@@ -1,36 +1,30 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# portal
 
-## Getting Started
+Chat UI for coding agents, spoken to over the [Agent Client Protocol](https://agentclientprotocol.com).
+MVP: Next.js app that spawns `claude-agent-acp` locally and streams the session to the browser.
 
-First, run the development server:
+## Run
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```sh
+pnpm install
+pnpm dev          # binds 0.0.0.0:3000 so it is reachable over Tailscale
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://<tailscale-ip>:3000`. Set a working directory, click **New session**, chat.
+Claude uses whatever login `claude` already has on this machine.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Layout
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `src/lib/acp.ts` — ACP layer. One long-lived `claude-agent-acp` subprocess (JSON-RPC over stdio),
+  a session map, an append-only event log per session, auto-approve permission handler.
+- `src/app/api/sessions` — `GET` list, `POST {cwd}` create.
+- `src/app/api/sessions/[id]/events` — Server-Sent Events: replays the log, then tails it.
+- `src/app/api/sessions/[id]/prompt` — `POST {text}`; returns 202, progress arrives via SSE.
+- `src/app/api/sessions/[id]/cancel` — `POST`; sends `session/cancel`.
+- `src/components/Chat.tsx` — reduces the event stream into user / assistant / thought / tool / plan blocks.
 
-## Learn More
+## Known limits (MVP)
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Sessions live in server memory; restarting the dev server loses them.
+- All tool permissions are auto-approved.
+- Claude Code only. Adding an agent means adding another spawn command in `acp.ts`.
