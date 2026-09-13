@@ -6,10 +6,12 @@
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test --test-timeout=15000 tests/*.test.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.76.0",
+    "@agentclientprotocol/codex-acp": "^1.11.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "next": "16.3.5",
     "react": "19.2.8",

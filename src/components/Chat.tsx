@@ -1,11 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { PortalEvent } from "@/lib/acp";
+import type { AgentInfo, PortalEvent, SessionMeta } from "@/lib/types";
 import type { SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
-
-type SessionMeta = { id: string; cwd: string; createdAt: number; busy: boolean };
 
 type ToolBlock = {
   kind: "tool";
@@ -219,6 +217,11 @@ function BlockView({ b }: { b: Block }) {
 }
 
 export default function Chat() {
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [cwd, setCwd] = useState("~/repos/monorepo");
@@ -228,36 +231,66 @@ export default function Chat() {
   const [showSidebar, setShowSidebar] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
-
-  const refreshSessions = useCallback(async () => {
-    const r = await fetch("/api/sessions");
-    const j = (await r.json()) as { sessions: SessionMeta[] };
-    setSessions(j.sessions);
-  }, []);
+  const activeSessionRef = useRef<string | null>(null);
+  const pendingPromptsRef = useRef(new Set<string>());
+  const creatingRef = useRef(false);
 
   useEffect(() => {
-    void refreshSessions();
-  }, [refreshSessions]);
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const [agentsResponse, sessionsResponse] = await Promise.all([
+          fetch("/api/agents", { signal: controller.signal }),
+          fetch("/api/sessions", { signal: controller.signal }),
+        ]);
+        if (!agentsResponse.ok || !sessionsResponse.ok) {
+          throw new Error("Could not load agents and sessions. Reload the page to retry.");
+        }
+        const [registry, saved] = await Promise.all([
+          agentsResponse.json() as Promise<{ agents: AgentInfo[]; defaultAgentId: string }>,
+          sessionsResponse.json() as Promise<{ sessions: SessionMeta[] }>,
+        ]);
+        if (controller.signal.aborted) return;
+        setAgents(registry.agents);
+        setSelectedAgentId(registry.defaultAgentId);
+        setSessions(saved.sessions);
+      } catch {
+        if (!controller.signal.aborted) {
+          setSessionError("Could not load agents and sessions. Check the server and reload the page to retry.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    };
+    void load();
+    return () => controller.abort();
+  }, []);
 
   // Subscribe to the active session's event stream.
   useEffect(() => {
     esRef.current?.close();
-    setEvents([]);
-    setBusy(false);
     if (!active) return;
     const es = new EventSource(`/api/sessions/${active}/events`);
     esRef.current = es;
     es.onmessage = (m) => {
+      if (esRef.current !== es || activeSessionRef.current !== active) return;
       const ev = JSON.parse(m.data) as PortalEvent;
       setEvents((prev) => [...prev, ev]);
+      if (ev.type === "turn_start" || ev.type === "turn_end" || ev.type === "error") {
+        pendingPromptsRef.current.delete(active);
+      }
       if (ev.type === "turn_start") setBusy(true);
       if (ev.type === "turn_end" || ev.type === "error") setBusy(false);
     };
     es.addEventListener("meta", (m) => {
+      if (esRef.current !== es || activeSessionRef.current !== active) return;
       const meta = JSON.parse((m as MessageEvent).data) as { busy: boolean };
       setBusy(meta.busy);
     });
-    return () => es.close();
+    return () => {
+      es.close();
+      if (esRef.current === es) esRef.current = null;
+    };
   }, [active]);
 
   const blocks = useMemo(() => reduce(events), [events]);
@@ -266,43 +299,87 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [blocks.length, events.length]);
 
-  const newSession = async () => {
-    const r = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd }),
-    });
-    const j = (await r.json()) as { id?: string; error?: string };
-    if (j.error) {
-      alert(j.error);
-      return;
+  const selectSession = (sessionId: string) => {
+    if (sessionId !== activeSessionRef.current) {
+      activeSessionRef.current = sessionId;
+      esRef.current?.close();
+      setEvents([]);
+      setBusy(false);
+      setActive(sessionId);
     }
-    await refreshSessions();
-    setActive(j.id!);
     setShowSidebar(false);
+  };
+
+  const newSession = async () => {
+    if (creatingRef.current || !selectedAgentId || !cwd.trim()) return;
+    creatingRef.current = true;
+    setCreating(true);
+    setSessionError(null);
+    try {
+      const r = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: cwd.trim(), agentId: selectedAgentId }),
+      });
+      const session = (await r.json()) as SessionMeta & { error?: string };
+      if (!r.ok || !session.id) {
+        setSessionError(session.error ?? "Could not create a session. Check the server and try again.");
+        return;
+      }
+      setSessions((prev) => [session, ...prev]);
+      selectSession(session.id);
+    } catch {
+      setSessionError("Could not create a session. Check the server connection and try again.");
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  };
+
+  const showRequestError = (sessionId: string, message: string) => {
+    if (activeSessionRef.current !== sessionId) return;
+    setEvents((prev) => [...prev, { type: "error", message }]);
   };
 
   const send = async () => {
     const text = input.trim();
-    if (!text || !active || busy) return;
+    if (!text || !active || busy || pendingPromptsRef.current.has(active)) return;
+    const sessionId = active;
+    pendingPromptsRef.current.add(sessionId);
     setInput("");
-    const r = await fetch(`/api/sessions/${active}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!r.ok) {
-      const j = (await r.json()) as { error?: string };
-      setEvents((prev) => [...prev, { type: "error", message: j.error ?? "send failed" }]);
+    try {
+      const r = await fetch(`/api/sessions/${sessionId}/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) {
+        pendingPromptsRef.current.delete(sessionId);
+        const j = (await r.json()) as { error?: string };
+        showRequestError(sessionId, j.error ?? "Could not send the message. Try again.");
+      }
+    } catch {
+      pendingPromptsRef.current.delete(sessionId);
+      showRequestError(sessionId, "Could not send the message. Check the server connection and try again.");
     }
   };
 
   const stop = async () => {
     if (!active) return;
-    await fetch(`/api/sessions/${active}/cancel`, { method: "POST" });
+    const sessionId = active;
+    try {
+      const r = await fetch(`/api/sessions/${sessionId}/cancel`, { method: "POST" });
+      if (!r.ok) {
+        const j = (await r.json()) as { error?: string };
+        showRequestError(sessionId, j.error ?? "Could not stop the agent. Try Stop again.");
+      }
+    } catch {
+      showRequestError(sessionId, "Could not stop the agent. Check the server connection and try Stop again.");
+    }
   };
 
   const activeMeta = sessions.find((s) => s.id === active);
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
 
   return (
     <div className="flex h-dvh bg-zinc-950 text-zinc-100">
@@ -311,41 +388,56 @@ export default function Chat() {
         className={`${showSidebar ? "flex" : "hidden"} absolute inset-y-0 left-0 z-20 w-72 flex-col border-r border-zinc-800 bg-zinc-950 p-3 md:static md:flex`}
       >
         <div className="mb-3 text-sm font-semibold tracking-wide text-zinc-400">portal</div>
-        <label className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">working directory</label>
+        <label htmlFor="working-directory" className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">working directory</label>
         <input
+          id="working-directory"
           value={cwd}
           onChange={(e) => setCwd(e.target.value)}
           className="mb-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs outline-none focus:border-indigo-500"
         />
-        <button onClick={newSession} className="mb-4 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500">
-          + New session
+        <label htmlFor="session-agent" className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">agent</label>
+        <select
+          id="session-agent"
+          value={selectedAgentId}
+          onChange={(e) => setSelectedAgentId(e.target.value)}
+          disabled={loading || creating || agents.length === 0}
+          className="mb-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs outline-none focus:border-indigo-500 disabled:opacity-50"
+        >
+          {agents.length === 0 && <option value="">{loading ? "Loading agents…" : "Agents unavailable"}</option>}
+          {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+        </select>
+        <button
+          onClick={newSession}
+          disabled={loading || creating || !selectedAgentId || !cwd.trim()}
+          className="mb-4 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
+        >
+          {creating ? "Creating session…" : "+ New session"}
         </button>
+        {sessionError && <p role="alert" className="mb-3 rounded bg-red-950/50 px-2 py-2 text-xs text-red-300">{sessionError}</p>}
         <div className="flex-1 space-y-1 overflow-y-auto">
           {sessions.map((s) => (
             <button
               key={s.id}
-              onClick={() => {
-                setActive(s.id);
-                setShowSidebar(false);
-              }}
+              onClick={() => selectSession(s.id)}
               className={`block w-full rounded px-2 py-1.5 text-left text-xs ${s.id === active ? "bg-zinc-800" : "hover:bg-zinc-900"}`}
             >
               <div className="truncate font-mono text-zinc-300">{s.cwd.replace(/^\/Users\/[^/]+/, "~")}</div>
               <div className="text-[10px] text-zinc-600">
-                {new Date(s.createdAt).toLocaleTimeString()} · {s.id.slice(0, 8)}
+                <span className="text-zinc-400">{s.agentName}</span> · {new Date(s.createdAt).toLocaleTimeString()} · {s.id.slice(0, 8)}
               </div>
             </button>
           ))}
         </div>
       </aside>
-      {showSidebar && <div className="absolute inset-0 z-10 bg-black/60 md:hidden" onClick={() => setShowSidebar(false)} />}
+      {showSidebar && <button aria-label="Close sessions sidebar" className="absolute inset-0 z-10 bg-black/60 md:hidden" onClick={() => setShowSidebar(false)} />}
 
       {/* Main */}
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2 text-xs">
-          <button onClick={() => setShowSidebar(true)} className="rounded border border-zinc-800 px-2 py-1 md:hidden">
+          <button aria-label="Open sessions sidebar" onClick={() => setShowSidebar(true)} className="rounded border border-zinc-800 px-2 py-1 md:hidden">
             ☰
           </button>
+          {activeMeta && <span className="shrink-0 text-zinc-200">{activeMeta.agentName}</span>}
           <span className="truncate font-mono text-zinc-400">
             {activeMeta ? activeMeta.cwd.replace(/^\/Users\/[^/]+/, "~") : "no session"}
           </span>
@@ -354,7 +446,9 @@ export default function Chat() {
 
         <div className="flex-1 space-y-3 overflow-y-auto px-3 py-4 md:px-6">
           {!active && (
-            <div className="mt-20 text-center text-sm text-zinc-500">Create a session to start chatting with Claude Code.</div>
+            <div className="mt-20 text-center text-sm text-zinc-500">
+              Create a session to start chatting{selectedAgent ? ` with ${selectedAgent.name}` : ""}.
+            </div>
           )}
           {blocks.map((b, i) => (
             <BlockView key={i} b={b} />
@@ -370,6 +464,7 @@ export default function Chat() {
           className="flex items-end gap-2 border-t border-zinc-800 p-3"
         >
           <textarea
+            aria-label={activeMeta ? `Message ${activeMeta.agentName}` : "Message"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -378,7 +473,7 @@ export default function Chat() {
                 void send();
               }
             }}
-            placeholder={active ? "Message Claude Code…" : "Create a session first"}
+            placeholder={activeMeta ? `Message ${activeMeta.agentName}…` : "Create a session first"}
             disabled={!active}
             rows={2}
             className="flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
