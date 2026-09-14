@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSession, listSessions } from "@/lib/acp";
 import { defaultAgentId, getAgent } from "@/lib/agents";
+import { shell } from "@/lib/shell";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +24,11 @@ export async function POST(req: Request) {
   if (typeof agentId !== "string" || !getAgent(agentId)) {
     return NextResponse.json({ error: "Unknown agent. Choose an agent from the dropdown." }, { status: 400 });
   }
-  let cwd = (requestedCwd ?? "").trim() || os.homedir();
-  if (cwd === "~" || cwd.startsWith("~/")) cwd = path.join(os.homedir(), cwd.slice(1));
-  cwd = path.resolve(cwd);
   try {
+    // The UI omits cwd so a new chat uses the authoritative shared shell directory.
+    let cwd = (requestedCwd ?? "").trim() || await shell.workingDirectory();
+    if (cwd === "~" || cwd.startsWith("~/")) cwd = path.join(os.homedir(), cwd.slice(1));
+    cwd = path.resolve(cwd);
     const s = await createSession(cwd, agentId);
     return NextResponse.json({
       id: s.id,

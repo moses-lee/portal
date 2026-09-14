@@ -1,9 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import ReactMarkdown from "react-markdown";
+import { useShellState } from "./useShellState";
 import type { AgentInfo, PortalEvent, SessionMeta } from "@/lib/types";
 import type { SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
+
+const ShellPanel = dynamic(() => import("./ShellPanel"), {
+  ssr: false,
+  loading: () => <p className="p-3 text-xs text-zinc-500">Loading shell…</p>,
+});
 
 type ToolBlock = {
   kind: "tool";
@@ -224,7 +232,10 @@ export default function Chat() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const [cwd, setCwd] = useState("~/repos/monorepo");
+  const { state: shellState, connected: shellConnected } = useShellState();
+  const [showShell, setShowShell] = useState(false);
+  const [shellSize, setShellSize] = useState(33);
+  const shellButton = useRef<HTMLButtonElement>(null);
   const [events, setEvents] = useState<PortalEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
@@ -311,7 +322,7 @@ export default function Chat() {
   };
 
   const newSession = async () => {
-    if (creatingRef.current || !selectedAgentId || !cwd.trim()) return;
+    if (creatingRef.current || !selectedAgentId || !shellConnected || shellState?.cwdError) return;
     creatingRef.current = true;
     setCreating(true);
     setSessionError(null);
@@ -319,7 +330,7 @@ export default function Chat() {
       const r = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd: cwd.trim(), agentId: selectedAgentId }),
+        body: JSON.stringify({ agentId: selectedAgentId }),
       });
       const session = (await r.json()) as SessionMeta & { error?: string };
       if (!r.ok || !session.id) {
@@ -381,6 +392,11 @@ export default function Chat() {
   const activeMeta = sessions.find((s) => s.id === active);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
 
+  const hideShell = () => {
+    setShowShell(false);
+    shellButton.current?.focus();
+  };
+
   return (
     <div className="flex h-dvh bg-zinc-950 text-zinc-100">
       {/* Sidebar */}
@@ -388,13 +404,12 @@ export default function Chat() {
         className={`${showSidebar ? "flex" : "hidden"} absolute inset-y-0 left-0 z-20 w-72 flex-col border-r border-zinc-800 bg-zinc-950 p-3 md:static md:flex`}
       >
         <div className="mb-3 text-sm font-semibold tracking-wide text-zinc-400">portal</div>
-        <label htmlFor="working-directory" className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">working directory</label>
-        <input
-          id="working-directory"
-          value={cwd}
-          onChange={(e) => setCwd(e.target.value)}
-          className="mb-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs outline-none focus:border-indigo-500"
-        />
+        <div className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">working directory</div>
+        <div id="working-directory" title={shellState?.cwd} className="mb-1 truncate rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs" aria-live="polite">
+          {shellState?.displayCwd ?? "Connecting…"}
+        </div>
+        <p className="mb-3 text-[11px] text-zinc-500">{!shellConnected ? "Reconnecting to directory…" : "Use Shell to change directories for new chats."}</p>
+        {shellState?.cwdError && <p role="alert" className="mb-3 text-xs text-red-300">{shellState.cwdError}</p>}
         <label htmlFor="session-agent" className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">agent</label>
         <select
           id="session-agent"
@@ -408,7 +423,7 @@ export default function Chat() {
         </select>
         <button
           onClick={newSession}
-          disabled={loading || creating || !selectedAgentId || !cwd.trim()}
+          disabled={loading || creating || !selectedAgentId || !shellConnected || !!shellState?.cwdError}
           className="mb-4 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
         >
           {creating ? "Creating session…" : "+ New session"}
@@ -433,7 +448,7 @@ export default function Chat() {
 
       {/* Main */}
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2 text-xs">
+        <header className="flex shrink-0 items-center gap-2 border-b border-zinc-800 px-3 py-2 text-xs">
           <button aria-label="Open sessions sidebar" onClick={() => setShowSidebar(true)} className="rounded border border-zinc-800 px-2 py-1 md:hidden">
             ☰
           </button>
@@ -441,53 +456,66 @@ export default function Chat() {
           <span className="truncate font-mono text-zinc-400">
             {activeMeta ? activeMeta.cwd.replace(/^\/Users\/[^/]+/, "~") : "no session"}
           </span>
-          {busy && <span className="ml-auto animate-pulse text-amber-400">working…</span>}
+          <div className="ml-auto flex shrink-0 items-center gap-3">
+            {busy && <span className="animate-pulse text-amber-400">working…</span>}
+            <button ref={shellButton} aria-expanded={showShell} aria-controls="shell-panel" onClick={() => setShowShell((open) => !open)} className={`rounded border px-3 py-1.5 ${showShell ? "border-indigo-500 bg-indigo-950 text-indigo-200" : "border-zinc-700 hover:bg-zinc-800"}`}>Shell</button>
+          </div>
         </header>
 
-        <div className="flex-1 space-y-3 overflow-y-auto px-3 py-4 md:px-6">
-          {!active && (
-            <div className="mt-20 text-center text-sm text-zinc-500">
-              Create a session to start chatting{selectedAgent ? ` with ${selectedAgent.name}` : ""}.
+        <Group orientation="vertical" className="min-h-0 flex-1" onLayoutChanged={(layout) => { if (layout.shell) setShellSize(layout.shell); }}>
+          <Panel id="chat" minSize="25%" className="flex min-h-0 flex-col">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 md:px-6">
+              {!active && (
+                <div className="mt-20 text-center text-sm text-zinc-500">
+                  Create a session to start chatting{selectedAgent ? ` with ${selectedAgent.name}` : ""}.
+                </div>
+              )}
+              {blocks.map((b, i) => (
+                <BlockView key={i} b={b} />
+              ))}
+              <div ref={bottomRef} />
             </div>
-          )}
-          {blocks.map((b, i) => (
-            <BlockView key={i} b={b} />
-          ))}
-          <div ref={bottomRef} />
-        </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-          className="flex items-end gap-2 border-t border-zinc-800 p-3"
-        >
-          <textarea
-            aria-label={activeMeta ? `Message ${activeMeta.agentName}` : "Message"}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            <form
+              onSubmit={(e) => {
                 e.preventDefault();
                 void send();
-              }
-            }}
-            placeholder={activeMeta ? `Message ${activeMeta.agentName}…` : "Create a session first"}
-            disabled={!active}
-            rows={2}
-            className="flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
-          />
-          {busy ? (
-            <button type="button" onClick={stop} className="rounded-xl bg-red-700 px-4 py-2 text-sm font-medium hover:bg-red-600">
-              Stop
-            </button>
-          ) : (
-            <button type="submit" disabled={!active || !input.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40">
-              Send
-            </button>
+              }}
+              className="flex shrink-0 items-end gap-2 border-t border-zinc-800 p-3"
+            >
+              <textarea
+                aria-label={activeMeta ? `Message ${activeMeta.agentName}` : "Message"}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                placeholder={activeMeta ? `Message ${activeMeta.agentName}…` : "Create a session first"}
+                disabled={!active}
+                rows={2}
+                className="flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
+              />
+              {busy ? (
+                <button type="button" onClick={stop} className="rounded-xl bg-red-700 px-4 py-2 text-sm font-medium hover:bg-red-600">
+                  Stop
+                </button>
+              ) : (
+                <button type="submit" disabled={!active || !input.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40">
+                  Send
+                </button>
+              )}
+            </form>
+          </Panel>
+          {showShell && <Separator aria-label="Resize shell panel" className="h-1.5 shrink-0 bg-zinc-800 transition-colors hover:bg-indigo-500 focus-visible:bg-indigo-500 focus-visible:outline-none" />}
+          {showShell && (
+            <Panel id="shell" defaultSize={`${shellSize}%`} minSize="20%" maxSize="75%">
+              <div id="shell-panel" className="h-full"><ShellPanel onHide={hideShell} /></div>
+            </Panel>
           )}
-        </form>
+        </Group>
       </main>
     </div>
   );
