@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["100.115.116.107", "*.ts.net", "localhost"],
+  allowedDevOrigins: ["100.115.116.107", "mini", "*.ts.net", "localhost"],
   serverExternalPackages: [
     "@agentclientprotocol/claude-agent-acp",
     "@agentclientprotocol/codex-acp",
