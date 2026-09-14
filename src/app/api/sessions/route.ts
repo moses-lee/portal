@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { createSession, listSessions } from "@/lib/acp";
 import { defaultAgentId, getAgent } from "@/lib/agents";
+import { summarizeSession } from "@/lib/session-summary";
 import { shell } from "@/lib/shell";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ sessions: listSessions() });
+  return NextResponse.json({ sessions: await Promise.all(listSessions().map(summarizeSession)) });
 }
 
 export async function POST(req: Request) {
@@ -29,15 +30,8 @@ export async function POST(req: Request) {
     let cwd = (requestedCwd ?? "").trim() || await shell.workingDirectory();
     if (cwd === "~" || cwd.startsWith("~/")) cwd = path.join(os.homedir(), cwd.slice(1));
     cwd = path.resolve(cwd);
-    const s = await createSession(cwd, agentId);
-    return NextResponse.json({
-      id: s.id,
-      agentId: s.agentId,
-      agentName: s.agentName,
-      cwd: s.cwd,
-      createdAt: s.createdAt,
-      busy: s.busy,
-    });
+    const session = await createSession(cwd, agentId);
+    return NextResponse.json(await summarizeSession(session));
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }

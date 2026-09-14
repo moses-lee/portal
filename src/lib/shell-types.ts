@@ -1,8 +1,12 @@
+import type { GitInfo } from "./git-info.ts";
+
 export type ShellState = {
   id: string | null;
   status: "idle" | "running" | "exited";
   cwd: string;
   displayCwd: string;
+  /** Repository and branch containing `cwd`, or null outside a git working tree. */
+  git: GitInfo;
   shell: string;
   cols: number;
   rows: number;

@@ -5,7 +5,8 @@ import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import ReactMarkdown from "react-markdown";
 import { useShellState } from "./useShellState";
-import type { AgentInfo, PortalEvent, SessionMeta } from "@/lib/types";
+import type { GitInfo } from "@/lib/git-info";
+import type { AgentInfo, PortalEvent, SessionSummary } from "@/lib/types";
 import type { SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
 
 const ShellPanel = dynamic(() => import("./ShellPanel"), {
@@ -224,13 +225,50 @@ function BlockView({ b }: { b: Block }) {
   }
 }
 
+function basename(directory: string) {
+  return directory.split("/").filter(Boolean).at(-1) ?? directory;
+}
+
+function BranchBadge({ git }: { git: GitInfo }) {
+  if (!git) return null;
+  return (
+    <span
+      title={git.detached ? `Detached HEAD at ${git.branch} in ${git.root}` : `Branch ${git.branch} in ${git.root}`}
+      className="inline-flex max-w-48 shrink-0 items-center gap-1 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-200"
+    >
+      <span aria-hidden="true" className="text-zinc-500">⎇</span>
+      <span className="truncate">{git.branch}</span>
+      {git.detached && <span className="text-zinc-500">detached</span>}
+    </span>
+  );
+}
+
+/** Repository, branch, and directory the message box currently targets. */
+function ContextBar({ cwd, displayCwd, git, note, error }: {
+  cwd: string | undefined;
+  displayCwd: string | undefined;
+  git: GitInfo;
+  note?: string;
+  error?: string | null;
+}) {
+  return (
+    <div id="session-context" aria-live="polite" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-2 text-[11px] text-zinc-500">
+      {git && <span className="shrink-0 font-medium text-zinc-300">{basename(git.root)}</span>}
+      <BranchBadge git={git} />
+      <span title={cwd} className="min-w-0 truncate font-mono">{displayCwd ?? "Connecting…"}</span>
+      {note && <span className="shrink-0">· {note}</span>}
+      {error && <span role="alert" className="basis-full text-red-300">{error}</span>}
+    </div>
+  );
+}
+
 export default function Chat() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const { state: shellState, connected: shellConnected } = useShellState();
   const [showShell, setShowShell] = useState(false);
@@ -259,7 +297,7 @@ export default function Chat() {
         }
         const [registry, saved] = await Promise.all([
           agentsResponse.json() as Promise<{ agents: AgentInfo[]; defaultAgentId: string }>,
-          sessionsResponse.json() as Promise<{ sessions: SessionMeta[] }>,
+          sessionsResponse.json() as Promise<{ sessions: SessionSummary[] }>,
         ]);
         if (controller.signal.aborted) return;
         setAgents(registry.agents);
@@ -295,8 +333,12 @@ export default function Chat() {
     };
     es.addEventListener("meta", (m) => {
       if (esRef.current !== es || activeSessionRef.current !== active) return;
-      const meta = JSON.parse((m as MessageEvent).data) as { busy: boolean };
+      const meta = JSON.parse((m as MessageEvent).data) as { busy: boolean; git?: GitInfo };
       setBusy(meta.busy);
+      // The stream tracks the session directory's branch live; keep the list in step.
+      if (meta.git !== undefined) {
+        setSessions((prev) => prev.map((s) => (s.id === active ? { ...s, git: meta.git ?? null } : s)));
+      }
     });
     return () => {
       es.close();
@@ -310,7 +352,7 @@ export default function Chat() {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [blocks.length, events.length]);
 
-  const selectSession = (sessionId: string) => {
+  const selectSession = (sessionId: string | null) => {
     if (sessionId !== activeSessionRef.current) {
       activeSessionRef.current = sessionId;
       esRef.current?.close();
@@ -321,8 +363,10 @@ export default function Chat() {
     setShowSidebar(false);
   };
 
+  const canCreate = !loading && !creating && !!selectedAgentId && shellConnected && !shellState?.cwdError;
+
   const newSession = async () => {
-    if (creatingRef.current || !selectedAgentId || !shellConnected || shellState?.cwdError) return;
+    if (creatingRef.current || !canCreate) return;
     creatingRef.current = true;
     setCreating(true);
     setSessionError(null);
@@ -332,7 +376,7 @@ export default function Chat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agentId: selectedAgentId }),
       });
-      const session = (await r.json()) as SessionMeta & { error?: string };
+      const session = (await r.json()) as SessionSummary & { error?: string };
       if (!r.ok || !session.id) {
         setSessionError(session.error ?? "Could not create a session. Check the server and try again.");
         return;
@@ -397,6 +441,20 @@ export default function Chat() {
     shellButton.current?.focus();
   };
 
+  const agentPicker = (id: string) => (
+    <select
+      id={id}
+      aria-label="Agent for new sessions"
+      value={selectedAgentId}
+      onChange={(e) => setSelectedAgentId(e.target.value)}
+      disabled={loading || creating || agents.length === 0}
+      className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs outline-none focus:border-indigo-500 disabled:opacity-50"
+    >
+      {agents.length === 0 && <option value="">{loading ? "Loading agents…" : "Agents unavailable"}</option>}
+      {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+    </select>
+  );
+
   return (
     <div className="flex h-dvh bg-zinc-950 text-zinc-100">
       {/* Sidebar */}
@@ -404,26 +462,11 @@ export default function Chat() {
         className={`${showSidebar ? "flex" : "hidden"} absolute inset-y-0 left-0 z-20 w-72 flex-col border-r border-zinc-800 bg-zinc-950 p-3 md:static md:flex`}
       >
         <div className="mb-3 text-sm font-semibold tracking-wide text-zinc-400">portal</div>
-        <div className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">working directory</div>
-        <div id="working-directory" title={shellState?.cwd} className="mb-1 truncate rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs" aria-live="polite">
-          {shellState?.displayCwd ?? "Connecting…"}
-        </div>
-        <p className="mb-3 text-[11px] text-zinc-500">{!shellConnected ? "Reconnecting to directory…" : "Use Shell to change directories for new chats."}</p>
-        {shellState?.cwdError && <p role="alert" className="mb-3 text-xs text-red-300">{shellState.cwdError}</p>}
-        <label htmlFor="session-agent" className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">agent</label>
-        <select
-          id="session-agent"
-          value={selectedAgentId}
-          onChange={(e) => setSelectedAgentId(e.target.value)}
-          disabled={loading || creating || agents.length === 0}
-          className="mb-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs outline-none focus:border-indigo-500 disabled:opacity-50"
-        >
-          {agents.length === 0 && <option value="">{loading ? "Loading agents…" : "Agents unavailable"}</option>}
-          {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
-        </select>
+        <label htmlFor="sidebar-agent" className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">agent</label>
+        <div className="mb-2 flex flex-col">{agentPicker("sidebar-agent")}</div>
         <button
           onClick={newSession}
-          disabled={loading || creating || !selectedAgentId || !shellConnected || !!shellState?.cwdError}
+          disabled={!canCreate}
           className="mb-4 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
         >
           {creating ? "Creating session…" : "+ New session"}
@@ -434,9 +477,13 @@ export default function Chat() {
             <button
               key={s.id}
               onClick={() => selectSession(s.id)}
+              aria-current={s.id === active ? "true" : undefined}
               className={`block w-full rounded px-2 py-1.5 text-left text-xs ${s.id === active ? "bg-zinc-800" : "hover:bg-zinc-900"}`}
             >
-              <div className="truncate font-mono text-zinc-300">{s.cwd.replace(/^\/Users\/[^/]+/, "~")}</div>
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate font-mono text-zinc-300" title={s.cwd}>{s.displayCwd}</span>
+                <BranchBadge git={s.git} />
+              </div>
               <div className="text-[10px] text-zinc-600">
                 <span className="text-zinc-400">{s.agentName}</span> · {new Date(s.createdAt).toLocaleTimeString()} · {s.id.slice(0, 8)}
               </div>
@@ -452,12 +499,12 @@ export default function Chat() {
           <button aria-label="Open sessions sidebar" onClick={() => setShowSidebar(true)} className="rounded border border-zinc-800 px-2 py-1 md:hidden">
             ☰
           </button>
-          {activeMeta && <span className="shrink-0 text-zinc-200">{activeMeta.agentName}</span>}
-          <span className="truncate font-mono text-zinc-400">
-            {activeMeta ? activeMeta.cwd.replace(/^\/Users\/[^/]+/, "~") : "no session"}
-          </span>
+          <span className="truncate text-zinc-200">{activeMeta ? activeMeta.agentName : "New session"}</span>
           <div className="ml-auto flex shrink-0 items-center gap-3">
             {busy && <span className="animate-pulse text-amber-400">working…</span>}
+            {active && (
+              <button onClick={() => selectSession(null)} className="rounded border border-zinc-700 px-3 py-1.5 hover:bg-zinc-800">+ New</button>
+            )}
             <button ref={shellButton} aria-expanded={showShell} aria-controls="shell-panel" onClick={() => setShowShell((open) => !open)} className={`rounded border px-3 py-1.5 ${showShell ? "border-indigo-500 bg-indigo-950 text-indigo-200" : "border-zinc-700 hover:bg-zinc-800"}`}>Shell</button>
           </div>
         </header>
@@ -466,9 +513,39 @@ export default function Chat() {
           <Panel id="chat" minSize="25%" className="flex min-h-0 flex-col">
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 md:px-6">
               {!active && (
-                <div className="mt-20 text-center text-sm text-zinc-500">
-                  Create a session to start chatting{selectedAgent ? ` with ${selectedAgent.name}` : ""}.
-                </div>
+                <section aria-labelledby="new-session-title" className="mx-auto mt-16 max-w-md rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+                  <h2 id="new-session-title" className="text-sm font-semibold text-zinc-200">Start a new session</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {shellState ? (
+                      <>
+                        In <span className="font-mono text-zinc-300" title={shellState.cwd}>{shellState.displayCwd}</span>
+                        {shellState.git && <> on <span className="font-mono text-zinc-300">{shellState.git.branch}</span></>}
+                        . Use Shell to change directories.
+                      </>
+                    ) : "Connecting to the shared shell…"}
+                  </p>
+                  <fieldset className="mt-4" disabled={loading || creating || agents.length === 0}>
+                    <legend className="mb-2 text-[11px] uppercase tracking-wide text-zinc-500">agent</legend>
+                    <div className="flex flex-wrap gap-2">
+                      {agents.length === 0 && <span className="text-xs text-zinc-500">{loading ? "Loading agents…" : "Agents unavailable"}</span>}
+                      {agents.map((agent) => (
+                        <label key={agent.id} className={`cursor-pointer rounded-lg border px-3 py-1.5 text-sm ${agent.id === selectedAgentId ? "border-indigo-500 bg-indigo-950 text-indigo-100" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"}`}>
+                          <input type="radio" name="new-session-agent" value={agent.id} checked={agent.id === selectedAgentId} onChange={() => setSelectedAgentId(agent.id)} className="sr-only" />
+                          {agent.name}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <button
+                    onClick={newSession}
+                    disabled={!canCreate}
+                    className="mt-4 w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
+                  >
+                    {creating ? "Creating session…" : `New session${selectedAgent ? ` with ${selectedAgent.name}` : ""}`}
+                  </button>
+                  {!shellConnected && <p className="mt-2 text-xs text-zinc-500">Waiting for the shared shell before a session can start…</p>}
+                  {sessionError && <p role="alert" className="mt-3 rounded bg-red-950/50 px-2 py-2 text-xs text-red-300">{sessionError}</p>}
+                </section>
               )}
               {blocks.map((b, i) => (
                 <BlockView key={i} b={b} />
@@ -481,10 +558,11 @@ export default function Chat() {
                 e.preventDefault();
                 void send();
               }}
-              className="flex shrink-0 items-end gap-2 border-t border-zinc-800 p-3"
+              className="flex shrink-0 items-end gap-2 border-t border-zinc-800 p-3 pb-2"
             >
               <textarea
                 aria-label={activeMeta ? `Message ${activeMeta.agentName}` : "Message"}
+                aria-describedby="session-context"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -493,7 +571,7 @@ export default function Chat() {
                     void send();
                   }
                 }}
-                placeholder={activeMeta ? `Message ${activeMeta.agentName}…` : "Create a session first"}
+                placeholder={activeMeta ? `Message ${activeMeta.agentName}…` : "Start a session above to chat"}
                 disabled={!active}
                 rows={2}
                 className="flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
@@ -508,6 +586,17 @@ export default function Chat() {
                 </button>
               )}
             </form>
+            {activeMeta ? (
+              <ContextBar cwd={activeMeta.cwd} displayCwd={activeMeta.displayCwd} git={activeMeta.git} />
+            ) : (
+              <ContextBar
+                cwd={shellState?.cwd}
+                displayCwd={shellState?.displayCwd}
+                git={shellState?.git ?? null}
+                note={!shellConnected ? "reconnecting to shell…" : "new sessions start here"}
+                error={shellState?.cwdError}
+              />
+            )}
           </Panel>
           {showShell && <Separator aria-label="Resize shell panel" className="h-1.5 shrink-0 bg-zinc-800 transition-colors hover:bg-indigo-500 focus-visible:bg-indigo-500 focus-visible:outline-none" />}
           {showShell && (

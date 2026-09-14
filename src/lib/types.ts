@@ -1,4 +1,5 @@
 import type { SessionUpdate, StopReason } from "@agentclientprotocol/sdk";
+import type { GitInfo } from "./git-info";
 
 export type AgentInfo = { id: string; name: string };
 
@@ -9,6 +10,12 @@ export type SessionMeta = {
   cwd: string;
   createdAt: number;
   busy: boolean;
+};
+
+/** Session metadata as served to the browser, with the directory's current git state. */
+export type SessionSummary = SessionMeta & {
+  displayCwd: string;
+  git: GitInfo;
 };
 
 export type PortalEvent =

@@ -12,7 +12,9 @@ pnpm install
 pnpm dev          # binds 0.0.0.0:3000 so it is reachable over Tailscale
 ```
 
-Open `http://localhost:3000` or `http://<tailscale-ip>:3000`. Use **Shell** to change directories, select an agent, click **New session**, and chat. Each existing session keeps its original agent and starting directory.
+Open `http://localhost:3000` or `http://<tailscale-ip>:3000`. The start page offers the agent choices and a **New session** button for the shell's current directory; the sidebar has the same controls plus the session list, and **+ New** in the header returns to the start page. Use **Shell** to change directories, then chat. Each existing session keeps its original agent and starting directory.
+
+A context bar under the message box shows the repository, branch, and directory the box targets: the active session's directory, or the shell's current directory when no session is open. The sidebar lists each session with its directory and current branch.
 
 Sign in on the machine running Portal before creating a session:
 
@@ -27,13 +29,15 @@ Click **Shell** in the top-right corner to open a terminal below the chat and me
 
 - One shell is shared across chats, browser tabs, and devices. It is available before starting a chat.
 - The first shell starts in Portal's launch directory using the host's `$SHELL` as a login shell, with its usual configuration and environment.
-- The sidebar shows the shell's current directory. `cd` changes where **new** chats start; existing chats retain their starting directory. The path is read-only in the sidebar.
+- The context bar and start page show the shell's current directory and branch. `cd` changes where **new** chats start; existing chats retain their starting directory.
 - Hiding the panel or refreshing reconnects to the same process, restoring its screen and up to 2,000 scrollback lines. Typing `exit` retains the output and offers **Start new shell**, starting in the last directory.
 - All viewers see the same terminal. The most recently focused/resized view sets its dimensions. Restarting Portal ends the shell.
 
 The terminal uses `node-pty`, `@xterm/xterm`, xterm's headless/serialization and fit addons, and `react-resizable-panels`. Socket.IO carries ordered input, output, resizing, and automatic reconnection over WebSockets. A small custom Next.js server (`server.mjs`) serves both the app and shell on port 3000 (or `$PORT`). Use `pnpm dev` / `pnpm start`; invoking `next dev` / `next start` directly does not start the shell transport. Restart the server after changing its runtime modules.
 
 Hosts currently support macOS and Linux. Directory tracking reads the root shell process (`lsof` on macOS, `/proc` on Linux), so nested shells, tmux panes, and remote SSH directories do not change Portal's local working directory. Directory changes appear within about a second, and new-session creation refreshes it on the server. If tracking fails, new chats are paused until it recovers.
+
+Branch tracking reads `.git/HEAD` directly (following worktree pointers) instead of spawning `git`, so it is cheap to poll: the shell directory's branch refreshes with the directory, and each open session's branch refreshes about once a second over its event stream. Detached HEADs show the abbreviated commit.
 
 As with the agent APIs, the shell is intended for this personal Portal instance over localhost or a trusted private network. It runs as the Portal host user; all connected devices share control. Shell endpoints reject cross-origin browser requests. `pnpm install` builds/prepares the native PTY dependency, including a workaround for its macOS prebuild executable permissions.
 
@@ -43,9 +47,10 @@ As with the agent APIs, the shell is intended for this personal Portal instance 
 - `src/lib/acp-runtime.ts` — shared ACP runtime. One lazy subprocess per agent, isolated sessions, append-only event logs, and automatic permissions.
 - `src/lib/acp.ts` — runtime singleton preserved across development hot reloads.
 - `src/lib/types.ts` — shared event and session metadata types.
+- `src/lib/git-info.ts` — repository root and branch lookup by reading `.git` directly; `src/lib/session-summary.ts` attaches it to sessions for the browser.
 - `src/app/api/agents` — `GET` available agents and the default selection.
 - `src/app/api/sessions` — `GET` list, `POST {cwd, agentId}` create. Omitting `agentId` defaults to Claude Code.
-- `src/app/api/sessions/[id]/events` — Server-Sent Events: replays the log, then tails it.
+- `src/app/api/sessions/[id]/events` — Server-Sent Events: replays the log, then tails it. `meta` events carry busy state and the directory's current branch.
 - `src/app/api/sessions/[id]/prompt` — `POST {text}`; returns 202, progress arrives via SSE.
 - `src/app/api/sessions/[id]/cancel` — `POST`; sends `session/cancel`.
 - `src/components/Chat.tsx` — reduces the event stream into user / assistant / thought / tool / plan blocks.

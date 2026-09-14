@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -135,4 +136,22 @@ test("shell commands reject cross-origin requests, oversized input and invalid g
     { action: "resize", id: "abc", cols: 0, rows: 24 }, { action: "resize", id: "abc", cols: 80, rows: 1.5 },
     { action: "resize", id: "abc", cols: 80, rows: 300 }, { action: "unknown", id: "abc" },
   ]) assert.throws(() => parseShellCommand(command));
+});
+
+test("tracks the repository and branch of the shell directory", native, async (t) => {
+  const { runtime, cwd, output, write } = setup(t);
+  const repo = path.join(cwd, "repo");
+  mkdirSync(repo);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
+  await until(() => runtime.getState().git === null, "no repository at the launch directory");
+  runtime.start(null);
+  await until(() => output().includes("PORTAL_TEST>"), "shell prompt");
+  write("cd repo\r");
+  await until(() => runtime.getState().git?.branch === "main", "branch after cd");
+  assert.equal(runtime.getState().git.root, repo);
+  assert.equal(runtime.getState().cwd, repo);
+  write("git checkout -q -b topic\r");
+  await until(() => runtime.getState().git?.branch === "topic", "branch after checkout");
+  write("cd ..\r");
+  await until(() => runtime.getState().git === null && runtime.getState().cwd === cwd, "leaving the repository");
 });

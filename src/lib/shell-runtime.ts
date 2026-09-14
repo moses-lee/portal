@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 import * as pty from "node-pty";
 import xterm from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
+import { displayPath, readGitInfo, sameGitInfo } from "./git-info.ts";
 import { readShellCwd } from "./shell-cwd.ts";
 import type { ShellEvent, ShellState } from "./shell-types.ts";
 
@@ -20,19 +20,17 @@ export function createShellRuntime({
   let proc: pty.IPty | null = null;
   let terminal: InstanceType<typeof xterm.Terminal> | null = null;
   let serializer: InstanceType<typeof serialize.SerializeAddon> | null = null;
-  let poll: ReturnType<typeof setInterval> | undefined;
   let checkingCwd: Promise<void> | null = null;
   let disposed = false;
   let state: ShellState = {
-    id: null, status: "idle", cwd, displayCwd: displayPath(cwd),
+    id: null, status: "idle", cwd, displayCwd: displayPath(cwd), git: null,
     shell: path.basename(shell), cols: 80, rows: 24, exitCode: null, cwdError: null,
   };
-
-  function displayPath(directory: string) {
-    const home = os.homedir();
-    return directory === home ? "~" : directory.startsWith(home + path.sep)
-      ? "~" + directory.slice(home.length) : directory;
-  }
+  // Directory and branch tracking run for the lifetime of the runtime: the branch can change
+  // from outside the shared shell, and the launch directory is shown before any shell starts.
+  const poll = setInterval(() => { void refreshCwd(); }, pollIntervalMs);
+  poll.unref();
+  void refreshCwd();
 
   function emit(event: ShellEvent) {
     for (const listener of listeners) listener(event);
@@ -41,17 +39,20 @@ export function createShellRuntime({
   function publish() { emit({ type: "state", state: { ...state } }); }
 
   function refreshCwd(): Promise<void> {
-    if (!proc) return Promise.resolve();
+    if (disposed) return Promise.resolve();
     if (checkingCwd) return checkingCwd;
     const current = proc;
-    checkingCwd = readShellCwd(current.pid).then((directory) => {
-      if (proc !== current) return;
-      if (directory !== state.cwd || state.cwdError) {
-        state = { ...state, cwd: directory, displayCwd: displayPath(directory), cwdError: null };
+    // Without a running shell the last known directory stands; only its branch can move.
+    const directory = current ? readShellCwd(current.pid) : Promise.resolve(state.cwd);
+    checkingCwd = directory.then(async (directory) => {
+      const git = await readGitInfo(directory);
+      if (proc !== current || disposed) return;
+      if (directory !== state.cwd || state.cwdError || !sameGitInfo(git, state.git)) {
+        state = { ...state, cwd: directory, displayCwd: displayPath(directory), git, cwdError: null };
         publish();
       }
     }).catch(() => {
-      if (proc !== current || state.cwdError) return;
+      if (proc !== current || disposed || state.cwdError) return;
       state = { ...state, cwdError: "Could not read the shell directory. New sessions are paused until it is available." };
       publish();
     }).finally(() => { checkingCwd = null; });
@@ -95,7 +96,6 @@ export function createShellRuntime({
     current.onExit(({ exitCode }) => {
       if (proc !== current) return;
       proc = null;
-      clearInterval(poll);
       // Drain final output before marking the shell exited or allowing a restart.
       screen.write("", () => {
         if (terminal !== screen || disposed) return;
@@ -103,8 +103,6 @@ export function createShellRuntime({
         publish();
       });
     });
-    poll = setInterval(() => { void refreshCwd(); }, pollIntervalMs);
-    poll.unref();
     emit({ type: "snapshot", state: getState(), data: "" });
     void refreshCwd();
     return getState();
