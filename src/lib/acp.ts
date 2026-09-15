@@ -14,6 +14,9 @@ export const listSessions = runtime.listSessions;
 export const getSession = runtime.getSession;
 export const sendPrompt = runtime.sendPrompt;
 export const cancel = runtime.cancel;
+export const respondPermission = runtime.respondPermission;
+export const setConfigOption = runtime.setConfigOption;
+export const setMode = runtime.setMode;
 
 export function createSession(cwd: string, agentId = defaultAgentId) {
   return runtime.createSession(cwd, agentId);

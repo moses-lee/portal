@@ -21,7 +21,7 @@ Sign in on the machine running Portal before creating a session:
 - **Claude Code:** run `claude` and complete sign-in.
 - **Codex:** run `codex login`. The ACP package includes a compatible Codex binary; `CODEX_PATH` can override it when needed.
 
-Portal uses the agents' existing credentials and default model/reasoning settings. Tool permission requests are automatically approved through ACP; Portal does not override agent sandbox defaults.
+Portal uses the agents' existing credentials. Mode, model, and effort controls under the message box are driven by whatever config options the agent announces over ACP; agents without them show none. Typing `/` in the message box autocompletes the agent's slash commands and skills. Tool permission requests appear inline in the chat and any connected viewer can answer them; **Stop** cancels pending prompts along with the turn. Portal does not override agent sandbox defaults.
 
 ## Shell
 
@@ -44,15 +44,17 @@ As with the agent APIs, the shell is intended for this personal Portal instance 
 ## Layout
 
 - `src/lib/agents.ts` — server-side registry: agent names, launch configurations, and login instructions.
-- `src/lib/acp-runtime.ts` — shared ACP runtime. One lazy subprocess per agent, isolated sessions, append-only event logs, and automatic permissions.
+- `src/lib/acp-runtime.ts` — shared ACP runtime. One lazy subprocess per agent, isolated sessions, append-only event logs, agent-announced session state (modes, config options, commands), and pending permission prompts.
 - `src/lib/acp.ts` — runtime singleton preserved across development hot reloads.
 - `src/lib/types.ts` — shared event and session metadata types.
 - `src/lib/git-info.ts` — repository root and branch lookup by reading `.git` directly; `src/lib/session-summary.ts` attaches it to sessions for the browser.
 - `src/app/api/agents` — `GET` available agents and the default selection.
 - `src/app/api/sessions` — `GET` list, `POST {cwd, agentId}` create. Omitting `agentId` defaults to Claude Code.
-- `src/app/api/sessions/[id]/events` — Server-Sent Events: replays the log, then tails it. `meta` events carry busy state and the directory's current branch.
+- `src/app/api/sessions/[id]/events` — Server-Sent Events: replays the log, then tails it. `meta` events carry busy state, the directory's current branch, and the agent's session state (modes, config options, commands); they are re-sent whenever any of these change.
 - `src/app/api/sessions/[id]/prompt` — `POST {text}`; returns 202, progress arrives via SSE.
-- `src/app/api/sessions/[id]/cancel` — `POST`; sends `session/cancel`.
+- `src/app/api/sessions/[id]/cancel` — `POST`; cancels open permission prompts, then sends `session/cancel`.
+- `src/app/api/sessions/[id]/config` — `POST {configId, value}` or `{modeId}`; forwards `session/set_config_option` / `session/set_mode` and returns the new `{state}`.
+- `src/app/api/sessions/[id]/permission` — `POST {requestId, optionId}`; answers a `permission_request` from the event stream (`optionId: null` cancels it).
 - `src/components/Chat.tsx` — reduces the event stream into user / assistant / thought / tool / plan blocks.
 - `src/lib/shell-runtime.ts` — shared PTY, bounded terminal state, directory tracking, and subscribers.
 - `src/lib/shell-server.ts` — shell WebSocket commands, snapshots, and live subscribers.
@@ -79,4 +81,4 @@ pnpm build
 
 - Sessions live in server memory; restarting the dev server loses them.
 - If an agent process exits, its session history remains visible, but continuing requires a new session. Other agents' sessions keep running.
-- Agent selection is fixed per session. Model selection, login screens, and custom-agent configuration UI are not included.
+- Agent selection is fixed per session. Mode, model, and effort choices are limited to what the agent exposes as ACP config options; login screens and custom-agent configuration UI are not included.

@@ -6,8 +6,28 @@ import { createInterface } from "node:readline";
 const [agentId, logPath, configPath] = process.argv.slice(2);
 const prompts = new Map();
 const permissions = new Map();
+const configs = new Map();
 let sessionCount = 0;
 let permissionCount = 0;
+
+const COMMANDS = [
+  { name: "help", description: "Show help" },
+  { name: "review", description: "Review code", input: { hint: "what to review" } },
+];
+
+function initialConfigOptions() {
+  return [
+    {
+      id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+      options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }],
+    },
+    {
+      id: "model", name: "Model", category: "model", type: "select", currentValue: "fast",
+      options: [{ value: "fast", name: "Fast" }, { value: "smart", name: "Smart" }],
+    },
+    { id: "fast", name: "Fast mode", category: "model_config", type: "boolean", currentValue: false },
+  ];
+}
 
 function log(entry) {
   appendFileSync(logPath, `${JSON.stringify({ agentId, pid: process.pid, ...entry })}\n`);
@@ -19,6 +39,10 @@ function send(message) {
 
 function respond(id, result) {
   send({ id, result });
+}
+
+function update(sessionId, update) {
+  send({ method: "session/update", params: { sessionId, update } });
 }
 
 function mode() {
@@ -44,7 +68,27 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return;
     }
     // Every process starts at the same upstream ID, including after a restart.
-    respond(id, { sessionId: `session-${++sessionCount}` });
+    const sessionId = `session-${++sessionCount}`;
+    configs.set(sessionId, initialConfigOptions());
+    respond(id, {
+      sessionId,
+      modes: {
+        currentModeId: "default",
+        availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }],
+      },
+      configOptions: configs.get(sessionId),
+    });
+    update(sessionId, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS });
+  } else if (method === "session/set_config_option") {
+    const option = configs.get(params.sessionId).find((option) => option.id === params.configId);
+    option.currentValue = params.value;
+    respond(id, { configOptions: configs.get(params.sessionId) });
+    if (params.configId === "mode") {
+      update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.value });
+    }
+  } else if (method === "session/set_mode") {
+    respond(id, {});
+    update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.modeId });
   } else if (method === "session/prompt") {
     const text = params.prompt[0].text;
     if (text === "exit") process.exit(17);
@@ -53,16 +97,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       process.stdout.end();
       return;
     }
-    send({
-      method: "session/update",
-      params: {
-        sessionId: params.sessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: `${agentId}:${text}` },
-        },
-      },
+    if (text === "commands") {
+      update(params.sessionId, {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [...COMMANDS, { name: "commit", description: "Commit changes" }],
+      });
+      respond(id, { stopReason: "end_turn" });
+      return;
+    }
+    update(params.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: `${agentId}:${text}` },
     });
+    // The turn stays open until the client answers; nothing here auto-approves.
     const permissionId = `permission-${++permissionCount}`;
     permissions.set(permissionId, { id, sessionId: params.sessionId, hold: text === "hold" });
     send({

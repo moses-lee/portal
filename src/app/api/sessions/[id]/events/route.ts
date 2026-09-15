@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/acp";
 import { readGitInfo, sameGitInfo, type GitInfo } from "@/lib/git-info";
-import type { PortalEvent } from "@/lib/types";
+import type { PortalEvent, SessionMetaEvent } from "@/lib/types";
 
 const GIT_POLL_MS = 1000;
 
@@ -33,7 +33,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       };
       const sendMeta = () => {
         if (closed) return;
-        const meta = { busy: session.busy, cwd: session.cwd, agentId: session.agentId, agentName: session.agentName, git };
+        const meta: SessionMetaEvent = {
+          busy: session.busy, cwd: session.cwd, agentId: session.agentId, agentName: session.agentName, git,
+          state: session.state,
+        };
         try {
           controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
         } catch { cleanup(); }
@@ -51,10 +54,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           if (announce || changed) sendMeta();
         } finally { checkingGit = false; }
       };
+      // Mode, model, and command changes reach viewers through `meta`, not the event log.
+      const onState = () => sendMeta();
       cleanup = () => {
         if (closed) return;
         closed = true;
         session.listeners.delete(send);
+        session.stateListeners.delete(onState);
         if (ping) clearInterval(ping);
         if (gitPoll) clearInterval(gitPoll);
         req.signal.removeEventListener("abort", cleanup);
@@ -66,6 +72,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       sendMeta();
       // Tail.
       session.listeners.add(send);
+      session.stateListeners.add(onState);
       ping = setInterval(() => {
         try { controller.enqueue(enc.encode(`: ping\n\n`)); } catch { cleanup(); }
       }, 15000);
