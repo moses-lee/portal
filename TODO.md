@@ -1,0 +1,3 @@
+# TODO
+
+- [ ] **Persist sessions across restarts.** Sessions, their event logs, and the Portal-to-agent session ID mapping live only in server memory, so a restart empties the sidebar even though Claude Code and Codex already write every transcript to disk (`~/.claude/projects/`, `~/.codex/sessions/`). Save the mapping plus `cwd` and `agentId` per session to a file, and on the next open call ACP `session/load` so the adapter replays the transcript through the existing reducer. Both adapters advertise `loadSession` and implement `session/list`, so this could also surface conversations started from the CLI.
