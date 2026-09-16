@@ -12,7 +12,9 @@ import Sidebar from "./Sidebar";
 import StartPage from "./StartPage";
 import AddProjectDialog from "./AddProjectDialog";
 import { useProjects } from "./useProjects";
-import type { AgentInfo, PortalEvent, SessionMetaEvent, SessionState, SessionSummary, SetConfigRequest } from "@/lib/types";
+import type { WorktreeChoice } from "./WorktreePicker";
+import { ORIGINAL, worktreeTarget } from "@/lib/branch-matching";
+import type { AgentInfo, PortalEvent, ProjectSummary, SessionMetaEvent, SessionState, SessionSummary, SetConfigRequest } from "@/lib/types";
 import type { AvailableCommand, SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
@@ -268,9 +270,11 @@ export default function Chat() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const { projects, loading: projectsLoading, addProject, renameProject, removeProject } = useProjects();
+  const { projects, loading: projectsLoading, addProject, renameProject, removeProject, refresh: refreshProjects } = useProjects();
   /** The project picked this page load, or null to fall back to the remembered/newest one. */
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
+  /** The start page's worktree choice, tied to the project it was made for so a project change resets it. */
+  const [worktreePick, setWorktreePick] = useState<{ projectId: string; choice: WorktreeChoice } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
@@ -338,6 +342,8 @@ export default function Chat() {
     setChosenProjectId(projectId);
     if (projectId) storeProjectId(projectId);
   };
+
+  const worktreeChoice = worktreePick?.projectId === selectedProjectId ? worktreePick.choice : ORIGINAL;
 
   // Subscribe to the active session's event stream.
   useEffect(() => {
@@ -408,13 +414,43 @@ export default function Chat() {
 
   const canCreate = !loading && !projectsLoading && !creating && !!selectedAgentId && !!selectedProjectId;
 
-  const newSession = async (projectId: string = selectedProjectId) => {
+  /** Create (or reuse) the worktree project for `choice` under `projectId`; rejects with the server's message. */
+  const ensureWorktreeProject = async (projectId: string, choice: Exclude<WorktreeChoice, { kind: "original" }>) => {
+    let r: Response;
+    try {
+      r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/worktrees`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch: choice.branch, create: choice.kind === "create" }),
+      });
+    } catch {
+      throw new Error("Could not prepare the worktree. Check the server connection and try again.");
+    }
+    const j = (await r.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
+    if (!r.ok || !j.project) throw new Error(j.error ?? "Could not prepare the worktree. Try again.");
+    return j.project;
+  };
+
+  /** Start a session in `projectId`, first turning a non-Original `choice` into its worktree project. */
+  const newSession = async (projectId: string = selectedProjectId, choice: WorktreeChoice = ORIGINAL) => {
     if (creatingRef.current || loading || projectsLoading || !selectedAgentId || !projectId) return;
     creatingRef.current = true;
     setCreating(true);
     setSessionError(null);
     if (projectId !== selectedProjectId) selectProject(projectId);
     try {
+      if (choice.kind !== "original") {
+        let worktreeProject: ProjectSummary;
+        try {
+          worktreeProject = await ensureWorktreeProject(projectId, choice);
+        } catch (e) {
+          setSessionError(e instanceof Error ? e.message : "Could not prepare the worktree. Try again.");
+          return;
+        }
+        await refreshProjects();
+        projectId = worktreeProject.id;
+        selectProject(projectId);
+      }
       const r = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -425,6 +461,8 @@ export default function Chat() {
         setSessionError(session.error ?? "Could not create a session. Check the server and try again.");
         return;
       }
+      // The worktree choice was for this start only; the next start page begins at Original again.
+      setWorktreePick(null);
       setSessions((prev) => [session, ...prev]);
       selectSession(session.id, session.state ?? null);
     } catch {
@@ -567,6 +605,8 @@ export default function Chat() {
   };
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  // Where the start page's next session runs when a worktree is chosen (only for non-worktree git projects).
+  const startTarget = selectedProject && !selectedProject.worktree ? worktreeTarget(selectedProject, worktreeChoice) : null;
 
   return (
     <div className="flex h-dvh bg-zinc-950 text-zinc-100">
@@ -627,6 +667,8 @@ export default function Chat() {
                   selectedProjectId={selectedProjectId}
                   onSelectProject={selectProject}
                   onAddProject={() => setShowAddProject(true)}
+                  worktree={worktreeChoice}
+                  onWorktreeChange={(choice) => setWorktreePick({ projectId: selectedProjectId, choice })}
                   agents={agents}
                   selectedAgentId={selectedAgentId}
                   onSelectAgent={setSelectedAgentId}
@@ -634,7 +676,7 @@ export default function Chat() {
                   canCreate={canCreate}
                   creating={creating}
                   error={sessionError}
-                  onCreate={() => void newSession()}
+                  onCreate={() => void newSession(selectedProjectId, worktreeChoice)}
                 />
               )}
               {blocks.map((b, i) => (
@@ -727,13 +769,23 @@ export default function Chat() {
                 cwd={activeMeta.cwd}
                 displayCwd={activeMeta.displayCwd}
                 git={activeMeta.git}
+                label={activeMeta.project?.name}
                 note={activeMeta.cwdMissing ? "Working directory is missing" : undefined}
+              />
+            ) : startTarget && selectedProject?.git ? (
+              <ContextBar
+                cwd={startTarget.displayPath}
+                displayCwd={startTarget.displayPath}
+                git={{ ...selectedProject.git, branch: startTarget.branch, detached: false }}
+                label={selectedProject.name}
+                note={worktreeChoice.kind === "create" ? "new sessions start in a new worktree" : "new sessions start in this worktree"}
               />
             ) : (
               <ContextBar
                 cwd={selectedProject?.path}
                 displayCwd={selectedProject?.displayPath}
                 git={selectedProject?.git ?? null}
+                label={selectedProject?.name}
                 note={selectedProject ? "new sessions start here" : undefined}
               />
             )}

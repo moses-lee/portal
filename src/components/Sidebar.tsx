@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { BranchBadge } from "./ContextBar";
+import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
+import { orderProjects } from "@/lib/project-tree";
 import { groupSessionsByProject } from "@/lib/session-groups";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
 
@@ -16,8 +18,8 @@ export type SidebarProps = {
   onAddProject: () => void;
   /** May reject; the message is shown under the project. */
   onRenameProject: (id: string, name: string) => void | Promise<void>;
-  /** May reject; the message is shown under the project. */
-  onRemoveProject: (id: string) => void | Promise<void>;
+  /** May reject; the message is shown in the confirm box, with "Remove anyway" when `dirty` (see `ProjectRequestError`). */
+  onRemoveProject: (id: string, opts?: RemoveProjectOptions) => void | Promise<void>;
   /** Mobile drawer state; on `md` and up the sidebar is always visible. */
   open: boolean;
   onClose: () => void;
@@ -132,6 +134,88 @@ function ProjectMenu({ name, onRename, onRemove, onClose }: {
   );
 }
 
+/**
+ * Inline "Remove <project>?" box. Worktree projects also offer to delete the worktree folder and,
+ * when git refuses because of uncommitted changes, to remove anyway. Stays open until removal succeeds.
+ */
+function RemoveConfirm({ project, onRemove, onCancel }: {
+  project: ProjectSummary;
+  onRemove: (opts: RemoveProjectOptions) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [deleteWorktree, setDeleteWorktree] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ message: string; dirty: boolean } | null>(null);
+  const isWorktree = !!project.worktree;
+  const checkboxId = `sidebar-delete-worktree-${project.id}`;
+
+  const submit = async (force: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onRemove(isWorktree ? { deleteWorktree, force } : {});
+    } catch (e) {
+      setError({
+        message: e instanceof Error && e.message ? e.message : "Could not remove the project. Try again.",
+        dirty: e instanceof ProjectRequestError && e.dirty,
+      });
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div role="group" aria-label={`Remove ${project.name}?`} className="my-1 rounded border border-red-900/60 bg-red-950/30 px-2 py-2 text-xs">
+      {isWorktree ? (
+        <>
+          <p className="mb-2 text-zinc-300">Remove <span className="font-medium">{project.name}</span> from Portal?</p>
+          <label htmlFor={checkboxId} className="mb-1 flex items-center gap-1.5 text-zinc-300">
+            <input
+              id={checkboxId}
+              type="checkbox"
+              checked={deleteWorktree}
+              disabled={busy}
+              onChange={(e) => setDeleteWorktree(e.target.checked)}
+              className="accent-indigo-500"
+            />
+            Also delete the worktree folder
+          </label>
+          {deleteWorktree && <p className="mb-2 text-zinc-500">The branch is deleted too if it is fully merged.</p>}
+        </>
+      ) : (
+        <p className="mb-2 text-zinc-300">Remove <span className="font-medium">{project.name}</span> from Portal? Its sessions stay and the folder is untouched.</p>
+      )}
+      {error && (
+        <p role="alert" className="mb-2 break-words rounded bg-red-950/50 px-2 py-1.5 text-red-300">{error.message}</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          autoFocus
+          disabled={busy}
+          onClick={() => void submit(false)}
+          className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600 disabled:opacity-50"
+        >
+          {busy ? "Removing…" : "Remove"}
+        </button>
+        {error?.dirty && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void submit(true)}
+            title="Discard the worktree's uncommitted changes"
+            className="rounded border border-red-700 px-2 py-1 font-medium text-red-200 hover:bg-red-900/40 disabled:opacity-50"
+          >
+            Remove anyway
+          </button>
+        )}
+        <button type="button" disabled={busy} onClick={onCancel} className="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800 disabled:opacity-50">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** Projects as collapsible groups with their sessions; the mobile drawer is controlled by `open`. */
 export default function Sidebar({
   projects, sessions, active, onSelect, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
@@ -140,7 +224,7 @@ export default function Sidebar({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [actionError, setActionError] = useState<{ id: string; message: string } | null>(null);
-  const groups = groupSessionsByProject(projects, sessions);
+  const groups = groupSessionsByProject(orderProjects(projects), sessions);
 
   const toggle = (id: string) => {
     setCollapsed((prev) => {
@@ -194,7 +278,7 @@ export default function Sidebar({
             const edit = editing?.id === project.id ? editing : null;
             const listId = `sidebar-project-${project.id}`;
             return (
-              <section key={project.id} aria-label={project.name}>
+              <section key={project.id} aria-label={project.name} className={project.depth === 1 ? "ml-3 border-l border-zinc-800 pl-2" : undefined}>
                 <div className="flex items-center gap-1">
                   {edit?.mode === "rename" ? (
                     <RenameField
@@ -259,25 +343,15 @@ export default function Sidebar({
                   />
                 )}
                 {edit?.mode === "remove" && (
-                  <div role="group" aria-label={`Remove ${project.name}?`} className="my-1 rounded border border-red-900/60 bg-red-950/30 px-2 py-2 text-xs">
-                    <p className="mb-2 text-zinc-300">Remove <span className="font-medium">{project.name}</span> from Portal? Its sessions stay and the folder is untouched.</p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        autoFocus
-                        onClick={() => {
-                          setEditing(null);
-                          void run(project.id, () => onRemoveProject(project.id), "Could not remove the project. Try again.");
-                        }}
-                        className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600"
-                      >
-                        Remove
-                      </button>
-                      <button type="button" onClick={() => setEditing(null)} className="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800">
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
+                  <RemoveConfirm
+                    project={project}
+                    onRemove={async (opts) => {
+                      setActionError(null);
+                      await onRemoveProject(project.id, opts);
+                      setEditing(null);
+                    }}
+                    onCancel={() => setEditing(null)}
+                  />
                 )}
                 {actionError?.id === project.id && (
                   <p role="alert" className="my-1 rounded bg-red-950/50 px-2 py-1.5 text-xs text-red-300">{actionError.message}</p>

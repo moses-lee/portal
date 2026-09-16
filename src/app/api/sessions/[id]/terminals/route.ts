@@ -27,7 +27,7 @@ export async function POST(req: Request, { params }: Context) {
   try {
     await stat(session.cwd);
   } catch {
-    return Response.json({ error: `Project folder is missing: ${displayPath(session.cwd)}` }, { status: 409 });
+    return Response.json({ error: `Working directory is missing: ${displayPath(session.cwd)}` }, { status: 409 });
   }
   return Response.json(info(terminals.create({ sessionId: id, cwd: session.cwd })), { status: 201 });
 }

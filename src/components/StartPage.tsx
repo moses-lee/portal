@@ -1,6 +1,9 @@
 "use client";
 
 import { BranchBadge } from "./ContextBar";
+import WorktreePicker, { type WorktreeChoice } from "./WorktreePicker";
+import { worktreeTarget } from "@/lib/branch-matching";
+import { orderProjects } from "@/lib/project-tree";
 import type { AgentInfo, ProjectSummary } from "@/lib/types";
 
 export type StartPageProps = {
@@ -9,6 +12,9 @@ export type StartPageProps = {
   selectedProjectId: string;
   onSelectProject: (projectId: string) => void;
   onAddProject: () => void;
+  /** Worktree to start in; only meaningful for git projects that are not worktrees themselves. */
+  worktree: WorktreeChoice;
+  onWorktreeChange: (choice: WorktreeChoice) => void;
   agents: AgentInfo[];
   selectedAgentId: string;
   onSelectAgent: (agentId: string) => void;
@@ -23,12 +29,18 @@ export type StartPageProps = {
 
 /** The empty-state card shown when no session is active: pick a project and an agent, then start. */
 export default function StartPage({
-  projects, selectedProjectId, onSelectProject, onAddProject,
+  projects, selectedProjectId, onSelectProject, onAddProject, worktree, onWorktreeChange,
   agents, selectedAgentId, onSelectAgent, loading = false, canCreate, creating, error, onCreate,
 }: StartPageProps) {
+  const ordered = orderProjects(projects);
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const missingFolder = !!error && /missing/i.test(error);
+  const canPickWorktree = !!selectedProject?.git && !selectedProject.worktree;
+  const parentName = selectedProject?.worktree
+    ? projects.find((p) => p.id === selectedProject.worktree?.parentId)?.name ?? "another project"
+    : null;
+  const target = selectedProject && canPickWorktree ? worktreeTarget(selectedProject, worktree) : null;
 
   return (
     <section aria-labelledby="new-session-title" className="mx-auto mt-16 max-w-md rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
@@ -59,9 +71,9 @@ export default function StartPage({
               className="min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
             >
               {!selectedProject && <option value="">Choose a project…</option>}
-              {projects.map((project) => (
+              {ordered.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.name}{project.exists === false ? " (missing)" : ""}
+                  {project.depth === 1 ? "  └ " : ""}{project.name}{project.exists === false ? " (missing)" : ""}
                 </option>
               ))}
             </select>
@@ -74,10 +86,29 @@ export default function StartPage({
               Add project…
             </button>
           </div>
+          {selectedProject && canPickWorktree && (
+            <WorktreePicker project={selectedProject} value={worktree} onChange={onWorktreeChange} disabled={loading || creating} />
+          )}
+          {selectedProject?.worktree && (
+            <p className="mt-2 text-xs text-zinc-500">
+              Worktree of <span className="text-zinc-300">{parentName}</span> on <span className="font-mono text-zinc-300">{selectedProject.worktree.branch}</span>
+            </p>
+          )}
           {selectedProject && (
             <p className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
-              <span className="min-w-0 truncate font-mono text-zinc-300" title={selectedProject.path}>{selectedProject.displayPath}</span>
-              <BranchBadge git={selectedProject.git} />
+              {target && selectedProject.git ? (
+                <>
+                  <span className="min-w-0 truncate font-mono text-zinc-300" title={target.displayPath}>{target.displayPath}</span>
+                  <BranchBadge git={{ ...selectedProject.git, branch: target.branch, detached: false }} />
+                  {worktree.kind === "create" && <span>new branch and worktree, created on start</span>}
+                  {worktree.kind === "branch" && !worktree.path && <span>worktree created on start</span>}
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 truncate font-mono text-zinc-300" title={selectedProject.path}>{selectedProject.displayPath}</span>
+                  <BranchBadge git={selectedProject.git} />
+                </>
+              )}
               {selectedProject.exists === false && <span className="text-amber-400">This folder is missing on the host.</span>}
             </p>
           )}

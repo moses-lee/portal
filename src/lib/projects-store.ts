@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveDirectory } from "./fs-paths.ts";
 import { displayPath, readGitInfo } from "./git-info.ts";
-import type { Project, ProjectSummary } from "./types.ts";
+import type { Project, ProjectSummary, WorktreeMeta } from "./types.ts";
 
 /** A project operation the caller got wrong; `project` is set on a 409 so the UI can select it. */
 export class ProjectError extends Error {
@@ -24,10 +24,16 @@ export function defaultProjectsFile() {
 
 type ProjectsFile = { version: 1; projects: Project[] };
 
+function isWorktreeMeta(value: unknown): value is WorktreeMeta {
+  const w = value as Record<string, unknown> | null;
+  return !!w && typeof w === "object" && typeof w.parentId === "string" && typeof w.branch === "string";
+}
+
 function isProject(value: unknown): value is Project {
   const p = value as Record<string, unknown> | null;
   return !!p && typeof p === "object" && typeof p.id === "string" && typeof p.name === "string"
-    && typeof p.path === "string" && typeof p.createdAt === "number";
+    && typeof p.path === "string" && typeof p.createdAt === "number"
+    && (p.worktree === undefined || isWorktreeMeta(p.worktree));
 }
 
 function parseProjectsFile(text: string): Project[] | null {
@@ -118,7 +124,7 @@ export function createProjectsStore({ file = defaultProjectsFile(), home = os.ho
     return project;
   }
 
-  function add({ path: input, name }: { path: string; name?: string }): Promise<Project> {
+  function add({ path: input, name, worktree }: { path: string; name?: string; worktree?: WorktreeMeta }): Promise<Project> {
     return mutate(async () => {
       const real = await resolveDirectory(input, home);
       const existing = findByPath(real);
@@ -128,6 +134,7 @@ export function createProjectsStore({ file = defaultProjectsFile(), home = os.ho
         name: name?.trim() || path.basename(real) || real,
         path: real,
         createdAt: Date.now(),
+        ...(worktree ? { worktree: { parentId: worktree.parentId, branch: worktree.branch } } : {}),
       };
       await save(new Map(projects).set(project.id, project));
       return project;

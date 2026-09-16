@@ -21,15 +21,18 @@ export function BranchBadge({ git }: { git: GitInfo }) {
 }
 
 /** Repository, branch, and directory the message box currently targets. */
-export default function ContextBar({ cwd, displayCwd, git, note }: {
+export default function ContextBar({ cwd, displayCwd, git, label, note }: {
   cwd: string | undefined;
   displayCwd: string | undefined;
   git: GitInfo;
+  /** Shown before the branch, e.g. the project name; defaults to the repository folder name. */
+  label?: string;
   note?: string;
 }) {
+  const heading = label ?? (git ? basename(git.root) : undefined);
   return (
     <div id="session-context" aria-live="polite" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-2 text-[11px] text-zinc-500">
-      {git && <span className="shrink-0 font-medium text-zinc-300">{basename(git.root)}</span>}
+      {heading && <span className="max-w-64 shrink-0 truncate font-medium text-zinc-300">{heading}</span>}
       <BranchBadge git={git} />
       <span title={cwd} className="min-w-0 truncate font-mono">{displayCwd ?? "No project selected"}</span>
       {note && <span className="shrink-0">· {note}</span>}

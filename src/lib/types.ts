@@ -11,6 +11,9 @@ import type { GitInfo } from "./git-info";
 
 export type AgentInfo = { id: string; name: string };
 
+/** Marks a project as a git worktree Portal created for `branch` under the `parentId` project. */
+export type WorktreeMeta = { parentId: string; branch: string };
+
 /** A folder the user added to Portal. Every session belongs to one and starts in its `path`. */
 export type Project = {
   id: string;
@@ -18,6 +21,47 @@ export type Project = {
   /** Absolute, realpath'd directory. */
   path: string;
   createdAt: number;
+  /** Present when this project is a worktree of another project. */
+  worktree?: WorktreeMeta;
+};
+
+/** One branch of a project's repository, merged across the local branch and `origin/<name>`. */
+export type BranchInfo = {
+  /** Short name, e.g. "feat/foo". */
+  name: string;
+  local: boolean;
+  remote: boolean;
+  /** Epoch ms of the latest commit across the local and remote tips. */
+  committedAt: number;
+  /** Absolute path of the worktree (or main checkout) where the branch is checked out, else null. */
+  worktreePath: string | null;
+};
+
+/** A GitHub pull request as reported by `gh`. */
+export type PullInfo = {
+  number: number;
+  title: string;
+  /** Head branch name. */
+  branch: string;
+  state: "open" | "closed" | "merged";
+  /** Epoch ms. */
+  updatedAt: number;
+  /** True for cross-repository (fork) PRs, which Portal cannot check out. */
+  fork: boolean;
+};
+
+/** Response of `GET /api/projects/<id>/branches`. */
+export type BranchListing = {
+  /** From `origin/HEAD`, falling back to main then master; null when none exist. */
+  defaultBranch: string | null;
+  /** Every local and origin branch except the default, newest commit first. */
+  branches: BranchInfo[];
+  /** Open PRs newest-updated first, or null when `gh` could not answer. */
+  pulls: PullInfo[] | null;
+  /** Short reason when `pulls` is null. */
+  pullsError: string | null;
+  /** Display path of the folder Portal creates worktrees under, e.g. "~/.portal/worktrees". */
+  worktreesDir: string;
 };
 
 /** Project as served to the browser, with presentation and the folder's current state. */

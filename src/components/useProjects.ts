@@ -5,6 +5,26 @@ import type { Project, ProjectSummary } from "@/lib/types";
 
 export type AddProjectInput = { path: string; name?: string };
 
+/** Options for removing a worktree project; ignored for other projects. */
+export type RemoveProjectOptions = {
+  /** Run `git worktree remove` (and delete the branch when fully merged) before dropping the record. */
+  deleteWorktree?: boolean;
+  /** Remove the worktree even when it has uncommitted changes. */
+  force?: boolean;
+};
+
+/** A failed project request, with the server's status and its `dirty` flag for a worktree that refused removal. */
+export class ProjectRequestError extends Error {
+  status: number;
+  dirty: boolean;
+  constructor(message: string, status: number, dirty = false) {
+    super(message);
+    this.name = "ProjectRequestError";
+    this.status = status;
+    this.dirty = dirty;
+  }
+}
+
 export type UseProjects = {
   /** Creation order, as served by `GET /api/projects`. */
   projects: ProjectSummary[];
@@ -20,8 +40,11 @@ export type UseProjects = {
   addProject: (input: AddProjectInput) => Promise<Project>;
   /** `PATCH /api/projects/[id]`. Rejects with the server's message. */
   renameProject: (id: string, name: string) => Promise<Project>;
-  /** `DELETE /api/projects/[id]`. Sessions stay. Rejects with the server's message. */
-  removeProject: (id: string) => Promise<void>;
+  /**
+   * `DELETE /api/projects/[id]`, with `?worktree=delete[&force=1]` per `opts`. Sessions stay.
+   * Rejects with a `ProjectRequestError` carrying the server's message (and `dirty` for a 409).
+   */
+  removeProject: (id: string, opts?: RemoveProjectOptions) => Promise<void>;
   /** Refetch the list. Never rejects; failures land in `error`. */
   refresh: () => Promise<void>;
 };
@@ -34,8 +57,8 @@ function placeholder(project: Project, previous?: ProjectSummary): ProjectSummar
 }
 
 async function readError(r: Response, fallback: string) {
-  const j = (await r.json().catch(() => ({}))) as { error?: string };
-  return new Error(j.error ?? fallback);
+  const j = (await r.json().catch(() => ({}))) as { error?: string; dirty?: boolean };
+  return new ProjectRequestError(j.error ?? fallback, r.status, j.dirty === true);
 }
 
 /** The project list and its mutations; refetches when the tab becomes visible again. */
@@ -131,10 +154,16 @@ export function useProjects(): UseProjects {
     return project;
   }, [merge, refresh]);
 
-  const removeProject = useCallback(async (id: string) => {
+  const removeProject = useCallback(async (id: string, opts: RemoveProjectOptions = {}) => {
+    const params = new URLSearchParams();
+    if (opts.deleteWorktree) {
+      params.set("worktree", "delete");
+      if (opts.force) params.set("force", "1");
+    }
+    const query = params.size ? `?${params}` : "";
     let r: Response;
     try {
-      r = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+      r = await fetch(`/api/projects/${encodeURIComponent(id)}${query}`, { method: "DELETE" });
     } catch {
       throw new Error(NETWORK_ERROR);
     }

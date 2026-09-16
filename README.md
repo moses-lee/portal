@@ -27,10 +27,18 @@ Portal uses the agents' existing credentials. Mode, model, and effort controls u
 
 **Add project** in the sidebar or on the start page opens a folder browser (or takes a typed path such as `~/repos/portal`). Projects are stored in `~/.portal/projects.json` (set `PORTAL_HOME` to move the directory); each project is exactly one folder, stored as its resolved real path, and the same folder cannot be added twice. Rename or remove a project from its `⋯` menu in the sidebar; removing a project does not touch its sessions, which move to a **Removed projects** group and keep working. If a project's folder disappears from disk, the project stays listed with a *missing* marker until you remove or re-add it, and starting a session or terminal in it fails with a clear error.
 
+### Worktrees
+
+For a project inside a git repository, the start page adds a **Worktree** picker under the project select. **Original** (the default) starts the session in the project folder itself; otherwise pick an open pull request, a recent local or `origin` branch, or type a name to **Create branch** off `origin/<default branch>`. Starting the session then checks the branch out into its own git worktree at `~/.portal/worktrees/<repo>/<branch>` (under `PORTAL_HOME` if set; `/` and other unsafe characters in the branch name become `-`), records it as a project of its own named `<project> · <branch>`, and starts the session there. Projects whose folder is a subfolder of the repository get the same subfolder inside the worktree. A branch already checked out somewhere (the main checkout or any worktree) is reused instead of duplicated; branches that exist only on `origin` are fetched and set to track it. Creating a branch fetches the default branch first and fails if `origin` cannot be reached.
+
+Pull requests come from the `gh` CLI (`gh pr list` / `gh pr view` in the repository); when `gh` is missing, signed out, or `origin` is not on GitHub, the picker still lists branches and shows the reason. PRs from forks are listed but cannot be checked out. Listing never runs `git fetch`.
+
+Worktree projects appear indented under their parent in the sidebar and project select and behave like any other project. Removing one from its `⋯` menu offers to also delete the worktree folder (`git worktree remove`), and deletes the local branch too when it is fully merged into the default branch (`git branch -d`, never `-D`). Uncommitted changes make git refuse; **Remove anyway** forces it. A worktree folder that has already disappeared is pruned from git and the project is removed.
+
 Click **Terminal** in the top-right corner of an open session to open that session's terminals below the chat and message box. Drag the divider to resize the panel; **Terminal** or **Hide** closes the panel while commands keep running. On touch screens, a small key row provides Esc, Tab, Ctrl+C, and command-history arrows.
 
 - Terminals belong to a session. Opening the panel for the first time creates one tab; **+** adds more. Every tab is its own process started in the session's directory with the host's `$SHELL` as a login shell, with its usual configuration and environment.
-- `cd` inside a terminal changes nothing about the session: the agent keeps working in the session's directory, and new sessions always start in their project's folder.
+- `cd` inside a terminal changes nothing about the session: the agent keeps working in the session's directory, and new sessions always start in their project's folder (or in the chosen worktree's).
 - Switching sessions or hiding the panel leaves the processes running; reconnecting restores each tab's screen and up to 2,000 scrollback lines. A tab ends when you close it with **×**, when its shell exits (the output stays and **Start new shell** restarts it in the same directory), or when Portal stops.
 - All viewers of a tab (other browser tabs, other devices) see the same terminal. The most recently focused/resized view sets its dimensions. Closing a tab on one device closes it everywhere.
 - The start page has no terminal.
@@ -47,18 +55,21 @@ As with the agent APIs, terminals are intended for this personal Portal instance
 - `src/lib/acp-runtime.ts` — shared ACP runtime. One lazy subprocess per agent, isolated sessions, append-only event logs, agent-announced session state (modes, config options, commands), and pending permission prompts.
 - `src/lib/acp.ts` — runtime singleton preserved across development hot reloads.
 - `src/lib/types.ts` — shared event, project, and session metadata types.
-- `src/lib/projects-store.ts` — persisted project list (`~/.portal/projects.json`, atomic rewrites); `src/lib/projects.ts` is its singleton. `src/lib/fs-paths.ts` resolves and lists directories for it and for the folder browser.
+- `src/lib/projects-store.ts` — persisted project list (`~/.portal/projects.json`, atomic rewrites), including `worktree: {parentId, branch}` metadata for worktree projects; `src/lib/projects.ts` is its singleton. `src/lib/fs-paths.ts` resolves and lists directories for it and for the folder browser.
+- `src/lib/worktrees.ts` — branch and PR listing (`git for-each-ref`, `git worktree list`, `gh pr`), worktree creation under `~/.portal/worktrees`, and removal with merged-branch cleanup. `src/lib/branch-matching.ts` ranks picker rows; `src/lib/project-tree.ts` orders worktree projects under their parents.
 - `src/lib/git-info.ts` — repository root and branch lookup by reading `.git` directly; `src/lib/session-summary.ts` attaches it to sessions for the browser.
 - `src/app/api/agents` — `GET` available agents and the default selection.
-- `src/app/api/projects` — `GET` list, `POST {path, name?}` add (409 with the existing project on a duplicate folder); `src/app/api/projects/[id]` — `PATCH {name}`, `DELETE`.
+- `src/app/api/projects` — `GET` list, `POST {path, name?}` add (409 with the existing project on a duplicate folder); `src/app/api/projects/[id]` — `PATCH {name}`, `DELETE` (`?worktree=delete` also removes a worktree project's folder and merged branch; 409 `{error, dirty: true}` when git refuses, `&force=1` overrides).
+- `src/app/api/projects/[id]/branches` — `GET` the repository's branches (local and `origin`, default branch excluded), which are checked out where, and open PRs via `gh` (or why `gh` could not answer). `src/app/api/projects/[id]/pulls/[number]` — `GET` one PR in any state.
+- `src/app/api/projects/[id]/worktrees` — `POST {branch, create?}` finds or creates the worktree for a branch (`create` starts it from `origin/<default>`) and returns `{project}`: 201 for a new worktree project, 200 when one already covers that folder.
 - `src/app/api/fs/dirs` — `GET ?path=&hidden=1` lists subdirectories for the folder browser.
-- `src/app/api/sessions` — `GET` list, `POST {projectId, agentId}` create in that project's folder. Omitting `agentId` defaults to Claude Code.
+- `src/app/api/sessions` — `GET` list, `POST {projectId, agentId}` create in that project's folder (pass a worktree project's ID to start in its worktree). Omitting `agentId` defaults to Claude Code.
 - `src/app/api/sessions/[id]/events` — Server-Sent Events: replays the log, then tails it. `meta` events carry busy state, the directory's current branch, whether the directory still exists, the owning project, and the agent's session state (modes, config options, commands); they are re-sent whenever any of these change.
 - `src/app/api/sessions/[id]/prompt` — `POST {text}`; returns 202, progress arrives via SSE.
 - `src/app/api/sessions/[id]/cancel` — `POST`; cancels open permission prompts, then sends `session/cancel`.
 - `src/app/api/sessions/[id]/config` — `POST {configId, value}` or `{modeId}`; forwards `session/set_config_option` / `session/set_mode` and returns the new `{state}`.
 - `src/app/api/sessions/[id]/permission` — `POST {requestId, optionId}`; answers a `permission_request` from the event stream (`optionId: null` cancels it).
-- `src/app/api/sessions/[id]/terminals` — `GET` list, `POST` create a terminal for the session; `src/app/api/terminals/[id]` — `DELETE` closes one.
+- `src/app/api/sessions/[id]/terminals` — `GET` list, `POST` create a terminal for the session (409 when its working directory is missing); `src/app/api/terminals/[id]` — `DELETE` closes one.
 - `src/components/Chat.tsx` — reduces the event stream into user / assistant / thought / tool / plan blocks; `Sidebar.tsx`, `StartPage.tsx`, `AddProjectDialog.tsx`, and `DirectoryBrowser.tsx` handle projects.
 - `src/lib/shell-runtime.ts` — one PTY with bounded terminal state, directory tracking, and subscribers; `src/lib/terminals-registry.ts` keeps one per terminal tab (`src/lib/terminals.ts` is the singleton).
 - `src/lib/shell-server.ts` — terminal WebSocket commands, snapshots, live subscribers, and close notifications.
@@ -83,6 +94,7 @@ pnpm build
 ## Known limits
 
 - Projects persist in `~/.portal/projects.json`; sessions and terminals live in server memory, so restarting the dev server loses them.
+- Worktrees are created from the repository's `origin` remote only; repositories without `origin` can still check out local branches but cannot create new ones. Worktrees Portal did not create are reused when their branch is picked but are never deleted by Portal.
 - Run one Portal instance per `PORTAL_HOME`; two servers writing the same projects file will overwrite each other.
 - If an agent process exits, its session history remains visible, but continuing requires a new session. Other agents' sessions keep running.
 - Agent selection is fixed per session. Mode, model, and effort choices are limited to what the agent exposes as ACP config options; login screens and custom-agent configuration UI are not included.

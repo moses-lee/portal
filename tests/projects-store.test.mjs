@@ -156,3 +156,31 @@ test("summarizeProject reports display path, git state, and existence", async (t
   rmSync(one.path, { recursive: true });
   assert.deepEqual(await summarizeProject(one), { ...one, displayPath: one.path, git: null, exists: false });
 });
+
+test("persists worktree metadata and rejects malformed worktree values on load", async (t) => {
+  const { home, file, open } = setup(t);
+  const store = open();
+  const parent = await store.add({ path: path.join(home, "one") });
+  const wt = await store.add({ path: path.join(home, "two"), name: "one · feat", worktree: { parentId: parent.id, branch: "feat", extra: "ignored" } });
+  assert.deepEqual(wt.worktree, { parentId: parent.id, branch: "feat" });
+  assert.equal(parent.worktree, undefined);
+  assert.ok(!("worktree" in parent), "plain projects carry no worktree key");
+  const reloaded = open();
+  await reloaded.ready;
+  assert.deepEqual(reloaded.get(wt.id), wt);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).projects[1].worktree, { parentId: parent.id, branch: "feat" });
+
+  const warn = t.mock.method(console, "warn", () => {});
+  for (const worktree of [null, "x", { parentId: 1, branch: "b" }, { parentId: "p" }]) {
+    writeFileSync(file, JSON.stringify({ version: 1, projects: [{ ...parent, worktree }] }));
+    const bad = open();
+    await bad.ready;
+    assert.deepEqual(bad.list(), [], `worktree ${JSON.stringify(worktree)} should be rejected`);
+  }
+  assert.equal(warn.mock.callCount(), 4);
+  // Unknown extra keys on a project are still tolerated.
+  writeFileSync(file, JSON.stringify({ version: 1, projects: [{ ...parent, colour: "red" }] }));
+  const lenient = open();
+  await lenient.ready;
+  assert.equal(lenient.list().length, 1);
+});
