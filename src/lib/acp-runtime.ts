@@ -241,8 +241,8 @@ export function createAcpRuntime(
 
   function listSessions(): SessionMeta[] {
     return [...sessions.values()]
-      .map(({ id, agentId, agentName, cwd, createdAt, busy, state }) => ({
-        id, agentId, agentName, cwd, createdAt, busy, state,
+      .map(({ id, agentId, agentName, cwd, projectId, createdAt, busy, state }) => ({
+        id, agentId, agentName, cwd, projectId, createdAt, busy, state,
       }))
       .sort((a, b) => b.createdAt - a.createdAt);
   }
@@ -251,7 +251,8 @@ export function createAcpRuntime(
     return sessions.get(id);
   }
 
-  async function createSession(cwd: string, agentId = agentDefinitions[0]?.id ?? ""): Promise<Session> {
+  /** `projectId` is Portal metadata: it is stored on the session and never sent to the agent. */
+  async function createSession(cwd: string, agentId = agentDefinitions[0]?.id ?? "", projectId = ""): Promise<Session> {
     const instance = await connect(agentId);
     try {
       const response = await instance.conn.agent.request(acp.methods.agent.session.new, {
@@ -264,6 +265,7 @@ export function createAcpRuntime(
         agentId: instance.agent.id,
         agentName: instance.agent.name,
         cwd,
+        projectId,
         createdAt: Date.now(),
         busy: false,
         state: {

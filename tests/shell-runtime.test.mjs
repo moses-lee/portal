@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import xterm from "@xterm/headless";
 import { createShellRuntime } from "../src/lib/shell-runtime.ts";
-import { checkShellOrigin, parseShellCommand } from "../src/lib/shell-http.ts";
+import { checkSameOrigin, parseShellCommand } from "../src/lib/shell-http.ts";
 
 const native = { skip: !["darwin", "linux"].includes(process.platform) };
 async function until(predicate, description) {
@@ -19,12 +19,16 @@ async function until(predicate, description) {
   }
 }
 
+function bashRuntime(cwd, overrides = {}) {
+  return createShellRuntime({
+    cwd, shell: "/bin/bash", args: ["--noprofile", "--rcfile", fileURLToPath(new URL("./fixtures/shell.bashrc", import.meta.url)), "-i"],
+    env: { ...process.env, PS1: "PORTAL_TEST> ", HISTFILE: "/dev/null" }, pollIntervalMs: 40, ...overrides,
+  });
+}
+
 function setup(t) {
   const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-shell-")));
-  const runtime = createShellRuntime({
-    cwd, shell: "/bin/bash", args: ["--noprofile", "--rcfile", fileURLToPath(new URL("./fixtures/shell.bashrc", import.meta.url)), "-i"],
-    env: { ...process.env, PS1: "PORTAL_TEST> ", HISTFILE: "/dev/null" }, pollIntervalMs: 40,
-  });
+  const runtime = bashRuntime(cwd);
   const events = [];
   const unsubscribe = runtime.subscribe((event) => events.push(event), true);
   t.after(() => { unsubscribe(); runtime.dispose(); rmSync(cwd, { recursive: true, force: true }); });
@@ -75,13 +79,13 @@ test("directory changes use the actual process, including aliases, spaces and fa
   runtime.start(null);
   await until(() => output().includes("PORTAL_TEST>"), "shell prompt");
   write("alias project='cd \"project with spaces\"'\rproject\r");
-  await until(async () => await runtime.workingDirectory() === target, "alias cd");
+  await until(async () => (await runtime.refresh()).cwd === target, "alias cd");
   assert.equal(process.cwd(), portalCwd);
   write("cd /portal-directory-that-does-not-exist\r");
   await until(() => output().includes("No such file or directory"), "failed cd");
-  assert.equal(await runtime.workingDirectory(), target);
+  assert.equal((await runtime.refresh()).cwd, target);
   write("printf '\\033]7;file://localhost/fake-directory\\007'\rcd ..\r");
-  await until(async () => await runtime.workingDirectory() === cwd, "parent directory");
+  await until(async () => (await runtime.refresh()).cwd === cwd, "parent directory");
   assert.equal(runtime.getState().cwdError, null);
 });
 
@@ -126,10 +130,10 @@ test("shell commands reject cross-origin requests, oversized input and invalid g
   const request = (body, headers = {}) => new Request("http://localhost:3000/api/shell", {
     method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
   });
-  assert.equal(checkShellOrigin(request({}, { origin: "http://evil.example" })).status, 403);
-  assert.equal(checkShellOrigin(request({}, { "sec-fetch-site": "cross-site" })).status, 403);
-  assert.equal(checkShellOrigin(request({}, { origin: "http://localhost:3000" })), null);
-  assert.equal(checkShellOrigin(new Request("http://100.1.2.3:3000/api/shell", { headers: { origin: "http://100.1.2.3:3000" } })), null);
+  assert.equal(checkSameOrigin(request({}, { origin: "http://evil.example" })).status, 403);
+  assert.equal(checkSameOrigin(request({}, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal(checkSameOrigin(request({}, { origin: "http://localhost:3000" })), null);
+  assert.equal(checkSameOrigin(new Request("http://100.1.2.3:3000/api/shell", { headers: { origin: "http://100.1.2.3:3000" } })), null);
   assert.deepEqual(parseShellCommand({ action: "input", id: "abc", data: "\u0003" }), { action: "input", id: "abc", data: "\u0003" });
   for (const command of [
     null, [], { action: "input", data: "hi" }, { action: "input", id: "abc", data: "a".repeat(17000) },
@@ -154,4 +158,42 @@ test("tracks the repository and branch of the shell directory", native, async (t
   await until(() => runtime.getState().git?.branch === "topic", "branch after checkout");
   write("cd ..\r");
   await until(() => runtime.getState().git === null && runtime.getState().cwd === cwd, "leaving the repository");
+});
+
+test("directory polling runs only while subscribed; refresh() still answers on demand", native, async (t) => {
+  const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-shell-")));
+  const runtime = bashRuntime(cwd);
+  t.after(() => { runtime.dispose(); rmSync(cwd, { recursive: true, force: true }); });
+  const target = path.join(cwd, "sub");
+  mkdirSync(target);
+  runtime.start(null);
+  const output = [];
+  const unsubscribe = runtime.subscribe((event) => { if (event.type === "output") output.push(event.data); }, true);
+  await until(() => output.join("").includes("PORTAL_TEST>"), "shell prompt");
+  unsubscribe();
+  runtime.write(runtime.getState().id, "cd sub\r");
+  await delay(250);
+  assert.equal(runtime.getState().cwd, cwd, "no poll without subscribers");
+  assert.equal((await runtime.refresh()).cwd, target);
+  assert.equal(runtime.getState().cwd, target);
+  const detach = runtime.subscribe(() => {});
+  runtime.write(runtime.getState().id, "cd ..\r");
+  await until(() => runtime.getState().cwd === cwd, "poll while subscribed");
+  detach();
+  runtime.write(runtime.getState().id, "cd sub\r");
+  await delay(250);
+  assert.equal(runtime.getState().cwd, cwd, "poll stops after the last unsubscribe");
+  assert.equal((await runtime.refresh()).cwd, target);
+});
+
+test("a missing launch directory fails start with a readable error and allows a retry", native, async (t) => {
+  const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-shell-")));
+  const runtime = bashRuntime(cwd);
+  t.after(() => { runtime.dispose(); rmSync(cwd, { recursive: true, force: true }); });
+  rmSync(cwd, { recursive: true, force: true });
+  assert.throws(() => runtime.start(null), new RegExp(`^Error: Could not start a terminal in ${cwd}: `));
+  assert.equal(runtime.getState().status, "idle");
+  assert.equal(runtime.getState().id, null);
+  mkdirSync(cwd);
+  assert.equal(runtime.start(null).status, "running");
 });

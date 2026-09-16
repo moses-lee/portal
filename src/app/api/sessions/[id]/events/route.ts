@@ -1,8 +1,10 @@
+import { stat } from "node:fs/promises";
 import { getSession } from "@/lib/acp";
 import { readGitInfo, sameGitInfo, type GitInfo } from "@/lib/git-info";
+import { projects } from "@/lib/projects";
 import type { PortalEvent, SessionMetaEvent } from "@/lib/types";
 
-const GIT_POLL_MS = 1000;
+const META_POLL_MS = 1000;
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +17,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!Number.isSafeInteger(since) || since < -1) {
     return new Response("invalid event cursor", { status: 400 });
   }
+  await projects.ready;
   const enc = new TextEncoder();
   let cleanup = () => {};
 
@@ -22,9 +25,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     start(controller) {
       let closed = false;
       let ping: ReturnType<typeof setInterval> | null = null;
-      let gitPoll: ReturnType<typeof setInterval> | null = null;
+      let metaPoll: ReturnType<typeof setInterval> | null = null;
+      const currentProject = (): SessionMetaEvent["project"] => {
+        const owner = projects.get(session.projectId);
+        return owner ? { id: owner.id, name: owner.name } : null;
+      };
       let git: GitInfo = null;
-      let checkingGit = false;
+      let cwdMissing = false;
+      let project = currentProject();
+      let checking = false;
       const send = (index: number, ev: PortalEvent) => {
         if (closed) return;
         try {
@@ -35,24 +44,31 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         if (closed) return;
         const meta: SessionMetaEvent = {
           busy: session.busy, cwd: session.cwd, agentId: session.agentId, agentName: session.agentName, git,
-          state: session.state,
+          state: session.state, project, cwdMissing,
         };
         try {
           controller.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
         } catch { cleanup(); }
       };
-      // The session directory is fixed, but its checked-out branch moves as the agent or the
-      // shell run git; re-announce meta whenever it changes.
-      const refreshGit = async (announce: boolean) => {
-        if (checkingGit) return;
-        checkingGit = true;
+      // The session directory is fixed, but its checked-out branch moves as the agent or a
+      // terminal run git, the folder itself can disappear, and the owning project can be renamed
+      // or removed; re-announce meta whenever any of those change.
+      const refreshMeta = async (announce: boolean) => {
+        if (checking) return;
+        checking = true;
         try {
-          const next = await readGitInfo(session.cwd);
+          const missing = await stat(session.cwd).then(() => false, () => true);
+          // readGitInfo walks up to parent directories, so skip it once the folder itself is gone.
+          const nextGit = missing ? null : await readGitInfo(session.cwd);
           if (closed) return;
-          const changed = !sameGitInfo(next, git);
-          git = next;
+          const nextProject = currentProject();
+          const changed = !sameGitInfo(nextGit, git) || missing !== cwdMissing
+            || nextProject?.id !== project?.id || nextProject?.name !== project?.name;
+          git = nextGit;
+          cwdMissing = missing;
+          project = nextProject;
           if (announce || changed) sendMeta();
-        } finally { checkingGit = false; }
+        } finally { checking = false; }
       };
       // Mode, model, and command changes reach viewers through `meta`, not the event log.
       const onState = () => sendMeta();
@@ -62,7 +78,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         session.listeners.delete(send);
         session.stateListeners.delete(onState);
         if (ping) clearInterval(ping);
-        if (gitPoll) clearInterval(gitPoll);
+        if (metaPoll) clearInterval(metaPoll);
         req.signal.removeEventListener("abort", cleanup);
         try { controller.close(); } catch {}
       };
@@ -76,9 +92,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       ping = setInterval(() => {
         try { controller.enqueue(enc.encode(`: ping\n\n`)); } catch { cleanup(); }
       }, 15000);
-      gitPoll = setInterval(() => { void refreshGit(false); }, GIT_POLL_MS);
+      metaPoll = setInterval(() => { void refreshMeta(false); }, META_POLL_MS);
       req.signal.addEventListener("abort", cleanup, { once: true });
-      void refreshGit(true);
+      void refreshMeta(true);
     },
     cancel() { cleanup(); },
   });

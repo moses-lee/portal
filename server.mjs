@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import next from "next";
-import { shell } from "./src/lib/shell.ts";
-import { attachShellServer } from "./src/lib/shell-server.ts";
+import { terminals } from "./src/lib/terminals.ts";
+import { attachTerminalServer } from "./src/lib/shell-server.ts";
 
 const dev = !process.argv.includes("--production");
 const port = Number(process.env.PORT || 3000);
@@ -10,21 +10,21 @@ const server = createServer((req, res) => handle(req, res));
 const app = next({ dev, hostname, port, httpServer: server });
 const handle = app.getRequestHandler();
 await app.prepare();
-const io = attachShellServer(server, shell);
+const io = attachTerminalServer(server, terminals);
 
 let stopping = false;
 async function shutdown() {
   if (stopping) return;
   stopping = true;
-  shell.dispose();
+  terminals.disposeAll();
   io.close();
-  // Active chat streams must not prevent the host (and its PTY) from stopping.
+  // Active chat streams must not prevent the host (and its PTYs) from stopping.
   setTimeout(() => process.exit(0), 1500).unref();
   await app.close();
   process.exit(0);
 }
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
-process.once("exit", () => shell.dispose());
-server.once("error", (error) => { console.error(error); shell.dispose(); process.exit(1); });
+process.once("exit", () => terminals.disposeAll());
+server.once("error", (error) => { console.error(error); terminals.disposeAll(); process.exit(1); });
 server.listen(port, hostname, () => console.log(`Portal ready at http://localhost:${port}`));

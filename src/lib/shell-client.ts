@@ -3,10 +3,26 @@ import { FitAddon } from "@xterm/addon-fit";
 import { io } from "socket.io-client";
 import type { ShellCommand, ShellEvent, ShellState } from "./shell-types";
 
-export type ShellViewState = { shell: ShellState | null; connected: boolean; error: string | null };
+export type ShellViewState = {
+  shell: ShellState | null;
+  connected: boolean;
+  /** The terminal was deleted (here or by another viewer); the client will not reconnect. */
+  closed: boolean;
+  error: string | null;
+};
 
-/** Owns terminal I/O and cleanup; output bypasses React's render cycle. */
-export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewState) => void) {
+export type ShellClient = ReturnType<typeof mountShell>;
+
+const CLOSED_MESSAGE = "This terminal was closed.";
+
+export type MountShellOptions = {
+  terminalId: string;
+  /** Asked before the client takes keyboard focus on its own (first connect, restart, refresh). */
+  canFocus?: () => boolean;
+};
+
+/** Owns one terminal's I/O and cleanup; output bypasses React's render cycle. */
+export function mountShell(element: HTMLDivElement, { terminalId, canFocus = () => true }: MountShellOptions, onChange: (state: ShellViewState) => void) {
   const terminal = new Terminal({
     cursorBlink: true, fontSize: 13, fontFamily: "Menlo, Monaco, Consolas, monospace",
     scrollback: 2000, allowProposedApi: true, screenReaderMode: true,
@@ -15,7 +31,7 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
   const fit = new FitAddon();
   terminal.loadAddon(fit);
   terminal.open(element);
-  terminal.textarea?.setAttribute("aria-label", "Shell terminal");
+  terminal.textarea?.setAttribute("aria-label", "Terminal");
 
   // The server's headless xterm answers queries once for the shared PTY.
   // Viewers still handle all keyboard, paste and mouse encoding through xterm.
@@ -28,7 +44,7 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
   terminal.parser.registerCsiHandler({ final: "t" }, (params) => Number(params[0]) >= 14 && Number(params[0]) <= 21);
   for (const code of [4, 10, 11, 12]) terminal.parser.registerOscHandler(code, (data) => data.includes("?"));
 
-  let view: ShellViewState = { shell: null, connected: false, error: null };
+  let view: ShellViewState = { shell: null, connected: false, closed: false, error: null };
   let disposed = false;
   let started = false;
   let startPending = false;
@@ -36,7 +52,12 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
   let sending = false;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let rendering = Promise.resolve();
-  const socket = io({ path: "/api/shell/socket", transports: ["websocket"], auth: { output: true } });
+  // `forceNew`: socket.io-client shares one Manager per URL otherwise, and every tab would reuse the first tab's auth.
+  const socket = io({ path: "/api/shell/socket", transports: ["websocket"], forceNew: true, auth: { terminalId, output: true } });
+
+  function focus() {
+    if (!disposed && canFocus()) terminal.focus();
+  }
 
   function update(patch: Partial<ShellViewState>) {
     if (disposed) return;
@@ -46,7 +67,7 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
   }
 
   async function request(command: ShellCommand) {
-    if (!socket.connected) throw new Error("Shell connection lost.");
+    if (!socket.connected) throw new Error("Terminal connection lost.");
     const result = await socket.timeout(10_000).emitWithAck("command", command) as { error?: string };
     if (result.error) throw new Error(result.error);
   }
@@ -59,7 +80,7 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
     } catch (error) {
       // An input request may have reached the shell. Never retry keystrokes.
       queue = [];
-      update({ error: `${error instanceof Error ? error.message : "Shell connection lost."} Check the terminal before typing again.` });
+      update({ error: `${error instanceof Error ? error.message : "Terminal connection lost."} Check the terminal before typing again.` });
     } finally {
       sending = false;
       if (disposed) socket.disconnect();
@@ -93,8 +114,10 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
 
   function resize() {
     if (!view.connected || view.shell?.status !== "running" || !view.shell.id || !document.hasFocus()) return;
+    // A hidden tab has no size; the fit addon would propose NaN, which the server rejects.
+    if (!element.isConnected || element.clientWidth === 0 || element.clientHeight === 0) return;
     const dimensions = fit.proposeDimensions();
-    if (!dimensions) return;
+    if (!dimensions || !Number.isFinite(dimensions.cols) || !Number.isFinite(dimensions.rows)) return;
     const cols = Math.max(2, Math.min(500, dimensions.cols));
     const rows = Math.max(1, Math.min(200, dimensions.rows));
     if (cols !== view.shell.cols || rows !== view.shell.rows) enqueue({ action: "resize", id: view.shell.id, cols, rows });
@@ -111,13 +134,27 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
     update({ error: null });
     try {
       await request({ action: "start", id: view.shell.id });
-      if (!disposed) terminal.focus();
+      focus();
     } catch (error) {
-      update({ error: error instanceof Error ? error.message : "Could not start the shell." });
+      update({ error: error instanceof Error ? error.message : "Could not start the terminal." });
     } finally { startPending = false; }
   }
 
-  socket.on("shell", (event: ShellEvent, acknowledge: () => void) => {
+  /** The terminal no longer exists on the server: stop reconnecting and drop pending input. */
+  function markClosed() {
+    if (view.closed) return;
+    queue = [];
+    socket.io.reconnection(false);
+    socket.disconnect();
+    update({ closed: true, connected: false, error: CLOSED_MESSAGE });
+  }
+
+  socket.on("shell", (event: ShellEvent, acknowledge?: () => void) => {
+    if (event.type === "closed") {
+      acknowledge?.();
+      markClosed();
+      return;
+    }
     rendering = rendering.then(async () => {
       if (disposed) return;
       if (event.type === "output") {
@@ -137,17 +174,20 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
       if (event.type === "snapshot") scheduleResize();
       if (!started) {
         started = true;
-        terminal.focus();
+        focus();
         if (event.state.status === "idle") void start();
       }
-    }).then(acknowledge).catch(() => update({ error: "Could not restore the terminal. Hide and reopen Shell to reconnect." }));
+    }).then(() => acknowledge?.()).catch(() => update({ error: "Could not restore the terminal. Hide and reopen Terminal to reconnect." }));
   });
   const disconnected = () => {
     queue = [];
     update({ connected: false });
   };
   socket.on("disconnect", disconnected);
-  socket.on("connect_error", disconnected);
+  socket.on("connect_error", (error: Error & { data?: { code?: string } }) => {
+    if (error.data?.code === "unknown_terminal") markClosed();
+    else disconnected();
+  });
   const observer = new ResizeObserver(scheduleResize);
   observer.observe(element);
   terminal.textarea?.addEventListener("focus", scheduleResize);
@@ -156,6 +196,13 @@ export function mountShell(element: HTMLDivElement, onChange: (state: ShellViewS
   return {
     start,
     input(data: string) { input(data); terminal.focus(); },
+    /** A hidden tab became visible: repaint, refit, and take focus if allowed. */
+    refresh() {
+      if (disposed) return;
+      terminal.refresh(0, terminal.rows - 1);
+      scheduleResize();
+      focus();
+    },
     dispose() {
       disposed = true;
       socket.off("shell");

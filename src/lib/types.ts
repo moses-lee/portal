@@ -11,6 +11,29 @@ import type { GitInfo } from "./git-info";
 
 export type AgentInfo = { id: string; name: string };
 
+/** A folder the user added to Portal. Every session belongs to one and starts in its `path`. */
+export type Project = {
+  id: string;
+  name: string;
+  /** Absolute, realpath'd directory. */
+  path: string;
+  createdAt: number;
+};
+
+/** Project as served to the browser, with presentation and the folder's current state. */
+export type ProjectSummary = Project & {
+  displayPath: string;
+  git: GitInfo;
+  /** False when the folder no longer exists on the host. */
+  exists: boolean;
+};
+
+/** One row of `GET /api/fs/dirs`. */
+export type DirEntry = { name: string; path: string; isGitRepo: boolean };
+
+/** Response of `GET /api/fs/dirs`. */
+export type DirListing = { path: string; parent: string | null; entries: DirEntry[] };
+
 /**
  * Agent-side session state announced over ACP. Replaced wholesale whenever the agent
  * sends `current_mode_update`, `config_option_update`, or `available_commands_update`,
@@ -30,6 +53,8 @@ export type SessionMeta = {
   agentId: string;
   agentName: string;
   cwd: string;
+  /** Portal metadata only; never sent over ACP. Empty for sessions created without a project. */
+  projectId: string;
   createdAt: number;
   busy: boolean;
   state: SessionState;
@@ -39,6 +64,10 @@ export type SessionMeta = {
 export type SessionSummary = SessionMeta & {
   displayCwd: string;
   git: GitInfo;
+  /** The owning project, or null when it has since been removed. */
+  project: { id: string; name: string } | null;
+  /** True when `cwd` no longer exists on the host. */
+  cwdMissing: boolean;
 };
 
 /** Payload of the SSE `meta` event on `/api/sessions/[id]/events`. */
@@ -49,6 +78,8 @@ export type SessionMetaEvent = {
   agentName: string;
   git: GitInfo;
   state: SessionState;
+  project: { id: string; name: string } | null;
+  cwdMissing: boolean;
 };
 
 export type PortalEvent =

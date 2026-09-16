@@ -396,3 +396,16 @@ test("permission answers must name an open request on the same session and an of
   await runtime.cancel(session.id);
   await until(() => !session.busy, "cancellation");
 });
+
+test("projectId is kept as Portal metadata and never crosses the ACP wire", async (t) => {
+  const { runtime, cwd, messages } = setup(t);
+  const session = await runtime.createSession(cwd, "claude", "proj-1");
+  assert.equal(session.projectId, "proj-1");
+  assert.equal(runtime.getSession(session.id).projectId, "proj-1");
+  assert.deepEqual(runtime.listSessions().map(({ id, projectId }) => ({ id, projectId })), [{ id: session.id, projectId: "proj-1" }]);
+  assert.deepEqual(messages("claude", "session/new")[0].message.params, { cwd, mcpServers: [] });
+  // Sessions created without a project (older callers, tests) carry an empty id rather than undefined.
+  const unowned = await runtime.createSession(cwd, "claude");
+  assert.equal(unowned.projectId, "");
+  assert.equal(messages("claude", "session/new").length, 2);
+});

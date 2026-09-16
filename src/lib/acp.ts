@@ -18,6 +18,6 @@ export const respondPermission = runtime.respondPermission;
 export const setConfigOption = runtime.setConfigOption;
 export const setMode = runtime.setMode;
 
-export function createSession(cwd: string, agentId = defaultAgentId) {
-  return runtime.createSession(cwd, agentId);
+export function createSession(cwd: string, agentId = defaultAgentId, projectId = "") {
+  return runtime.createSession(cwd, agentId, projectId);
 }

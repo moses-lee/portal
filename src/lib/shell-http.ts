@@ -1,16 +1,16 @@
 import type { ShellCommand } from "./shell-types";
 
 /** Same-origin only: Portal's existing trust boundary is its private host/network. */
-export function checkShellOrigin(req: Request): Response | null {
+export function checkSameOrigin(req: Request): Response | null {
   const origin = req.headers.get("origin");
   if (req.headers.get("sec-fetch-site") === "cross-site") {
-    return Response.json({ error: "Cross-site shell requests are not allowed." }, { status: 403 });
+    return Response.json({ error: "Cross-site requests are not allowed." }, { status: 403 });
   }
   if (origin) {
     try {
       if (new URL(origin).host !== (req.headers.get("host") ?? new URL(req.url).host)) throw new Error();
     } catch {
-      return Response.json({ error: "Cross-origin shell requests are not allowed." }, { status: 403 });
+      return Response.json({ error: "Cross-origin requests are not allowed." }, { status: 403 });
     }
   }
   return null;

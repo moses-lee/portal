@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import path from "node:path";
 import * as pty from "node-pty";
 import xterm from "@xterm/headless";
@@ -21,15 +22,14 @@ export function createShellRuntime({
   let terminal: InstanceType<typeof xterm.Terminal> | null = null;
   let serializer: InstanceType<typeof serialize.SerializeAddon> | null = null;
   let checkingCwd: Promise<void> | null = null;
+  let poll: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
   let state: ShellState = {
     id: null, status: "idle", cwd, displayCwd: displayPath(cwd), git: null,
     shell: path.basename(shell), cols: 80, rows: 24, exitCode: null, cwdError: null,
   };
-  // Directory and branch tracking run for the lifetime of the runtime: the branch can change
-  // from outside the shared shell, and the launch directory is shown before any shell starts.
-  const poll = setInterval(() => { void refreshCwd(); }, pollIntervalMs);
-  poll.unref();
+  // The launch directory and branch are shown before any shell starts; continuous polling
+  // (an `lsof` per tick on macOS) only runs while someone is watching.
   void refreshCwd();
 
   function emit(event: ShellEvent) {
@@ -53,10 +53,21 @@ export function createShellRuntime({
       }
     }).catch(() => {
       if (proc !== current || disposed || state.cwdError) return;
-      state = { ...state, cwdError: "Could not read the shell directory. New sessions are paused until it is available." };
+      state = { ...state, cwdError: "Could not read this terminal's directory." };
       publish();
     }).finally(() => { checkingCwd = null; });
     return checkingCwd;
+  }
+
+  function startPolling() {
+    if (poll || disposed) return;
+    poll = setInterval(() => { void refreshCwd(); }, pollIntervalMs);
+    poll.unref();
+  }
+
+  function stopPolling() {
+    if (poll) clearInterval(poll);
+    poll = null;
   }
 
   function start(expectedId: string | null) {
@@ -64,12 +75,21 @@ export function createShellRuntime({
     // Multiple tabs opening/restarting at once must never replace a live shell.
     if (state.status === "running" || expectedId !== state.id) return getState();
     if (process.platform !== "darwin" && process.platform !== "linux") {
-      throw new Error("The shared shell currently supports macOS and Linux hosts.");
+      throw new Error("Portal terminals require a macOS or Linux host.");
     }
-    const current = pty.spawn(shell, args, {
-      name: "xterm-256color", cols: state.cols, rows: state.rows, cwd: state.cwd,
-      env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
-    });
+    let current: pty.IPty;
+    try {
+      // node-pty does not report a missing directory (the child just exits); check it here
+      // so the tab gets a readable error and can retry once the folder is back.
+      if (!statSync(state.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error("The directory no longer exists.");
+      current = pty.spawn(shell, args, {
+        name: "xterm-256color", cols: state.cols, rows: state.rows, cwd: state.cwd,
+        env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not start a terminal in ${displayPath(state.cwd)}: ${message}`);
+    }
     terminal?.dispose();
     const screen = new xterm.Terminal({
       cols: state.cols, rows: state.rows, scrollback: SCROLLBACK, allowProposedApi: true,
@@ -134,10 +154,10 @@ export function createShellRuntime({
 
   function getState(): ShellState { return { ...state }; }
 
-  async function workingDirectory() {
+  /** Force one directory/branch check now, regardless of whether anyone is subscribed. */
+  async function refresh(): Promise<ShellState> {
     await refreshCwd();
-    if (state.cwdError) throw new Error(state.cwdError);
-    return state.cwd;
+    return getState();
   }
 
   function subscribe(listener: (event: ShellEvent) => void, output = false) {
@@ -150,12 +170,17 @@ export function createShellRuntime({
       else if (event.type === "snapshot") listener({ type: "state", state: event.state });
     };
     listeners.add(filtered);
-    return () => { listeners.delete(filtered); };
+    startPolling();
+    void refreshCwd();
+    return () => {
+      listeners.delete(filtered);
+      if (listeners.size === 0) stopPolling();
+    };
   }
 
   function dispose() {
     disposed = true;
-    clearInterval(poll);
+    stopPolling();
     const current = proc;
     proc = null;
     current?.kill();
@@ -164,5 +189,5 @@ export function createShellRuntime({
     listeners.clear();
   }
 
-  return { start, write, resize, getState, workingDirectory, subscribe, dispose };
+  return { start, write, resize, getState, refresh, subscribe, dispose };
 }

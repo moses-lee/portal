@@ -17,7 +17,17 @@ export type ShellState = {
 export type ShellEvent =
   | { type: "state"; state: ShellState }
   | { type: "snapshot"; state: ShellState; data: string }
-  | { type: "output"; id: string; data: string };
+  | { type: "output"; id: string; data: string }
+  /** The terminal was deleted; the server disconnects viewers right after sending this. */
+  | { type: "closed"; terminalId: string };
+
+/** A terminal (one PTY) owned by a session, as served by the terminal REST routes. */
+export type TerminalInfo = {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  state: ShellState;
+};
 
 export type ShellCommand =
   | { action: "start"; id: string | null }
