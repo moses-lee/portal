@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { respondPermission } from "@/lib/acp";
+import { checkSameOrigin } from "@/lib/shell-http";
 import type { PermissionAnswerRequest } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,8 @@ function parseBody(body: unknown): PermissionAnswerRequest | null {
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const rejected = checkSameOrigin(req);
+  if (rejected) return rejected;
   const { id } = await params;
   const body = parseBody(await req.json().catch(() => null));
   if (!body) {

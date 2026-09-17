@@ -13,6 +13,8 @@ export type SidebarProps = {
   /** Active session id. */
   active: string | null;
   onSelect: (sessionId: string) => void;
+  /** May reject; the message is shown under the session. */
+  onDeleteSession: (sessionId: string) => void | Promise<void>;
   /** Start a new session in this project (the `+` on a project row). */
   onNewSession: (projectId: string) => void;
   onAddProject: () => void;
@@ -29,34 +31,77 @@ type Editing = { id: string; mode: "rename" | "remove" };
 
 const iconButtonClass = "shrink-0 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 focus-visible:bg-zinc-800 focus-visible:text-zinc-200 focus-visible:outline-none";
 
-function SessionRow({ session, active, showCwd, onSelect }: {
+function SessionRow({ session, active, showCwd, onSelect, onDelete }: {
   session: SessionSummary;
   active: boolean;
   /** Show the directory on the row itself (used when there is no project header above it). */
   showCwd: boolean;
   onSelect: (sessionId: string) => void;
+  onDelete: (sessionId: string) => void | Promise<void>;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const title = session.title ?? session.agentName;
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onDelete(session.id);
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "Could not delete the session. Try again.");
+      setBusy(false);
+    }
+  };
   return (
-    <button
-      onClick={() => onSelect(session.id)}
-      aria-current={active ? "true" : undefined}
-      title={session.cwd}
-      className={`block w-full rounded px-2 py-1.5 text-left text-xs ${active ? "bg-zinc-800" : "hover:bg-zinc-900"}`}
-    >
-      <div className="flex items-center gap-2">
-        {showCwd ? (
-          <span className="min-w-0 flex-1 truncate font-mono text-zinc-300">{session.displayCwd}</span>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-zinc-300">{session.agentName}</span>
-        )}
-        {session.cwdMissing && <span title="The session's folder no longer exists" className="shrink-0 text-[10px] text-amber-400">missing</span>}
-        <BranchBadge git={session.git} />
+    <div className={`group rounded ${active ? "bg-zinc-800" : "hover:bg-zinc-900"}`}>
+      <div className="flex items-start">
+        <button
+          onClick={() => onSelect(session.id)}
+          aria-current={active ? "true" : undefined}
+          title={session.cwd}
+          className="block min-w-0 flex-1 px-2 py-1.5 text-left text-xs"
+        >
+          <div className="flex items-center gap-2">
+            <span className={`min-w-0 flex-1 truncate ${showCwd ? "font-mono" : ""} text-zinc-300`}>{showCwd ? session.displayCwd : title}</span>
+            {session.cwdMissing && <span title="The session's folder no longer exists" className="shrink-0 text-[10px] text-amber-400">missing</span>}
+            {session.link.status === "offline" && session.link.error && (
+              <span title={session.link.error} className="shrink-0 text-[10px] text-amber-400">offline</span>
+            )}
+            <BranchBadge git={session.git} />
+          </div>
+          <div className="truncate text-[10px] text-zinc-600">
+            {showCwd && <><span className="text-zinc-400">{title}</span> · </>}
+            {session.agentName} · {new Date(session.lastActiveAt ?? session.createdAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+          </div>
+        </button>
+        <button
+          type="button"
+          aria-label={`Delete session ${title}`}
+          title="Delete session"
+          disabled={busy}
+          onClick={() => setConfirming((open) => !open)}
+          // Always visible on the open row (touch screens have no hover), revealed on hover elsewhere.
+          className={`${iconButtonClass} mt-1 focus-visible:opacity-100 ${active || confirming ? "opacity-100" : "opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-60"}`}
+        >
+          ×
+        </button>
       </div>
-      <div className="text-[10px] text-zinc-600">
-        {showCwd && <><span className="text-zinc-400">{session.agentName}</span> · </>}
-        {new Date(session.createdAt).toLocaleTimeString()} · {session.id.slice(0, 8)}
-      </div>
-    </button>
+      {confirming && (
+        <div role="group" aria-label={`Delete ${title}?`} className="mx-2 mb-2 rounded border border-red-900/60 bg-red-950/30 px-2 py-2 text-xs">
+          <p className="mb-2 text-zinc-300">Delete this session and its terminals? The transcript is removed from Portal.</p>
+          {error && <p role="alert" className="mb-2 break-words rounded bg-red-950/50 px-2 py-1.5 text-red-300">{error}</p>}
+          <div className="flex gap-2">
+            <button type="button" autoFocus disabled={busy} onClick={() => void remove()} className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600 disabled:opacity-50">
+              {busy ? "Deleting…" : "Delete"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setConfirming(false)} className="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800 disabled:opacity-50">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -218,7 +263,7 @@ function RemoveConfirm({ project, onRemove, onCancel }: {
 
 /** Projects as collapsible groups with their sessions; the mobile drawer is controlled by `open`. */
 export default function Sidebar({
-  projects, sessions, active, onSelect, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
+  projects, sessions, active, onSelect, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -269,7 +314,7 @@ export default function Sidebar({
                 <section key="removed" aria-labelledby="sidebar-removed-projects">
                   <h3 id="sidebar-removed-projects" className="px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-500">Removed projects</h3>
                   <div className="space-y-1">
-                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd onSelect={onSelect} />)}
+                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd onSelect={onSelect} onDelete={onDeleteSession} />)}
                   </div>
                 </section>
               );
@@ -357,7 +402,7 @@ export default function Sidebar({
                   <p role="alert" className="my-1 rounded bg-red-950/50 px-2 py-1.5 text-xs text-red-300">{actionError.message}</p>
                 )}
                 <div id={listId} hidden={isCollapsed} className="mt-0.5 space-y-1 pl-2">
-                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd={false} onSelect={onSelect} />)}
+                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd={false} onSelect={onSelect} onDelete={onDeleteSession} />)}
                   {rows.length === 0 && <p className="px-2 py-1 text-[11px] text-zinc-600">No sessions yet.</p>}
                 </div>
               </section>

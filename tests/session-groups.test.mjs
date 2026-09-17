@@ -15,7 +15,10 @@ function session(id, projectId, createdAt) {
     displayCwd: `~/repos/${projectId}`,
     projectId,
     createdAt,
+    lastActiveAt: createdAt,
+    title: null,
     busy: false,
+    link: { status: "live" },
     state: { modes: null, configOptions: [], commands: [] },
     git: null,
     project: null,
@@ -29,13 +32,16 @@ test("every project gets a group in project order, even with no sessions", () =>
   assert.deepEqual(groups.map((g) => g.sessions.map((s) => s.id)), [[], ["s1"], []]);
 });
 
-test("sessions within a group are newest first", () => {
+test("sessions within a group are most recently active first", () => {
   const groups = groupSessionsByProject([project("a")], [
     session("old", "a", 1),
     session("newest", "a", 3),
     session("mid", "a", 2),
   ]);
   assert.deepEqual(groups[0].sessions.map((s) => s.id), ["newest", "mid", "old"]);
+  const revived = { ...session("old", "a", 1), lastActiveAt: 10 };
+  const active = groupSessionsByProject([project("a")], [revived, session("newest", "a", 3)]);
+  assert.deepEqual(active[0].sessions.map((s) => s.id), ["old", "newest"]);
 });
 
 test("sessions with an unknown projectId go to a trailing null group", () => {

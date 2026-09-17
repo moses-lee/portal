@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
-import { createSession, listSessions } from "@/lib/acp";
+import { createSession, listSessions, ready } from "@/lib/acp";
 import { defaultAgentId, getAgent } from "@/lib/agents";
 import { errorStatus, resolveDirectory } from "@/lib/fs-paths";
 import { displayPath } from "@/lib/git-info";
 import { projects } from "@/lib/projects";
 import { summarizeSession } from "@/lib/session-summary";
+import { checkSameOrigin } from "@/lib/shell-http";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  await projects.ready;
+  await Promise.all([projects.ready, ready]);
   return NextResponse.json({
     sessions: await Promise.all(
       listSessions().map((meta) => summarizeSession(meta, projects.get(meta.projectId) ?? null)),
@@ -18,6 +19,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const rejected = checkSameOrigin(req);
+  if (rejected) return rejected;
   const body: unknown = await req.json().catch(() => null);
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return NextResponse.json({ error: "Expected a JSON object." }, { status: 400 });

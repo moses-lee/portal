@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { getSession } from "@/lib/acp";
+import { getSession, ready } from "@/lib/acp";
 import { displayPath } from "@/lib/git-info";
 import { checkSameOrigin } from "@/lib/shell-http";
 import { terminals } from "@/lib/terminals";
@@ -14,6 +14,7 @@ export async function GET(req: Request, { params }: Context) {
   const rejected = checkSameOrigin(req);
   if (rejected) return rejected;
   const { id } = await params;
+  await ready;
   if (!getSession(id)) return Response.json({ error: "Unknown session." }, { status: 404 });
   return Response.json({ terminals: terminals.listBySession(id).map(info) });
 }
@@ -22,6 +23,7 @@ export async function POST(req: Request, { params }: Context) {
   const rejected = checkSameOrigin(req);
   if (rejected) return rejected;
   const { id } = await params;
+  await ready;
   const session = getSession(id);
   if (!session) return Response.json({ error: "Unknown session." }, { status: 404 });
   try {

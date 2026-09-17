@@ -3,9 +3,14 @@ import type { Project, SessionSummary } from "./types.ts";
 export type SessionGroup<P extends Project = Project> = {
   /** The owning project, or null for sessions whose project has since been removed. */
   project: P | null;
-  /** Newest first. */
+  /** Most recently active first. */
   sessions: SessionSummary[];
 };
+
+/** Most recently active first, newest created breaking ties. */
+export function byRecentActivity(a: SessionSummary, b: SessionSummary): number {
+  return (b.lastActiveAt ?? b.createdAt) - (a.lastActiveAt ?? a.createdAt) || b.createdAt - a.createdAt;
+}
 
 /**
  * Group sessions under their projects for the sidebar. Every project gets a group in the given
@@ -16,8 +21,7 @@ export function groupSessionsByProject<P extends Project>(projects: P[], session
   const byProject = new Map<string, SessionSummary[]>();
   for (const project of projects) byProject.set(project.id, []);
   const orphans: SessionSummary[] = [];
-  const newestFirst = [...sessions].sort((a, b) => b.createdAt - a.createdAt);
-  for (const session of newestFirst) {
+  for (const session of [...sessions].sort(byRecentActivity)) {
     const bucket = byProject.get(session.projectId);
     if (bucket) bucket.push(session);
     else orphans.push(session);

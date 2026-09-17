@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { sendPrompt } from "@/lib/acp";
+import { checkSameOrigin } from "@/lib/shell-http";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const rejected = checkSameOrigin(req);
+  if (rejected) return rejected;
   const { id } = await params;
-  const { text } = (await req.json()) as { text?: string };
+  const { text } = ((await req.json().catch(() => ({}))) ?? {}) as { text?: string };
   if (!text?.trim()) return NextResponse.json({ error: "empty prompt" }, { status: 400 });
   try {
     await sendPrompt(id, text);

@@ -92,6 +92,15 @@ export type SessionState = {
   commands: AvailableCommand[];
 };
 
+/**
+ * Whether Portal currently holds a live ACP session for this conversation. Persisted sessions
+ * start `offline` after a server restart and become `live` once `session/resume` succeeds.
+ */
+export type SessionLink =
+  | { status: "live" }
+  | { status: "connecting" }
+  | { status: "offline"; error: string | null };
+
 export type SessionMeta = {
   id: string;
   agentId: string;
@@ -100,7 +109,12 @@ export type SessionMeta = {
   /** Portal metadata only; never sent over ACP. Empty for sessions created without a project. */
   projectId: string;
   createdAt: number;
+  /** Epoch ms of the last user prompt (or creation). Drives sidebar order. */
+  lastActiveAt: number;
+  /** First user prompt, trimmed; null until the first message. */
+  title: string | null;
   busy: boolean;
+  link: SessionLink;
   state: SessionState;
 };
 
@@ -114,9 +128,11 @@ export type SessionSummary = SessionMeta & {
   cwdMissing: boolean;
 };
 
-/** Payload of the SSE `meta` event on `/api/sessions/[id]/events`. */
+/** Payload of the SSE `meta` event on `/api/sessions/[id]/stream`. */
 export type SessionMetaEvent = {
   busy: boolean;
+  link: SessionLink;
+  title: string | null;
   cwd: string;
   agentId: string;
   agentName: string;
@@ -137,6 +153,18 @@ export type PortalEvent =
   | { type: "permission_response"; requestId: string; outcome: "selected"; optionId: string; optionName: string }
   | { type: "permission_response"; requestId: string; outcome: "cancelled" }
   | { type: "error"; message: string };
+
+/** A logged event with its position in the session's log (dense from 0) and epoch ms timestamp. */
+export type StoredEvent = PortalEvent & { seq: number; ts: number };
+
+/** Response of `GET /api/sessions/[id]/events`: one page of the log, oldest first. */
+export type EventPage = {
+  events: StoredEvent[];
+  /** True when events exist before `events[0]`; fetch them with `?before=<events[0].seq>`. */
+  hasMore: boolean;
+  /** Sequence number the next appended event will get; `events.at(-1).seq + 1` for the latest page. */
+  nextSeq: number;
+};
 
 /** Body of `POST /api/sessions/[id]/config`. */
 export type SetConfigRequest =

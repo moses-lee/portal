@@ -61,7 +61,32 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       send({ id, error: { code: -32603, message: "Fixture initialization failed" } });
       return;
     }
-    respond(id, { protocolVersion: params.protocolVersion, agentCapabilities: {} });
+    // "resume" / "load" modes advertise the matching way of reattaching persisted sessions.
+    const agentCapabilities = mode() === "resume" || mode() === "resume-error" || mode() === "hang-close"
+      ? { sessionCapabilities: { resume: {}, close: {} } }
+      : mode() === "load" ? { loadSession: true } : {};
+    respond(id, { protocolVersion: params.protocolVersion, agentCapabilities });
+  } else if (method === "session/resume" || method === "session/load") {
+    if (mode() === "resume-error") {
+      send({ id, error: { code: -32603, message: "Fixture cannot resume that session" } });
+      return;
+    }
+    const sessionId = params.sessionId;
+    if (!configs.has(sessionId)) configs.set(sessionId, initialConfigOptions());
+    if (method === "session/load") {
+      // History replay: the client already holds these events and must not log them again.
+      update(sessionId, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "replayed prompt" } });
+      update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed answer" } });
+    }
+    respond(id, {
+      modes: { currentModeId: "plan", availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }] },
+      configOptions: configs.get(sessionId),
+    });
+    update(sessionId, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS });
+  } else if (method === "session/close") {
+    if (mode() === "hang-close") return; // A stalled agent never answers.
+    configs.delete(params.sessionId);
+    respond(id, {});
   } else if (method === "session/new") {
     if (mode() === "auth-required") {
       send({ id, error: { code: -32000, message: "Authentication required" } });

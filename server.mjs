@@ -18,6 +18,9 @@ async function shutdown() {
   stopping = true;
   terminals.disposeAll();
   io.close();
+  // Stop the agent processes and flush pending session writes; the runtime lives on the global
+  // shared with Next's bundle (see src/lib/acp.ts) because this file cannot import it directly.
+  await globalThis.__portalMultiAgentAcp?.dispose().catch(() => {});
   // Active chat streams must not prevent the host (and its PTYs) from stopping.
   setTimeout(() => process.exit(0), 1500).unref();
   await app.close();
