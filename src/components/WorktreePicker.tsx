@@ -15,7 +15,7 @@ import type { BranchListing, ProjectSummary, PullInfo } from "@/lib/types";
 export type { WorktreeChoice } from "@/lib/branch-matching";
 
 export type WorktreePickerProps = {
-  /** A git project that is not itself a worktree. */
+  /** A git project; a worktree project lists and creates worktrees of the same repository. */
   project: ProjectSummary;
   value: WorktreeChoice;
   onChange: (choice: WorktreeChoice) => void;
@@ -232,14 +232,14 @@ export default function WorktreePicker({ project, value, onChange, disabled = fa
           branch: row.pull.branch,
           pull: row.pull,
           path: listing?.branches.find((b) => b.name === row.pull.branch)?.worktreePath ?? undefined,
-          worktreesDir: listing?.worktreesDir,
+          repoWorktreesDir: listing?.repoWorktreesDir,
         });
         break;
       case "branch":
-        onChange({ kind: "branch", branch: row.branch.name, path: row.branch.worktreePath ?? undefined, worktreesDir: listing?.worktreesDir });
+        onChange({ kind: "branch", branch: row.branch.name, path: row.branch.worktreePath ?? undefined, repoWorktreesDir: listing?.repoWorktreesDir });
         break;
       case "create":
-        onChange({ kind: "create", branch: row.name, worktreesDir: listing?.worktreesDir });
+        onChange({ kind: "create", branch: row.name, repoWorktreesDir: listing?.repoWorktreesDir });
         break;
     }
     close(true);

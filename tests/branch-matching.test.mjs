@@ -146,7 +146,9 @@ test("sanitizeBranchForPath replaces slashes and unusual characters with dashes"
 test("plannedWorktreePath lives under ~/.portal/worktrees/<repo>/<sanitized>", () => {
   assert.equal(plannedWorktreePath("/Users/me/repos/portal", "feat/foo"), "~/.portal/worktrees/portal/feat-foo");
   assert.equal(plannedWorktreePath("/srv/app/", "x"), "~/.portal/worktrees/app/x");
-  assert.equal(plannedWorktreePath("/srv/app", "x", "/opt/portal/worktrees"), "/opt/portal/worktrees/app/x");
+  assert.equal(plannedWorktreePath("/srv/app", "x", "/opt/portal/worktrees/app"), "/opt/portal/worktrees/app/x");
+  // From a worktree the root's name is the branch folder, so the server-provided folder wins.
+  assert.equal(plannedWorktreePath("/srv/worktrees/app/feat-y", "x", "/opt/portal/worktrees/app"), "/opt/portal/worktrees/app/x");
 });
 
 test("shortenHome uses the home folder implied by a project's display path", () => {
@@ -164,7 +166,7 @@ test("worktreeTarget: planned path for new or unchecked-out branches, existing p
   assert.deepEqual(worktreeTarget(project, { kind: "create", branch: "feat/x" }), { displayPath: "~/.portal/worktrees/portal/feat-x", branch: "feat/x" });
   assert.deepEqual(worktreeTarget(project, { kind: "branch", branch: "feat/x" }), { displayPath: "~/.portal/worktrees/portal/feat-x", branch: "feat/x" });
   assert.deepEqual(
-    worktreeTarget(project, { kind: "create", branch: "feat/x", worktreesDir: "/srv/portal/worktrees" }),
+    worktreeTarget(project, { kind: "create", branch: "feat/x", repoWorktreesDir: "/srv/portal/worktrees/portal" }),
     { displayPath: "/srv/portal/worktrees/portal/feat-x", branch: "feat/x" },
   );
   assert.deepEqual(

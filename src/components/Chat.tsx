@@ -154,6 +154,13 @@ export default function Chat() {
     return j.project;
   };
 
+  /** The sidebar's `+`: open the start page with `projectId` selected so the worktree picker is available. */
+  const startIn = (projectId: string) => {
+    selectProject(projectId);
+    if (active) router.push("/");
+    setShowSidebar(false);
+  };
+
   /** Start a session in `projectId`, first turning a non-Original `choice` into its worktree project. */
   const newSession = async (projectId: string = selectedProjectId, choice: WorktreeChoice = ORIGINAL) => {
     if (creating || loading || projectsLoading || !selectedAgentId || !projectId) return;
@@ -196,8 +203,8 @@ export default function Chat() {
   };
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
-  // Where the start page's next session runs when a worktree is chosen (only for non-worktree git projects).
-  const startTarget = selectedProject && !selectedProject.worktree ? worktreeTarget(selectedProject, worktreeChoice) : null;
+  // Where the start page's next session runs when a worktree is chosen (git projects only).
+  const startTarget = selectedProject ? worktreeTarget(selectedProject, worktreeChoice) : null;
   const startContext = startTarget && selectedProject?.git ? (
     <ContextBar
       cwd={startTarget.displayPath}
@@ -224,7 +231,7 @@ export default function Chat() {
         active={active}
         onSelect={(id) => selectSession(id)}
         onDeleteSession={deleteSession}
-        onNewSession={(projectId) => void newSession(projectId)}
+        onNewSession={startIn}
         onAddProject={() => setShowAddProject(true)}
         onRenameProject={async (id, name) => { await renameProject(id, name); }}
         onRemoveProject={removeProject}

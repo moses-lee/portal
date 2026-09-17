@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { BranchBadge } from "./ContextBar";
 import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
-import { orderProjects } from "@/lib/project-tree";
 import { groupSessionsByProject } from "@/lib/session-groups";
+import { WorktreeBadge } from "./WorktreeBadge";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
 
 export type SidebarProps = {
@@ -15,7 +15,7 @@ export type SidebarProps = {
   onSelect: (sessionId: string) => void;
   /** May reject; the message is shown under the session. */
   onDeleteSession: (sessionId: string) => void | Promise<void>;
-  /** Start a new session in this project (the `+` on a project row). */
+  /** Open the start page with this project selected (the `+` on a project row). */
   onNewSession: (projectId: string) => void;
   onAddProject: () => void;
   /** May reject; the message is shown under the project. */
@@ -269,7 +269,7 @@ export default function Sidebar({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [actionError, setActionError] = useState<{ id: string; message: string } | null>(null);
-  const groups = groupSessionsByProject(orderProjects(projects), sessions);
+  const groups = groupSessionsByProject(projects, sessions);
 
   const toggle = (id: string) => {
     setCollapsed((prev) => {
@@ -323,7 +323,7 @@ export default function Sidebar({
             const edit = editing?.id === project.id ? editing : null;
             const listId = `sidebar-project-${project.id}`;
             return (
-              <section key={project.id} aria-label={project.name} className={project.depth === 1 ? "ml-3 border-l border-zinc-800 pl-2" : undefined}>
+              <section key={project.id} aria-label={project.name}>
                 <div className="flex items-center gap-1">
                   {edit?.mode === "rename" ? (
                     <RenameField
@@ -345,6 +345,7 @@ export default function Sidebar({
                     >
                       <span aria-hidden="true" className="w-3 shrink-0 text-zinc-600">{isCollapsed ? "▸" : "▾"}</span>
                       <span className="min-w-0 flex-1 truncate font-medium text-zinc-200">{project.name}</span>
+                      <WorktreeBadge project={project} projects={projects} />
                       {project.exists === false && (
                         <span title={`Folder not found: ${project.displayPath}`} className="shrink-0 text-[10px] text-amber-400">missing</span>
                       )}
@@ -354,7 +355,7 @@ export default function Sidebar({
                   <button
                     type="button"
                     aria-label={`New session in ${project.name}`}
-                    title="New session here"
+                    title="Start a session here"
                     onClick={() => onNewSession(project.id)}
                     className={iconButtonClass}
                   >

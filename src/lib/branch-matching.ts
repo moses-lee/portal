@@ -6,10 +6,10 @@ export type WorktreeChoice =
   | { kind: "original" }
   /**
    * An existing local or remote branch; `path` is the worktree it is already checked out in, when
-   * known, else `worktreesDir` is where the server will create one.
+   * known, else `repoWorktreesDir` is where the server will create one.
    */
-  | { kind: "branch"; branch: string; pull?: PullInfo; path?: string; worktreesDir?: string }
-  | { kind: "create"; branch: string; worktreesDir?: string };
+  | { kind: "branch"; branch: string; pull?: PullInfo; path?: string; repoWorktreesDir?: string }
+  | { kind: "create"; branch: string; repoWorktreesDir?: string };
 
 export const ORIGINAL: WorktreeChoice = { kind: "original" };
 
@@ -55,12 +55,17 @@ function basename(directory: string) {
   return directory.split("/").filter(Boolean).at(-1) ?? directory;
 }
 
-/** Where Portal creates worktrees unless the server says otherwise (`BranchListing.worktreesDir`). */
+/** Where Portal creates worktrees unless the server says otherwise (`BranchListing.repoWorktreesDir`). */
 export const DEFAULT_WORKTREES_DIR = "~/.portal/worktrees";
 
-/** Display path of the worktree Portal would create for `branch` in the repository at `repoRoot`. */
-export function plannedWorktreePath(repoRoot: string, branch: string, worktreesDir = DEFAULT_WORKTREES_DIR) {
-  return `${worktreesDir}/${basename(repoRoot)}/${sanitizeBranchForPath(branch)}`;
+/**
+ * Display path of the worktree Portal would create for `branch`: under `repoWorktreesDir` when the
+ * server has named the repository's folder, else the default guessed from `repoRoot`'s name (which
+ * is only the repository name for the main checkout, not for a worktree).
+ */
+export function plannedWorktreePath(repoRoot: string, branch: string, repoWorktreesDir?: string) {
+  const dir = repoWorktreesDir ?? `${DEFAULT_WORKTREES_DIR}/${basename(repoRoot)}`;
+  return `${dir}/${sanitizeBranchForPath(branch)}`;
 }
 
 /** Shorten `absolute` with `~` the way the server shortened `sample.path` into `sample.displayPath`. */
@@ -85,7 +90,7 @@ export function worktreeTarget(
   const subpath = project.path.startsWith(root + "/") ? project.path.slice(root.length) : "";
   const folder = choice.kind === "branch" && choice.path
     ? shortenHome(choice.path, project)
-    : plannedWorktreePath(root, choice.branch, choice.worktreesDir);
+    : plannedWorktreePath(root, choice.branch, choice.repoWorktreesDir);
   return { displayPath: folder + subpath, branch: choice.branch };
 }
 

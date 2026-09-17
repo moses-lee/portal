@@ -44,6 +44,24 @@ function parseProjectsFile(text: string): Project[] | null {
   return file.projects.every(isProject) ? file.projects : null;
 }
 
+/**
+ * Worktree projects used to be named "<parent> · <branch>"; the sidebar now marks them with a badge
+ * naming the parent, so that prefix is redundant. Rename the ones that still carry the exact old
+ * name to their branch (a name the user changed is left alone). Returns null when nothing changed.
+ */
+export function dropLegacyWorktreeNames(projects: Project[]): Project[] | null {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  let changed = false;
+  const next = projects.map((project) => {
+    if (!project.worktree) return project;
+    const parent = byId.get(project.worktree.parentId);
+    if (!parent || project.name !== `${parent.name} · ${project.worktree.branch}`) return project;
+    changed = true;
+    return { ...project, name: project.worktree.branch };
+  });
+  return changed ? next : null;
+}
+
 /** Attach the folder's display form and current state for the browser. */
 export async function summarizeProject(project: Project): Promise<ProjectSummary> {
   const exists = await stat(project.path).then((info) => info.isDirectory(), () => false);
@@ -75,6 +93,15 @@ export function createProjectsStore({ file = defaultProjectsFile(), home = os.ho
       return;
     }
     projects = new Map(loaded.map((project) => [project.id, project]));
+    const migrated = dropLegacyWorktreeNames(loaded);
+    if (!migrated) return;
+    try {
+      await save(new Map(migrated.map((project) => [project.id, project])));
+    } catch (err) {
+      // Keep the new names for this run even if the file could not be rewritten.
+      projects = new Map(migrated.map((project) => [project.id, project]));
+      console.warn(`Could not rewrite ${file} with renamed worktree projects: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   const ready = load();
 

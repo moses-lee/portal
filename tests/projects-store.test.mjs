@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { PathError } from "../src/lib/fs-paths.ts";
-import { ProjectError, createProjectsStore, defaultProjectsFile, summarizeProject } from "../src/lib/projects-store.ts";
+import { ProjectError, createProjectsStore, defaultProjectsFile, dropLegacyWorktreeNames, summarizeProject } from "../src/lib/projects-store.ts";
 
 function setup(t) {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-projects-")));
@@ -161,7 +161,7 @@ test("persists worktree metadata and rejects malformed worktree values on load",
   const { home, file, open } = setup(t);
   const store = open();
   const parent = await store.add({ path: path.join(home, "one") });
-  const wt = await store.add({ path: path.join(home, "two"), name: "one · feat", worktree: { parentId: parent.id, branch: "feat", extra: "ignored" } });
+  const wt = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat", extra: "ignored" } });
   assert.deepEqual(wt.worktree, { parentId: parent.id, branch: "feat" });
   assert.equal(parent.worktree, undefined);
   assert.ok(!("worktree" in parent), "plain projects carry no worktree key");
@@ -183,4 +183,22 @@ test("persists worktree metadata and rejects malformed worktree values on load",
   const lenient = open();
   await lenient.ready;
   assert.equal(lenient.list().length, 1);
+});
+
+test("renames legacy \"<parent> · <branch>\" worktree projects to their branch on load", async (t) => {
+  const { home, file, open } = setup(t);
+  const parent = { id: "p", name: "one", path: path.join(home, "one"), createdAt: 1 };
+  const legacy = { id: "w", name: "one · feat/x", path: path.join(home, "two"), createdAt: 2, worktree: { parentId: "p", branch: "feat/x" } };
+  const custom = { id: "c", name: "my thing", path: path.join(home, "sub"), createdAt: 3, worktree: { parentId: "p", branch: "feat/y" } };
+  const orphan = { id: "o", name: "gone · feat/z", path: path.join(home, "sub", "deep"), createdAt: 4, worktree: { parentId: "gone", branch: "feat/z" } };
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ version: 1, projects: [parent, legacy, custom, orphan] }));
+
+  const store = open();
+  await store.ready;
+  assert.deepEqual(store.list().map((p) => p.name), ["one", "feat/x", "my thing", "gone · feat/z"]);
+  // The rename is persisted, so the next load has nothing to do.
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).projects.map((p) => p.name), ["one", "feat/x", "my thing", "gone · feat/z"]);
+  assert.equal(dropLegacyWorktreeNames(store.list()), null);
+  assert.equal(dropLegacyWorktreeNames([]), null);
 });

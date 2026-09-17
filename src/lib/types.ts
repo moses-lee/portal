@@ -60,8 +60,8 @@ export type BranchListing = {
   pulls: PullInfo[] | null;
   /** Short reason when `pulls` is null. */
   pullsError: string | null;
-  /** Display path of the folder Portal creates worktrees under, e.g. "~/.portal/worktrees". */
-  worktreesDir: string;
+  /** Display path of the folder Portal creates this repository's worktrees under, e.g. "~/.portal/worktrees/portal". */
+  repoWorktreesDir: string;
 };
 
 /** Project as served to the browser, with presentation and the folder's current state. */

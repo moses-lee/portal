@@ -5,7 +5,7 @@ import { displayPath } from "@/lib/git-info";
 import { projects } from "@/lib/projects";
 import { ProjectError, summarizeProject } from "@/lib/projects-store";
 import { checkSameOrigin } from "@/lib/shell-http";
-import { ensureWorktree, repoRootOf } from "@/lib/worktrees";
+import { ensureWorktree, mainWorktreeOf, repoRootOf } from "@/lib/worktrees";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,9 @@ function fail(err: unknown) {
 
 /**
  * Find or create a worktree of the project's repository for `branch` and return the project that
- * lives in it (201 when the project is new, 200 when one already covered that folder).
+ * lives in it (201 when the project is new, 200 when one already covered that folder). Works from
+ * the main checkout and from any worktree project of the same repository; the new project points
+ * at the original project either way.
  */
 export async function POST(req: Request, { params }: Context) {
   const rejected = checkSameOrigin(req);
@@ -35,24 +37,24 @@ export async function POST(req: Request, { params }: Context) {
   if (create !== undefined && typeof create !== "boolean") {
     return NextResponse.json({ error: "create must be a boolean." }, { status: 400 });
   }
-  const parent = projects.get(id);
-  if (!parent) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
-  if (parent.worktree) {
-    return NextResponse.json({ error: "This project is itself a worktree; start from its parent project." }, { status: 400 });
-  }
+  const from = projects.get(id);
+  if (!from) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
+  // Worktrees of a worktree belong to the original project while it is still listed.
+  const parentId = from.worktree && projects.get(from.worktree.parentId) ? from.worktree.parentId : from.id;
   try {
-    const root = await repoRootOf(parent.path);
-    const worktree = await ensureWorktree({ repoRoot: root, branch: branch.trim(), create: create === true });
+    const root = await repoRootOf(from.path);
+    // Worktree folders are named after the main checkout, wherever the request started.
+    const worktree = await ensureWorktree({ repoRoot: await mainWorktreeOf(root), branch: branch.trim(), create: create === true });
     // A project rooted in a subfolder of the repo gets the same subfolder inside the worktree.
-    const projectPath = path.join(worktree.path, path.relative(root, parent.path));
+    const projectPath = path.join(worktree.path, path.relative(root, from.path));
     const existing = projects.findByPath(projectPath);
     if (existing) return NextResponse.json({ project: await summarizeProject(existing) });
     let project;
     try {
       project = await projects.add({
         path: projectPath,
-        name: `${parent.name} · ${branch.trim()}`,
-        worktree: { parentId: parent.id, branch: branch.trim() },
+        name: branch.trim(),
+        worktree: { parentId, branch: branch.trim() },
       });
     } catch (err) {
       // Lost a race with a concurrent request for the same branch: that project is the answer.

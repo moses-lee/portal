@@ -2,8 +2,8 @@
 
 import { BranchBadge } from "./ContextBar";
 import WorktreePicker, { type WorktreeChoice } from "./WorktreePicker";
+import { WorktreeBadge, worktreeLabel } from "./WorktreeBadge";
 import { worktreeTarget } from "@/lib/branch-matching";
-import { orderProjects } from "@/lib/project-tree";
 import type { AgentInfo, ProjectSummary } from "@/lib/types";
 
 export type StartPageProps = {
@@ -12,7 +12,7 @@ export type StartPageProps = {
   selectedProjectId: string;
   onSelectProject: (projectId: string) => void;
   onAddProject: () => void;
-  /** Worktree to start in; only meaningful for git projects that are not worktrees themselves. */
+  /** Worktree to start in; only meaningful for git projects. */
   worktree: WorktreeChoice;
   onWorktreeChange: (choice: WorktreeChoice) => void;
   agents: AgentInfo[];
@@ -32,14 +32,10 @@ export default function StartPage({
   projects, selectedProjectId, onSelectProject, onAddProject, worktree, onWorktreeChange,
   agents, selectedAgentId, onSelectAgent, loading = false, canCreate, creating, error, onCreate,
 }: StartPageProps) {
-  const ordered = orderProjects(projects);
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const missingFolder = !!error && /missing/i.test(error);
-  const canPickWorktree = !!selectedProject?.git && !selectedProject.worktree;
-  const parentName = selectedProject?.worktree
-    ? projects.find((p) => p.id === selectedProject.worktree?.parentId)?.name ?? "another project"
-    : null;
+  const canPickWorktree = !!selectedProject?.git;
   const target = selectedProject && canPickWorktree ? worktreeTarget(selectedProject, worktree) : null;
 
   return (
@@ -71,11 +67,14 @@ export default function StartPage({
               className="min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
             >
               {!selectedProject && <option value="">Choose a project…</option>}
-              {ordered.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.depth === 1 ? "  └ " : ""}{project.name}{project.exists === false ? " (missing)" : ""}
-                </option>
-              ))}
+              {projects.map((project) => {
+                const label = worktreeLabel(project, projects);
+                return (
+                  <option key={project.id} value={project.id}>
+                    {project.name}{label ? ` (${label})` : ""}{project.exists === false ? " (missing)" : ""}
+                  </option>
+                );
+              })}
             </select>
             <button
               type="button"
@@ -90,8 +89,9 @@ export default function StartPage({
             <WorktreePicker project={selectedProject} value={worktree} onChange={onWorktreeChange} disabled={loading || creating} />
           )}
           {selectedProject?.worktree && (
-            <p className="mt-2 text-xs text-zinc-500">
-              Worktree of <span className="text-zinc-300">{parentName}</span> on <span className="font-mono text-zinc-300">{selectedProject.worktree.branch}</span>
+            <p className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
+              <WorktreeBadge project={selectedProject} projects={projects} />
+              <span>worktree on <span className="font-mono text-zinc-300">{selectedProject.worktree.branch}</span></span>
             </p>
           )}
           {selectedProject && (
