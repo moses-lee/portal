@@ -276,13 +276,12 @@
   box-shadow: inset 0 1px #ffffff05;
 }
 .sidebar-title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  display: block;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 .workspace-header {
   min-height: 64px;

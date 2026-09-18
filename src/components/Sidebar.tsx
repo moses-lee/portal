@@ -136,21 +136,25 @@ function SessionRow({
             onClick={() => onSelect(session.id)}
             onPointerEnter={startHover}
             onPointerLeave={cancelHover}
-            className="flex min-w-0 gap-2.5 rounded-xl px-2.5 py-3 text-left"
+            className="flex min-w-0 gap-2.5 rounded-xl px-2.5 py-1.5 text-left"
           >
-            <AgentLogo agentId={session.agentId} className="mt-0.5 !size-4" />
+            <span
+              data-activity={activity}
+              className="mt-[6px] inline-flex shrink-0"
+              aria-label={activityLabels[activity]}
+            >
+              <span className="status-dot" />
+            </span>
             <span className="min-w-0 flex-1">
               <span className="sidebar-title text-foreground/90">{title}</span>
-              <span className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+                <AgentLogo
+                  agentId={session.agentId}
+                  className="!size-[11px] opacity-70"
+                />
                 {pinned && <Pin className="size-2.5" aria-label="Pinned" />}
                 {session.busy || session.link.status === "connecting" ? (
-                  <span
-                    data-activity={activity}
-                    className="inline-flex items-center gap-1.5"
-                  >
-                    <span className="status-dot" />
-                    {activityLabels[activity]}
-                  </span>
+                  <span>{activityLabels[activity]}</span>
                 ) : session.cwdMissing ? (
                   "Folder missing"
                 ) : session.link.status === "offline" && session.link.error ? (
@@ -357,7 +361,7 @@ function SidebarContent(props: SidebarProps) {
       </div>
       <nav
         aria-label="Projects and sessions"
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-4"
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4"
       >
         {groups.length === 0 && (
           <p className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
@@ -380,7 +384,7 @@ function SidebarContent(props: SidebarProps) {
               key={project?.id ?? "removed"}
               aria-label={project?.name ?? "Removed projects"}
             >
-              <div className="mb-1 flex items-center gap-0.5 px-1">
+              <div className="mb-0.5 flex items-center gap-0.5 px-1">
                 {edit?.mode === "rename" && project ? (
                   <RenameField
                     inputRef={renameInput}
@@ -413,7 +417,7 @@ function SidebarContent(props: SidebarProps) {
                         ? `${project.name} · ${project.displayPath}`
                         : undefined
                     }
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
                   >
                     {project?.git ? (
                       <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
@@ -426,7 +430,7 @@ function SidebarContent(props: SidebarProps) {
                       </span>
                       {parent && (
                         <span className="block truncate text-[10px] text-muted-foreground">
-                          Worktree of {parent.name}
+                          {parent.name}
                         </span>
                       )}
                     </span>
@@ -526,7 +530,7 @@ function SidebarContent(props: SidebarProps) {
               <div
                 id={`project-${project?.id ?? "removed"}`}
                 hidden={isCollapsed}
-                className="space-y-1"
+                className="space-y-0.5"
               >
                 {rows.map((session) => (
                   <SessionRow

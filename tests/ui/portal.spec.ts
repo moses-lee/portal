@@ -532,3 +532,14 @@ test("each project has a new conversation button, and the start page applies cho
   await page.getByRole("button", { name: "New conversation", exact: true }).first().click();
   await expect(settings).toContainText("Opus");
 });
+
+test("sidebar rows are compact with single-line titles", async ({ page }) => {
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const row = page.getByRole("button", { name: firstTitle, exact: true });
+  await expect(row).toBeVisible();
+  const box = (await row.boundingBox())!;
+  expect(box.height).toBeLessThan(50);
+  const title = row.locator(".sidebar-title");
+  expect(await title.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+});
