@@ -587,7 +587,10 @@ export default function SessionPane({
               minSize="20%"
               maxSize="75%"
             >
-              <TerminalPanel sessionId={sessionId} onHide={hideShell} />
+              <TerminalPanel
+                endpoint={sessionUrl(sessionId, "/terminals")}
+                onHide={hideShell}
+              />
             </Panel>
           )}
         </Group>

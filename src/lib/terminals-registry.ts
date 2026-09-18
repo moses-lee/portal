@@ -5,10 +5,10 @@ import type { TerminalInfo } from "./shell-types.ts";
 export type ShellRuntime = ReturnType<typeof createShellRuntime>;
 type RuntimeOptions = NonNullable<Parameters<typeof createShellRuntime>[0]>;
 
-/** One terminal tab: a PTY runtime owned by a chat session. */
+/** One terminal tab: a PTY runtime owned by a chat session, or by nobody (`sessionId: null`) for the standalone terminal page. */
 export type TerminalEntry = {
   id: string;
-  sessionId: string;
+  sessionId: string | null;
   createdAt: number;
   runtime: ShellRuntime;
 };
@@ -26,7 +26,7 @@ export function createTerminalRegistry({
   let disposed = false;
 
   /** Registers a terminal without starting its PTY; the first attached viewer sends `start`. */
-  function create({ sessionId, ...options }: RuntimeOptions & { sessionId: string; cwd: string }): TerminalEntry {
+  function create({ sessionId, ...options }: RuntimeOptions & { sessionId: string | null; cwd: string }): TerminalEntry {
     if (disposed) throw new Error("Terminals are shutting down.");
     const entry: TerminalEntry = { id: randomUUID(), sessionId, createdAt: Date.now(), runtime: createRuntime(options) };
     entries.set(entry.id, entry);
@@ -39,6 +39,11 @@ export function createTerminalRegistry({
 
   function listBySession(sessionId: string): TerminalEntry[] {
     return [...entries.values()].filter((entry) => entry.sessionId === sessionId);
+  }
+
+  /** Terminals that belong to no session; they end only when closed, when their shell exits, or when Portal stops. */
+  function listStandalone(): TerminalEntry[] {
+    return [...entries.values()].filter((entry) => entry.sessionId === null);
   }
 
   function close(id: string): boolean {
@@ -68,5 +73,5 @@ export function createTerminalRegistry({
     closeListeners.clear();
   }
 
-  return { create, get, listBySession, close, closeSession, onClose, disposeAll };
+  return { create, get, listBySession, listStandalone, close, closeSession, onClose, disposeAll };
 }

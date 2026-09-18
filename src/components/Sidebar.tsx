@@ -13,6 +13,7 @@ import {
   Search,
   Settings,
   SquarePen,
+  TerminalSquare,
   Trash2,
   X,
 } from "lucide-react";
@@ -62,6 +63,10 @@ export type SidebarProps = {
   onDeleteSession: (id: string) => void | Promise<void>;
   onNewSession: (projectId: string) => void;
   onHome: () => void;
+  /** Open the standalone terminal page. */
+  onTerminal: () => void;
+  /** True while the standalone terminal page is open. */
+  terminalActive: boolean;
   onAddProject: () => void;
   onOpenSettings: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
@@ -253,6 +258,8 @@ function SidebarContent(props: SidebarProps) {
     onTogglePinProject,
     onNewSession,
     onHome,
+    onTerminal,
+    terminalActive,
     onAddProject,
     onRenameProject,
     onRemoveProject,
@@ -304,7 +311,7 @@ function SidebarContent(props: SidebarProps) {
     });
   return (
     <div className="sidebar-content">
-      <div className="mb-6 flex items-center gap-2 px-2">
+      <div className="mb-4 flex items-center gap-2 px-2">
         <PortalMark />
         <span className="flex-1 text-[15px] font-semibold tracking-[-.03em]">
           Portal
@@ -327,21 +334,30 @@ function SidebarContent(props: SidebarProps) {
         </Button>
       </div>
       <Button
-        variant="secondary"
+        variant="ghost"
         onClick={onHome}
-        className="mb-4 h-10 justify-start gap-2.5 rounded-xl bg-white/5 px-3 text-[13px]"
+        className="mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px]"
       >
         <SquarePen className="size-4" />
         New conversation
       </Button>
-      <div className="relative mb-6">
-        <Search className="pointer-events-none absolute left-3 top-2.5 size-3.5 text-muted-foreground" />
+      <Button
+        variant="ghost"
+        onClick={onTerminal}
+        aria-current={terminalActive ? "page" : undefined}
+        className={`mb-3 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${terminalActive ? "text-foreground" : "text-foreground/80"}`}
+      >
+        <TerminalSquare className="size-4" />
+        Terminal
+      </Button>
+      <div className="relative mb-4">
+        <Search className="pointer-events-none absolute left-2 top-2.5 size-3.5 text-muted-foreground" />
         <Input
           aria-label="Search sessions"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search conversations"
-          className="h-9 rounded-xl border-transparent bg-transparent pl-9 text-xs shadow-none dark:bg-transparent focus-visible:bg-white/5"
+          className="h-8 rounded-lg border-transparent bg-transparent pl-8 text-xs shadow-none dark:bg-transparent focus-visible:bg-white/5"
         />
       </div>
       <div className="mb-2 flex items-center px-2">
@@ -556,7 +572,7 @@ function SidebarContent(props: SidebarProps) {
       <Button
         variant="ghost"
         onClick={props.onOpenSettings}
-        className="mt-3 h-10 justify-start gap-2 border-t border-white/5 rounded-none px-3 text-xs text-muted-foreground"
+        className="mt-3 h-10 justify-start gap-2 rounded-xl px-3 text-xs text-muted-foreground"
       >
         <Settings className="size-3.5" />
         Settings

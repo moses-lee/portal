@@ -88,3 +88,21 @@ test("terminals are independent PTYs grouped by session and torn down individual
   terminals.disposeAll();
   assert.throws(() => create("session-1", dirs[0]), /shutting down/);
 });
+
+test("standalone terminals belong to no session and outlive session teardown", (t) => {
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-terminals-")));
+  const terminals = createTerminalRegistry();
+  t.after(() => { terminals.disposeAll(); rmSync(dir, { recursive: true, force: true }); });
+  const standalone = terminals.create({ sessionId: null, cwd: dir });
+  const owned = terminals.create({ sessionId: "session-1", cwd: dir });
+  assert.equal(info(standalone).sessionId, null);
+  assert.deepEqual(terminals.listStandalone(), [standalone]);
+  assert.deepEqual(terminals.listBySession("session-1"), [owned]);
+  assert.equal(info(standalone).state.status, "idle", "creating a standalone terminal must not start its PTY");
+
+  terminals.closeSession("session-1");
+  assert.deepEqual(terminals.listStandalone(), [standalone], "closing a session must leave standalone terminals alone");
+  assert.equal(terminals.get(owned.id), undefined);
+  assert.equal(terminals.close(standalone.id), true);
+  assert.deepEqual(terminals.listStandalone(), []);
+});

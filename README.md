@@ -10,7 +10,10 @@ Requires Node.js 24 or newer and a macOS or Linux host.
 ```sh
 pnpm install
 pnpm dev          # binds 0.0.0.0:3000 so it is reachable over Tailscale
+pnpm prod         # production build, then serve it on the same port
 ```
+
+`pnpm prod` runs `next build` and then `pnpm start` (the custom server in production mode). It clears the variables `next dev` sets on its own process first, so it also works from a terminal opened inside Portal; stop the dev server before running it, since both use port 3000.
 
 Open `http://localhost:3000` or `http://<tailscale-ip>:3000`. Sessions belong to **projects**: folders you add once and Portal remembers. On the start page, choose a project and agent, then send your first message or choose **Start an empty conversation**; the sidebar groups sessions under their projects, most recently active first, titled by their first message. The **New conversation** action in the header returns to the start page.
 
@@ -51,11 +54,15 @@ Portal runs `git fetch origin --prune` for the repository only while the panel i
 
 Click **Show terminal** in the top-right corner of an open session to open that session's terminals below the chat and message box. Drag the divider to resize the panel; **Hide terminal** or **Hide** closes the panel while commands keep running. On touch screens, a small key row provides Esc, Tab, Ctrl+C, and command-history arrows.
 
-- Terminals belong to a session. Opening the panel for the first time creates one tab; **+** adds more. Every tab is its own process started in the session's directory with the host's `$SHELL` as a login shell, with its usual configuration and environment.
+- Terminals belong to a session, except on the standalone terminal page (below). Opening the panel for the first time creates one tab; **+** adds more. Every tab is its own process started in the session's directory with the host's `$SHELL` as a login shell, with its usual configuration and environment.
 - `cd` inside a terminal changes nothing about the session: the agent keeps working in the session's directory, and new sessions always start in their project's folder (or in the chosen worktree's).
 - Switching sessions or hiding the panel leaves the processes running; reconnecting restores each tab's screen and up to 2,000 scrollback lines. A tab ends when you close it with **×**, when its shell exits (the output stays and **Start new shell** restarts it in the same directory), or when Portal stops.
 - All viewers of a tab (other browser tabs, other devices) see the same terminal. The most recently focused/resized view sets its dimensions. Closing a tab on one device closes it everywhere.
 - The start page has no terminal.
+
+### Standalone terminal
+
+**Terminal** in the sidebar, under **New conversation**, opens a terminal page at `/terminal` that belongs to no session or project: the terminal panel fills the main column instead of a chat, with the same tab strip, mobile key row, and shared view across devices. Shells start in the host user's home directory with `$SHELL` as a login shell. These terminals are durable in the same way session terminals are: leaving the page (or closing the browser) leaves them running, and coming back reattaches every tab. A tab ends only when you close it with **×**, when its shell exits, or when Portal stops; deleting sessions never touches them. The page has no GitHub inspector and no aurora.
 
 Terminals use `node-pty`, `@xterm/xterm`, xterm's headless/serialization and fit addons, and `react-resizable-panels`. Socket.IO carries ordered input, output, resizing, and automatic reconnection over WebSockets; each tab connects with its terminal ID. A small custom Next.js server (`server.mjs`) serves both the app and the terminal transport on port 3000 (or `$PORT`). Use `pnpm dev` / `pnpm start`; invoking `next dev` / `next start` directly does not start the terminal transport. Restart the server after changing its runtime modules.
 
@@ -70,7 +77,7 @@ As with the agent APIs, terminals are intended for this personal Portal instance
 - `src/lib/acp.ts` — runtime singleton preserved across development hot reloads.
 - `src/lib/session-store.ts` — the `SessionStore` interface every persistence backend implements (session records plus an append-only, tail-readable event log with dense sequence numbers), and an in-memory implementation used by tests. `src/lib/file-session-store.ts` is the file backend: `~/.portal/sessions/index.json` (atomic rewrites) and `~/.portal/sessions/logs/<id>.jsonl`, read backwards in chunks so the latest page never scans the whole file; `src/lib/session-storage.ts` is its singleton. A cloud backend is another implementation of the same interface.
 - `src/lib/session-pages.ts` — turn-aligned pagination over a store: every page starts at a user message so the browser can reduce it on its own.
-- `src/lib/session-routes.ts` — the `/sessions/<id>` URL scheme shared by the router and the sidebar.
+- `src/lib/session-routes.ts` — the `/sessions/<id>` and `/terminal` URL scheme shared by the router and the sidebar.
 - `src/lib/pins.ts` — pinned project and session maps (id → pinned time) and the pinned-first orderings; `src/lib/session-groups.ts` groups sessions under projects for the sidebar; `src/components/usePins.ts` keeps the maps in localStorage.
 - `src/lib/types.ts` — shared event, project, and session metadata types.
 - `src/lib/projects-store.ts` — persisted project list (`~/.portal/projects.json`, atomic rewrites), including `worktree: {parentId, branch}` metadata for worktree projects; `src/lib/projects.ts` is its singleton. `src/lib/fs-paths.ts` resolves and lists directories for it and for the folder browser.
@@ -92,13 +99,13 @@ As with the agent APIs, terminals are intended for this personal Portal instance
 - `src/app/api/sessions/[id]/cancel` — `POST`; cancels open permission prompts, then sends `session/cancel`.
 - `src/app/api/sessions/[id]/config` — `POST {configId, value}` or `{modeId}`; forwards `session/set_config_option` / `session/set_mode` and returns the new `{state}`.
 - `src/app/api/sessions/[id]/permission` — `POST {requestId, optionId}`; answers a `permission_request` from the event stream (`optionId: null` cancels it).
-- `src/app/api/sessions/[id]/terminals` — `GET` list, `POST` create a terminal for the session (409 when its working directory is missing); `src/app/api/terminals/[id]` — `DELETE` closes one.
-- `src/components/Chat.tsx` — the app shell: reads the session from the URL, owns the session list and project selection, and renders `SessionPane.tsx`, which loads the latest page, follows the live stream, fetches earlier pages on scroll while keeping the viewport still, and reduces events into user / assistant / thought / tool / plan blocks one turn at a time. `src/app/(portal)/layout.tsx` mounts the shell once for `/` and `/sessions/[id]`. `Sidebar.tsx`, `StartPage.tsx`, `AddProjectDialog.tsx`, and `DirectoryBrowser.tsx` handle projects.
+- `src/app/api/sessions/[id]/terminals` — `GET` list, `POST` create a terminal for the session (409 when its working directory is missing); `src/app/api/terminals` — `GET` list, `POST` create a standalone terminal in the home directory; `src/app/api/terminals/[id]` — `DELETE` closes one of either kind.
+- `src/components/Chat.tsx` — the app shell: reads the session (or the terminal page) from the URL, owns the session list and project selection, and renders `TerminalPage.tsx` or `SessionPane.tsx`, which loads the latest page, follows the live stream, fetches earlier pages on scroll while keeping the viewport still, and reduces events into user / assistant / thought / tool / plan blocks one turn at a time. `src/app/(portal)/layout.tsx` mounts the shell once for `/`, `/sessions/[id]`, and `/terminal`. `Sidebar.tsx`, `StartPage.tsx`, `AddProjectDialog.tsx`, and `DirectoryBrowser.tsx` handle projects.
 - `src/components/Conversation.tsx` — shadcn message rendering, activity disclosure, Markdown, code copying, diffs, and scroll behavior. `ChatComposer.tsx` owns input interactions; `SessionControls.tsx` owns the settings dialog. `src/components/ui/` contains the local shadcn components.
 - `src/lib/drafts.ts` — per-tab draft storage with an in-memory fallback, shared by the start page and active conversations.
-- `src/lib/shell-runtime.ts` — one PTY with bounded terminal state, directory tracking, and subscribers; `src/lib/terminals-registry.ts` keeps one per terminal tab (`src/lib/terminals.ts` is the singleton).
+- `src/lib/shell-runtime.ts` — one PTY with bounded terminal state, directory tracking, and subscribers; `src/lib/terminals-registry.ts` keeps one per terminal tab, owned by a session or standalone (`src/lib/terminals.ts` is the singleton).
 - `src/lib/shell-server.ts` — terminal WebSocket commands, snapshots, live subscribers, and close notifications.
-- `src/components/TerminalPanel.tsx` — per-session tab strip; `TerminalView.tsx` and `src/lib/shell-client.ts` own xterm and browser I/O for one tab.
+- `src/components/TerminalPanel.tsx` — tab strip over one terminal collection (a session's, or the standalone set behind `TerminalPage.tsx`); `TerminalView.tsx` and `src/lib/shell-client.ts` own xterm and browser I/O for one tab.
 
 ## Adding an agent
 

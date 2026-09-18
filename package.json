@@ -11,6 +11,7 @@
     "dev": "node server.mjs",
     "build": "next build",
     "start": "NODE_ENV=production node server.mjs --production",
+    "prod": "env -u NODE_ENV -u TURBOPACK -u NEXT_DEPLOYMENT_ID -u __NEXT_DEV_SERVER pnpm build && pnpm start",
     "lint": "eslint",
     "test": "node --test --test-timeout=15000 tests/*.test.mjs",
     "test:ui": "playwright test"

@@ -6,9 +6,10 @@ import type { ShellViewState } from "@/lib/shell-client";
 import type { TerminalInfo } from "@/lib/shell-types";
 
 export type TerminalPanelProps = {
-  sessionId: string;
-  /** Hide the panel; the caller returns focus to the header's Terminal toggle. */
-  onHide: () => void;
+  /** The REST collection of this panel's terminals: `GET` lists them and `POST` creates one. */
+  endpoint: string;
+  /** Hide the panel; the caller returns focus to the header's Terminal toggle. Omitted where the panel is the page. */
+  onHide?: () => void;
 };
 
 /**
@@ -76,8 +77,8 @@ function statusText(view: ShellViewState | undefined) {
   return view.shell?.shell ?? "";
 }
 
-/** A session's terminals as tabs; each tab is its own PTY, started on first attach and kept running while hidden. */
-export default function TerminalPanel({ sessionId, onHide }: TerminalPanelProps) {
+/** A collection of terminals as tabs; each tab is its own PTY, started on first attach and kept running while hidden. */
+export default function TerminalPanel({ endpoint, onHide }: TerminalPanelProps) {
   const [tabs, setTabs] = useState<Tabs>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [views, setViews] = useState<Record<string, ShellViewState>>({});
@@ -88,7 +89,6 @@ export default function TerminalPanel({ sessionId, onHide }: TerminalPanelProps)
   const clients = useRef(new Map<string, TerminalViewHandle>());
   const deleting = useRef(new Set<string>());
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const listUrl = `/api/sessions/${encodeURIComponent(sessionId)}/terminals`;
 
   const showClosedNotice = useCallback((id: string) => {
     clearTimeout(noticeTimer.current);
@@ -98,16 +98,16 @@ export default function TerminalPanel({ sessionId, onHide }: TerminalPanelProps)
   useEffect(() => () => clearTimeout(noticeTimer.current), []);
 
   const fetchTerminals = useCallback(async (signal?: AbortSignal) => {
-    const r = await fetch(listUrl, { signal });
-    if (!r.ok) throw await readError(r, "Could not load this session's terminals.");
+    const r = await fetch(endpoint, { signal });
+    if (!r.ok) throw await readError(r, "Could not load the terminals.");
     return ((await r.json()) as { terminals: TerminalInfo[] }).terminals;
-  }, [listUrl]);
+  }, [endpoint]);
 
   const createTerminal = useCallback(async (signal?: AbortSignal) => {
-    const r = await fetch(listUrl, { method: "POST", signal });
+    const r = await fetch(endpoint, { method: "POST", signal });
     if (!r.ok) throw await readError(r, "Could not create a terminal.");
     return (await r.json()) as TerminalInfo;
-  }, [listUrl]);
+  }, [endpoint]);
 
   // Load on open (creating the first tab when there is none) and reconcile with the server on every return to the tab.
   useEffect(() => {
@@ -277,7 +277,7 @@ export default function TerminalPanel({ sessionId, onHide }: TerminalPanelProps)
             +
           </button>
         </div>
-        <button aria-label="Hide terminal" onClick={onHide} className="ml-auto shrink-0 rounded px-2 py-1 text-zinc-300 hover:bg-zinc-800">Hide</button>
+        {onHide && <button aria-label="Hide terminal" onClick={onHide} className="ml-auto shrink-0 rounded px-2 py-1 text-zinc-300 hover:bg-zinc-800">Hide</button>}
       </div>
       {active && (
         <div className="flex shrink-0 items-center gap-3 px-3 pb-1.5 text-xs text-zinc-400">
@@ -307,7 +307,7 @@ export default function TerminalPanel({ sessionId, onHide }: TerminalPanelProps)
         ))}
         {loaded && tabs.terminals.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-xs text-zinc-500">
-            <p>No terminals in this session.</p>
+            <p>No terminals open.</p>
             <button
               type="button"
               onClick={() => void newTab()}

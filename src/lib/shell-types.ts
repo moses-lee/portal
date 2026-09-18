@@ -21,10 +21,10 @@ export type ShellEvent =
   /** The terminal was deleted; the server disconnects viewers right after sending this. */
   | { type: "closed"; terminalId: string };
 
-/** A terminal (one PTY) owned by a session, as served by the terminal REST routes. */
+/** A terminal (one PTY) as served by the terminal REST routes; `sessionId` is null for standalone terminals. */
 export type TerminalInfo = {
   id: string;
-  sessionId: string;
+  sessionId: string | null;
   createdAt: number;
   state: ShellState;
 };

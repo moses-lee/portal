@@ -504,6 +504,27 @@ export async function setupPortal(
       });
     if (path.endsWith("/github"))
       return json({ summary: options.github ?? githubSummary });
+    if (path === "/api/terminals" && method === "POST")
+      return json(
+        {
+          id: "standalone-1",
+          sessionId: null,
+          createdAt: now,
+          state: {
+            id: null,
+            status: "idle",
+            cwd: "/Users/tester",
+            displayCwd: "~",
+            git: null,
+            shell: "zsh",
+            cols: 80,
+            rows: 24,
+            exitCode: null,
+            cwdError: null,
+          },
+        },
+        201,
+      );
     if (path.endsWith("/terminals")) return json({ terminals: [] });
     if (path.startsWith("/api/sessions/") && method === "GET")
       return json(

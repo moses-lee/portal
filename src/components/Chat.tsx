@@ -8,6 +8,7 @@ import { usePreference } from "./usePreference";
 import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
+import TerminalPage from "./TerminalPage";
 import AddProjectDialog from "./AddProjectDialog";
 import SettingsDialog from "./SettingsDialog";
 import { usePins } from "./usePins";
@@ -24,7 +25,12 @@ import {
   latestStateForAgent,
   nextConfigChange,
 } from "@/lib/session-config";
-import { sessionIdFromPath, sessionPath } from "@/lib/session-routes";
+import {
+  isTerminalPath,
+  sessionIdFromPath,
+  sessionPath,
+  terminalPath,
+} from "@/lib/session-routes";
 import type {
   AgentInfo,
   EventPage,
@@ -78,6 +84,9 @@ export default function Chat() {
   const pathname = usePathname();
   /** The open session comes from the URL, so refresh, back, and shared links all land on it. */
   const active = useMemo(() => sessionIdFromPath(pathname ?? "/"), [pathname]);
+  /** The standalone terminal page: no session, no start page. */
+  const terminalOpen = isTerminalPath(pathname ?? "/");
+  const onStartPage = !active && !terminalOpen;
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -329,7 +338,7 @@ export default function Chat() {
 
   /** Navigate to a session (or the start page); the URL drives the rest. */
   const selectSession = (sessionId: string | null) => {
-    if (sessionId !== active)
+    if (sessionId !== active || terminalOpen)
       pushPath(sessionId ? sessionPath(sessionId) : "/");
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
@@ -423,7 +432,13 @@ export default function Chat() {
   /** The sidebar's `+`: open the start page with `projectId` selected so the worktree picker is available. */
   const startIn = (projectId: string) => {
     selectProject(projectId);
-    if (active) pushPath("/");
+    if (!onStartPage) pushPath("/");
+    setShowSidebar(false);
+  };
+
+  /** The sidebar's Terminal button: open the standalone terminal page. */
+  const openTerminal = () => {
+    if (!terminalOpen) pushPath(terminalPath());
     setShowSidebar(false);
   };
 
@@ -578,7 +593,7 @@ export default function Chat() {
     // The start page begins at Original again; the draft replaces whatever was there.
     setWorktreePick(null);
     writeDraft("new", text);
-    if (active) pushPath("/");
+    if (!onStartPage) pushPath("/");
     setShowSidebar(false);
   };
   return (
@@ -604,6 +619,8 @@ export default function Chat() {
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
         onHome={() => selectSession(null)}
+        onTerminal={openTerminal}
+        terminalActive={terminalOpen}
         desktopOpen={sidebarPreference === "true"}
         onCollapse={() => setSidebarPreference("false")}
       />
@@ -619,7 +636,18 @@ export default function Chat() {
         open={showSettings}
         onClose={() => setShowSettings(false)}
       />
-      {/* Keyed by session so switching remounts the pane with fresh history; terminals keep running server-side. */}
+      {terminalOpen ? (
+        <TerminalPage
+          onOpenSidebar={() => {
+            if (desktop)
+              setSidebarPreference(
+                sidebarPreference === "true" ? "false" : "true",
+              );
+            else setShowSidebar(true);
+          }}
+        />
+      ) : (
+      /* Keyed by session so switching remounts the pane with fresh history; terminals keep running server-side. */
       <SessionPane
         key={active ?? ""}
         sessionId={active}
@@ -666,7 +694,8 @@ export default function Chat() {
         shellSize={shellSize}
         onShellSize={setShellSize}
       />
-      {showGithub && (
+      )}
+      {showGithub && !terminalOpen && (
         <GithubInspector
           open={showGithub}
           onClose={() => setGithubPreference("false")}

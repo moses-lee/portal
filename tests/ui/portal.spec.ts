@@ -667,3 +667,45 @@ test("source control actions draft a prompt on the start page without creating a
     ),
   ).toHaveLength(0);
 });
+
+test("the sidebar opens a standalone terminal page with its own URL", async ({
+  page,
+}) => {
+  await setupPortal(page);
+  // No PTY behind the fixtures: the tab stays connecting instead of being closed as unknown.
+  await page.routeWebSocket("**/api/shell/socket**", () => {});
+  await page.goto("/sessions/s1");
+  const terminalButton = page.getByRole("button", {
+    name: "Terminal",
+    exact: true,
+  });
+  await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
+  await terminalButton.click();
+  await expect(page).toHaveURL(/\/terminal$/);
+  await expect(terminalButton).toHaveAttribute("aria-current", "page");
+  await expect(
+    page.getByRole("heading", { name: "Terminal", level: 1 }),
+  ).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Terminal 1" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Connecting…" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hide terminal" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /GitHub inspector/ }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "First message" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: firstTitle, exact: true }),
+  ).not.toHaveAttribute("aria-current", "page");
+
+  // The page survives a reload and leaves via the sidebar.
+  await page.reload();
+  await expect(page).toHaveURL(/\/terminal$/);
+  await expect(page.getByRole("tab", { name: "Terminal 1" })).toBeVisible();
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
+  await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
+});
