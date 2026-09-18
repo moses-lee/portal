@@ -1,5 +1,5 @@
 import { EMPTY_PINS, partitionPinned, type PinMap } from "./pins.ts";
-import type { Project, SessionSummary } from "./types.ts";
+import type { Project, SessionMeta, SessionSummary } from "./types.ts";
 
 export type SessionGroup<P extends Project = Project> = {
   /** The owning project, or null for sessions whose project has since been removed. */
@@ -9,7 +9,7 @@ export type SessionGroup<P extends Project = Project> = {
 };
 
 /** Most recently active first, newest created breaking ties. */
-export function byRecentActivity(a: SessionSummary, b: SessionSummary): number {
+export function byRecentActivity(a: Pick<SessionMeta, "lastActiveAt" | "createdAt">, b: Pick<SessionMeta, "lastActiveAt" | "createdAt">): number {
   return (b.lastActiveAt ?? b.createdAt) - (a.lastActiveAt ?? a.createdAt) || b.createdAt - a.createdAt;
 }
 

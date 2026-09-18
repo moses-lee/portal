@@ -5,6 +5,7 @@ import WorktreePicker, { type WorktreeChoice } from "./WorktreePicker";
 import ContextBar from "./ContextBar";
 import AgentLogo from "./AgentLogo";
 import ChatComposer from "./ChatComposer";
+import SessionControls from "./SessionControls";
 import { useDraft } from "./useDraft";
 import { worktreeLabel } from "./WorktreeBadge";
 import { worktreeTarget } from "@/lib/branch-matching";
@@ -16,7 +17,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AgentInfo, ProjectSummary } from "@/lib/types";
+import type {
+  AgentInfo,
+  ProjectSummary,
+  SessionState,
+  SetConfigRequest,
+} from "@/lib/types";
 
 export type StartPageProps = {
   projects: ProjectSummary[];
@@ -28,6 +34,9 @@ export type StartPageProps = {
   agents: AgentInfo[];
   selectedAgentId: string;
   onSelectAgent: (agentId: string) => void;
+  /** Agent settings for the new session, seeded from the agent's latest session; null when none are known yet. */
+  settings: SessionState | null;
+  onSettingsChange: (request: SetConfigRequest) => void;
   loading?: boolean;
   canCreate: boolean;
   creating: boolean;
@@ -45,6 +54,8 @@ export default function StartPage({
   agents,
   selectedAgentId,
   onSelectAgent,
+  settings,
+  onSettingsChange,
   loading = false,
   canCreate,
   creating,
@@ -188,6 +199,15 @@ export default function StartPage({
             label="First message"
             placeholder="What would you like to build?"
             error={error}
+            settings={
+              settings && (
+                <SessionControls
+                  state={settings}
+                  disabled={loading || creating}
+                  onChange={onSettingsChange}
+                />
+              )
+            }
             context={
               <ContextBar
                 cwd={target?.displayPath ?? project?.path}

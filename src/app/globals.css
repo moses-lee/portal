@@ -131,16 +131,23 @@
 @property --aurora-a {
   syntax: "<color>";
   inherits: true;
-  initial-value: #515fbd;
+  initial-value: #5f6ff5;
 }
 @property --aurora-b {
   syntax: "<color>";
   inherits: true;
-  initial-value: #6c4e96;
+  initial-value: #a855f7;
 }
+@property --aurora-c {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #22b8cf;
+}
+/* Three drifting bands of colour that shift hue with the agent's activity, Siri-style but slow. */
 .aurora {
-  --aurora-a: #515fbd;
-  --aurora-b: #6c4e96;
+  --aurora-a: #5f6ff5;
+  --aurora-b: #a855f7;
+  --aurora-c: #22b8cf;
   position: fixed;
   inset: 0;
   z-index: -1;
@@ -148,46 +155,71 @@
   pointer-events: none;
   transition:
     --aurora-a 1.8s ease,
-    --aurora-b 1.8s ease;
+    --aurora-b 1.8s ease,
+    --aurora-c 1.8s ease;
   mask-image: radial-gradient(
-    ellipse at 65% 0%,
+    ellipse 130% 95% at 65% 0%,
     #000 0%,
-    #0009 35%,
-    transparent 80%
+    #000d 40%,
+    #0006 70%,
+    transparent 100%
   );
 }
 .aurora[data-activity="working"] {
-  --aurora-a: #296e87;
-  --aurora-b: #7057c7;
+  --aurora-a: #22a6d8;
+  --aurora-b: #7c5cf0;
+  --aurora-c: #34d399;
 }
 .aurora[data-activity="waiting"] {
-  --aurora-a: #986b39;
-  --aurora-b: #805749;
+  --aurora-a: #f0a44a;
+  --aurora-b: #d97757;
+  --aurora-c: #f5c66b;
 }
 .aurora[data-activity="connecting"] {
-  --aurora-a: #3d6b9c;
-  --aurora-b: #525890;
+  --aurora-a: #4f8fd9;
+  --aurora-b: #6470c8;
+  --aurora-c: #7ec8f0;
 }
 .aurora[data-activity="error"] {
-  --aurora-a: #8c4758;
-  --aurora-b: #674979;
+  --aurora-a: #e0506b;
+  --aurora-b: #9b4fd1;
+  --aurora-c: #f08a8a;
 }
 .aurora-ribbons {
   position: absolute;
   inset: -30%;
-  opacity: 0.18;
-  filter: blur(60px);
+  opacity: 0.4;
+  filter: blur(40px) saturate(150%);
   background: repeating-linear-gradient(
     110deg,
     transparent 0%,
-    var(--aurora-a) 12%,
-    transparent 26%,
-    var(--aurora-b) 39%,
-    transparent 54%
+    var(--aurora-a) 10%,
+    transparent 22%,
+    var(--aurora-b) 33%,
+    transparent 45%,
+    var(--aurora-c) 54%,
+    transparent 66%
   );
   background-size: 180% 150%;
   transform: rotate(-14deg);
-  animation: aurora-drift 65s linear infinite alternate;
+  animation: aurora-drift 45s ease-in-out infinite alternate;
+}
+.aurora-ribbons-far {
+  inset: -20%;
+  opacity: 0.28;
+  filter: blur(64px) saturate(130%);
+  mix-blend-mode: screen;
+  background: repeating-linear-gradient(
+    70deg,
+    transparent 0%,
+    var(--aurora-c) 14%,
+    transparent 30%,
+    var(--aurora-a) 44%,
+    transparent 60%
+  );
+  background-size: 220% 170%;
+  transform: rotate(12deg);
+  animation: aurora-drift-far 70s ease-in-out infinite alternate;
 }
 .aurora[data-paused="true"] .aurora-ribbons {
   animation-play-state: paused;
@@ -195,11 +227,21 @@
 @keyframes aurora-drift {
   from {
     background-position: 0% 40%;
-    transform: rotate(-14deg) translate3d(-2%, 0, 0);
+    transform: rotate(-14deg) translate3d(-3%, 0, 0);
   }
   to {
     background-position: 100% 60%;
-    transform: rotate(-10deg) translate3d(2%, 3%, 0);
+    transform: rotate(-8deg) translate3d(3%, 5%, 0);
+  }
+}
+@keyframes aurora-drift-far {
+  from {
+    background-position: 100% 30%;
+    transform: rotate(12deg) translate3d(3%, 2%, 0);
+  }
+  to {
+    background-position: 0% 70%;
+    transform: rotate(18deg) translate3d(-3%, -3%, 0);
   }
 }
 
@@ -590,8 +632,11 @@
     font-size: 10px;
   }
   .aurora-ribbons {
-    filter: blur(40px);
-    opacity: 0.14;
+    filter: blur(36px) saturate(150%);
+    opacity: 0.3;
+  }
+  .aurora-ribbons-far {
+    opacity: 0.2;
   }
   button[data-size="icon"] {
     min-width: 40px;

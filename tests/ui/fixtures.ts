@@ -295,12 +295,16 @@ export async function setupPortal(
     if (path === "/api/sessions" && method === "GET")
       return json({ sessions: currentSessions });
     if (path === "/api/sessions" && method === "POST") {
-      const session = makeSession(
-        "created",
-        "",
-        body.agentId,
-        body.projectId === "p1" ? project : worktree,
-      );
+      const session = {
+        ...makeSession(
+          "created",
+          "",
+          body.agentId,
+          body.projectId === "p1" ? project : worktree,
+        ),
+        // A new session is the most recently active one.
+        lastActiveAt: now,
+      };
       currentSessions.push(session);
       await page.evaluate(
         (session) => window.__portalSessions.push(session),
@@ -370,6 +374,14 @@ export async function setupPortal(
         option.id === body.configId
           ? { ...option, currentValue: body.value }
           : option,
+      );
+      // The stream's meta reports the browser-side copy; keep it current like the real server would.
+      await page.evaluate(
+        ({ id, state }) => {
+          const mirrored = window.__portalSessions.find((s) => s.id === id);
+          if (mirrored) mirrored.state = state;
+        },
+        { id: session.id, state: session.state },
       );
       return json({ state: session.state });
     }

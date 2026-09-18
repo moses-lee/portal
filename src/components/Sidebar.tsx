@@ -445,6 +445,16 @@ function SidebarContent(props: SidebarProps) {
                   </button>
                 )}
                 {project && (
+                  <IconButton
+                    label={`New conversation in ${project.name}`}
+                    size="icon-xs"
+                    onClick={() => onNewSession(project.id)}
+                    className="text-muted-foreground"
+                  >
+                    <SquarePen />
+                  </IconButton>
+                )}
+                {project && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -466,12 +476,6 @@ function SidebarContent(props: SidebarProps) {
                         }
                       }}
                     >
-                      <DropdownMenuItem
-                        onSelect={() => onNewSession(project.id)}
-                      >
-                        <SquarePen />
-                        New conversation
-                      </DropdownMenuItem>
                       <DropdownMenuItem
                         onSelect={() => onTogglePinProject(project.id)}
                       >

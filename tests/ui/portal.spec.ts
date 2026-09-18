@@ -390,8 +390,10 @@ test("reduced motion freezes the aurora and sidebar search finds session titles"
   expect(
     await page
       .locator(".aurora-ribbons")
-      .evaluate((node) => getComputedStyle(node).animationName),
-  ).toBe("none");
+      .evaluateAll((nodes) =>
+        nodes.map((node) => getComputedStyle(node).animationName),
+      ),
+  ).toEqual(["none", "none"]);
   await page
     .getByRole("textbox", { name: "Search sessions" })
     .fill("overlapping");
@@ -471,4 +473,62 @@ test("sidebar width, visibility, and pins survive reload", async ({ page }) => {
   await expect(
     page.getByRole("menuitem", { name: "Unpin session", exact: true }),
   ).toBeVisible();
+});
+
+test("each project has a new conversation button, and the start page applies chosen agent settings before the first prompt", async ({
+  page,
+}, info) => {
+  const fixture = await setupPortal(page);
+  await page.goto("/sessions/s1");
+  await expect(
+    page.getByText("A calmer place to work", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Actions for project portal" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "New conversation in portal", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("combobox", { name: "Project", exact: true }),
+  ).toContainText("portal");
+  // Seeded from Claude Code's latest session: Sonnet in the fixture.
+  const settings = page.getByRole("button", {
+    name: "Agent settings",
+    exact: true,
+  });
+  await expect(settings).toContainText("Sonnet");
+  await settings.click();
+  const dialog = page.getByRole("dialog", { name: "Agent settings" });
+  await dialog.getByRole("combobox", { name: "Model" }).click();
+  await page.getByRole("option", { name: "Opus", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(settings).toContainText("Opus");
+  await page.screenshot({
+    animations: "disabled",
+    path: info.outputPath("start-settings.png"),
+  });
+  await page
+    .getByRole("textbox", { name: "First message" })
+    .fill("Build a project dashboard");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page).toHaveURL(/\/sessions\/created$/);
+  await expect(
+    page.getByRole("combobox", { name: "Message Claude Code" }),
+  ).toHaveValue("");
+  const steps = fixture.requests
+    .filter(
+      (request) =>
+        request.path.endsWith("/config") || request.path.endsWith("/prompt"),
+    )
+    .map((request) => [request.path, request.body]);
+  expect(steps).toEqual([
+    ["/api/sessions/created/config", { configId: "model", value: "opus" }],
+    ["/api/sessions/created/prompt", { text: "Build a project dashboard" }],
+  ]);
+  // The next start page seeds from the session just created, so Opus is now the default.
+  await page.getByRole("button", { name: "New conversation", exact: true }).first().click();
+  await expect(settings).toContainText("Opus");
 });

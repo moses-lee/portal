@@ -15,13 +15,20 @@ import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { pinnedFirst } from "@/lib/pins";
 import { createHistoryCache } from "@/lib/history-cache";
+import {
+  applyConfigChange,
+  latestStateForAgent,
+  nextConfigChange,
+} from "@/lib/session-config";
 import { sessionIdFromPath, sessionPath } from "@/lib/session-routes";
 import type {
   AgentInfo,
   EventPage,
   ProjectSummary,
   SessionListEvent,
+  SessionState,
   SessionSummary,
+  SetConfigRequest,
 } from "@/lib/types";
 
 const GithubInspector = dynamic(() => import("./GithubInspector"));
@@ -103,6 +110,11 @@ export default function Chat() {
   const [worktreePick, setWorktreePick] = useState<{
     projectId: string;
     choice: WorktreeChoice;
+  } | null>(null);
+  /** Agent settings chosen on the start page, tied to the agent they were chosen for. */
+  const [startConfig, setStartConfig] = useState<{
+    agentId: string;
+    state: SessionState;
   } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showShell, setShowShell] = useState(false);
@@ -254,6 +266,59 @@ export default function Chat() {
       ? worktreePick.choice
       : ORIGINAL;
 
+  // The start page's agent settings: the user's picks this visit, else the agent's latest session
+  // (its current option list and the values last chosen); null until the agent has had a session.
+  const startSettings = useMemo(
+    () =>
+      startConfig?.agentId === selectedAgentId
+        ? startConfig.state
+        : latestStateForAgent(sessions, selectedAgentId),
+    [startConfig, selectedAgentId, sessions],
+  );
+  const changeStartSetting = (request: SetConfigRequest) => {
+    if (!startSettings) return;
+    setStartConfig({
+      agentId: selectedAgentId,
+      state: applyConfigChange(startSettings, request),
+    });
+  };
+
+  /**
+   * Move a new session's settings to the ones chosen on the start page, one request at a time
+   * since a model switch can change the choices of later options. Resolves with the final state.
+   */
+  const applyStartSettings = async (
+    sessionId: string,
+    desired: SessionState,
+    actual: SessionState,
+  ) => {
+    let state = actual;
+    for (let step = 0; step < 16; step++) {
+      const request = nextConfigChange(desired, state);
+      if (!request) break;
+      let r: Response;
+      try {
+        r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+      } catch {
+        throw new Error(
+          "Could not reach the server to apply the agent settings.",
+        );
+      }
+      const j = (await r.json().catch(() => ({}))) as {
+        state?: SessionState;
+        error?: string;
+      };
+      if (!r.ok || !j.state)
+        throw new Error(j.error ?? "Could not apply the agent settings.");
+      state = j.state;
+    }
+    return state;
+  };
+
   /** Navigate to a session (or the start page); the URL drives the rest. */
   const selectSession = (sessionId: string | null) => {
     if (sessionId !== active)
@@ -371,6 +436,7 @@ export default function Chat() {
     creatingRef.current = true;
     setCreating(true);
     setSessionError(null);
+    const desiredSettings = startSettings;
     if (projectId !== selectedProjectId) selectProject(projectId);
     try {
       if (choice.kind !== "original") {
@@ -415,6 +481,25 @@ export default function Chat() {
       }
       pushPath(sessionPath(session.id));
       setShowSidebar(false);
+      if (desiredSettings) {
+        // The next start page seeds from this session, which now carries these choices.
+        setStartConfig(null);
+        try {
+          const state = await applyStartSettings(
+            session.id,
+            desiredSettings,
+            session.state,
+          );
+          updateSession(session.id, { state });
+        } catch (error) {
+          setInitialSend({
+            sessionId: session.id,
+            pending: false,
+            error: `${error instanceof Error ? error.message : "Could not apply the agent settings."} Check Agent settings, then send your message.`,
+          });
+          return;
+        }
+      }
       if (firstPrompt.trim()) {
         try {
           const response = await fetch(
@@ -521,6 +606,8 @@ export default function Chat() {
           agents,
           selectedAgentId,
           onSelectAgent: setSelectedAgentId,
+          settings: startSettings,
+          onSettingsChange: changeStartSetting,
           loading: loading || projectsLoading,
           canCreate,
           creating,

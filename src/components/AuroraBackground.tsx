@@ -27,6 +27,7 @@ export default function AuroraBackground({
       aria-hidden="true"
     >
       <div className="aurora-ribbons" />
+      <div className="aurora-ribbons aurora-ribbons-far" />
     </div>
   );
 }
