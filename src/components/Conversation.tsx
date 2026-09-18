@@ -263,6 +263,66 @@ function ToolCard({ block }: { block: ToolBlock }) {
   );
 }
 
+type Phase = "thinking" | "tool" | "approval";
+const toolVerbs: Record<string, string> = {
+  read: "Reading files",
+  edit: "Editing",
+  delete: "Removing files",
+  move: "Moving files",
+  search: "Searching",
+  execute: "Running commands",
+  fetch: "Fetching",
+  think: "Thinking",
+  switch_mode: "Switching mode",
+};
+
+function indicatorPhase(turn?: Turn): { phase: Phase; verb: string } {
+  const blocks = turn?.blocks ?? [];
+  if (blocks.some((b) => b.kind === "permission" && !b.response))
+    return { phase: "approval", verb: "Waiting for your approval" };
+  const live = [...blocks]
+    .reverse()
+    .find(
+      (b): b is ToolBlock => b.kind === "tool" && b.status === "in_progress",
+    );
+  if (live)
+    return {
+      phase: "tool",
+      verb: toolVerbs[live.toolKind ?? ""] ?? live.title,
+    };
+  return { phase: "thinking", verb: "Thinking" };
+}
+
+function WorkingIndicator({
+  turn,
+  agentName,
+}: {
+  turn?: Turn;
+  agentName: string;
+}) {
+  const { phase, verb } = indicatorPhase(turn);
+  const label = phase === "approval" ? verb : `${verb}…`;
+  return (
+    <div
+      role="status"
+      data-phase={phase}
+      className="flex items-center gap-2.5 text-xs text-muted-foreground"
+    >
+      <span className="ind-orb" aria-hidden="true">
+        <i />
+      </span>
+      <span className="relative inline-flex overflow-hidden" aria-hidden="true">
+        <span key={verb} className="ind-verb">
+          {label}
+        </span>
+      </span>
+      <span className="sr-only">
+        {phase === "approval" ? verb : `${agentName} is working`}
+      </span>
+    </div>
+  );
+}
+
 type ActivityBlock = Extract<Block, { kind: "tool" | "thought" | "plan" }>;
 function isActivity(block: Block): block is ActivityBlock {
   return ["tool", "thought", "plan"].includes(block.kind);
@@ -572,23 +632,10 @@ export default function Conversation({
               </MessageScrollerItem>
             ))}
             {busy && (
-              <div
-                role="status"
-                className="flex items-center gap-2 text-xs text-muted-foreground"
-              >
-                <span className="flex gap-1" aria-hidden="true">
-                  <span className="size-1 rounded-full bg-indigo-200/60 animate-pulse" />
-                  <span className="size-1 rounded-full bg-indigo-200/40 animate-pulse [animation-delay:200ms]" />
-                  <span className="size-1 rounded-full bg-indigo-200/20 animate-pulse [animation-delay:400ms]" />
-                </span>
-                {history.turns
-                  .at(-1)
-                  ?.blocks.some(
-                    (block) => block.kind === "permission" && !block.response,
-                  )
-                  ? "Waiting for your approval"
-                  : `${agentName} is working`}
-              </div>
+              <WorkingIndicator
+                turn={history.turns.at(-1)}
+                agentName={agentName}
+              />
             )}
           </MessageScrollerContent>
         </MessageScrollerViewport>

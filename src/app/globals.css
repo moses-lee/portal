@@ -278,6 +278,84 @@
   }
 }
 
+/* Working indicator: breathing orb with a sonar ping, plus a verb label that
+   flips as the agent moves between thinking, tool calls, and approval. */
+.ind-orb {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.ind-orb::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #dfe4ff, #8f9cf0 60%, #6b6fd8);
+  box-shadow: 0 0 10px #9aa4f088;
+  animation: ind-orb-core 2.4s ease-in-out infinite;
+}
+.ind-orb i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid #a8b6f6;
+  opacity: 0;
+  animation: ind-orb-ping 2.4s ease-out infinite;
+}
+@keyframes ind-orb-core {
+  50% {
+    transform: scale(0.82);
+    filter: brightness(1.3);
+  }
+}
+@keyframes ind-orb-ping {
+  0% {
+    transform: scale(0.45);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+[data-phase="tool"] .ind-orb::after,
+[data-phase="tool"] .ind-orb i {
+  animation-duration: 1.05s;
+}
+[data-phase="approval"] .ind-orb::after {
+  background: radial-gradient(circle at 35% 30%, #ffe0b0, #edbb6a 60%, #c98f5c);
+  box-shadow: 0 0 12px #edbb6a66;
+}
+[data-phase="approval"] .ind-orb i {
+  border-color: #edbb6a;
+  animation-duration: 3.4s;
+}
+.ind-verb {
+  display: inline-block;
+  animation: ind-verb-in 220ms ease-out;
+}
+@keyframes ind-verb-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+[data-phase="approval"] .ind-verb {
+  color: #edbb6a;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ind-orb i {
+    display: none;
+  }
+}
+
 .conversation-content {
   width: 100%;
   max-width: 840px;
