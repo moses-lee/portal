@@ -502,6 +502,9 @@ export function createAcpRuntime(
   /**
    * Reattach the agent to a session created by an earlier process (or whose process has since
    * exited) with `session/resume`, falling back to `session/load` with its replay discarded.
+   * When the agent no longer knows the session, a never-prompted session gets a fresh upstream
+   * session in its place (Claude Code only writes a transcript on the first turn), while one
+   * with history fails with a message the user can act on.
    * Resolves immediately for live sessions; concurrent callers share one attempt.
    */
   async function attach(id: string): Promise<void> {
@@ -513,6 +516,7 @@ export function createAcpRuntime(
       ?? { id: session.agentId, name: session.agentName, command: "", args: [], authHint: "" };
     const cannotResume = (capabilities: acp.AgentCapabilities) =>
       !capabilities.sessionCapabilities?.resume && !capabilities.loadSession;
+    const isNotFound = (error: unknown) => error instanceof acp.RequestError && error.code === -32002;
     session.attaching = (async () => {
       setLink(session, { status: "connecting" });
       let instance: AgentProcess | null = null;
@@ -529,22 +533,42 @@ export function createAcpRuntime(
         instance.sessions.set(session.upstreamId, session);
         session.process = instance;
         const params = { sessionId: session.upstreamId, cwd: session.cwd, mcpServers: [] };
-        let response: acp.ResumeSessionResponse | acp.LoadSessionResponse | null;
-        if (instance.capabilities.sessionCapabilities?.resume) {
-          response = await instance.conn.agent.request(acp.methods.agent.session.resume, params);
-        } else {
-          session.replaying = true;
-          try {
-            response = await instance.conn.agent.request(acp.methods.agent.session.load, params);
-          } finally {
-            session.replaying = false;
+        let response: acp.ResumeSessionResponse | acp.LoadSessionResponse | acp.NewSessionResponse | null;
+        let replaced = false;
+        try {
+          if (instance.capabilities.sessionCapabilities?.resume) {
+            response = await instance.conn.agent.request(acp.methods.agent.session.resume, params);
+          } else {
+            session.replaying = true;
+            try {
+              response = await instance.conn.agent.request(acp.methods.agent.session.load, params);
+            } finally {
+              session.replaying = false;
+            }
           }
+        } catch (error) {
+          if (!isNotFound(error)) throw error;
+          if (instance.failure) throw instance.failure;
+          if (!current(session)) throw new Error("the session was deleted");
+          if (session.nextSeq > 0) {
+            console.warn(`Session ${session.id}: ${agent.name} no longer has agent session ${session.upstreamId}`);
+            throw new Error(`${agent.name} no longer has this conversation on the machine running Portal, so it cannot be resumed. Start a new session to continue.`);
+          }
+          // Nothing was ever said in this session, so a fresh upstream session loses nothing.
+          const created = await instance.conn.agent.request(acp.methods.agent.session.new, { cwd: session.cwd, mcpServers: [] });
+          if (instance.sessions.get(session.upstreamId) === session) instance.sessions.delete(session.upstreamId);
+          session.upstreamId = created.sessionId;
+          instance.sessions.set(created.sessionId, session);
+          response = created;
+          replaced = true;
         }
         if (instance.failure) throw instance.failure;
         if (!current(session)) throw new Error("the session was deleted");
         setState(session, {
           modes: response?.modes ?? session.state.modes,
           configOptions: response?.configOptions ?? session.state.configOptions,
+          // The new upstream session announces its own commands.
+          ...(replaced ? { commands: [] } : {}),
         });
         setLink(session, { status: "live" });
       } catch (error) {

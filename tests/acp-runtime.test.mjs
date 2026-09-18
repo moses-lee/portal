@@ -593,6 +593,84 @@ test("agents that cannot resume leave persisted sessions offline without launchi
   assert.deepEqual(later.getSession(session.id).link, { status: "live" });
 });
 
+test("a never-prompted session whose agent lost it gets a fresh agent session on reconnect", async (t) => {
+  const first = persistentSetup(t);
+  const { runtime, cwd, store } = first;
+  // The fixture's ids restart at "session-1" with its process, so persist this session as
+  // "session-2" to make the replacement id visibly different from the one that was lost.
+  await runtime.createSession(cwd, "claude");
+  // Claude Code only writes a transcript on the first turn, so a session that was never prompted
+  // has nothing for the agent to find after a restart.
+  const session = await runtime.createSession(cwd, "claude");
+  assert.equal(session.upstreamId, "session-2");
+  await runtime.dispose();
+
+  const next = restart(t, first, { claude: "resume-missing" });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  assert.equal(restored.link.status, "offline");
+  await next.attach(session.id);
+  assert.deepEqual(restored.link, { status: "live" });
+
+  // The old id was tried exactly once, then replaced with a new session on the same process.
+  const resumes = first.messages("claude", "session/resume");
+  assert.equal(resumes.length, 1);
+  assert.equal(resumes[0].message.params.sessionId, "session-2");
+  const news = first.messages("claude", "session/new");
+  assert.equal(news.length, 3);
+  assert.deepEqual(news.at(-1).message.params, { cwd, mcpServers: [] });
+  const order = first.records().map(({ message }) => message?.method);
+  assert.ok(order.indexOf("session/resume") < order.lastIndexOf("session/new"), "session/new follows the failed resume");
+  assert.equal(first.starts("claude").length, 2);
+  assert.equal(restored.upstreamId, "session-1");
+  await restored.writes;
+  assert.equal((await store.getSession(session.id)).upstreamId, "session-1");
+  // The replacement announces its own commands rather than inheriting stale ones.
+  await until(() => restored.state.commands.length === 2, "commands after replacement");
+  assert.deepEqual(restored.state.commands.map(({ name }) => name), ["help", "review"]);
+
+  await next.sendPrompt(session.id, "hi");
+  await answerPermission(next, restored, "once");
+  await until(() => !restored.busy, "turn on the replacement session");
+  assert.deepEqual(restored.events.at(-1), { type: "turn_end", stopReason: "end_turn" });
+  assert.equal(first.messages("claude", "session/prompt").at(-1).message.params.sessionId, "session-1");
+});
+
+test("a session with history whose agent lost it reports a clear error instead of the raw id", async (t) => {
+  const first = persistentSetup(t);
+  const { runtime, cwd, store } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "hello");
+  await answerPermission(runtime, session, "once");
+  await until(() => !session.busy, "turn");
+  await runtime.dispose();
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  t.after(() => { console.warn = original; });
+
+  const next = restart(t, first, { claude: "resume-missing" });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  const newsBefore = first.messages("claude", "session/new").length;
+  await assert.rejects(next.attach(session.id), /no longer has this conversation/);
+  assert.equal(restored.link.status, "offline");
+  // The message tells the user what to do, not what the protocol said or which id was lost.
+  assert.match(restored.link.error, /Claude Code no longer has this conversation.*Start a new session/);
+  assert.doesNotMatch(restored.link.error, /Resource not found|session-1/);
+  // A conversation with history is never silently swapped for an empty one.
+  assert.equal(first.messages("claude", "session/new").length, newsBefore);
+  assert.equal(first.messages("claude", "session/resume").length, 1);
+  assert.equal(restored.upstreamId, "session-1");
+  await restored.writes;
+  assert.equal((await store.getSession(session.id)).upstreamId, "session-1");
+  assert.equal(warnings.filter((line) => /no longer has agent session session-1/.test(line)).length, 1);
+  await assert.rejects(next.sendPrompt(session.id, "hi"), /no longer has this conversation/);
+  // History is still readable while offline.
+  const page = await next.readEvents(session.id, { limit: 100 });
+  assert.deepEqual(page.events.map(({ type }) => type), ["user", "turn_start", "update", "permission_request", "permission_response", "turn_end"]);
+});
+
 test("a crashed agent leaves its sessions offline and a later prompt reconnects them", async (t) => {
   const { runtime, cwd, setModes, starts, messages } = persistentSetup(t);
   setModes({ claude: "resume" });

@@ -62,13 +62,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return;
     }
     // "resume" / "load" modes advertise the matching way of reattaching persisted sessions.
-    const agentCapabilities = mode() === "resume" || mode() === "resume-error" || mode() === "hang-close"
+    const agentCapabilities = mode() === "resume" || mode() === "resume-error" || mode() === "resume-missing" || mode() === "hang-close"
       ? { sessionCapabilities: { resume: {}, close: {} } }
       : mode() === "load" ? { loadSession: true } : {};
     respond(id, { protocolVersion: params.protocolVersion, agentCapabilities });
   } else if (method === "session/resume" || method === "session/load") {
     if (mode() === "resume-error") {
       send({ id, error: { code: -32603, message: "Fixture cannot resume that session" } });
+      return;
+    }
+    if (mode() === "resume-missing") {
+      // The ACP "resource not found" code: the agent has no transcript for this session.
+      send({ id, error: { code: -32002, message: `Resource not found: ${params.sessionId}` } });
       return;
     }
     const sessionId = params.sessionId;
