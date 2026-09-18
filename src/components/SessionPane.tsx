@@ -1,143 +1,46 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import ReactMarkdown from "react-markdown";
-import PermissionCard from "./PermissionCard";
-import SessionControls, { applyConfigChange } from "./SessionControls";
-import CommandPalette, { commandInsertText, findCommandToken, matchCommands } from "./CommandPalette";
+import SessionControls from "./SessionControls";
 import ContextBar from "./ContextBar";
 import StartPage, { type StartPageProps } from "./StartPage";
-import type { EventPage, PortalEvent, SessionLink, SessionMetaEvent, SessionState, SessionSummary, SetConfigRequest } from "@/lib/types";
-import { appendEvent, firstSeq, lastSeq, segment, type Block, type History, type ToolBlock } from "@/lib/transcript";
+import ChatComposer from "./ChatComposer";
+import Conversation from "./Conversation";
+import SessionHeader from "./SessionHeader";
+import AuroraBackground from "./AuroraBackground";
+import { Button } from "@/components/ui/button";
+import { useDraft } from "./useDraft";
+import { clearSubmittedDraft } from "@/lib/drafts";
+import { applyConfigChange } from "@/lib/session-config";
+import { agentActivity } from "@/lib/agent-activity";
+import type {
+  EventPage,
+  PortalEvent,
+  SessionLink,
+  SessionMetaEvent,
+  SessionState,
+  SessionSummary,
+  SetConfigRequest,
+} from "@/lib/types";
+import {
+  appendEvent,
+  firstSeq,
+  lastSeq,
+  segment,
+  type History,
+} from "@/lib/transcript";
 import type { HistoryCache } from "@/lib/history-cache";
-import type { AvailableCommand } from "@agentclientprotocol/sdk";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ssr: false,
-  loading: () => <p className="p-3 text-xs text-zinc-500">Loading terminal…</p>,
+  loading: () => (
+    <p className="p-4 text-xs text-muted-foreground">Opening terminal…</p>
+  ),
 });
-
-/** Viewers this close to the bottom (px) follow new output; further up they keep their place. */
-const STICK_THRESHOLD = 80;
-/** Scrolling this close to the top (px) fetches the previous page. */
-const LOAD_OLDER_THRESHOLD = 240;
-
-const sessionUrl = (id: string, suffix = "") => `/api/sessions/${encodeURIComponent(id)}${suffix}`;
-
-const statusIcon: Record<string, string> = {
-  pending: "○",
-  in_progress: "◐",
-  completed: "●",
-  failed: "✕",
-};
-
-function ToolCard({ b }: { b: ToolBlock }) {
-  const [open, setOpen] = useState(false);
-  const diffs = b.content.filter((c) => c.type === "diff");
-  const texts = b.content.filter((c) => c.type === "content");
-  return (
-    <div className="my-1 rounded-lg border border-zinc-800 bg-zinc-900/60 text-sm">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-xs text-zinc-300"
-      >
-        <span className={b.status === "failed" ? "text-red-400" : b.status === "completed" ? "text-emerald-400" : "text-amber-400"}>
-          {statusIcon[b.status ?? "pending"] ?? "○"}
-        </span>
-        <span className="text-zinc-500">{b.toolKind ?? "tool"}</span>
-        <span className="truncate">{b.title}</span>
-        <span className="ml-auto text-zinc-600">{open ? "▾" : "▸"}</span>
-      </button>
-      {open && (
-        <div className="space-y-2 border-t border-zinc-800 px-3 py-2">
-          {b.rawInput !== undefined && (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-black/40 p-2 text-[11px] text-zinc-400">
-              {typeof b.rawInput === "string" ? b.rawInput : JSON.stringify(b.rawInput, null, 2)}
-            </pre>
-          )}
-          {diffs.map((d, i) => (
-            <div key={i} className="rounded bg-black/40 p-2 font-mono text-[11px]">
-              <div className="mb-1 text-zinc-500">{(d as { path: string }).path}</div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words text-red-400/80">{(d as { oldText?: string | null }).oldText ?? ""}</pre>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words text-emerald-400/80">{(d as { newText: string }).newText}</pre>
-            </div>
-          ))}
-          {texts.map((t, i) => {
-            const c = (t as { content: { type: string; text?: string } }).content;
-            return c.type === "text" ? (
-              <pre key={i} className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-2 text-[11px] text-zinc-300">
-                {c.text}
-              </pre>
-            ) : null;
-          })}
-          {b.rawOutput !== undefined && texts.length === 0 && (
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-2 text-[11px] text-zinc-300">
-              {typeof b.rawOutput === "string" ? b.rawOutput : JSON.stringify(b.rawOutput, null, 2)}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BlockView({ b, onAnswerPermission }: {
-  b: Block;
-  onAnswerPermission: (requestId: string, optionId: string) => Promise<void>;
-}) {
-  const [showThought, setShowThought] = useState(false);
-  switch (b.kind) {
-    case "user":
-      return (
-        <div className="flex justify-end">
-          <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-indigo-600 px-4 py-2 text-sm text-white">
-            {b.text}
-          </div>
-        </div>
-      );
-    case "assistant":
-      return (
-        <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-black/40 prose-pre:text-xs">
-          <ReactMarkdown>{b.text}</ReactMarkdown>
-        </div>
-      );
-    case "thought":
-      return (
-        <div className="text-xs text-zinc-500">
-          <button onClick={() => setShowThought((s) => !s)} className="italic">
-            {showThought ? "▾ thinking" : "▸ thinking…"}
-          </button>
-          {showThought && <div className="mt-1 whitespace-pre-wrap border-l border-zinc-800 pl-2">{b.text}</div>}
-        </div>
-      );
-    case "tool":
-      return <ToolCard b={b} />;
-    case "plan":
-      return (
-        <div className="my-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs">
-          <div className="mb-1 text-zinc-500">plan</div>
-          {b.entries.map((e, i) => (
-            <div key={i} className="flex gap-2">
-              <span className={e.status === "completed" ? "text-emerald-400" : e.status === "in_progress" ? "text-amber-400" : "text-zinc-600"}>
-                {statusIcon[e.status] ?? "○"}
-              </span>
-              <span className={e.status === "completed" ? "text-zinc-500 line-through" : "text-zinc-300"}>{e.content}</span>
-            </div>
-          ))}
-        </div>
-      );
-    case "permission":
-      return <PermissionCard b={b} onAnswer={onAnswerPermission} />;
-    case "turn_end":
-      return b.stopReason === "end_turn" ? null : (
-        <div className="text-[11px] text-zinc-600">turn ended: {b.stopReason}</div>
-      );
-    case "error":
-      return <div className="rounded bg-red-950/50 px-3 py-2 text-sm text-red-300">{b.message}</div>;
-  }
-}
+const sessionUrl = (id: string, suffix = "") =>
+  `/api/sessions/${encodeURIComponent(id)}${suffix}`;
 
 export type SessionPaneProps = {
   /** The open session, or null for the start page. The parent keys this component by it. */
@@ -146,9 +49,15 @@ export type SessionPaneProps = {
   session: SessionSummary | undefined;
   /** Props for the start page shown when no session is open. */
   start: StartPageProps;
-  /** Context bar under the message box when no session is open. */
-  startContext: ReactNode;
   onOpenSidebar: () => void;
+  showGithub: boolean;
+  onToggleGithub: () => void;
+  initialSend: {
+    sessionId: string;
+    pending: boolean;
+    error: string | null;
+  } | null;
+  onInitialSendHandled: (sessionId: string) => void;
   /** "+ New": back to the start page. */
   onBack: () => void;
   /** Live changes to the session's list entry (title, branch, connection, …). */
@@ -165,12 +74,30 @@ export type SessionPaneProps = {
 
 /** The main column: header, transcript, message box, controls, and terminals for one session. */
 export default function SessionPane({
-  sessionId, session, start, startContext, onOpenSidebar, onBack, onSessionUpdate, onSessionDeleted, historyCache,
-  showShell, onShowShell, shellSize, onShellSize,
+  sessionId,
+  session,
+  start,
+  onOpenSidebar,
+  onBack,
+  onSessionUpdate,
+  onSessionDeleted,
+  historyCache,
+  showGithub,
+  onToggleGithub,
+  initialSend,
+  onInitialSendHandled,
+  showShell,
+  onShowShell,
+  shellSize,
+  onShellSize,
 }: SessionPaneProps) {
   // A session seen before renders from the cache on the first paint; the stream then fills in the rest.
-  const [initial] = useState(() => (sessionId ? historyCache.get(sessionId) : undefined));
-  const [history, setHistory] = useState<History>(initial?.history ?? { turns: [], hasMore: false });
+  const [initial] = useState(() =>
+    sessionId ? historyCache.get(sessionId) : undefined,
+  );
+  const [history, setHistory] = useState<History>(
+    initial?.history ?? { turns: [], hasMore: false },
+  );
   const [historyLoading, setHistoryLoading] = useState(!!sessionId && !initial);
   /** Seq of the newest streamed event held; the stream reopens from here and the cache entry records it. */
   const cursorRef = useRef(initial?.cursor ?? -1);
@@ -181,21 +108,17 @@ export default function SessionPane({
   const [notFound, setNotFound] = useState(false);
   const [link, setLink] = useState<SessionLink | null>(session?.link ?? null);
   const [busy, setBusy] = useState(session?.busy ?? false);
-  const [sessionState, setSessionState] = useState<SessionState | null>(session?.state ?? null);
+  const [sessionState, setSessionState] = useState<SessionState | null>(
+    session?.state ?? null,
+  );
   const [configInFlight, setConfigInFlight] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [input, setInput] = useState("");
-  const [caret, setCaret] = useState(0);
-  const [paletteClosed, setPaletteClosed] = useState(false);
-  const [paletteIndex, setPaletteIndex] = useState(0);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const pendingCaretRef = useRef<number | null>(null);
+  const [input, setInput] = useDraft(sessionId ?? "new");
+  const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [scrollRequest, setScrollRequest] = useState(0);
   const shellButton = useRef<HTMLButtonElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  /** Follow new output while the viewer is at the bottom. */
-  const stickRef = useRef(true);
-  /** Set before an older page is prepended so the layout effect can keep the viewport still. */
-  const anchorRef = useRef<{ height: number; top: number } | null>(null);
   /** A prompt POST is in flight or its turn has not started yet. */
   const pendingPromptRef = useRef(false);
   /** Client-only notices (failed requests) get negative seqs so they never collide with the log. */
@@ -209,7 +132,10 @@ export default function SessionPane({
     const controller = new AbortController();
     let es: EventSource | null = null;
     const applyMeta = (meta: Partial<SessionMetaEvent>) => {
-      if (meta.busy !== undefined) setBusy(meta.busy);
+      if (meta.busy !== undefined) {
+        setBusy(meta.busy);
+        if (!meta.busy) setStopping(false);
+      }
       if (meta.link) setLink(meta.link);
       // Agent state (modes, config options, commands) changes from any viewer; the stream is the source of truth.
       if (meta.state) setSessionState(meta.state);
@@ -228,20 +154,21 @@ export default function SessionPane({
       const cached = fresh ? undefined : historyCache.get(sessionId);
       if (!cached) setHistoryLoading(true);
       try {
-        const entry = cached ?? await historyCache.load(sessionId, { fresh });
+        const entry = cached ?? (await historyCache.load(sessionId, { fresh }));
         if (controller.signal.aborted) return;
         if (!entry) {
           setNotFound(true);
           return;
         }
-        stickRef.current = true;
         cursorRef.current = entry.cursor;
         loadedRef.current = true;
         setHistory(entry.history);
         // The page is authoritative: whatever prompt was in flight has either started or failed by now.
         pendingPromptRef.current = false;
         es?.close();
-        const mine = new EventSource(sessionUrl(sessionId, `/stream?since=${entry.cursor}`));
+        const mine = new EventSource(
+          sessionUrl(sessionId, `/stream?since=${entry.cursor}`),
+        );
         es = mine;
         mine.onmessage = (m) => {
           if (es !== mine) return;
@@ -250,14 +177,27 @@ export default function SessionPane({
           cursorRef.current = Math.max(cursorRef.current, seq);
           setHistory((prev) => {
             const last = lastSeq(prev);
-            return last !== undefined && last >= seq ? prev : appendEvent(prev, { ...ev, seq, ts: Date.now() });
+            return last !== undefined && last >= seq
+              ? prev
+              : appendEvent(prev, { ...ev, seq, ts: Date.now() });
           });
-          if (ev.type === "turn_start" || ev.type === "turn_end" || ev.type === "error") pendingPromptRef.current = false;
+          if (
+            ev.type === "turn_start" ||
+            ev.type === "turn_end" ||
+            ev.type === "error"
+          )
+            pendingPromptRef.current = false;
           if (ev.type === "turn_start") setBusy(true);
-          if (ev.type === "turn_end" || ev.type === "error") setBusy(false);
+          if (ev.type === "turn_end" || ev.type === "error") {
+            setBusy(false);
+            setStopping(false);
+          }
         };
         mine.addEventListener("meta", (m) => {
-          if (es === mine) applyMeta(JSON.parse((m as MessageEvent).data) as Partial<SessionMetaEvent>);
+          if (es === mine)
+            applyMeta(
+              JSON.parse((m as MessageEvent).data) as Partial<SessionMetaEvent>,
+            );
         });
         // The server no longer holds the events between our cursor and now: start over from a fresh page.
         mine.addEventListener("reset", () => {
@@ -270,7 +210,10 @@ export default function SessionPane({
           onSessionDeleted(sessionId);
         });
       } catch {
-        if (!controller.signal.aborted) setHistoryError("Could not load the conversation. Check the server and reload the page to retry.");
+        if (!controller.signal.aborted)
+          setHistoryError(
+            "Could not load the conversation. Check the server and reload the page to retry.",
+          );
       } finally {
         if (!controller.signal.aborted) setHistoryLoading(false);
       }
@@ -285,13 +228,22 @@ export default function SessionPane({
 
   // Keep the cache entry current so the next visit starts from this history and cursor.
   useEffect(() => {
-    if (sessionId && loadedRef.current) historyCache.set(sessionId, { history, cursor: cursorRef.current });
+    if (sessionId && loadedRef.current)
+      historyCache.set(sessionId, { history, cursor: cursorRef.current });
   }, [sessionId, history, historyCache]);
 
   // Fetch the page before the oldest loaded event and prepend it without moving the viewport.
   const loadOlder = async () => {
     const before = firstSeq(history);
-    if (!sessionId || !history.hasMore || loadingOlderRef.current || historyLoading || before === undefined || before <= 0) return;
+    if (
+      !sessionId ||
+      !history.hasMore ||
+      loadingOlderRef.current ||
+      historyLoading ||
+      before === undefined ||
+      before <= 0
+    )
+      return;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     setHistoryError(null);
@@ -299,12 +251,13 @@ export default function SessionPane({
       const r = await fetch(sessionUrl(sessionId, `/events?before=${before}`));
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const page = (await r.json()) as EventPage;
-      const container = scrollRef.current;
       setHistory((prev) => {
         // History was replaced (a `reset`) while this page was in flight: it no longer fits.
         if (firstSeq(prev) !== before) return prev;
-        if (container) anchorRef.current = { height: container.scrollHeight, top: container.scrollTop };
-        return { turns: [...segment(page.events), ...prev.turns], hasMore: page.hasMore };
+        return {
+          turns: [...segment(page.events), ...prev.turns],
+          hasMore: page.hasMore,
+        };
       });
     } catch {
       setHistoryError("Could not load earlier messages. Scroll up to retry.");
@@ -314,63 +267,80 @@ export default function SessionPane({
     }
   };
 
-  // Keep the viewport still when older events are prepended; otherwise follow the bottom while the viewer is there.
-  useLayoutEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const anchor = anchorRef.current;
-    if (anchor) {
-      anchorRef.current = null;
-      container.scrollTop = container.scrollHeight - anchor.height + anchor.top;
-    } else if (stickRef.current) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, [history]);
-
-  const onScroll = () => {
-    const container = scrollRef.current;
-    if (!container) return;
-    stickRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < STICK_THRESHOLD;
-    if (container.scrollTop < LOAD_OLDER_THRESHOLD) void loadOlder();
-  };
-
   const showRequestError = (message: string) => {
-    stickRef.current = true;
-    setHistory((prev) => appendEvent(prev, { type: "error", message, seq: localSeqRef.current--, ts: Date.now() }));
+    const event = {
+      type: "error" as const,
+      message,
+      seq: localSeqRef.current--,
+      ts: Date.now(),
+    };
+    setHistory((previous) => appendEvent(previous, event));
   };
 
   const send = async () => {
     const text = input.trim();
-    if (!text || !sessionId || busy || pendingPromptRef.current) return;
+    if (
+      !text ||
+      !sessionId ||
+      busy ||
+      pendingPromptRef.current ||
+      (initialSend?.sessionId === sessionId && initialSend.pending)
+    )
+      return;
+    const draft = input;
+    onInitialSendHandled(sessionId);
     pendingPromptRef.current = true;
-    setInput("");
+    setSending(true);
+    setSendError(null);
     try {
-      const r = await fetch(sessionUrl(sessionId, "/prompt"), {
+      const response = await fetch(sessionUrl(sessionId, "/prompt"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      if (!r.ok) {
-        pendingPromptRef.current = false;
-        const j = (await r.json()) as { error?: string };
-        showRequestError(j.error ?? "Could not send the message. Try again.");
+      if (!response.ok) {
+        const result = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(
+          result.error ??
+            "Could not send your message. Your draft is saved; try again.",
+        );
       }
-    } catch {
+      clearSubmittedDraft(sessionId, draft);
+      setScrollRequest((request) => request + 1);
+    } catch (error) {
+      setSendError(
+        error instanceof Error
+          ? error.message
+          : "Could not send your message. Your draft is saved; try again.",
+      );
+    } finally {
       pendingPromptRef.current = false;
-      showRequestError("Could not send the message. Check the server connection and try again.");
+      setSending(false);
     }
   };
 
   const stop = async () => {
-    if (!sessionId) return;
+    if (!sessionId || stopping) return;
+    setStopping(true);
     try {
-      const r = await fetch(sessionUrl(sessionId, "/cancel"), { method: "POST" });
-      if (!r.ok) {
-        const j = (await r.json()) as { error?: string };
-        showRequestError(j.error ?? "Could not stop the agent. Try Stop again.");
+      const response = await fetch(sessionUrl(sessionId, "/cancel"), {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const result = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(result.error ?? "Could not stop the agent. Try again.");
       }
-    } catch {
-      showRequestError("Could not stop the agent. Check the server connection and try Stop again.");
+    } catch (error) {
+      setStopping(false);
+      showRequestError(
+        error instanceof Error
+          ? error.message
+          : "Could not stop the agent. Try again.",
+      );
     }
   };
 
@@ -379,10 +349,15 @@ export default function SessionPane({
     if (!sessionId) return;
     setLink({ status: "connecting" });
     try {
-      const r = await fetch(sessionUrl(sessionId, "/attach"), { method: "POST" });
+      const r = await fetch(sessionUrl(sessionId, "/attach"), {
+        method: "POST",
+      });
       if (!r.ok) {
         const j = (await r.json().catch(() => ({}))) as { error?: string };
-        setLink({ status: "offline", error: j.error ?? "Could not reconnect." });
+        setLink({
+          status: "offline",
+          error: j.error ?? "Could not reconnect.",
+        });
       }
     } catch {
       setLink({ status: "offline", error: "Could not reach the server." });
@@ -414,232 +389,209 @@ export default function SessionPane({
       setSessionState(j.state);
       onSessionUpdate(sessionId, { state: j.state });
     } catch {
-      revert("Could not change the setting. Check the server connection and try again.");
+      revert(
+        "Could not change the setting. Check the server connection and try again.",
+      );
     } finally {
       setConfigInFlight(false);
     }
   };
 
   /** Answer a permission request; the card resolves when the matching `permission_response` arrives over SSE. */
-  const answerPermission = async (requestId: string, optionId: string) => {
-    if (!sessionId) throw new Error("No active session.");
-    let r: Response;
-    try {
-      r = await fetch(sessionUrl(sessionId, "/permission"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId, optionId }),
-      });
-    } catch {
-      throw new Error("Could not send the answer. Check the server connection and try again.");
-    }
-    if (!r.ok) {
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      throw new Error(j.error ?? "Could not send the answer. Try again.");
-    }
-  };
+  const answerPermission = useCallback(
+    async (requestId: string, optionId: string) => {
+      if (!sessionId) throw new Error("No active session.");
+      let r: Response;
+      try {
+        r = await fetch(sessionUrl(sessionId, "/permission"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, optionId }),
+        });
+      } catch {
+        throw new Error(
+          "Could not send the answer. Check the server connection and try again.",
+        );
+      }
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? "Could not send the answer. Try again.");
+      }
+    },
+    [sessionId],
+  );
 
   const lastTurn = history.turns.at(-1);
-  const awaitingPermission = busy && !!lastTurn?.blocks.some((b) => b.kind === "permission" && b.response === null);
+  const awaitingPermission =
+    busy &&
+    !!lastTurn?.blocks.some(
+      (b) => b.kind === "permission" && b.response === null,
+    );
   const offline = link?.status === "offline";
   const agentName = session?.agentName ?? "the agent";
-
-  // Slash-command autocomplete: driven by the `/` or `$` token under the caret.
-  const commands = sessionId ? sessionState?.commands : undefined;
-  const token = useMemo(() => (commands?.length ? findCommandToken(input, caret) : null), [commands, input, caret]);
-  const matches = useMemo(() => (token && commands ? matchCommands(commands, token.query) : []), [commands, token]);
-  const paletteOpen = token !== null && matches.length > 0 && !paletteClosed;
-  const selectedMatch = matches.length ? Math.min(paletteIndex, matches.length - 1) : 0;
-
-  const insertCommand = (command: AvailableCommand) => {
-    if (!token) return;
-    const text = commandInsertText(command, token.trigger) + " ";
-    const caretAfter = token.start + text.length;
-    pendingCaretRef.current = caretAfter;
-    setInput(input.slice(0, token.start) + text + input.slice(token.end));
-    setCaret(caretAfter);
-    setPaletteIndex(0);
-  };
-
-  // Place the caret after an inserted command once the new text has rendered.
-  useEffect(() => {
-    const position = pendingCaretRef.current;
-    const textarea = textareaRef.current;
-    if (position === null || !textarea) return;
-    pendingCaretRef.current = null;
-    textarea.focus();
-    textarea.setSelectionRange(position, position);
-  }, [input]);
 
   const hideShell = () => {
     onShowShell(false);
     shellButton.current?.focus();
   };
 
+  const activity = agentActivity({
+    busy,
+    awaitingPermission,
+    link,
+    failed: lastTurn?.blocks.at(-1)?.kind === "error",
+  });
+  const initialPending =
+    initialSend?.sessionId === sessionId && initialSend.pending;
+  const composerError =
+    sendError ??
+    (initialSend?.sessionId === sessionId ? initialSend.error : null);
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-zinc-800 px-3 py-2 text-xs">
-        <button aria-label="Open sessions sidebar" onClick={onOpenSidebar} className="rounded border border-zinc-800 px-2 py-1 md:hidden">
-          ☰
-        </button>
-        <span className="truncate text-zinc-200">{session ? session.title ?? session.agentName : sessionId ? "Session" : "New session"}</span>
-        <div className="ml-auto flex shrink-0 items-center gap-3">
-          {busy && <span className="animate-pulse text-amber-400">{awaitingPermission ? "waiting for permission…" : "working…"}</span>}
-          {sessionId && (
-            <button onClick={onBack} className="rounded border border-zinc-700 px-3 py-1.5 hover:bg-zinc-800">+ New</button>
-          )}
-          <button
-            ref={shellButton}
-            id="terminal-toggle"
-            aria-expanded={showShell && !!sessionId}
-            aria-controls="terminal-panel"
-            disabled={!sessionId}
-            title={sessionId ? "Terminals for this session" : "Open a session to use its terminals"}
-            onClick={() => onShowShell(!showShell)}
-            className={`rounded border px-3 py-1.5 disabled:opacity-40 ${showShell && sessionId ? "border-indigo-500 bg-indigo-950 text-indigo-200" : "border-zinc-700 hover:bg-zinc-800"}`}
-          >
-            Terminal
-          </button>
+      <AuroraBackground activity={sessionId ? activity : "idle"} />
+      <SessionHeader
+        title={
+          session
+            ? session.title || "New conversation"
+            : sessionId
+              ? "Conversation"
+              : "Your workspace"
+        }
+        activity={activity}
+        hasSession={!!sessionId}
+        showShell={showShell && !!sessionId}
+        showGithub={showGithub}
+        onSidebar={onOpenSidebar}
+        onNew={onBack}
+        onTerminal={() => onShowShell(!showShell)}
+        onGithub={onToggleGithub}
+        shellButton={shellButton}
+      />
+      {!sessionId ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <StartPage {...start} />
         </div>
-      </header>
-
-      <Group orientation="vertical" className="min-h-0 flex-1" onLayoutChanged={(layout) => { if (layout.shell) onShellSize(layout.shell); }}>
-        <Panel id="chat" minSize="25%" className="flex min-h-0 flex-col">
-          <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 md:px-6">
-            {!sessionId && <StartPage {...start} />}
-            {sessionId && notFound && (
-              <div className="mx-auto mt-16 max-w-md rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-6 text-center text-sm">
-                <p className="text-zinc-200">This session no longer exists.</p>
-                <p className="mt-1 text-xs text-zinc-500">It may have been deleted, or the link is from another Portal.</p>
-                <button onClick={onBack} className="mt-4 rounded border border-zinc-700 px-3 py-1.5 text-xs hover:bg-zinc-800">Back to start</button>
+      ) : (
+        <Group
+          orientation="vertical"
+          className="min-h-0 flex-1"
+          onLayoutChanged={(layout) => {
+            if (layout.shell) onShellSize(layout.shell);
+          }}
+        >
+          <Panel id="chat" minSize="25%" className="flex min-h-0 flex-col">
+            {notFound ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+                <h2 className="text-lg">
+                  This conversation is no longer here.
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  It may have been deleted, or opened from a different Portal.
+                </p>
+                <Button onClick={onBack} variant="secondary">
+                  Start a conversation
+                </Button>
               </div>
+            ) : (
+              <Conversation
+                history={history}
+                loading={historyLoading}
+                loadingOlder={loadingOlder}
+                error={historyError}
+                loadOlder={() => void loadOlder()}
+                busy={busy}
+                agentId={session?.agentId ?? ""}
+                agentName={agentName}
+                onAnswer={answerPermission}
+                scrollRequest={scrollRequest}
+              />
             )}
-            {sessionId && !notFound && (history.hasMore || loadingOlder || historyLoading) && (
-              <div className="flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => void loadOlder()}
-                  disabled={loadingOlder || historyLoading}
-                  className="rounded-full border border-zinc-800 px-3 py-1 text-[11px] text-zinc-400 hover:bg-zinc-900 disabled:opacity-60"
+            <div className="composer-wrap">
+              {link && link.status !== "live" && (
+                <div
+                  role="status"
+                  className={`mb-3 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs leading-relaxed ${offline ? "border-amber-300/10 bg-amber-300/5 text-amber-200" : "border-white/5 text-muted-foreground"}`}
                 >
-                  {historyLoading ? "Loading conversation…" : loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
-                </button>
-              </div>
-            )}
-            {historyError && <div role="alert" className="rounded bg-red-950/50 px-3 py-2 text-sm text-red-300">{historyError}</div>}
-            {history.turns.map((turn) => turn.blocks.map((b, i) => (
-              <BlockView key={`${turn.key}:${i}`} b={b} onAnswerPermission={answerPermission} />
-            )))}
-          </div>
-          {sessionId && link && link.status !== "live" && (
-            <div role="status" className={`flex flex-wrap items-center gap-2 border-t px-3 py-1.5 text-xs ${offline ? "border-amber-900/60 bg-amber-950/30 text-amber-200" : "border-zinc-800 bg-zinc-900/60 text-zinc-400"}`}>
-              {link.status === "connecting" ? (
-                <span className="animate-pulse">Connecting to {agentName}…</span>
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 break-words">{link.error ?? `${agentName} is not connected to this session.`}</span>
-                  <button type="button" onClick={() => void retryAttach()} className="rounded border border-amber-800 px-2 py-0.5 hover:bg-amber-900/40">Reconnect</button>
-                </>
+                  <span className="min-w-0 flex-1">
+                    {link.status === "connecting"
+                      ? `Connecting to ${agentName}…`
+                      : (link.error ??
+                        `${agentName} is offline. Send a message to reconnect.`)}
+                  </span>
+                  {offline && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void retryAttach()}
+                    >
+                      Reconnect
+                    </Button>
+                  )}
+                </div>
               )}
-            </div>
-          )}
-
-          <div className="relative shrink-0">
-            {paletteOpen && token && (
-              <CommandPalette
-                id="command-palette"
-                matches={matches}
-                trigger={token.trigger}
-                selected={selectedMatch}
-                onSelect={insertCommand}
-                onHighlight={setPaletteIndex}
-              />
-            )}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send();
-              }}
-              className="flex items-end gap-2 border-t border-zinc-800 p-3 pb-2"
-            >
-              <textarea
-                ref={textareaRef}
-                aria-label={session ? `Message ${session.agentName}` : "Message"}
-                aria-describedby="session-context"
-                role="combobox"
-                aria-autocomplete="list"
-                aria-expanded={paletteOpen}
-                aria-controls={paletteOpen ? "command-palette" : undefined}
-                aria-activedescendant={paletteOpen ? `command-palette-${selectedMatch}` : undefined}
+              <ChatComposer
                 value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  setCaret(e.target.selectionStart);
-                  setPaletteClosed(false);
-                  setPaletteIndex(0);
-                }}
-                onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-                onBlur={() => setPaletteClosed(true)}
-                onKeyDown={(e) => {
-                  if (paletteOpen) {
-                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                      e.preventDefault();
-                      const step = e.key === "ArrowDown" ? 1 : matches.length - 1;
-                      setPaletteIndex((selectedMatch + step) % matches.length);
-                      return;
-                    }
-                    if (e.key === "Enter" || e.key === "Tab") {
-                      e.preventDefault();
-                      if (!e.nativeEvent.isComposing) insertCommand(matches[selectedMatch]);
-                      return;
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setPaletteClosed(true);
-                      return;
-                    }
-                  }
-                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-                placeholder={session ? `Message ${session.agentName}…` : sessionId ? "Message…" : "Start a session above to chat"}
-                disabled={!sessionId || notFound}
-                rows={2}
-                className="flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
+                onChange={setInput}
+                onSend={() => void send()}
+                onStop={() => void stop()}
+                busy={busy}
+                sending={sending || initialPending}
+                stopping={stopping}
+                disabled={notFound}
+                commands={sessionState?.commands}
+                label={`Message ${agentName}`}
+                placeholder={`Message ${agentName}…`}
+                describedBy={session ? "session-context" : undefined}
+                error={composerError}
+                settings={
+                  sessionState && (
+                    <SessionControls
+                      state={sessionState}
+                      disabled={
+                        busy || configInFlight || sending || initialPending
+                      }
+                      error={configError}
+                      onChange={(request) => void setConfig(request)}
+                    />
+                  )
+                }
+                context={
+                  session && (
+                    <ContextBar
+                      cwd={session.cwd}
+                      displayCwd={session.displayCwd}
+                      git={session.git}
+                      note={
+                        session.cwdMissing
+                          ? "Working directory is missing"
+                          : undefined
+                      }
+                    />
+                  )
+                }
               />
-              {busy ? (
-                <button type="button" onClick={stop} className="rounded-xl bg-red-700 px-4 py-2 text-sm font-medium hover:bg-red-600">
-                  Stop
-                </button>
-              ) : (
-                <button type="submit" disabled={!sessionId || notFound || !input.trim()} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40">
-                  Send
-                </button>
-              )}
-            </form>
-          </div>
-          {sessionId && sessionState && (
-            <SessionControls state={sessionState} disabled={busy || configInFlight} error={configError} onChange={(request) => void setConfig(request)} />
-          )}
-          {session ? (
-            <ContextBar
-              cwd={session.cwd}
-              displayCwd={session.displayCwd}
-              git={session.git}
-              label={session.project?.name}
-              note={session.cwdMissing ? "Working directory is missing" : undefined}
-            />
-          ) : startContext}
-        </Panel>
-        {showShell && sessionId && <Separator aria-label="Resize terminal panel" className="h-1.5 shrink-0 bg-zinc-800 transition-colors hover:bg-indigo-500 focus-visible:bg-indigo-500 focus-visible:outline-none" />}
-        {showShell && sessionId && (
-          <Panel id="shell" defaultSize={`${shellSize}%`} minSize="20%" maxSize="75%">
-            <TerminalPanel sessionId={sessionId} onHide={hideShell} />
+            </div>
           </Panel>
-        )}
-      </Group>
+          {showShell && (
+            <Separator
+              aria-label="Resize terminal panel"
+              className="h-1.5 shrink-0 bg-white/5 transition-colors hover:bg-indigo-300/30 focus-visible:bg-indigo-300/30"
+            />
+          )}
+          {showShell && (
+            <Panel
+              id="shell"
+              defaultSize={`${shellSize}%`}
+              minSize="20%"
+              maxSize="75%"
+            >
+              <TerminalPanel sessionId={sessionId} onHide={hideShell} />
+            </Panel>
+          )}
+        </Group>
+      )}
     </main>
   );
 }

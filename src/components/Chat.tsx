@@ -2,18 +2,29 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import ContextBar from "./ContextBar";
+import dynamic from "next/dynamic";
+import { useMediaQuery } from "./useMediaQuery";
+import { usePreference } from "./usePreference";
+import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import AddProjectDialog from "./AddProjectDialog";
 import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
 import type { WorktreeChoice } from "./WorktreePicker";
-import { ORIGINAL, worktreeTarget } from "@/lib/branch-matching";
+import { ORIGINAL } from "@/lib/branch-matching";
 import { pinnedFirst } from "@/lib/pins";
 import { createHistoryCache } from "@/lib/history-cache";
 import { sessionIdFromPath, sessionPath } from "@/lib/session-routes";
-import type { AgentInfo, EventPage, ProjectSummary, SessionListEvent, SessionSummary } from "@/lib/types";
+import type {
+  AgentInfo,
+  EventPage,
+  ProjectSummary,
+  SessionListEvent,
+  SessionSummary,
+} from "@/lib/types";
+
+const GithubInspector = dynamic(() => import("./GithubInspector"));
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -48,7 +59,8 @@ async function fetchHistoryPage(id: string): Promise<EventPage | null> {
  * the route's payload first) would only delay the switch.
  */
 const pushPath = (path: string) => window.history.pushState(null, "", path);
-const replacePath = (path: string) => window.history.replaceState(null, "", path);
+const replacePath = (path: string) =>
+  window.history.replaceState(null, "", path);
 
 export default function Chat() {
   const pathname = usePathname();
@@ -62,19 +74,56 @@ export default function Chat() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   /** The current list, for stream handlers that must not close over a stale render. */
   const sessionsRef = useRef(sessions);
-  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
-  const { projects, loading: projectsLoading, addProject, renameProject, removeProject, refresh: refreshProjects } = useProjects();
-  const { projectPins, sessionPins, toggleProjectPin, toggleSessionPin, prune: prunePins } = usePins();
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+  const {
+    projects,
+    loading: projectsLoading,
+    addProject,
+    renameProject,
+    removeProject,
+    refresh: refreshProjects,
+  } = useProjects();
+  const {
+    projectPins,
+    sessionPins,
+    toggleProjectPin,
+    toggleSessionPin,
+    prune: prunePins,
+  } = usePins();
   /** Pinned projects first (most recently pinned on top), then creation order: the sidebar's and the start page's order. */
-  const orderedProjects = useMemo(() => pinnedFirst(projects, projectPins), [projects, projectPins]);
+  const orderedProjects = useMemo(
+    () => pinnedFirst(projects, projectPins),
+    [projects, projectPins],
+  );
   /** The project picked this page load, or null to fall back to the remembered/newest one. */
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
   /** The start page's worktree choice, tied to the project it was made for so a project change resets it. */
-  const [worktreePick, setWorktreePick] = useState<{ projectId: string; choice: WorktreeChoice } | null>(null);
+  const [worktreePick, setWorktreePick] = useState<{
+    projectId: string;
+    choice: WorktreeChoice;
+  } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
   const [showSidebar, setShowSidebar] = useState(false);
+  const desktop = useMediaQuery("(min-width: 768px)", true);
+  const [sidebarPreference, setSidebarPreference] = usePreference(
+    "portal.sidebar.open",
+    "true",
+  );
+  const [githubPreference, setGithubPreference] = usePreference(
+    "portal.githubInspector.open",
+    "false",
+  );
+  const showGithub = githubPreference === "true";
+  const [initialSend, setInitialSend] = useState<{
+    sessionId: string;
+    pending: boolean;
+    error: string | null;
+  } | null>(null);
+  const creatingRef = useRef(false);
   /** Reduced transcripts of visited (and hovered) sessions, for instant switches. */
   const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
 
@@ -82,7 +131,9 @@ export default function Chat() {
   const refetchSessions = useCallback(async (signal?: AbortSignal) => {
     const r = await fetch("/api/sessions", { signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const { sessions: fetched } = (await r.json()) as { sessions: SessionSummary[] };
+    const { sessions: fetched } = (await r.json()) as {
+      sessions: SessionSummary[];
+    };
     if (!signal?.aborted) setSessions(fetched);
   }, []);
 
@@ -95,10 +146,15 @@ export default function Chat() {
           fetch("/api/sessions", { signal: controller.signal }),
         ]);
         if (!agentsResponse.ok || !sessionsResponse.ok) {
-          throw new Error("Could not load agents and sessions. Reload the page to retry.");
+          throw new Error(
+            "Could not load agents and sessions. Reload the page to retry.",
+          );
         }
         const [registry, saved] = await Promise.all([
-          agentsResponse.json() as Promise<{ agents: AgentInfo[]; defaultAgentId: string }>,
+          agentsResponse.json() as Promise<{
+            agents: AgentInfo[];
+            defaultAgentId: string;
+          }>,
           sessionsResponse.json() as Promise<{ sessions: SessionSummary[] }>,
         ]);
         if (controller.signal.aborted) return;
@@ -107,7 +163,9 @@ export default function Chat() {
         setSessions(saved.sessions);
       } catch {
         if (!controller.signal.aborted) {
-          setSessionError("Could not load agents and sessions. Check the server and reload the page to retry.");
+          setSessionError(
+            "Could not load agents and sessions. Check the server and reload the page to retry.",
+          );
         }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -130,21 +188,33 @@ export default function Chat() {
         case "snapshot": {
           const byId = new Map(event.sessions.map((s) => [s.id, s]));
           // The snapshot decides what exists; entries it lacks were deleted while we were not listening.
-          setSessions((prev) => prev.filter((s) => byId.has(s.id)).map((s) => ({ ...s, ...byId.get(s.id) })));
+          setSessions((prev) =>
+            prev
+              .filter((s) => byId.has(s.id))
+              .map((s) => ({ ...s, ...byId.get(s.id) })),
+          );
           // A session created while we were not listening needs its full entry (folder, branch, project).
           const known = new Set(sessionsRef.current.map((s) => s.id));
-          if (event.sessions.some((s) => !known.has(s.id))) refetchSessions(controller.signal).catch(() => {});
+          if (event.sessions.some((s) => !known.has(s.id)))
+            refetchSessions(controller.signal).catch(() => {});
           return;
         }
         case "created":
-          setSessions((prev) => (prev.some((s) => s.id === event.session.id) ? prev : [event.session, ...prev]));
+          setSessions((prev) =>
+            prev.some((s) => s.id === event.session.id)
+              ? prev
+              : [event.session, ...prev],
+          );
           return;
         case "updated":
-          setSessions((prev) => prev.map((s) => (s.id === event.id ? { ...s, ...event.patch } : s)));
+          setSessions((prev) =>
+            prev.map((s) => (s.id === event.id ? { ...s, ...event.patch } : s)),
+          );
           return;
         case "deleted":
           setSessions((prev) => prev.filter((s) => s.id !== event.id));
           historyCache.delete(event.id);
+          writeDraft(event.id, "");
           return;
       }
     };
@@ -157,14 +227,18 @@ export default function Chat() {
   // Pins outlive their projects and sessions in storage; forget the ones for things that are gone.
   useEffect(() => {
     if (loading || sessionError || projectsLoading) return;
-    prunePins(projects.map((p) => p.id), sessions.map((s) => s.id));
+    prunePins(
+      projects.map((p) => p.id),
+      sessions.map((s) => s.id),
+    );
   }, [loading, sessionError, projectsLoading, projects, sessions, prunePins]);
 
   // The project new sessions start in: the chosen one while it exists, else the remembered one, else the newest.
   // Projects only arrive after mount, so this stays "" during server rendering and hydration.
   const selectedProjectId = useMemo(() => {
     if (projectsLoading) return chosenProjectId ?? "";
-    if (chosenProjectId && projects.some((p) => p.id === chosenProjectId)) return chosenProjectId;
+    if (chosenProjectId && projects.some((p) => p.id === chosenProjectId))
+      return chosenProjectId;
     const stored = readStoredProjectId();
     if (stored && projects.some((p) => p.id === stored)) return stored;
     return projects.at(-1)?.id ?? "";
@@ -175,19 +249,35 @@ export default function Chat() {
     if (projectId) storeProjectId(projectId);
   };
 
-  const worktreeChoice = worktreePick?.projectId === selectedProjectId ? worktreePick.choice : ORIGINAL;
+  const worktreeChoice =
+    worktreePick?.projectId === selectedProjectId
+      ? worktreePick.choice
+      : ORIGINAL;
 
   /** Navigate to a session (or the start page); the URL drives the rest. */
   const selectSession = (sessionId: string | null) => {
-    if (sessionId !== active) pushPath(sessionId ? sessionPath(sessionId) : "/");
+    if (sessionId !== active)
+      pushPath(sessionId ? sessionPath(sessionId) : "/");
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
-    if (projectId && projects.some((p) => p.id === projectId)) selectProject(projectId);
+    if (projectId && projects.some((p) => p.id === projectId))
+      selectProject(projectId);
     setShowSidebar(false);
   };
 
-  const updateSession = useCallback((id: string, patch: Partial<SessionSummary>) => {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  const updateSession = useCallback(
+    (id: string, patch: Partial<SessionSummary>) => {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+      );
+    },
+    [],
+  );
+
+  const initialSendHandled = useCallback((id: string) => {
+    setInitialSend((previous) =>
+      previous?.sessionId === id && !previous.pending ? null : previous,
+    );
   }, []);
 
   /** Another viewer deleted the open session, or the server dropped it: leave it. */
@@ -200,9 +290,13 @@ export default function Chat() {
   const deleteSession = async (sessionId: string) => {
     let r: Response;
     try {
-      r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "DELETE",
+      });
     } catch {
-      throw new Error("Could not reach the server. Check the connection and try again.");
+      throw new Error(
+        "Could not reach the server. Check the connection and try again.",
+      );
     }
     if (!r.ok && r.status !== 404) {
       const j = (await r.json().catch(() => ({}))) as { error?: string };
@@ -210,25 +304,46 @@ export default function Chat() {
     }
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
     historyCache.delete(sessionId);
+    writeDraft(sessionId, "");
     if (sessionId === active) replacePath("/");
   };
 
-  const canCreate = !loading && !projectsLoading && !creating && !!selectedAgentId && !!selectedProjectId;
+  const canCreate =
+    !loading &&
+    !projectsLoading &&
+    !creating &&
+    !!selectedAgentId &&
+    !!selectedProjectId;
 
   /** Create (or reuse) the worktree project for `choice` under `projectId`; rejects with the server's message. */
-  const ensureWorktreeProject = async (projectId: string, choice: Exclude<WorktreeChoice, { kind: "original" }>) => {
+  const ensureWorktreeProject = async (
+    projectId: string,
+    choice: Exclude<WorktreeChoice, { kind: "original" }>,
+  ) => {
     let r: Response;
     try {
-      r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/worktrees`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ branch: choice.branch, create: choice.kind === "create" }),
-      });
+      r = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/worktrees`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            branch: choice.branch,
+            create: choice.kind === "create",
+          }),
+        },
+      );
     } catch {
-      throw new Error("Could not prepare the worktree. Check the server connection and try again.");
+      throw new Error(
+        "Could not prepare the worktree. Check the server connection and try again.",
+      );
     }
-    const j = (await r.json().catch(() => ({}))) as { project?: ProjectSummary; error?: string };
-    if (!r.ok || !j.project) throw new Error(j.error ?? "Could not prepare the worktree. Try again.");
+    const j = (await r.json().catch(() => ({}))) as {
+      project?: ProjectSummary;
+      error?: string;
+    };
+    if (!r.ok || !j.project)
+      throw new Error(j.error ?? "Could not prepare the worktree. Try again.");
     return j.project;
   };
 
@@ -240,8 +355,20 @@ export default function Chat() {
   };
 
   /** Start a session in `projectId`, first turning a non-Original `choice` into its worktree project. */
-  const newSession = async (projectId: string = selectedProjectId, choice: WorktreeChoice = ORIGINAL) => {
-    if (creating || loading || projectsLoading || !selectedAgentId || !projectId) return;
+  const newSession = async (
+    projectId: string = selectedProjectId,
+    choice: WorktreeChoice = ORIGINAL,
+    firstPrompt = "",
+  ) => {
+    if (
+      creatingRef.current ||
+      loading ||
+      projectsLoading ||
+      !selectedAgentId ||
+      !projectId
+    )
+      return;
+    creatingRef.current = true;
     setCreating(true);
     setSessionError(null);
     if (projectId !== selectedProjectId) selectProject(projectId);
@@ -251,7 +378,11 @@ export default function Chat() {
         try {
           worktreeProject = await ensureWorktreeProject(projectId, choice);
         } catch (e) {
-          setSessionError(e instanceof Error ? e.message : "Could not prepare the worktree. Try again.");
+          setSessionError(
+            e instanceof Error
+              ? e.message
+              : "Could not prepare the worktree. Try again.",
+          );
           return;
         }
         await refreshProjects();
@@ -265,51 +396,84 @@ export default function Chat() {
       });
       const session = (await r.json()) as SessionSummary & { error?: string };
       if (!r.ok || !session.id) {
-        setSessionError(session.error ?? "Could not create a session. Check the server and try again.");
+        setSessionError(
+          session.error ??
+            "Could not create a session. Check the server and try again.",
+        );
         return;
       }
       // The worktree choice was for this start only; the next start page begins at Original again.
       setWorktreePick(null);
-      setSessions((prev) => [session, ...prev]);
+      setSessions((prev) => [
+        session,
+        ...prev.filter((item) => item.id !== session.id),
+      ]);
+      if (firstPrompt.trim()) {
+        writeDraft(session.id, firstPrompt);
+        clearSubmittedDraft("new", firstPrompt);
+        setInitialSend({ sessionId: session.id, pending: true, error: null });
+      }
       pushPath(sessionPath(session.id));
       setShowSidebar(false);
+      if (firstPrompt.trim()) {
+        try {
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.id)}/prompt`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: firstPrompt.trim() }),
+            },
+          );
+          if (!response.ok) {
+            const result = (await response.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(
+              result.error ??
+                "Could not send your first message. Your draft is saved; try again.",
+            );
+          }
+          clearSubmittedDraft(session.id, firstPrompt);
+          setInitialSend(null);
+        } catch (error) {
+          setInitialSend({
+            sessionId: session.id,
+            pending: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Could not send your first message. Your draft is saved; try again.",
+          });
+        }
+      }
     } catch {
-      setSessionError("Could not create a session. Check the server connection and try again.");
+      setSessionError(
+        "Could not create a session. Check the server connection and try again.",
+      );
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   };
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId);
   // The GitHub panel follows the open session's project, else the project new sessions start in.
   // Nothing until the session list has loaded, so it does not fetch the start page's project and then switch.
   const activeSession = sessions.find((s) => s.id === active);
   const githubProjectId = active
-    ? (!loading && activeSession && projects.some((p) => p.id === activeSession.projectId) ? activeSession.projectId : null)
+    ? !loading &&
+      activeSession &&
+      projects.some((p) => p.id === activeSession.projectId)
+      ? activeSession.projectId
+      : null
     : selectedProjectId || null;
-  const githubProjectRemoved = !!active && !!activeSession && activeSession.projectId !== "" && !githubProjectId;
-  // Where the start page's next session runs when a worktree is chosen (git projects only).
-  const startTarget = selectedProject ? worktreeTarget(selectedProject, worktreeChoice) : null;
-  const startContext = startTarget && selectedProject?.git ? (
-    <ContextBar
-      cwd={startTarget.displayPath}
-      displayCwd={startTarget.displayPath}
-      git={{ ...selectedProject.git, branch: startTarget.branch, detached: false }}
-      label={selectedProject.name}
-      note={worktreeChoice.kind === "create" ? "new sessions start in a new worktree" : "new sessions start in this worktree"}
-    />
-  ) : (
-    <ContextBar
-      cwd={selectedProject?.path}
-      displayCwd={selectedProject?.displayPath}
-      git={selectedProject?.git ?? null}
-      label={selectedProject?.name}
-      note={selectedProject ? "new sessions start here" : undefined}
-    />
-  );
-
+  const githubProjectRemoved =
+    !!active &&
+    !!activeSession &&
+    activeSession.projectId !== "" &&
+    !githubProjectId;
   return (
-    <div className="flex h-dvh bg-zinc-950 text-zinc-100">
+    <div className="portal-shell">
       <Sidebar
         projects={orderedProjects}
         sessions={sessions}
@@ -323,13 +487,15 @@ export default function Chat() {
         onDeleteSession={deleteSession}
         onNewSession={startIn}
         onAddProject={() => setShowAddProject(true)}
-        onRenameProject={async (id, name) => { await renameProject(id, name); }}
+        onRenameProject={async (id, name) => {
+          await renameProject(id, name);
+        }}
         onRemoveProject={removeProject}
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
-        githubProjectId={githubProjectId}
-        githubProjectRemoved={githubProjectRemoved}
-        activeSession={activeSession}
+        onHome={() => selectSession(null)}
+        desktopOpen={sidebarPreference === "true"}
+        onCollapse={() => setSidebarPreference("false")}
       />
       <AddProjectDialog
         open={showAddProject}
@@ -350,7 +516,8 @@ export default function Chat() {
           onSelectProject: selectProject,
           onAddProject: () => setShowAddProject(true),
           worktree: worktreeChoice,
-          onWorktreeChange: (choice) => setWorktreePick({ projectId: selectedProjectId, choice }),
+          onWorktreeChange: (choice) =>
+            setWorktreePick({ projectId: selectedProjectId, choice }),
           agents,
           selectedAgentId,
           onSelectAgent: setSelectedAgentId,
@@ -358,10 +525,22 @@ export default function Chat() {
           canCreate,
           creating,
           error: sessionError,
-          onCreate: () => void newSession(selectedProjectId, worktreeChoice),
+          onCreate: (text) =>
+            void newSession(selectedProjectId, worktreeChoice, text),
         }}
-        startContext={startContext}
-        onOpenSidebar={() => setShowSidebar(true)}
+        onOpenSidebar={() => {
+          if (desktop)
+            setSidebarPreference(
+              sidebarPreference === "true" ? "false" : "true",
+            );
+          else setShowSidebar(true);
+        }}
+        showGithub={showGithub}
+        onToggleGithub={() =>
+          setGithubPreference(showGithub ? "false" : "true")
+        }
+        initialSend={initialSend}
+        onInitialSendHandled={initialSendHandled}
         onBack={() => selectSession(null)}
         onSessionUpdate={updateSession}
         onSessionDeleted={sessionDeleted}
@@ -371,6 +550,15 @@ export default function Chat() {
         shellSize={shellSize}
         onShellSize={setShellSize}
       />
+      {showGithub && (
+        <GithubInspector
+          open={showGithub}
+          onClose={() => setGithubPreference("false")}
+          projectId={githubProjectId}
+          projectRemoved={githubProjectRemoved}
+          session={activeSession}
+        />
+      )}
     </div>
   );
 }

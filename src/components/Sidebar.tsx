@@ -1,221 +1,230 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
-import { BranchBadge } from "./ContextBar";
-import GithubPanel, { GITHUB_PANEL_HEADER_PX } from "./GithubPanel";
-import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
-import type { PinMap } from "@/lib/pins";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  ChevronRight,
+  Folder,
+  FolderGit2,
+  MoreHorizontal,
+  PanelLeftClose,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  SquarePen,
+  Trash2,
+  X,
+} from "lucide-react";
+import AgentLogo from "./AgentLogo";
+import IconButton from "./IconButton";
+import { RenameField, RemoveConfirm } from "./ProjectActions";
+import { useMediaQuery } from "./useMediaQuery";
+import { usePreference } from "./usePreference";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { groupSessionsByProject } from "@/lib/session-groups";
-import { WorktreeBadge } from "./WorktreeBadge";
+import { agentActivity, activityLabels } from "@/lib/agent-activity";
+import { relativeAge } from "@/lib/relative-age";
+import type { PinMap } from "@/lib/pins";
+import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
 
 export type SidebarProps = {
-  /** In display order: pinned first, then creation order. */
   projects: ProjectSummary[];
   sessions: SessionSummary[];
   projectPins: PinMap;
   sessionPins: PinMap;
   onTogglePinProject: (id: string) => void;
   onTogglePinSession: (id: string) => void;
-  /** Active session id. */
   active: string | null;
-  onSelect: (sessionId: string) => void;
-  /** The pointer has rested on a session row: warm its transcript ahead of a click. */
-  onPrefetch: (sessionId: string) => void;
-  /** May reject; the message is shown under the session. */
-  onDeleteSession: (sessionId: string) => void | Promise<void>;
-  /** Open the start page with this project selected (the `+` on a project row). */
+  onSelect: (id: string) => void;
+  onPrefetch: (id: string) => void;
+  onDeleteSession: (id: string) => void | Promise<void>;
   onNewSession: (projectId: string) => void;
+  onHome: () => void;
   onAddProject: () => void;
-  /** May reject; the message is shown under the project. */
   onRenameProject: (id: string, name: string) => void | Promise<void>;
-  /** May reject; the message is shown in the confirm box, with "Remove anyway" when `dirty` (see `ProjectRequestError`). */
-  onRemoveProject: (id: string, opts?: RemoveProjectOptions) => void | Promise<void>;
-  /** Mobile drawer state; on `md` and up the sidebar is always visible. */
+  onRemoveProject: (
+    id: string,
+    opts?: RemoveProjectOptions,
+  ) => void | Promise<void>;
   open: boolean;
   onClose: () => void;
-  /** The project the GitHub panel shows: the active session's, else the start page's; null for none. */
-  githubProjectId: string | null;
-  /** The active session's project was removed from Portal, so the panel shows nothing for it. */
-  githubProjectRemoved: boolean;
-  /** The active session, whose branch switches and turn ends refresh the GitHub panel. */
-  activeSession?: SessionSummary;
+  desktopOpen: boolean;
+  onCollapse: () => void;
 };
 
-const GITHUB_COLLAPSED_KEY = "portal.githubPanel.collapsed";
-const GITHUB_SIZE_KEY = "portal.githubPanel.size";
-const GITHUB_DEFAULT_SIZE = 33;
-/** Tailwind's `md` breakpoint, where the sidebar stops being a drawer. */
-const DESKTOP_QUERY = "(min-width: 768px)";
-
-function subscribeDesktop(onChange: () => void) {
-  const query = window.matchMedia(DESKTOP_QUERY);
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
-}
-const noopSubscribe = () => () => {};
-
-/** The GitHub panel's remembered layout; null on the server, where there is no storage to read. */
-type GithubLayout = { collapsed: boolean; size: number };
-
-/** Collapsed by default on small screens, where the sidebar is a drawer. */
-function readGithubLayout(): GithubLayout | null {
-  if (typeof window === "undefined") return null;
-  const defaultCollapsed = !window.matchMedia(DESKTOP_QUERY).matches;
-  try {
-    const collapsed = localStorage.getItem(GITHUB_COLLAPSED_KEY);
-    const size = Number(localStorage.getItem(GITHUB_SIZE_KEY));
-    return {
-      collapsed: collapsed === null ? defaultCollapsed : collapsed === "1",
-      size: Number.isFinite(size) && size > 0 && size < 100 ? size : GITHUB_DEFAULT_SIZE,
-    };
-  } catch {
-    return { collapsed: defaultCollapsed, size: GITHUB_DEFAULT_SIZE };
-  }
-}
-
-function storeGithubLayout(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Storage is a convenience; the layout still holds for this page load.
-  }
-}
-
-type Editing = { id: string; mode: "rename" | "remove" };
-
-const iconButtonClass = "shrink-0 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 focus-visible:bg-zinc-800 focus-visible:text-zinc-200 focus-visible:outline-none";
-
-/** A thumbtack; filled when `pinned`. */
-function PinIcon({ pinned }: { pinned: boolean }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" width="11" height="11" className="inline-block" fill={pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round">
-      <path d="M9.5 1.5 14.5 6.5 12.5 7.5 10.5 9.5 10 13 3 6 6.5 5.5 8.5 3.5Z" />
-      <path d="M6.5 9.5 2 14" />
-    </svg>
-  );
-}
-
-/**
- * What a session is doing right now: a pulsing dot while the agent works, a steady brighter one
- * while it waits for someone to answer a permission prompt. Nothing when idle.
- */
-function ActivityDot({ busy, awaitingPermission }: { busy: boolean; awaitingPermission: boolean }) {
-  if (!busy) return null;
-  const label = awaitingPermission ? "Waiting for your answer" : "Working";
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      className={`inline-block h-2 w-2 shrink-0 rounded-full ${awaitingPermission ? "bg-amber-300 ring-2 ring-amber-300/30" : "animate-pulse bg-amber-400"}`}
-    />
-  );
-}
-
-/** A mouse resting on a row this long (ms) counts as intent to open it; a pass-over does not prefetch. */
-const PREFETCH_HOVER_MS = 100;
-
-function SessionRow({ session, active, showCwd, pinned, onSelect, onPrefetch, onDelete, onTogglePin }: {
+function SessionRow({
+  session,
+  active,
+  pinned,
+  now,
+  onSelect,
+  onPrefetch,
+  onDelete,
+  onTogglePin,
+}: {
   session: SessionSummary;
   active: boolean;
-  /** Show the directory on the row itself (used when there is no project header above it). */
-  showCwd: boolean;
   pinned: boolean;
-  onSelect: (sessionId: string) => void;
-  onPrefetch: (sessionId: string) => void;
-  onDelete: (sessionId: string) => void | Promise<void>;
-  onTogglePin: (sessionId: string) => void;
+  now: number;
+  onSelect: (id: string) => void;
+  onPrefetch: (id: string) => void;
+  onDelete: (id: string) => void | Promise<void>;
+  onTogglePin: (id: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const title = session.title ?? session.agentName;
-  const hoverRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hover = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (hover.current) clearTimeout(hover.current);
+    },
+    [],
+  );
+  const title = session.title || "New conversation";
+  const activity = agentActivity(session);
+  const age = relativeAge(now - session.lastActiveAt);
   const cancelHover = () => {
-    if (hoverRef.current) clearTimeout(hoverRef.current);
-    hoverRef.current = null;
+    if (hover.current) clearTimeout(hover.current);
   };
-  useEffect(() => cancelHover, []);
-  const startHover = (e: ReactPointerEvent<HTMLButtonElement>) => {
-    // Touch and pen have no hover; their first contact is the click itself.
-    if (e.pointerType !== "mouse" || active) return;
+  const startHover = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return;
     cancelHover();
-    hoverRef.current = setTimeout(() => {
-      hoverRef.current = null;
-      onPrefetch(session.id);
-    }, PREFETCH_HOVER_MS);
+    hover.current = setTimeout(() => onPrefetch(session.id), 100);
   };
   const remove = async () => {
-    setBusy(true);
+    setDeleting(true);
     setError(null);
     try {
       await onDelete(session.id);
     } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : "Could not delete the session. Try again.");
-      setBusy(false);
+      setError(
+        e instanceof Error ? e.message : "Could not delete the session.",
+      );
+    } finally {
+      setDeleting(false);
     }
   };
   return (
-    <div className={`group rounded ${active ? "bg-zinc-800" : "hover:bg-zinc-900"}`}>
-      <div className="flex items-start">
-        <button
-          onClick={() => onSelect(session.id)}
-          onPointerEnter={startHover}
-          onPointerLeave={cancelHover}
-          aria-current={active ? "true" : undefined}
-          title={session.cwd}
-          className="block min-w-0 flex-1 px-2 py-1.5 text-left text-xs"
-        >
-          <div className="flex items-center gap-2">
-            <ActivityDot busy={session.busy} awaitingPermission={session.awaitingPermission} />
-            <span className={`min-w-0 flex-1 truncate ${showCwd ? "font-mono" : ""} text-zinc-300`}>{showCwd ? session.displayCwd : title}</span>
-            {session.cwdMissing && <span title="The session's folder no longer exists" className="shrink-0 text-[10px] text-amber-400">missing</span>}
-            {session.link.status === "offline" && session.link.error && (
-              <span title={session.link.error} className="shrink-0 text-[10px] text-amber-400">offline</span>
-            )}
-            <BranchBadge git={session.git} />
-          </div>
-          <div className="truncate text-[10px] text-zinc-600">
-            {showCwd && <><span className="text-zinc-400">{title}</span> · </>}
-            {session.agentName} · {new Date(session.lastActiveAt ?? session.createdAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
-          </div>
-        </button>
-        <button
-          type="button"
-          aria-label={`${pinned ? "Unpin" : "Pin"} session ${title}`}
-          aria-pressed={pinned}
-          title={pinned ? "Unpin from the top" : "Pin to the top"}
-          onClick={() => onTogglePin(session.id)}
-          // A pinned row always shows its pin; otherwise it appears with the delete button.
-          className={`${iconButtonClass} mt-1 py-1 focus-visible:opacity-100 ${pinned ? "text-zinc-400 opacity-100" : active || confirming ? "opacity-100" : "opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-60"}`}
-        >
-          <PinIcon pinned={pinned} />
-        </button>
-        <button
-          type="button"
-          aria-label={`Delete session ${title}`}
-          title="Delete session"
-          disabled={busy}
-          onClick={() => setConfirming((open) => !open)}
-          // Always visible on the open row (touch screens have no hover), revealed on hover elsewhere.
-          className={`${iconButtonClass} mt-1 focus-visible:opacity-100 ${active || confirming ? "opacity-100" : "opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-60"}`}
-        >
-          ×
-        </button>
-      </div>
+    <div className="sidebar-row group" data-active={active}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={title}
+            aria-current={active ? "page" : undefined}
+            onClick={() => onSelect(session.id)}
+            onPointerEnter={startHover}
+            onPointerLeave={cancelHover}
+            className="flex min-w-0 gap-2.5 rounded-xl px-2.5 py-3 text-left"
+          >
+            <AgentLogo agentId={session.agentId} className="mt-0.5 !size-4" />
+            <span className="min-w-0 flex-1">
+              <span className="sidebar-title text-foreground/90">{title}</span>
+              <span className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                {pinned && <Pin className="size-2.5" aria-label="Pinned" />}
+                {session.busy || session.link.status === "connecting" ? (
+                  <span
+                    data-activity={activity}
+                    className="inline-flex items-center gap-1.5"
+                  >
+                    <span className="status-dot" />
+                    {activityLabels[activity]}
+                  </span>
+                ) : session.cwdMissing ? (
+                  "Folder missing"
+                ) : session.link.status === "offline" && session.link.error ? (
+                  "Offline"
+                ) : (
+                  <span>{age === "now" ? "Just now" : `${age} ago`}</span>
+                )}
+              </span>
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-72 break-words">
+          {title}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Actions for ${title}`}
+            className="mt-2 text-muted-foreground opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            <MoreHorizontal />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" side="right">
+          <DropdownMenuItem onSelect={() => onTogglePin(session.id)}>
+            {pinned ? <PinOff /> : <Pin />}
+            {pinned ? "Unpin session" : "Pin session"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => setConfirming(true)}
+          >
+            <Trash2 />
+            Delete session
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       {confirming && (
-        <div role="group" aria-label={`Delete ${title}?`} className="mx-2 mb-2 rounded border border-red-900/60 bg-red-950/30 px-2 py-2 text-xs">
-          <p className="mb-2 text-zinc-300">Delete this session and its terminals? The transcript is removed from Portal.</p>
-          {error && <p role="alert" className="mb-2 break-words rounded bg-red-950/50 px-2 py-1.5 text-red-300">{error}</p>}
-          <div className="flex gap-2">
-            <button type="button" autoFocus disabled={busy} onClick={() => void remove()} className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600 disabled:opacity-50">
-              {busy ? "Deleting…" : "Delete"}
-            </button>
-            <button type="button" disabled={busy} onClick={() => setConfirming(false)} className="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800 disabled:opacity-50">
+        <div
+          role="group"
+          aria-label={`Delete ${title}?`}
+          className="col-span-2 m-2 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-xs"
+        >
+          <p className="leading-relaxed">
+            Delete this conversation and its terminals? This removes its
+            transcript from Portal.
+          </p>
+          {error && (
+            <p role="alert" className="mt-2 text-destructive">
+              {error}
+            </p>
+          )}
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void remove()}
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={deleting}
+              onClick={() => setConfirming(false)}
+            >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -223,396 +232,418 @@ function SessionRow({ session, active, showCwd, pinned, onSelect, onPrefetch, on
   );
 }
 
-/** Inline rename field: Enter commits, Escape cancels, blur commits. */
-function RenameField({ initial, onCommit, onCancel }: {
-  initial: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}) {
-  const [draft, setDraft] = useState(initial);
-  const doneRef = useRef(false);
-  const finish = (commit: boolean) => {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    const name = draft.trim();
-    if (commit && name && name !== initial) onCommit(name);
-    else onCancel();
-  };
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "Enter") {
-      e.preventDefault();
-      finish(true);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      finish(false);
-    }
-  };
-  return (
-    <input
-      aria-label="Project name"
-      autoFocus
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onKeyDown={onKeyDown}
-      onBlur={() => finish(true)}
-      onFocus={(e) => e.target.select()}
-      className="my-1 w-full rounded border border-indigo-500 bg-zinc-900 px-2 py-1 text-xs outline-none"
-    />
-  );
-}
-
-function ProjectMenu({ name, pinned, onTogglePin, onRename, onRemove, onClose }: {
-  name: string;
-  pinned: boolean;
-  onTogglePin: () => void;
-  onRename: () => void;
-  onRemove: () => void;
-  onClose: () => void;
-}) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    menuRef.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-    const onPointerDown = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [onClose]);
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? []);
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
-    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const step = e.key === "ArrowDown" ? 1 : items.length - 1;
-      items[(Math.max(index, 0) + step) % items.length]?.focus();
-    }
-  };
-  return (
-    <div ref={menuRef} role="menu" aria-label={`Project ${name}`} onKeyDown={onKeyDown} className="my-1 flex gap-1 rounded border border-zinc-800 bg-zinc-900 p-1 text-xs">
-      <button role="menuitem" type="button" onClick={onTogglePin} className="flex-1 rounded px-2 py-1 text-left hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none">{pinned ? "Unpin" : "Pin"}</button>
-      <button role="menuitem" type="button" onClick={onRename} className="flex-1 rounded px-2 py-1 text-left hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none">Rename</button>
-      <button role="menuitem" type="button" onClick={onRemove} className="flex-1 rounded px-2 py-1 text-left text-red-300 hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none">Remove</button>
-    </div>
-  );
-}
-
-/**
- * Inline "Remove <project>?" box. Worktree projects also offer to delete the worktree folder and,
- * when git refuses because of uncommitted changes, to remove anyway. Stays open until removal succeeds.
- */
-function RemoveConfirm({ project, onRemove, onCancel }: {
-  project: ProjectSummary;
-  onRemove: (opts: RemoveProjectOptions) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const [deleteWorktree, setDeleteWorktree] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; dirty: boolean } | null>(null);
-  const isWorktree = !!project.worktree;
-  const checkboxId = `sidebar-delete-worktree-${project.id}`;
-
-  const submit = async (force: boolean) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onRemove(isWorktree ? { deleteWorktree, force } : {});
-    } catch (e) {
-      setError({
-        message: e instanceof Error && e.message ? e.message : "Could not remove the project. Try again.",
-        dirty: e instanceof ProjectRequestError && e.dirty,
-      });
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div role="group" aria-label={`Remove ${project.name}?`} className="my-1 rounded border border-red-900/60 bg-red-950/30 px-2 py-2 text-xs">
-      {isWorktree ? (
-        <>
-          <p className="mb-2 text-zinc-300">Remove <span className="font-medium">{project.name}</span> from Portal?</p>
-          <label htmlFor={checkboxId} className="mb-1 flex items-center gap-1.5 text-zinc-300">
-            <input
-              id={checkboxId}
-              type="checkbox"
-              checked={deleteWorktree}
-              disabled={busy}
-              onChange={(e) => setDeleteWorktree(e.target.checked)}
-              className="accent-indigo-500"
-            />
-            Also delete the worktree folder
-          </label>
-          {deleteWorktree && <p className="mb-2 text-zinc-500">The branch is deleted too if it is fully merged.</p>}
-        </>
-      ) : (
-        <p className="mb-2 text-zinc-300">Remove <span className="font-medium">{project.name}</span> from Portal? Its sessions stay and the folder is untouched.</p>
-      )}
-      {error && (
-        <p role="alert" className="mb-2 break-words rounded bg-red-950/50 px-2 py-1.5 text-red-300">{error.message}</p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          autoFocus
-          disabled={busy}
-          onClick={() => void submit(false)}
-          className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600 disabled:opacity-50"
-        >
-          {busy ? "Removing…" : "Remove"}
-        </button>
-        {error?.dirty && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void submit(true)}
-            title="Discard the worktree's uncommitted changes"
-            className="rounded border border-red-700 px-2 py-1 font-medium text-red-200 hover:bg-red-900/40 disabled:opacity-50"
-          >
-            Remove anyway
-          </button>
-        )}
-        <button type="button" disabled={busy} onClick={onCancel} className="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800 disabled:opacity-50">
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Projects as collapsible groups with their sessions; the mobile drawer is controlled by `open`. */
-export default function Sidebar({
-  projects, sessions, projectPins, sessionPins, onTogglePinProject, onTogglePinSession,
-  active, onSelect, onPrefetch, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
-  githubProjectId, githubProjectRemoved, activeSession,
-}: SidebarProps) {
+function SidebarContent(props: SidebarProps) {
+  const {
+    projects,
+    sessions,
+    projectPins,
+    sessionPins,
+    active,
+    onSelect,
+    onPrefetch,
+    onDeleteSession,
+    onTogglePinSession,
+    onTogglePinProject,
+    onNewSession,
+    onHome,
+    onAddProject,
+    onRenameProject,
+    onRemoveProject,
+  } = props;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  /** True on `md` and up, where the sidebar is always visible; the drawer's `open` governs below that. */
-  const desktop = useSyncExternalStore(subscribeDesktop, () => window.matchMedia(DESKTOP_QUERY).matches, () => true);
-  /** False during server rendering and hydration, so the storage-dependent panel only renders once the markup can differ. */
-  const mounted = useSyncExternalStore(noopSubscribe, () => true, () => false);
-  const [githubLayout, setGithubLayout] = useState<GithubLayout | null>(readGithubLayout);
-  const githubPanelRef = usePanelRef();
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [editing, setEditing] = useState<Editing | null>(null);
-  const [actionError, setActionError] = useState<{ id: string; message: string } | null>(null);
-  const groups = groupSessionsByProject(projects, sessions, sessionPins);
-
-  const toggle = (id: string) => {
+  const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState<{
+    id: string;
+    mode: "rename" | "remove";
+  } | null>(null);
+  const renameInput = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<{ id: string; message: string } | null>(
+    null,
+  );
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    update();
+    const timer = setInterval(update, 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const groups = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    return groupSessionsByProject(projects, sessions, sessionPins)
+      .map((group) => ({
+        ...group,
+        sessions:
+          !q || group.project?.name.toLowerCase().includes(q)
+            ? group.sessions
+            : group.sessions.filter((s) =>
+                `${s.title} ${s.agentName} ${s.git?.branch ?? ""} ${s.displayCwd}`
+                  .toLowerCase()
+                  .includes(q),
+              ),
+      }))
+      .filter(
+        (group) =>
+          !q ||
+          group.sessions.length > 0 ||
+          group.project?.name.toLowerCase().includes(q),
+      );
+  }, [projects, sessions, sessionPins, query]);
+  const toggle = (id: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
-
-  const run = async (id: string, action: () => void | Promise<void>, fallback: string) => {
-    setActionError(null);
-    try {
-      await action();
-    } catch (e) {
-      setActionError({ id, message: e instanceof Error && e.message ? e.message : fallback });
-    }
-  };
-
-  const closeMenu = useCallback(() => setMenuFor(null), []);
-
-  const setGithubCollapsed = (value: boolean) => {
-    setGithubLayout((prev) => (prev ? { ...prev, collapsed: value } : prev));
-    storeGithubLayout(GITHUB_COLLAPSED_KEY, value ? "1" : "0");
-  };
-
-  const toggleGithub = () => {
-    const panel = githubPanelRef.current;
-    if (!githubLayout || !panel) return;
-    if (githubLayout.collapsed) panel.resize(`${githubLayout.size}%`);
-    else panel.collapse();
-    setGithubCollapsed(!githubLayout.collapsed);
-  };
-
-  const nav = (
-    <nav aria-label="Projects and sessions" className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-          {projects.length === 0 && groups.length === 0 && (
-            <p className="px-2 text-xs text-zinc-500">No projects yet. Add a folder to start a session.</p>
-          )}
-          {groups.map(({ project, sessions: rows }) => {
-            if (!project) {
-              return (
-                <section key="removed" aria-labelledby="sidebar-removed-projects">
-                  <h3 id="sidebar-removed-projects" className="px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-500">Removed projects</h3>
-                  <div className="space-y-1">
-                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} onPrefetch={onPrefetch} showCwd pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
-                  </div>
-                </section>
-              );
-            }
-            const isCollapsed = collapsed.has(project.id);
-            const isPinned = project.id in projectPins;
-            const edit = editing?.id === project.id ? editing : null;
-            const listId = `sidebar-project-${project.id}`;
-            // A collapsed project stands in for its rows: show that something inside is working or waiting.
-            const working = isCollapsed && rows.some((s) => s.busy);
-            const waiting = working && rows.some((s) => s.busy && s.awaitingPermission);
-            return (
-              <section key={project.id} aria-label={project.name}>
-                <div className="flex items-center gap-1">
-                  {edit?.mode === "rename" ? (
-                    <RenameField
-                      initial={project.name}
-                      onCommit={(name) => {
-                        setEditing(null);
-                        void run(project.id, () => onRenameProject(project.id, name), "Could not rename the project. Try again.");
-                      }}
-                      onCancel={() => setEditing(null)}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => toggle(project.id)}
-                      aria-expanded={!isCollapsed}
-                      aria-controls={listId}
-                      title={project.displayPath}
-                      className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs hover:bg-zinc-900"
-                    >
-                      <span aria-hidden="true" className="w-3 shrink-0 text-zinc-600">{isCollapsed ? "▸" : "▾"}</span>
-                      <ActivityDot busy={working} awaitingPermission={waiting} />
-                      <span className="min-w-0 flex-1 truncate font-medium text-zinc-200">{project.name}</span>
-                      {isPinned && <span title="Pinned" className="shrink-0 text-zinc-500"><PinIcon pinned /><span className="sr-only">Pinned</span></span>}
-                      <WorktreeBadge project={project} projects={projects} />
-                      {project.exists === false && (
-                        <span title={`Folder not found: ${project.displayPath}`} className="shrink-0 text-[10px] text-amber-400">missing</span>
-                      )}
-                      {isCollapsed && rows.length > 0 && <span className="shrink-0 text-[10px] text-zinc-600">{rows.length}</span>}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    aria-label={`New session in ${project.name}`}
-                    title="Start a session here"
-                    onClick={() => onNewSession(project.id)}
-                    className={iconButtonClass}
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`More actions for ${project.name}`}
-                    aria-haspopup="menu"
-                    aria-expanded={menuFor === project.id}
-                    // Keep the menu's outside-click listener from closing it before this click toggles it.
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => setMenuFor((current) => (current === project.id ? null : project.id))}
-                    className={iconButtonClass}
-                  >
-                    ⋯
-                  </button>
-                </div>
-                {menuFor === project.id && (
-                  <ProjectMenu
-                    name={project.name}
-                    pinned={isPinned}
-                    onTogglePin={() => {
-                      setMenuFor(null);
-                      onTogglePinProject(project.id);
-                    }}
-                    onClose={closeMenu}
-                    onRename={() => {
-                      setMenuFor(null);
-                      setEditing({ id: project.id, mode: "rename" });
-                    }}
-                    onRemove={() => {
-                      setMenuFor(null);
-                      setEditing({ id: project.id, mode: "remove" });
-                    }}
-                  />
-                )}
-                {edit?.mode === "remove" && (
-                  <RemoveConfirm
-                    project={project}
-                    onRemove={async (opts) => {
-                      setActionError(null);
-                      await onRemoveProject(project.id, opts);
-                      setEditing(null);
-                    }}
-                    onCancel={() => setEditing(null)}
-                  />
-                )}
-                {actionError?.id === project.id && (
-                  <p role="alert" className="my-1 rounded bg-red-950/50 px-2 py-1.5 text-xs text-red-300">{actionError.message}</p>
-                )}
-                <div id={listId} hidden={isCollapsed} className="mt-0.5 space-y-1 pl-2">
-                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} onPrefetch={onPrefetch} showCwd={false} pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
-                  {rows.length === 0 && <p className="px-2 py-1 text-[11px] text-zinc-600">No sessions yet.</p>}
-                </div>
-              </section>
-            );
-          })}
-    </nav>
-  );
-
   return (
-    <>
-      <aside
-        className={`${open ? "flex" : "hidden"} absolute inset-y-0 left-0 z-20 w-72 flex-col border-r border-zinc-800 bg-zinc-950 p-3 md:static md:flex`}
-      >
-        <div className="mb-3 text-sm font-semibold tracking-wide text-zinc-400">portal</div>
-        <button
-          type="button"
-          onClick={onAddProject}
-          className="mb-4 rounded border border-zinc-700 px-3 py-1.5 text-sm font-medium hover:bg-zinc-800"
+    <div className="sidebar-content">
+      <div className="mb-6 flex items-center gap-2 px-2">
+        <span
+          className="flex size-7 items-center justify-center rounded-full border border-white/20 bg-white/5"
+          aria-hidden="true"
         >
-          + Add project
-        </button>
-        <Group
-          orientation="vertical"
-          className="min-h-0 flex-1"
-          onLayoutChanged={(layout, meta) => {
-            // The library can collapse or expand the panel on its own (a drag past the minimum, a group
-            // resize), so the state always follows it; only user resizes are remembered across page loads.
-            const panel = githubPanelRef.current;
-            if (!panel || layout.github === undefined) return;
-            const collapsed = panel.isCollapsed();
-            const size = Math.round(layout.github * 10) / 10;
-            setGithubLayout((prev) => (prev ? { collapsed, size: collapsed ? prev.size : size } : prev));
-            if (!meta.isUserInteraction) return;
-            storeGithubLayout(GITHUB_COLLAPSED_KEY, collapsed ? "1" : "0");
-            if (!collapsed) storeGithubLayout(GITHUB_SIZE_KEY, String(size));
+          <span className="size-3.5 rounded-full border-2 border-indigo-200/75 shadow-[0_0_12px_#a5b4fc30]" />
+        </span>
+        <span className="flex-1 text-[15px] font-semibold tracking-[-.03em]">
+          Portal
+        </span>
+        <IconButton
+          label="Collapse sidebar"
+          onClick={props.onCollapse}
+          className="hidden text-muted-foreground md:inline-flex"
+        >
+          <PanelLeftClose className="size-4" />
+        </IconButton>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Close sidebar"
+          onClick={props.onClose}
+          className="text-muted-foreground md:hidden"
+        >
+          <X />
+        </Button>
+      </div>
+      <Button
+        variant="secondary"
+        onClick={onHome}
+        className="mb-4 h-10 justify-start gap-2.5 rounded-xl bg-white/5 px-3 text-[13px]"
+      >
+        <SquarePen className="size-4" />
+        New conversation
+      </Button>
+      <div className="relative mb-6">
+        <Search className="pointer-events-none absolute left-3 top-2.5 size-3.5 text-muted-foreground" />
+        <Input
+          aria-label="Search sessions"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search conversations"
+          className="h-9 rounded-xl border-transparent bg-transparent pl-9 text-xs shadow-none dark:bg-transparent focus-visible:bg-white/5"
+        />
+      </div>
+      <div className="mb-2 flex items-center px-2">
+        <span className="flex-1 text-[10px] font-semibold tracking-[.12em] text-muted-foreground/80 uppercase">
+          Workspace
+        </span>
+        <IconButton
+          label="Add project"
+          size="icon-xs"
+          onClick={onAddProject}
+          className="text-muted-foreground"
+        >
+          <Plus />
+        </IconButton>
+      </div>
+      <nav
+        aria-label="Projects and sessions"
+        className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-4"
+      >
+        {groups.length === 0 && (
+          <p className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
+            {query
+              ? "No matching conversations."
+              : "Add a project to create your first conversation."}
+          </p>
+        )}
+        {groups.map(({ project, sessions: rows }) => {
+          const isCollapsed = !query && !!project && collapsed.has(project.id);
+          const isPinned = !!project && project.id in projectPins;
+          const edit = editing?.id === project?.id ? editing : null;
+          const parent = project?.worktree
+            ? projects.find((p) => p.id === project.worktree?.parentId)
+            : null;
+          const waiting = rows.some((s) => s.awaitingPermission);
+          const working = rows.some((s) => s.busy);
+          return (
+            <section
+              key={project?.id ?? "removed"}
+              aria-label={project?.name ?? "Removed projects"}
+            >
+              <div className="mb-1 flex items-center gap-0.5 px-1">
+                {edit?.mode === "rename" && project ? (
+                  <RenameField
+                    inputRef={renameInput}
+                    initial={project.name}
+                    onCancel={() => setEditing(null)}
+                    onCommit={(name) => {
+                      setEditing(null);
+                      setError(null);
+                      Promise.resolve(onRenameProject(project.id, name)).catch(
+                        (e) =>
+                          setError({
+                            id: project.id,
+                            message:
+                              e instanceof Error
+                                ? e.message
+                                : "Could not rename project.",
+                          }),
+                      );
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!project}
+                    onClick={() => project && toggle(project.id)}
+                    aria-expanded={!isCollapsed}
+                    aria-controls={`project-${project?.id ?? "removed"}`}
+                    title={
+                      project
+                        ? `${project.name} · ${project.displayPath}`
+                        : undefined
+                    }
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1.5 text-left"
+                  >
+                    {project?.git ? (
+                      <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium text-zinc-300">
+                        {project?.name ?? "Removed projects"}
+                      </span>
+                      {parent && (
+                        <span className="block truncate text-[10px] text-muted-foreground">
+                          Worktree of {parent.name}
+                        </span>
+                      )}
+                    </span>
+                    {isPinned && (
+                      <Pin className="size-2.5 shrink-0 text-muted-foreground" />
+                    )}
+                    {isCollapsed && working && (
+                      <span
+                        className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-indigo-300"}`}
+                        aria-label={waiting ? "Needs approval" : "Working"}
+                      />
+                    )}
+                    <ChevronRight
+                      className={`size-3 shrink-0 text-muted-foreground transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                    />
+                  </button>
+                )}
+                {project && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Actions for project ${project.name}`}
+                        className="text-muted-foreground"
+                      >
+                        <MoreHorizontal />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      side="right"
+                      onCloseAutoFocus={(event) => {
+                        if (renameInput.current) {
+                          event.preventDefault();
+                          renameInput.current.focus();
+                        }
+                      }}
+                    >
+                      <DropdownMenuItem
+                        onSelect={() => onNewSession(project.id)}
+                      >
+                        <SquarePen />
+                        New conversation
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => onTogglePinProject(project.id)}
+                      >
+                        {isPinned ? <PinOff /> : <Pin />}
+                        {isPinned ? "Unpin project" : "Pin project"}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          setEditing({ id: project.id, mode: "rename" })
+                        }
+                      >
+                        Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() =>
+                          setEditing({ id: project.id, mode: "remove" })
+                        }
+                      >
+                        <Trash2 />
+                        Remove project
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+              {project?.exists === false && (
+                <p className="px-3 pb-2 text-[11px] text-amber-300">
+                  Project folder is missing
+                </p>
+              )}
+              {edit?.mode === "remove" && project && (
+                <RemoveConfirm
+                  project={project}
+                  onCancel={() => setEditing(null)}
+                  onRemove={async (options) => {
+                    await onRemoveProject(project.id, options);
+                    setEditing(null);
+                  }}
+                />
+              )}
+              {error?.id === project?.id && (
+                <p role="alert" className="px-3 text-xs text-destructive">
+                  {error?.message}
+                </p>
+              )}
+              <div
+                id={`project-${project?.id ?? "removed"}`}
+                hidden={isCollapsed}
+                className="space-y-1"
+              >
+                {rows.map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    active={session.id === active}
+                    pinned={session.id in sessionPins}
+                    now={now || session.lastActiveAt}
+                    onSelect={onSelect}
+                    onPrefetch={onPrefetch}
+                    onDelete={onDeleteSession}
+                    onTogglePin={onTogglePinSession}
+                  />
+                ))}
+                {rows.length === 0 && (
+                  <p className="px-3 py-3 text-[11px] text-muted-foreground">
+                    No conversations yet
+                  </p>
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </nav>
+      <Button
+        variant="ghost"
+        onClick={onAddProject}
+        className="mt-3 h-10 justify-start gap-2 border-t border-white/5 rounded-none px-3 text-xs text-muted-foreground"
+      >
+        <Plus className="size-3.5" />
+        Add project
+      </Button>
+    </div>
+  );
+}
+
+export default function Sidebar(props: SidebarProps) {
+  const desktop = useMediaQuery("(min-width: 768px)", true);
+  const [storedWidth, storeWidth] = usePreference(
+    "portal.sidebar.width",
+    "280",
+  );
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const width =
+    dragWidth ?? Math.max(240, Math.min(400, Number(storedWidth) || 280));
+  if (!desktop)
+    return (
+      <Sheet
+        open={props.open}
+        onOpenChange={(open) => {
+          if (!open) props.onClose();
+        }}
+      >
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="!w-[min(320px,88vw)] gap-0 p-0"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            document.getElementById("sidebar-toggle")?.focus();
           }}
         >
-          <Panel id="sessions" minSize="20%" className="flex min-h-0 flex-col">
-            {nav}
-          </Panel>
-          {mounted && githubLayout && (
-            <Separator aria-label="Resize GitHub panel" className="h-1.5 shrink-0 bg-zinc-800 transition-colors hover:bg-indigo-500 focus-visible:bg-indigo-500 focus-visible:outline-none" />
-          )}
-          {mounted && githubLayout && (
-            <Panel
-              id="github"
-              panelRef={githubPanelRef}
-              collapsible
-              collapsedSize={GITHUB_PANEL_HEADER_PX}
-              groupResizeBehavior="preserve-pixel-size"
-              defaultSize={githubLayout.collapsed ? GITHUB_PANEL_HEADER_PX : `${githubLayout.size}%`}
-              minSize="15%"
-              maxSize="80%"
-              className="flex min-h-0 flex-col overflow-hidden"
-            >
-              <GithubPanel
-                projectId={githubProjectId}
-                projectRemoved={githubProjectRemoved}
-                session={activeSession}
-                collapsed={githubLayout.collapsed}
-                onToggle={toggleGithub}
-                visible={desktop || open}
-              />
-            </Panel>
-          )}
-        </Group>
-      </aside>
-      {open && <button aria-label="Close sessions sidebar" className="absolute inset-0 z-10 bg-black/60 md:hidden" onClick={onClose} />}
-    </>
+          <SheetTitle className="sr-only">Your workspace</SheetTitle>
+          <SheetDescription className="sr-only">
+            Browse projects and conversations.
+          </SheetDescription>
+          <SidebarContent {...props} />
+        </SheetContent>
+      </Sheet>
+    );
+  if (!props.desktopOpen) return null;
+  return (
+    <aside
+      aria-label="Workspace sidebar"
+      className="sidebar-shell glass-subtle relative"
+      style={{ width }}
+    >
+      <SidebarContent {...props} />
+      <div
+        role="separator"
+        aria-label="Resize sidebar"
+        aria-orientation="vertical"
+        aria-valuemin={240}
+        aria-valuemax={400}
+        aria-valuenow={width}
+        tabIndex={0}
+        className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none hover:bg-white/5 focus-visible:bg-white/10"
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId))
+            setDragWidth(Math.max(240, Math.min(400, e.clientX)));
+        }}
+        onPointerUp={(e) => {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+          storeWidth(String(width));
+          setDragWidth(null);
+        }}
+        onPointerCancel={() => setDragWidth(null)}
+        onKeyDown={(e) => {
+          if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+            e.preventDefault();
+            storeWidth(
+              String(
+                e.key === "Home"
+                  ? 240
+                  : e.key === "End"
+                    ? 400
+                    : Math.max(
+                        240,
+                        Math.min(
+                          400,
+                          width + (e.key === "ArrowLeft" ? -16 : 16),
+                        ),
+                      ),
+              ),
+            );
+          }
+        }}
+      />
+    </aside>
   );
 }

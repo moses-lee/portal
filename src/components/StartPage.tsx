@@ -1,148 +1,224 @@
 "use client";
 
-import { BranchBadge } from "./ContextBar";
+import { FolderGit2, Plus } from "lucide-react";
 import WorktreePicker, { type WorktreeChoice } from "./WorktreePicker";
-import { WorktreeBadge, worktreeLabel } from "./WorktreeBadge";
+import ContextBar from "./ContextBar";
+import AgentLogo from "./AgentLogo";
+import ChatComposer from "./ChatComposer";
+import { useDraft } from "./useDraft";
+import { worktreeLabel } from "./WorktreeBadge";
 import { worktreeTarget } from "@/lib/branch-matching";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { AgentInfo, ProjectSummary } from "@/lib/types";
 
 export type StartPageProps = {
   projects: ProjectSummary[];
-  /** Id of the project new sessions start in; "" when none is selected. */
   selectedProjectId: string;
   onSelectProject: (projectId: string) => void;
   onAddProject: () => void;
-  /** Worktree to start in; only meaningful for git projects. */
   worktree: WorktreeChoice;
   onWorktreeChange: (choice: WorktreeChoice) => void;
   agents: AgentInfo[];
   selectedAgentId: string;
   onSelectAgent: (agentId: string) => void;
-  /** True while agents, sessions, or projects are still loading; disables the pickers. */
   loading?: boolean;
   canCreate: boolean;
   creating: boolean;
-  /** Session-creation error, e.g. the server's "Project folder is missing: ~/x". */
   error: string | null;
-  onCreate: () => void;
+  onCreate: (firstPrompt?: string) => void;
 };
 
-/** The empty-state card shown when no session is active: pick a project and an agent, then start. */
 export default function StartPage({
-  projects, selectedProjectId, onSelectProject, onAddProject, worktree, onWorktreeChange,
-  agents, selectedAgentId, onSelectAgent, loading = false, canCreate, creating, error, onCreate,
+  projects,
+  selectedProjectId,
+  onSelectProject,
+  onAddProject,
+  worktree,
+  onWorktreeChange,
+  agents,
+  selectedAgentId,
+  onSelectAgent,
+  loading = false,
+  canCreate,
+  creating,
+  error,
+  onCreate,
 }: StartPageProps) {
-  const selectedProject = projects.find((p) => p.id === selectedProjectId);
-  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
-  const missingFolder = !!error && /missing/i.test(error);
-  const canPickWorktree = !!selectedProject?.git;
-  const target = selectedProject && canPickWorktree ? worktreeTarget(selectedProject, worktree) : null;
-
+  const [draft, setDraft] = useDraft("new");
+  const project = projects.find((item) => item.id === selectedProjectId);
+  const target = project ? worktreeTarget(project, worktree) : null;
+  const git =
+    target && project?.git
+      ? { ...project.git, branch: target.branch, detached: false }
+      : (project?.git ?? null);
+  const ready = canCreate && project?.exists !== false;
   return (
-    <section aria-labelledby="new-session-title" className="mx-auto mt-16 max-w-md rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <h2 id="new-session-title" className="text-sm font-semibold text-zinc-200">Start a new session</h2>
-
+    <section
+      aria-labelledby="new-session-title"
+      className="mx-auto flex w-full max-w-[780px] flex-col px-6 pb-12 pt-[clamp(48px,13vh,160px)] sm:px-10"
+    >
+      <div className="mb-9 text-center">
+        <span
+          className="glass mx-auto mb-6 flex size-14 items-center justify-center rounded-[20px]"
+          aria-hidden="true"
+        >
+          <span className="size-7 rounded-full border-[3px] border-indigo-200/70 shadow-[0_0_24px_#a5b4fc25]" />
+        </span>
+        <h2
+          id="new-session-title"
+          className="text-[clamp(26px,3vw,34px)] font-medium tracking-[-.045em]"
+        >
+          What would you like to work on?
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+          Choose a project and an agent to get started.
+        </p>
+      </div>
       {projects.length === 0 ? (
-        <div className="mt-3">
-          <p className="text-xs text-zinc-500">Add a project folder to start a session.</p>
-          <button
-            type="button"
+        <div className="glass flex flex-col items-center gap-4 rounded-3xl p-8 text-center">
+          <FolderGit2 className="size-7 text-muted-foreground" />
+          <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
+            Add a local project folder to give your agent a place to work.
+          </p>
+          <Button
             onClick={onAddProject}
             disabled={loading}
-            className="mt-3 w-full rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium hover:bg-zinc-800 disabled:opacity-40"
+            className="h-10 rounded-full px-5"
           >
-            + Add project
-          </button>
+            <Plus className="size-4" />
+            Add your first project
+          </Button>
         </div>
       ) : (
-        <div className="mt-3">
-          <label htmlFor="new-session-project" className="mb-1 block text-[11px] uppercase tracking-wide text-zinc-500">project</label>
-          <div className="flex items-center gap-2">
-            <select
-              id="new-session-project"
-              aria-label="Project"
-              value={selectedProjectId}
-              onChange={(e) => onSelectProject(e.target.value)}
-              disabled={loading || creating}
-              className="min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-sm outline-none focus:border-indigo-500 disabled:opacity-50"
-            >
-              {!selectedProject && <option value="">Choose a project…</option>}
-              {projects.map((project) => {
-                const label = worktreeLabel(project, projects);
-                return (
-                  <option key={project.id} value={project.id}>
-                    {project.name}{label ? ` (${label})` : ""}{project.exists === false ? " (missing)" : ""}
-                  </option>
-                );
-              })}
-            </select>
-            <button
-              type="button"
-              onClick={onAddProject}
-              disabled={loading}
-              className="shrink-0 rounded border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800 disabled:opacity-40"
-            >
-              Add project…
-            </button>
+        <>
+          <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/[.015] p-4 sm:flex-row sm:items-start sm:gap-4">
+            <div className="min-w-0 flex-1 space-y-2">
+              <label
+                htmlFor="new-session-project"
+                className="text-[11px] text-muted-foreground"
+              >
+                Project
+              </label>
+              <div className="flex gap-1">
+                <Select
+                  value={selectedProjectId}
+                  onValueChange={onSelectProject}
+                  disabled={loading || creating}
+                >
+                  <SelectTrigger
+                    id="new-session-project"
+                    className="h-9 min-w-0 flex-1 border-white/5 !bg-white/[.025] text-xs"
+                  >
+                    <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+                    <SelectValue placeholder="Choose a project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.name}
+                        {worktreeLabel(item, projects)
+                          ? ` · ${worktreeLabel(item, projects)}`
+                          : ""}
+                        {item.exists === false ? " (missing)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Add project"
+                  onClick={onAddProject}
+                  disabled={creating}
+                >
+                  <Plus className="size-4 text-muted-foreground" />
+                </Button>
+              </div>
+            </div>
+            {project?.git && (
+              <div className="start-worktree min-w-0 flex-1">
+                <WorktreePicker
+                  project={project}
+                  value={worktree}
+                  onChange={onWorktreeChange}
+                  disabled={loading || creating}
+                />
+              </div>
+            )}
           </div>
-          {selectedProject && canPickWorktree && (
-            <WorktreePicker project={selectedProject} value={worktree} onChange={onWorktreeChange} disabled={loading || creating} />
-          )}
-          {selectedProject?.worktree && (
-            <p className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
-              <WorktreeBadge project={selectedProject} projects={projects} />
-              <span>worktree on <span className="font-mono text-zinc-300">{selectedProject.worktree.branch}</span></span>
-            </p>
-          )}
-          {selectedProject && (
-            <p className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
-              {target && selectedProject.git ? (
-                <>
-                  <span className="min-w-0 truncate font-mono text-zinc-300" title={target.displayPath}>{target.displayPath}</span>
-                  <BranchBadge git={{ ...selectedProject.git, branch: target.branch, detached: false }} />
-                  {worktree.kind === "create" && <span>new branch and worktree, created on start</span>}
-                  {worktree.kind === "branch" && !worktree.path && <span>worktree created on start</span>}
-                </>
-              ) : (
-                <>
-                  <span className="min-w-0 truncate font-mono text-zinc-300" title={selectedProject.path}>{selectedProject.displayPath}</span>
-                  <BranchBadge git={selectedProject.git} />
-                </>
+          <fieldset disabled={loading || creating} className="mb-5">
+            <legend className="sr-only">Agent</legend>
+            <div className="flex justify-center gap-2">
+              {agents.map((agent) => (
+                <label key={agent.id} className="relative cursor-pointer">
+                  <input
+                    type="radio"
+                    name="new-session-agent"
+                    value={agent.id}
+                    checked={agent.id === selectedAgentId}
+                    onChange={() => onSelectAgent(agent.id)}
+                    className="peer sr-only"
+                  />
+                  <span className="flex items-center gap-2.5 rounded-full border border-transparent px-4 py-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground peer-checked:border-white/10 peer-checked:bg-white/5 peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-disabled:opacity-50">
+                    <AgentLogo agentId={agent.id} className="!size-4" />
+                    {agent.name}
+                  </span>
+                </label>
+              ))}
+              {agents.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {loading ? "Loading agents…" : "Agents unavailable"}
+                </p>
               )}
-              {selectedProject.exists === false && <span className="text-amber-400">This folder is missing on the host.</span>}
-            </p>
-          )}
-        </div>
+            </div>
+          </fieldset>
+          <ChatComposer
+            value={draft}
+            onChange={setDraft}
+            onSend={() => onCreate(draft)}
+            sending={creating}
+            disabled={!ready && !creating}
+            label="First message"
+            placeholder="What would you like to build?"
+            error={error}
+            context={
+              <ContextBar
+                cwd={target?.displayPath ?? project?.path}
+                displayCwd={target?.displayPath ?? project?.displayPath}
+                git={git}
+                note={
+                  project?.exists === false
+                    ? "Project folder is missing"
+                    : worktree.kind === "create"
+                      ? "A new branch and worktree will be created"
+                      : undefined
+                }
+              />
+            }
+          />
+          <div className="mt-5 text-center">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!ready}
+              onClick={() => onCreate()}
+              className="text-[11px] text-muted-foreground/80"
+            >
+              Start an empty conversation
+            </Button>
+          </div>
+        </>
       )}
-
-      <fieldset className="mt-4" disabled={loading || creating || agents.length === 0}>
-        <legend className="mb-2 text-[11px] uppercase tracking-wide text-zinc-500">agent</legend>
-        <div className="flex flex-wrap gap-2">
-          {agents.length === 0 && <span className="text-xs text-zinc-500">{loading ? "Loading agents…" : "Agents unavailable"}</span>}
-          {agents.map((agent) => (
-            <label key={agent.id} className={`cursor-pointer rounded-lg border px-3 py-1.5 text-sm ${agent.id === selectedAgentId ? "border-indigo-500 bg-indigo-950 text-indigo-100" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"}`}>
-              <input type="radio" name="new-session-agent" value={agent.id} checked={agent.id === selectedAgentId} onChange={() => onSelectAgent(agent.id)} className="sr-only" />
-              {agent.name}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
-      <button
-        type="button"
-        onClick={onCreate}
-        disabled={!canCreate}
-        className="mt-4 w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-40"
-      >
-        {creating ? "Creating session…" : `New session${selectedAgent ? ` with ${selectedAgent.name}` : ""}`}
-      </button>
-      {projects.length > 0 && !selectedProject && !loading && (
-        <p className="mt-2 text-xs text-zinc-500">Choose a project before starting a session.</p>
-      )}
-      {error && (
-        <p role="alert" className="mt-3 rounded bg-red-950/50 px-2 py-2 text-xs text-red-300">
+      {projects.length === 0 && error && (
+        <p role="alert" className="mt-4 text-center text-xs text-destructive">
           {error}
-          {missingFolder && <span className="mt-1 block text-red-200/80">Choose another project above, or add the folder again if it moved.</span>}
         </p>
       )}
     </section>

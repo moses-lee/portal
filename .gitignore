@@ -45,3 +45,7 @@ next-env.d.ts
 .sse.log
 .smoke-session
 *.tmp.mjs
+
+# browser test artifacts
+/test-results/
+/playwright-report/

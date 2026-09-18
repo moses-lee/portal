@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { Check, ShieldQuestion } from "lucide-react";
 import { useState } from "react";
 import type { PermissionOption } from "@agentclientprotocol/sdk";
 import type { PermissionBlock } from "@/lib/transcript";
@@ -9,8 +11,8 @@ export type { PermissionBlock, PermissionResponse } from "@/lib/transcript";
 const PREVIEW_LIMIT = 400;
 
 const optionClass: Record<PermissionOption["kind"], string> = {
-  allow_once: "bg-indigo-600 text-white hover:bg-indigo-500",
-  allow_always: "bg-emerald-700 text-white hover:bg-emerald-600",
+  allow_once: "bg-primary text-primary-foreground hover:bg-primary/90",
+  allow_always: "bg-white/5 text-foreground hover:bg-white/10",
   reject_once: "border border-zinc-600 text-zinc-300 hover:bg-zinc-800",
   reject_always: "border border-red-800 text-red-300 hover:bg-red-950/60",
 };
@@ -28,13 +30,22 @@ function RawInputPreview({ rawInput }: { rawInput: unknown }) {
   const [expanded, setExpanded] = useState(false);
   const full = formatInput(rawInput);
   const truncated = full.length > PREVIEW_LIMIT;
-  const shown = expanded || !truncated ? full : full.slice(0, PREVIEW_LIMIT) + "…";
+  const shown =
+    expanded || !truncated ? full : full.slice(0, PREVIEW_LIMIT) + "…";
   return (
     <div>
-      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-2 text-[11px] text-zinc-400">{shown}</pre>
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-2 text-[11px] text-zinc-400">
+        {shown}
+      </pre>
       {truncated && (
-        <button type="button" onClick={() => setExpanded((e) => !e)} className="mt-1 text-[11px] text-zinc-500 hover:text-zinc-300">
-          {expanded ? "Show less" : `Show all (${full.length.toLocaleString()} chars)`}
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          className="mt-1 text-[11px] text-zinc-500 hover:text-zinc-300"
+        >
+          {expanded
+            ? "Show less"
+            : `Show all (${full.length.toLocaleString()} chars)`}
         </button>
       )}
     </div>
@@ -57,7 +68,10 @@ function describeResponse(b: PermissionBlock) {
 }
 
 /** A permission request from the agent, rendered inline right after the tool call it concerns. */
-export default function PermissionCard({ b, onAnswer }: {
+export default function PermissionCard({
+  b,
+  onAnswer,
+}: {
   b: PermissionBlock;
   /** Resolves when the server accepted the answer; rejects with a message to show otherwise. */
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
@@ -74,7 +88,11 @@ export default function PermissionCard({ b, onAnswer }: {
     try {
       await onAnswer(b.requestId, optionId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not send the answer. Try again.");
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Could not send the answer. Try again.",
+      );
     } finally {
       setInFlight(false);
     }
@@ -84,20 +102,30 @@ export default function PermissionCard({ b, onAnswer }: {
     <div
       role="group"
       aria-label={`Permission request: ${title}`}
-      className={`my-1 rounded-lg border text-sm ${answered ? "border-zinc-800 bg-zinc-900/40" : "border-amber-700/60 bg-amber-950/20"}`}
+      className={`my-1 rounded-2xl border text-sm ${answered ? "border-white/5 bg-white/[.015]" : "border-amber-300/20 bg-amber-300/[.035]"}`}
     >
-      <div className="flex items-center gap-2 px-3 py-2 font-mono text-xs text-zinc-300">
-        <span className={answered ? "text-zinc-600" : "text-amber-400"} aria-hidden="true">{answered ? "●" : "?"}</span>
-        <span className="text-zinc-500">{b.toolCall.kind ?? "tool"}</span>
-        <span className="truncate">{title}</span>
-        <span className="ml-auto shrink-0 text-[11px] text-zinc-500">{answered ? describeResponse(b) : "permission"}</span>
+      <div className="flex items-start gap-3 p-4">
+        {answered ? (
+          <Check className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-200" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="mb-1 text-xs font-medium text-muted-foreground">
+            {answered ? describeResponse(b) : "Your approval is needed"}
+          </p>
+          <p className="break-words text-sm leading-relaxed">{title}</p>
+        </div>
       </div>
       {!answered && (
-        <div className="space-y-2 border-t border-zinc-800 px-3 py-2">
-          {b.toolCall.rawInput !== undefined && b.toolCall.rawInput !== null && <RawInputPreview rawInput={b.toolCall.rawInput} />}
+        <div className="space-y-3 border-t border-white/5 p-4">
+          {b.toolCall.rawInput !== undefined &&
+            b.toolCall.rawInput !== null && (
+              <RawInputPreview rawInput={b.toolCall.rawInput} />
+            )}
           <div className="flex flex-wrap items-center gap-2">
             {b.options.map((o) => (
-              <button
+              <Button
                 key={o.optionId}
                 type="button"
                 disabled={inFlight}
@@ -105,13 +133,17 @@ export default function PermissionCard({ b, onAnswer }: {
                 className={`rounded px-3 py-1 text-xs font-medium disabled:opacity-50 ${optionClass[o.kind] ?? optionClass.reject_once}`}
               >
                 {o.name}
-              </button>
+              </Button>
             ))}
             <span className="text-[11px] text-zinc-500" aria-live="polite">
               {inFlight ? "Sending…" : "Waiting for your answer"}
             </span>
           </div>
-          {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+          {error && (
+            <p role="alert" className="text-xs text-red-300">
+              {error}
+            </p>
+          )}
         </div>
       )}
     </div>
