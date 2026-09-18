@@ -110,7 +110,9 @@ export default function SessionControls({
     !!modes?.availableModes.length &&
     !options.some((option) => option.category === "mode");
   const summaries = options
-    .filter((option) => ["model", "mode"].includes(option.category ?? ""))
+    .filter((option) =>
+      ["model", "mode", "thought_level"].includes(option.category ?? ""),
+    )
     .flatMap((option) => {
       if (option.type !== "select") return [];
       const choices = isGrouped(option.options)
