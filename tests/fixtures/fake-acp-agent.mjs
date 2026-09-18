@@ -49,7 +49,7 @@ function mode() {
   return JSON.parse(readFileSync(configPath, "utf8"))[agentId];
 }
 
-log({ event: "spawn" });
+log({ event: "spawn", env: { NODE_ENV: process.env.NODE_ENV ?? null, TURBOPACK: process.env.TURBOPACK ?? null, PORTAL_KEEP: process.env.PORTAL_KEEP ?? null } });
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   log({ event: "message", message });

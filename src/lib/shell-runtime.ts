@@ -4,6 +4,7 @@ import path from "node:path";
 import * as pty from "node-pty";
 import xterm from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
+import { childEnv } from "./child-env.ts";
 import { displayPath, readGitInfo, sameGitInfo } from "./git-info.ts";
 import { readShellCwd } from "./shell-cwd.ts";
 import type { ShellEvent, ShellState } from "./shell-types.ts";
@@ -84,7 +85,7 @@ export function createShellRuntime({
       if (!statSync(state.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error("The directory no longer exists.");
       current = pty.spawn(shell, args, {
         name: "xterm-256color", cols: state.cols, rows: state.rows, cwd: state.cwd,
-        env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+        env: { ...childEnv(env), TERM: "xterm-256color", COLORTERM: "truecolor" },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

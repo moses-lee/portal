@@ -197,3 +197,22 @@ test("a missing launch directory fails start with a readable error and allows a 
   mkdirSync(cwd);
   assert.equal(runtime.start(null).status, "running");
 });
+
+test("the shell does not inherit the dev server's Next variables", native, async (t) => {
+  const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-shell-")));
+  const runtime = bashRuntime(cwd, {
+    env: {
+      ...process.env, PS1: "PORTAL_TEST> ", HISTFILE: "/dev/null",
+      NODE_ENV: "development", TURBOPACK: "1", NEXT_DEPLOYMENT_ID: "", __NEXT_DEV_SERVER: "1", PORTAL_KEEP: "yes",
+    },
+  });
+  const events = [];
+  const unsubscribe = runtime.subscribe((event) => events.push(event), true);
+  t.after(() => { unsubscribe(); runtime.dispose(); rmSync(cwd, { recursive: true, force: true }); });
+  const output = () => events.filter((event) => event.type === "output").map((event) => event.data).join("");
+  runtime.start(null);
+  await until(() => output().includes("PORTAL_TEST>"), "shell prompt");
+  runtime.write(runtime.getState().id, "printf 'vars=[%s|%s|%s|%s|%s]\\n' \"${NODE_ENV-unset}\" \"${TURBOPACK-unset}\" \"${NEXT_DEPLOYMENT_ID-unset}\" \"${__NEXT_DEV_SERVER-unset}\" \"$PORTAL_KEEP\"\r");
+  await until(() => /vars=\[[^\]]*\]/.test(output().replace(/printf[^\n]*\n/, "")), "printed variables");
+  assert.match(output().replace(/printf[^\n]*\n/, ""), /vars=\[unset\|unset\|unset\|unset\|yes\]/);
+});

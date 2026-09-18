@@ -843,3 +843,19 @@ test("list subscribers hear sessions being created, working, waiting on permissi
   await runtime.createSession(cwd, "codex");
   assert.deepEqual(changes.at(-1), { type: "deleted", id: session.id });
 });
+
+test("agent processes do not inherit the dev server's Next variables", async (t) => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, TURBOPACK: process.env.TURBOPACK, PORTAL_KEEP: process.env.PORTAL_KEEP };
+  process.env.NODE_ENV = "development";
+  process.env.TURBOPACK = "1";
+  process.env.PORTAL_KEEP = "yes";
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const { runtime, starts } = setup(t);
+  await runtime.createSession(process.cwd(), "claude");
+  assert.deepEqual(starts("claude").map((entry) => entry.env), [{ NODE_ENV: null, TURBOPACK: null, PORTAL_KEEP: "yes" }]);
+});

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentDefinition } from "./agents";
+import { childEnv } from "./child-env.ts";
 import { coalesceTextChunks, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "./session-store.ts";
 import type { EventPage, PortalEvent, SessionLink, SessionListPatch, SessionMeta, SessionState, StoredEvent } from "./types";
@@ -266,7 +267,7 @@ export function createAcpRuntime(
     try {
       proc = spawn(agent.command, agent.args, {
         cwd: process.cwd(),
-        env: { ...process.env, ...agent.env },
+        env: { ...childEnv(), ...agent.env },
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
