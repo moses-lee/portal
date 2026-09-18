@@ -10,6 +10,7 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
+import type { GithubPanelProps } from "./GithubPanel";
 import type { SessionSummary } from "@/lib/types";
 
 export default function GithubInspector({
@@ -18,12 +19,14 @@ export default function GithubInspector({
   projectId,
   projectRemoved,
   session,
+  onGitAction,
 }: {
   open: boolean;
   onClose: () => void;
   projectId: string | null;
   projectRemoved: boolean;
   session?: SessionSummary;
+  onGitAction?: GithubPanelProps["onGitAction"];
 }) {
   const desktop = useMediaQuery("(min-width: 1280px)");
   const panel = (
@@ -34,6 +37,15 @@ export default function GithubInspector({
       collapsed={false}
       onToggle={onClose}
       visible={open}
+      onGitAction={
+        // The sheet covers the composer the action just filled; get out of its way.
+        desktop || !onGitAction
+          ? onGitAction
+          : (kind, summary) => {
+              onGitAction(kind, summary);
+              onClose();
+            }
+      }
     />
   );
   if (!desktop)

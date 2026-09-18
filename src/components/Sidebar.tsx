@@ -11,12 +11,14 @@ import {
   PinOff,
   Plus,
   Search,
+  Settings,
   SquarePen,
   Trash2,
   X,
 } from "lucide-react";
 import AgentLogo from "./AgentLogo";
 import IconButton from "./IconButton";
+import PortalMark from "./PortalMark";
 import { RenameField, RemoveConfirm } from "./ProjectActions";
 import { useMediaQuery } from "./useMediaQuery";
 import { usePreference } from "./usePreference";
@@ -61,6 +63,7 @@ export type SidebarProps = {
   onNewSession: (projectId: string) => void;
   onHome: () => void;
   onAddProject: () => void;
+  onOpenSettings: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
   onRemoveProject: (
     id: string,
@@ -302,12 +305,7 @@ function SidebarContent(props: SidebarProps) {
   return (
     <div className="sidebar-content">
       <div className="mb-6 flex items-center gap-2 px-2">
-        <span
-          className="flex size-7 items-center justify-center rounded-full border border-white/20 bg-white/5"
-          aria-hidden="true"
-        >
-          <span className="size-3.5 rounded-full border-2 border-indigo-200/75 shadow-[0_0_12px_#a5b4fc30]" />
-        </span>
+        <PortalMark />
         <span className="flex-1 text-[15px] font-semibold tracking-[-.03em]">
           Portal
         </span>
@@ -557,11 +555,11 @@ function SidebarContent(props: SidebarProps) {
       </nav>
       <Button
         variant="ghost"
-        onClick={onAddProject}
+        onClick={props.onOpenSettings}
         className="mt-3 h-10 justify-start gap-2 border-t border-white/5 rounded-none px-3 text-xs text-muted-foreground"
       >
-        <Plus className="size-3.5" />
-        Add project
+        <Settings className="size-3.5" />
+        Settings
       </Button>
     </div>
   );

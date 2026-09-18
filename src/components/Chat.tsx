@@ -9,12 +9,16 @@ import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import AddProjectDialog from "./AddProjectDialog";
+import SettingsDialog from "./SettingsDialog";
 import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
+import { useSettings } from "./useSettings";
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
+import { buildGitActionPrompt } from "@/lib/git-action-prompt";
 import { pinnedFirst } from "@/lib/pins";
 import { createHistoryCache } from "@/lib/history-cache";
+import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
   applyConfigChange,
   latestStateForAgent,
@@ -24,6 +28,7 @@ import { sessionIdFromPath, sessionPath } from "@/lib/session-routes";
 import type {
   AgentInfo,
   EventPage,
+  GithubSummary,
   ProjectSummary,
   SessionListEvent,
   SessionState,
@@ -117,6 +122,7 @@ export default function Chat() {
     state: SessionState;
   } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
   const [showSidebar, setShowSidebar] = useState(false);
@@ -130,6 +136,8 @@ export default function Chat() {
     "false",
   );
   const showGithub = githubPreference === "true";
+  /** Portal preferences; the source control panel's actions read their prompts from here. */
+  const { settings } = useSettings();
   const [initialSend, setInitialSend] = useState<{
     sessionId: string;
     pending: boolean;
@@ -557,6 +565,22 @@ export default function Chat() {
     !!activeSession &&
     activeSession.projectId !== "" &&
     !githubProjectId;
+
+  /**
+   * A source control panel action: draft its prompt on the start page for the panel's project, so
+   * the user picks the agent and model and sends. Nothing is created until they do.
+   */
+  const startGitAction = (kind: GitActionKind, summary: GithubSummary) => {
+    if (!githubProjectId) return;
+    const promptText = (settings ?? defaultSettings).gitActions.prompts[kind];
+    const text = buildGitActionPrompt(kind, summary, promptText);
+    selectProject(githubProjectId);
+    // The start page begins at Original again; the draft replaces whatever was there.
+    setWorktreePick(null);
+    writeDraft("new", text);
+    if (active) pushPath("/");
+    setShowSidebar(false);
+  };
   return (
     <div className="portal-shell">
       <Sidebar
@@ -572,6 +596,7 @@ export default function Chat() {
         onDeleteSession={deleteSession}
         onNewSession={startIn}
         onAddProject={() => setShowAddProject(true)}
+        onOpenSettings={() => setShowSettings(true)}
         onRenameProject={async (id, name) => {
           await renameProject(id, name);
         }}
@@ -589,6 +614,10 @@ export default function Chat() {
           const project = await addProject(input);
           selectProject(project.id);
         }}
+      />
+      <SettingsDialog
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
       />
       {/* Keyed by session so switching remounts the pane with fresh history; terminals keep running server-side. */}
       <SessionPane
@@ -644,6 +673,7 @@ export default function Chat() {
           projectId={githubProjectId}
           projectRemoved={githubProjectRemoved}
           session={activeSession}
+          onGitAction={startGitAction}
         />
       )}
     </div>

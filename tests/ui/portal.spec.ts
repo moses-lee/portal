@@ -1,5 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { emit, events, firstTitle, secondTitle, setupPortal } from "./fixtures";
+import {
+  emit,
+  events,
+  failingGithubSummary,
+  firstTitle,
+  secondTitle,
+  setupPortal,
+} from "./fixtures";
+import { buildGitActionPrompt } from "../../src/lib/git-action-prompt";
+import { defaultSettings } from "../../src/lib/settings";
 import type { StoredEvent } from "../../src/lib/types";
 
 test("long titles retain space and GitHub loads only when opened", async ({
@@ -542,4 +551,119 @@ test("sidebar rows are compact with single-line titles", async ({ page }) => {
   expect(box.height).toBeLessThan(50);
   const title = row.locator(".sidebar-title");
   expect(await title.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+});
+
+test("git action prompts persist across reloads and reset to their default", async ({
+  page,
+}) => {
+  await setupPortal(page, { realSettings: true });
+  await page.goto("/sessions/s1");
+  const openSettings = () =>
+    page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const field = dialog.getByRole("textbox", { name: "Failing checks" });
+  const reset = dialog.getByRole("button", { name: "Reset to default" });
+  const defaultPrompt = defaultSettings.gitActions.prompts.checks;
+  await openSettings();
+  await expect(
+    dialog.getByRole("heading", { name: "Git actions" }),
+  ).toBeVisible();
+  await expect(field).toHaveValue(defaultPrompt);
+  await expect(reset).toHaveCount(0);
+  // Unique so a stale settings file from another run can never satisfy the assertions.
+  const custom = `Find out why the checks fail (${Date.now()})`;
+  await field.fill(custom);
+  await field.press("Tab");
+  await expect(dialog.getByRole("status")).toHaveText("Saved");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await page.reload();
+  await openSettings();
+  await expect(field).toHaveValue(custom);
+  await expect(reset).toBeVisible();
+  await reset.click();
+  await expect(field).toHaveValue(defaultPrompt);
+  await expect(reset).toHaveCount(0);
+  // Leave the server's settings as this test found them.
+  await page.reload();
+  await openSettings();
+  await expect(field).toHaveValue(defaultPrompt);
+});
+
+test("source control actions draft a prompt on the start page without creating a session", async ({
+  page,
+}, info) => {
+  const fixture = await setupPortal(page, { github: failingGithubSummary });
+  await page.goto("/sessions/s3");
+  await expect(
+    page.getByRole("combobox", { name: "Message Codex" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Open GitHub inspector" }).click();
+  const inspector = page.getByRole("complementary", {
+    name: "GitHub inspector",
+  });
+  const action = (name: string) => inspector.getByRole("button", { name });
+  const checks = action("Investigate failing checks in a new conversation");
+  await expect(checks).toBeVisible();
+  // The expand toggle is the action button's sibling, not its parent, and still works.
+  const toggle = inspector.getByRole("button", {
+    name: /Checks: 1 passing, 1 failing/,
+  });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    inspector.getByRole("link", { name: "Unit tests" }),
+  ).toBeVisible();
+  await inspector.screenshot({
+    animations: "disabled",
+    path: info.outputPath("git-actions.png"),
+  });
+  const composer = page.getByRole("textbox", { name: "First message" });
+  const prompts = defaultSettings.gitActions.prompts;
+
+  await checks.click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("combobox", { name: "Project", exact: true }),
+  ).toContainText("portal");
+  const checksPrompt = buildGitActionPrompt(
+    "checks",
+    failingGithubSummary,
+    prompts.checks,
+  );
+  expect(checksPrompt).toContain(prompts.checks);
+  expect(checksPrompt).toContain(
+    "PR #42: https://github.com/example/portal/pull/42",
+  );
+  expect(checksPrompt).toContain(
+    "- Unit tests: https://github.com/example/portal/actions/runs/2",
+  );
+  expect(checksPrompt).not.toContain("Lint");
+  await expect(composer).toHaveValue(checksPrompt);
+
+  // The inspector stays open on the start page, so the other actions are a click away.
+  await action("Investigate merge conflicts in a new conversation").click();
+  const conflictsPrompt = buildGitActionPrompt(
+    "conflicts",
+    failingGithubSummary,
+    prompts.conflicts,
+  );
+  expect(conflictsPrompt).toContain("- src/a.ts");
+  await expect(composer).toHaveValue(conflictsPrompt);
+
+  await action("Summarize review items in a new conversation").click();
+  const reviewPrompt = buildGitActionPrompt(
+    "review",
+    failingGithubSummary,
+    prompts.review,
+  );
+  expect(reviewPrompt).toContain("2 unresolved threads, 3 comments");
+  await expect(composer).toHaveValue(reviewPrompt);
+
+  expect(
+    fixture.requests.filter(
+      (request) =>
+        request.path === "/api/sessions" && request.method === "POST",
+    ),
+  ).toHaveLength(0);
 });

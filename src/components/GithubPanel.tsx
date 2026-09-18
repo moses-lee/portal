@@ -2,8 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { copyText } from "@/lib/clipboard";
+import { gitActionAvailable } from "@/lib/git-action-prompt";
 import { relativeAge } from "@/lib/relative-age";
+import PortalMark from "./PortalMark";
 import { useGithubSummary } from "./useGithubSummary";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type { GitActionKind } from "@/lib/settings";
 import type {
   CheckState,
   CheckSummary,
@@ -83,7 +91,62 @@ const stateChipClass: Record<"open" | "draft" | "merged" | "closed", string> = {
   closed: "bg-red-900/50 text-red-300",
 };
 
-function PullBlock({ pull }: { pull: PullSummary }) {
+/** The "start a conversation about this" handler; the panel only draws the buttons when it is given. */
+type OnGitAction = (kind: GitActionKind, summary: GithubSummary) => void;
+
+const gitActionLabels: Record<GitActionKind, string> = {
+  checks: "Investigate failing checks in a new conversation",
+  conflicts: "Investigate merge conflicts in a new conversation",
+  review: "Summarize review items in a new conversation",
+};
+
+/**
+ * The Portal mark as a button that drafts a conversation about `kind`; nothing when there is no
+ * handler or the summary has nothing for the action to look at.
+ */
+function GitActionButton({
+  kind,
+  summary,
+  onGitAction,
+  className = "",
+}: {
+  kind: GitActionKind;
+  summary: GithubSummary;
+  onGitAction?: OnGitAction;
+  className?: string;
+}) {
+  if (!onGitAction || !gitActionAvailable(kind, summary)) return null;
+  const label = gitActionLabels[kind];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={() => onGitAction(kind, summary)}
+          className={`${iconButtonClass} inline-flex items-center ${className}`}
+        >
+          {/* Ring and glow scaled down with the mark for the 12px rows. */}
+          <PortalMark
+            className="size-4"
+            ringClassName="border shadow-[0_0_6px_#a5b4fc30]"
+          />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function PullBlock({
+  pull,
+  summary,
+  onGitAction,
+}: {
+  pull: PullSummary;
+  summary: GithubSummary;
+  onGitAction?: OnGitAction;
+}) {
   const state = pull.state === "open" && pull.draft ? "draft" : pull.state;
   const review =
     pull.reviewDecision === "approved"
@@ -129,6 +192,12 @@ function PullBlock({ pull }: { pull: PullSummary }) {
             {pull.comments} {pull.comments === 1 ? "comment" : "comments"}
           </span>
         )}
+        <GitActionButton
+          kind="review"
+          summary={summary}
+          onGitAction={onGitAction}
+          className="ml-auto"
+        />
       </div>
     </div>
   );
@@ -136,30 +205,41 @@ function PullBlock({ pull }: { pull: PullSummary }) {
 
 function ChecksLine({
   checks,
+  summary,
   open,
   onToggle,
+  onGitAction,
 }: {
   checks: CheckSummary;
+  summary: GithubSummary;
   open: boolean;
   onToggle: () => void;
+  onGitAction?: OnGitAction;
 }) {
   return (
     <div className="px-1.5">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        title={open ? "Hide the checks" : "Show the checks"}
-        className="flex w-full items-center gap-1.5 rounded py-0.5 text-left text-xs text-zinc-300 hover:bg-zinc-900"
-      >
-        <CheckDot state={checks.state} title={`Checks ${checks.state}`} />
-        <span className="min-w-0 flex-1 truncate">
-          Checks: {checksLabel(checks)}
-        </span>
-        <span aria-hidden="true" className="text-muted-foreground">
-          {open ? "▾" : "▸"}
-        </span>
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          title={open ? "Hide the checks" : "Show the checks"}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded py-0.5 text-left text-xs text-zinc-300 hover:bg-zinc-900"
+        >
+          <CheckDot state={checks.state} title={`Checks ${checks.state}`} />
+          <span className="min-w-0 flex-1 truncate">
+            Checks: {checksLabel(checks)}
+          </span>
+          <span aria-hidden="true" className="text-muted-foreground">
+            {open ? "▾" : "▸"}
+          </span>
+        </button>
+        <GitActionButton
+          kind="checks"
+          summary={summary}
+          onGitAction={onGitAction}
+        />
+      </div>
       {open && (
         <ul className="mb-1 space-y-0.5 pl-3.5 text-xs">
           {checks.checks.map((check, i) => (
@@ -192,12 +272,16 @@ function ChecksLine({
 
 function ConflictsLine({
   conflicts,
+  summary,
   open,
   onToggle,
+  onGitAction,
 }: {
   conflicts: ConflictSummary;
+  summary: GithubSummary;
   open: boolean;
   onToggle: () => void;
+  onGitAction?: OnGitAction;
 }) {
   if (conflicts.status === "clean") {
     return (
@@ -221,16 +305,24 @@ function ConflictsLine({
   }
   return (
     <div className="px-1.5 py-0.5">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        title={`${conflicts.files.length} conflicting ${conflicts.files.length === 1 ? "file" : "files"}, checked ${conflicts.source === "local" ? "locally" : "by GitHub"}`}
-        className={`${chipClass} gap-1 bg-red-900/50 py-0.5 text-xs text-red-300 hover:bg-red-900/70`}
-      >
-        <span aria-hidden="true">{open ? "▾" : "▸"}</span>
-        Conflicts with {conflicts.base}
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          title={`${conflicts.files.length} conflicting ${conflicts.files.length === 1 ? "file" : "files"}, checked ${conflicts.source === "local" ? "locally" : "by GitHub"}`}
+          className={`${chipClass} min-w-0 gap-1 bg-red-900/50 py-0.5 text-xs text-red-300 hover:bg-red-900/70`}
+        >
+          <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+          <span className="truncate">Conflicts with {conflicts.base}</span>
+        </button>
+        <GitActionButton
+          kind="conflicts"
+          summary={summary}
+          onGitAction={onGitAction}
+          className="ml-auto"
+        />
+      </div>
       {open && (
         <ul className="mt-1 space-y-0.5 pl-3.5 font-mono text-xs text-zinc-400">
           {conflicts.files.length === 0 && (
@@ -394,6 +486,11 @@ export type GithubPanelProps = {
   onToggle: () => void;
   /** Polling runs only while true (and the panel is expanded); the sidebar passes its own visibility. */
   visible: boolean;
+  /**
+   * Start a conversation about the PR's failing checks, conflicts, or review items. The buttons
+   * appear only when this is given and the summary has something for the action to look at.
+   */
+  onGitAction?: (kind: GitActionKind, summary: GithubSummary) => void;
 };
 
 /**
@@ -407,6 +504,7 @@ export default function GithubPanel({
   collapsed,
   onToggle,
   visible,
+  onGitAction,
 }: GithubPanelProps) {
   const {
     summary,
@@ -579,7 +677,11 @@ export default function GithubPanel({
               {summary && (
                 <>
                   {summary.pull ? (
-                    <PullBlock pull={summary.pull} />
+                    <PullBlock
+                      pull={summary.pull}
+                      summary={summary}
+                      onGitAction={onGitAction}
+                    />
                   ) : summary.pullError ? (
                     <p className="px-1.5 py-1 text-muted-foreground">
                       PR: {summary.pullError}
@@ -592,15 +694,19 @@ export default function GithubPanel({
                   {summary.pull?.checks && (
                     <ChecksLine
                       checks={summary.pull.checks}
+                      summary={summary}
                       open={showChecks}
                       onToggle={() => setShowChecks((v) => !v)}
+                      onGitAction={onGitAction}
                     />
                   )}
                   {summary.conflicts && (
                     <ConflictsLine
                       conflicts={summary.conflicts}
+                      summary={summary}
                       open={showConflicts}
                       onToggle={() => setShowConflicts((v) => !v)}
+                      onGitAction={onGitAction}
                     />
                   )}
                   <ul aria-label="Commits" className="mt-5 px-1.5">

@@ -4,6 +4,7 @@ import { FolderGit2, Plus } from "lucide-react";
 import WorktreePicker, { type WorktreeChoice } from "./WorktreePicker";
 import ContextBar from "./ContextBar";
 import AgentLogo from "./AgentLogo";
+import PortalMark from "./PortalMark";
 import ChatComposer from "./ChatComposer";
 import SessionControls from "./SessionControls";
 import { useDraft } from "./useDraft";
@@ -76,12 +77,10 @@ export default function StartPage({
       className="mx-auto flex w-full max-w-[780px] flex-col px-6 pb-12 pt-[clamp(48px,13vh,160px)] sm:px-10"
     >
       <div className="mb-9 text-center">
-        <span
-          className="glass mx-auto mb-6 flex size-14 items-center justify-center rounded-[20px]"
-          aria-hidden="true"
-        >
-          <span className="size-7 rounded-full border-[3px] border-indigo-200/70 shadow-[0_0_24px_#a5b4fc25]" />
-        </span>
+        <PortalMark
+          className="glass mx-auto mb-6 size-14 rounded-[20px]"
+          ringClassName="border-[3px] border-indigo-200/70 shadow-[0_0_24px_#a5b4fc25]"
+        />
         <h2
           id="new-session-title"
           className="text-[clamp(26px,3vw,34px)] font-medium tracking-[-.045em]"

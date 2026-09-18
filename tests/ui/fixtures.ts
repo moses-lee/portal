@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
+import { applySettingsPatch, defaultSettings } from "../../src/lib/settings";
 import type {
+  GithubSummary,
   ProjectSummary,
   SessionSummary,
   StoredEvent,
@@ -180,6 +182,86 @@ export const events: StoredEvent[] = raw.map((event, seq) => ({
   ts: now,
 }));
 
+/** What the source control panel shows by default: an approved PR with no checks that merges cleanly. */
+export const githubSummary: GithubSummary = {
+  branch: worktree.git!.branch,
+  detached: false,
+  defaultBranch: "main",
+  upstream: "origin/feature/improve-chat-experience",
+  ahead: 2,
+  behind: 0,
+  fetchedAt: now,
+  fetchError: null,
+  repoUrl: "https://github.com/example/portal",
+  logBase: "origin/main",
+  commits: [
+    {
+      sha: "abc123",
+      short: "abc123",
+      subject: "Make conversations easier to read",
+      author: "Developer",
+      committedAt: now,
+      head: true,
+      remoteHead: false,
+      base: false,
+    },
+  ],
+  cursor: null,
+  pull: {
+    number: 42,
+    title: "Improve the chat experience and simplify workspace navigation",
+    author: "developer",
+    url: "https://github.com/example/portal/pull/42",
+    state: "open",
+    draft: false,
+    baseBranch: "main",
+    headSha: "abc123",
+    reviewDecision: "approved",
+    unresolvedThreads: 0,
+    comments: 2,
+    checks: null,
+    mergeable: "mergeable",
+  },
+  pullError: null,
+  conflicts: { status: "clean", base: "main", source: "local" },
+  at: now,
+};
+
+/** The same PR in trouble: a failing check, conflicts with main, and open review threads; every git action applies. */
+export const failingGithubSummary: GithubSummary = {
+  ...githubSummary,
+  pull: {
+    ...githubSummary.pull!,
+    unresolvedThreads: 2,
+    comments: 3,
+    checks: {
+      state: "failing",
+      passing: 1,
+      failing: 1,
+      pending: 0,
+      checks: [
+        {
+          name: "Lint",
+          state: "passing",
+          url: "https://github.com/example/portal/actions/runs/1",
+        },
+        {
+          name: "Unit tests",
+          state: "failing",
+          url: "https://github.com/example/portal/actions/runs/2",
+        },
+      ],
+    },
+    mergeable: "conflicting",
+  },
+  conflicts: {
+    status: "conflicts",
+    base: "main",
+    files: ["src/a.ts"],
+    source: "local",
+  },
+};
+
 declare global {
   interface Window {
     __portalEmit: (
@@ -211,6 +293,13 @@ export async function setupPortal(
     history?: StoredEvent[];
     hasMore?: boolean;
     olderDelay?: number;
+    /** What `GET /api/projects/<id>/github` answers; defaults to `githubSummary`. */
+    github?: GithubSummary;
+    /**
+     * Let `/api/settings` reach the test server (isolated by its temp PORTAL_HOME) instead of
+     * answering with the defaults, for tests of persistence itself.
+     */
+    realSettings?: boolean;
   } = {},
 ) {
   const currentSessions = structuredClone(sessions);
@@ -282,6 +371,16 @@ export async function setupPortal(
         contentType: "application/json",
         body: JSON.stringify(body),
       });
+    if (path === "/api/settings") {
+      if (options.realSettings) return route.fallback();
+      // Parallel tests share the server's settings file; the defaults keep them independent of each other.
+      return json({
+        settings:
+          method === "PATCH"
+            ? applySettingsPatch(defaultSettings, body)
+            : defaultSettings,
+      });
+    }
     if (path === "/api/agents")
       return json({
         agents: [
@@ -404,52 +503,7 @@ export async function setupPortal(
         repoWorktreesDir: "~/.portal/worktrees/portal",
       });
     if (path.endsWith("/github"))
-      return json({
-        summary: {
-          branch: worktree.git!.branch,
-          detached: false,
-          defaultBranch: "main",
-          upstream: "origin/feature/improve-chat-experience",
-          ahead: 2,
-          behind: 0,
-          fetchedAt: now,
-          fetchError: null,
-          repoUrl: "https://github.com/example/portal",
-          logBase: "origin/main",
-          commits: [
-            {
-              sha: "abc123",
-              short: "abc123",
-              subject: "Make conversations easier to read",
-              author: "Developer",
-              committedAt: now,
-              head: true,
-              remoteHead: false,
-              base: false,
-            },
-          ],
-          cursor: null,
-          pull: {
-            number: 42,
-            title:
-              "Improve the chat experience and simplify workspace navigation",
-            author: "developer",
-            url: "https://github.com/example/portal/pull/42",
-            state: "open",
-            draft: false,
-            baseBranch: "main",
-            headSha: "abc123",
-            reviewDecision: "approved",
-            unresolvedThreads: 0,
-            comments: 2,
-            checks: null,
-            mergeable: "mergeable",
-          },
-          pullError: null,
-          conflicts: { status: "clean", base: "main", source: "local" },
-          at: now,
-        },
-      });
+      return json({ summary: options.github ?? githubSummary });
     if (path.endsWith("/terminals")) return json({ terminals: [] });
     if (path.startsWith("/api/sessions/") && method === "GET")
       return json(
