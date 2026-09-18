@@ -6,9 +6,15 @@ import * as acp from "@agentclientprotocol/sdk";
 import type { AgentDefinition } from "./agents";
 import { readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "./session-store.ts";
-import type { EventPage, PortalEvent, SessionLink, SessionMeta, SessionState, StoredEvent } from "./types";
+import type { EventPage, PortalEvent, SessionLink, SessionListPatch, SessionMeta, SessionState, StoredEvent } from "./types";
 
-export type Session = SessionMeta & {
+/** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
+export type SessionListChange =
+  | { type: "created"; session: SessionMeta }
+  | { type: "updated"; id: string; patch: SessionListPatch }
+  | { type: "deleted"; id: string };
+
+export type Session = Omit<SessionMeta, "awaitingPermission"> & {
   /** The most recent events, oldest first; `eventBase` is the seq of `events[0]`. Older events live in the store. */
   events: PortalEvent[];
   /** Epoch ms timestamps parallel to `events`. */
@@ -84,6 +90,12 @@ function agentError(agent: AgentDefinition, action: string, error: unknown) {
   return new Error(`${agent.name} ${action}: ${detail}${hint ? `. ${hint}` : ""}`);
 }
 
+/** The session's browser-facing metadata, without the runtime's own bookkeeping. */
+export function toMeta(session: Session): SessionMeta {
+  const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, link, state } = session;
+  return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, awaitingPermission: session.pendingPermissions.size > 0, link, state };
+}
+
 /**
  * A turn is open when the most recent turn marker is its start: `turn_end` and `error` close a
  * turn, while updates such as usage reports may trail either. Returns null when `tail` holds no
@@ -120,7 +132,29 @@ export function createAcpRuntime(
   const knownCapabilities = new Map<string, acp.AgentCapabilities>();
   // Open permission prompts by request ID. Answered by any viewer, or cancelled when the turn ends.
   const pending = new Map<string, PendingPermission>();
+  const listListeners = new Set<(change: SessionListChange) => void>();
   let disposed = false;
+
+  function toListPatch(session: Session): SessionListPatch {
+    const { busy, link, title, lastActiveAt } = session;
+    return { busy, awaitingPermission: session.pendingPermissions.size > 0, link, title, lastActiveAt };
+  }
+
+  function notifyList(change: SessionListChange) {
+    for (const listener of listListeners) listener(change);
+  }
+
+  /** Tell list subscribers about a change to a session's busy, permission, link, title, or activity fields. */
+  function announce(session: Session) {
+    if (!current(session)) return;
+    notifyList({ type: "updated", id: session.id, patch: toListPatch(session) });
+  }
+
+  /** Subscribe to session list changes; returns the unsubscribe function. */
+  function onSessionsChange(listener: (change: SessionListChange) => void): () => void {
+    listListeners.add(listener);
+    return () => { listListeners.delete(listener); };
+  }
 
   function toRecord(session: Session): SessionRecord {
     const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state } = session;
@@ -171,6 +205,7 @@ export function createAcpRuntime(
   function setLink(session: Session, link: SessionLink) {
     session.link = link;
     for (const listener of session.linkListeners) listener(link);
+    announce(session);
   }
 
   function settlePermission(requestId: string, outcome: acp.RequestPermissionOutcome) {
@@ -178,6 +213,7 @@ export function createAcpRuntime(
     if (!request) return;
     pending.delete(requestId);
     request.session.pendingPermissions.delete(requestId);
+    announce(request.session);
     if (outcome.outcome === "selected") {
       const option = request.options.find((option) => option.optionId === outcome.optionId);
       emit(request.session, {
@@ -254,6 +290,7 @@ export function createAcpRuntime(
           pending.set(requestId, { session, options: params.options, resolve });
           session.pendingPermissions.add(requestId);
           emit(session, { type: "permission_request", requestId, toolCall: params.toolCall, options: params.options });
+          announce(session);
         });
       })
       .onNotification(acp.methods.client.session.update, ({ params }) => {
@@ -279,6 +316,7 @@ export function createAcpRuntime(
               session.title = update.title.trim();
               persistMeta(session);
               for (const listener of session.linkListeners) listener(session.link);
+              announce(session);
             }
             return;
           default:
@@ -411,9 +449,7 @@ export function createAcpRuntime(
 
   function listSessions(): SessionMeta[] {
     return [...sessions.values()]
-      .map(({ id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, link, state }) => ({
-        id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, link, state,
-      }))
+      .map(toMeta)
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt || b.createdAt - a.createdAt);
   }
 
@@ -459,6 +495,7 @@ export function createAcpRuntime(
       instance.sessions.delete(response.sessionId);
       throw new Error(`Could not save the new session: ${errorMessage(error)}`);
     }
+    notifyList({ type: "created", session: toMeta(session) });
     return session;
   }
 
@@ -535,6 +572,7 @@ export function createAcpRuntime(
     session.lastActiveAt = Date.now();
     if (session.title === null) session.title = titleFrom(text) || null;
     persistMeta(session);
+    announce(session);
     emit(session, { type: "user", text });
     emit(session, { type: "turn_start" });
 
@@ -547,11 +585,13 @@ export function createAcpRuntime(
       session.busy = false;
       cancelPermissions(session);
       emit(session, { type: "turn_end", stopReason: response.stopReason });
+      announce(session);
     }).catch((error: unknown) => {
       if (instance.failure) return; // fail() already ended this session's turn.
       session.busy = false;
       cancelPermissions(session);
       emit(session, { type: "error", message: agentError(instance.agent, "prompt failed", error).message });
+      announce(session);
     });
   }
 
@@ -681,6 +721,7 @@ export function createAcpRuntime(
     detach(session, null);
     session.busy = false;
     for (const listener of session.closeListeners) listener();
+    notifyList({ type: "deleted", id });
     await session.writes;
     await store.deleteSession(id);
     return true;
@@ -695,7 +736,7 @@ export function createAcpRuntime(
 
   return {
     ready, listSessions, getSession, createSession, attach, sendPrompt, cancel,
-    respondPermission, setConfigOption, setMode, readEvents, eventsSince, deleteSession, dispose,
+    respondPermission, setConfigOption, setMode, readEvents, eventsSince, deleteSession, onSessionsChange, dispose,
   };
 }
 

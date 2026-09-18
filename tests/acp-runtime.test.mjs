@@ -735,3 +735,33 @@ test("deleting a session gives up on a stalled agent instead of hanging", async 
   assert.equal(messages("claude", "session/close").length, 1);
   assert.equal(runtime.getSession(session.id), undefined);
 });
+
+test("list subscribers hear sessions being created, working, waiting on permission, and deleted", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const changes = [];
+  const unsubscribe = runtime.onSessionsChange((change) => changes.push(change));
+  const session = await runtime.createSession(cwd, "claude");
+  assert.deepEqual(changes.map(({ type }) => type), ["created"]);
+  assert.equal(changes[0].session.id, session.id);
+  assert.equal(changes[0].session.awaitingPermission, false);
+  assert.deepEqual(runtime.listSessions().map(({ awaitingPermission }) => awaitingPermission), [false]);
+
+  const patches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch);
+  await runtime.sendPrompt(session.id, "hold");
+  assert.equal(patches().at(-1).busy, true);
+  assert.equal(patches().at(-1).title, "hold");
+  await until(() => patches().some((patch) => patch.awaitingPermission), "waiting on permission");
+  assert.equal(runtime.listSessions()[0].awaitingPermission, true);
+  await answerPermission(runtime, session);
+  assert.equal(patches().at(-1).awaitingPermission, false);
+  assert.equal(patches().at(-1).busy, true);
+  await runtime.cancel(session.id);
+  await until(() => !session.busy, "cancellation");
+  assert.deepEqual(patches().at(-1), { busy: false, awaitingPermission: false, link: { status: "live" }, title: "hold", lastActiveAt: session.lastActiveAt });
+
+  await runtime.deleteSession(session.id);
+  assert.deepEqual(changes.at(-1), { type: "deleted", id: session.id });
+  unsubscribe();
+  await runtime.createSession(cwd, "codex");
+  assert.deepEqual(changes.at(-1), { type: "deleted", id: session.id });
+});

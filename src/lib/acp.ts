@@ -2,7 +2,8 @@ import { agents, defaultAgentId } from "./agents";
 import { createAcpRuntime } from "./acp-runtime";
 import { sessionStore } from "./session-storage";
 
-export type { Session } from "./acp-runtime";
+export type { Session, SessionListChange } from "./acp-runtime";
+export { toMeta } from "./acp-runtime";
 export type { PortalEvent } from "./types";
 
 // Keep processes and their session event logs alive across Next.js dev HMR.
@@ -24,6 +25,7 @@ export const setMode = runtime.setMode;
 export const readEvents = runtime.readEvents;
 export const eventsSince = runtime.eventsSince;
 export const deleteSession = runtime.deleteSession;
+export const onSessionsChange = runtime.onSessionsChange;
 
 export function createSession(cwd: string, agentId = defaultAgentId, projectId = "") {
   return runtime.createSession(cwd, agentId, projectId);

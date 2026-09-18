@@ -18,6 +18,7 @@ function session(id, projectId, createdAt) {
     lastActiveAt: createdAt,
     title: null,
     busy: false,
+    awaitingPermission: false,
     link: { status: "live" },
     state: { modes: null, configOptions: [], commands: [] },
     git: null,
@@ -68,4 +69,17 @@ test("does not mutate its inputs", () => {
   groupSessionsByProject(projects, sessions);
   assert.deepEqual(sessions.map((s) => s.id), ["a1", "a2"]);
   assert.equal(projects.length, 1);
+});
+
+test("pinned sessions lead their group, each part most recently active first", () => {
+  const groups = groupSessionsByProject([project("a")], [
+    session("old-pinned", "a", 1),
+    session("newest", "a", 4),
+    session("new-pinned", "a", 3),
+    session("mid", "a", 2),
+    session("orphan-pinned", "gone", 1),
+    session("orphan", "gone", 5),
+  ], { "old-pinned": 100, "new-pinned": 50, "orphan-pinned": 10 });
+  assert.deepEqual(groups[0].sessions.map((s) => s.id), ["new-pinned", "old-pinned", "newest", "mid"]);
+  assert.deepEqual(groups[1].sessions.map((s) => s.id), ["orphan-pinned", "orphan"]);
 });

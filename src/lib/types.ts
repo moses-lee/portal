@@ -114,9 +114,14 @@ export type SessionMeta = {
   /** First user prompt, trimmed; null until the first message. */
   title: string | null;
   busy: boolean;
+  /** True while the agent is blocked on a permission prompt no viewer has answered yet. */
+  awaitingPermission: boolean;
   link: SessionLink;
   state: SessionState;
 };
+
+/** The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`. */
+export type SessionListPatch = Pick<SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "lastActiveAt">;
 
 /** Session metadata as served to the browser, with the directory's current git state. */
 export type SessionSummary = SessionMeta & {
@@ -141,6 +146,16 @@ export type SessionMetaEvent = {
   project: { id: string; name: string } | null;
   cwdMissing: boolean;
 };
+
+/**
+ * One message of `GET /api/sessions/stream`. A `snapshot` opens every connection and is
+ * authoritative for which sessions exist; the rest follow as they happen.
+ */
+export type SessionListEvent =
+  | { type: "snapshot"; sessions: (SessionListPatch & { id: string })[] }
+  | { type: "created"; session: SessionSummary }
+  | { type: "updated"; id: string; patch: SessionListPatch }
+  | { type: "deleted"; id: string };
 
 export type PortalEvent =
   | { type: "update"; update: SessionUpdate }

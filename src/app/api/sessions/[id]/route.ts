@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { deleteSession, getSession, ready } from "@/lib/acp";
+import { deleteSession, getSession, ready, toMeta } from "@/lib/acp";
 import { projects } from "@/lib/projects";
 import { summarizeSession } from "@/lib/session-summary";
 import { checkSameOrigin } from "@/lib/shell-http";
@@ -14,7 +14,7 @@ export async function GET(_req: Request, { params }: Context) {
   await Promise.all([projects.ready, ready]);
   const session = getSession(id);
   if (!session) return NextResponse.json({ error: "Unknown session." }, { status: 404 });
-  return NextResponse.json(await summarizeSession(session, projects.get(session.projectId) ?? null));
+  return NextResponse.json(await summarizeSession(toMeta(session), projects.get(session.projectId) ?? null));
 }
 
 /** Remove the session, its log, and its terminals. */

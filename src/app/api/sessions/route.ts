@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSession, listSessions, ready } from "@/lib/acp";
+import { createSession, listSessions, ready, toMeta } from "@/lib/acp";
 import { defaultAgentId, getAgent } from "@/lib/agents";
 import { errorStatus, resolveDirectory } from "@/lib/fs-paths";
 import { displayPath } from "@/lib/git-info";
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
   }
   try {
     const session = await createSession(cwd, agentId, project.id);
-    return NextResponse.json(await summarizeSession(session, project));
+    return NextResponse.json(await summarizeSession(toMeta(session), project));
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }

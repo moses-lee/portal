@@ -1,9 +1,10 @@
+import { EMPTY_PINS, partitionPinned, type PinMap } from "./pins.ts";
 import type { Project, SessionSummary } from "./types.ts";
 
 export type SessionGroup<P extends Project = Project> = {
   /** The owning project, or null for sessions whose project has since been removed. */
   project: P | null;
-  /** Most recently active first. */
+  /** Pinned sessions first; each part most recently active first. */
   sessions: SessionSummary[];
 };
 
@@ -15,9 +16,10 @@ export function byRecentActivity(a: SessionSummary, b: SessionSummary): number {
 /**
  * Group sessions under their projects for the sidebar. Every project gets a group in the given
  * order, even with no sessions; sessions whose `projectId` matches no project land in a trailing
- * `project: null` group that is present only when non-empty.
+ * `project: null` group that is present only when non-empty. Within a group, sessions pinned in
+ * `sessionPins` come first; both parts are most recently active first.
  */
-export function groupSessionsByProject<P extends Project>(projects: P[], sessions: SessionSummary[]): SessionGroup<P>[] {
+export function groupSessionsByProject<P extends Project>(projects: P[], sessions: SessionSummary[], sessionPins: PinMap = EMPTY_PINS): SessionGroup<P>[] {
   const byProject = new Map<string, SessionSummary[]>();
   for (const project of projects) byProject.set(project.id, []);
   const orphans: SessionSummary[] = [];
@@ -26,7 +28,7 @@ export function groupSessionsByProject<P extends Project>(projects: P[], session
     if (bucket) bucket.push(session);
     else orphans.push(session);
   }
-  const groups: SessionGroup<P>[] = projects.map((project) => ({ project, sessions: byProject.get(project.id) ?? [] }));
-  if (orphans.length > 0) groups.push({ project: null, sessions: orphans });
+  const groups: SessionGroup<P>[] = projects.map((project) => ({ project, sessions: partitionPinned(byProject.get(project.id) ?? [], sessionPins) }));
+  if (orphans.length > 0) groups.push({ project: null, sessions: partitionPinned(orphans, sessionPins) });
   return groups;
 }

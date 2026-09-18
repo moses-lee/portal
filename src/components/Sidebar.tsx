@@ -5,13 +5,19 @@ import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { BranchBadge } from "./ContextBar";
 import GithubPanel, { GITHUB_PANEL_HEADER_PX } from "./GithubPanel";
 import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
+import type { PinMap } from "@/lib/pins";
 import { groupSessionsByProject } from "@/lib/session-groups";
 import { WorktreeBadge } from "./WorktreeBadge";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
 
 export type SidebarProps = {
+  /** In display order: pinned first, then creation order. */
   projects: ProjectSummary[];
   sessions: SessionSummary[];
+  projectPins: PinMap;
+  sessionPins: PinMap;
+  onTogglePinProject: (id: string) => void;
+  onTogglePinSession: (id: string) => void;
   /** Active session id. */
   active: string | null;
   onSelect: (sessionId: string) => void;
@@ -79,13 +85,42 @@ type Editing = { id: string; mode: "rename" | "remove" };
 
 const iconButtonClass = "shrink-0 rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 focus-visible:bg-zinc-800 focus-visible:text-zinc-200 focus-visible:outline-none";
 
-function SessionRow({ session, active, showCwd, onSelect, onDelete }: {
+/** A thumbtack; filled when `pinned`. */
+function PinIcon({ pinned }: { pinned: boolean }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="11" height="11" className="inline-block" fill={pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round">
+      <path d="M9.5 1.5 14.5 6.5 12.5 7.5 10.5 9.5 10 13 3 6 6.5 5.5 8.5 3.5Z" />
+      <path d="M6.5 9.5 2 14" />
+    </svg>
+  );
+}
+
+/**
+ * What a session is doing right now: a pulsing dot while the agent works, a steady brighter one
+ * while it waits for someone to answer a permission prompt. Nothing when idle.
+ */
+function ActivityDot({ busy, awaitingPermission }: { busy: boolean; awaitingPermission: boolean }) {
+  if (!busy) return null;
+  const label = awaitingPermission ? "Waiting for your answer" : "Working";
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={`inline-block h-2 w-2 shrink-0 rounded-full ${awaitingPermission ? "bg-amber-300 ring-2 ring-amber-300/30" : "animate-pulse bg-amber-400"}`}
+    />
+  );
+}
+
+function SessionRow({ session, active, showCwd, pinned, onSelect, onDelete, onTogglePin }: {
   session: SessionSummary;
   active: boolean;
   /** Show the directory on the row itself (used when there is no project header above it). */
   showCwd: boolean;
+  pinned: boolean;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void | Promise<void>;
+  onTogglePin: (sessionId: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -111,6 +146,7 @@ function SessionRow({ session, active, showCwd, onSelect, onDelete }: {
           className="block min-w-0 flex-1 px-2 py-1.5 text-left text-xs"
         >
           <div className="flex items-center gap-2">
+            <ActivityDot busy={session.busy} awaitingPermission={session.awaitingPermission} />
             <span className={`min-w-0 flex-1 truncate ${showCwd ? "font-mono" : ""} text-zinc-300`}>{showCwd ? session.displayCwd : title}</span>
             {session.cwdMissing && <span title="The session's folder no longer exists" className="shrink-0 text-[10px] text-amber-400">missing</span>}
             {session.link.status === "offline" && session.link.error && (
@@ -122,6 +158,17 @@ function SessionRow({ session, active, showCwd, onSelect, onDelete }: {
             {showCwd && <><span className="text-zinc-400">{title}</span> · </>}
             {session.agentName} · {new Date(session.lastActiveAt ?? session.createdAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
           </div>
+        </button>
+        <button
+          type="button"
+          aria-label={`${pinned ? "Unpin" : "Pin"} session ${title}`}
+          aria-pressed={pinned}
+          title={pinned ? "Unpin from the top" : "Pin to the top"}
+          onClick={() => onTogglePin(session.id)}
+          // A pinned row always shows its pin; otherwise it appears with the delete button.
+          className={`${iconButtonClass} mt-1 py-1 focus-visible:opacity-100 ${pinned ? "text-zinc-400 opacity-100" : active || confirming ? "opacity-100" : "opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-60"}`}
+        >
+          <PinIcon pinned={pinned} />
         </button>
         <button
           type="button"
@@ -192,8 +239,10 @@ function RenameField({ initial, onCommit, onCancel }: {
   );
 }
 
-function ProjectMenu({ name, onRename, onRemove, onClose }: {
+function ProjectMenu({ name, pinned, onTogglePin, onRename, onRemove, onClose }: {
   name: string;
+  pinned: boolean;
+  onTogglePin: () => void;
   onRename: () => void;
   onRemove: () => void;
   onClose: () => void;
@@ -221,6 +270,7 @@ function ProjectMenu({ name, onRename, onRemove, onClose }: {
   };
   return (
     <div ref={menuRef} role="menu" aria-label={`Project ${name}`} onKeyDown={onKeyDown} className="my-1 flex gap-1 rounded border border-zinc-800 bg-zinc-900 p-1 text-xs">
+      <button role="menuitem" type="button" onClick={onTogglePin} className="flex-1 rounded px-2 py-1 text-left hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none">{pinned ? "Unpin" : "Pin"}</button>
       <button role="menuitem" type="button" onClick={onRename} className="flex-1 rounded px-2 py-1 text-left hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none">Rename</button>
       <button role="menuitem" type="button" onClick={onRemove} className="flex-1 rounded px-2 py-1 text-left text-red-300 hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none">Remove</button>
     </div>
@@ -311,7 +361,8 @@ function RemoveConfirm({ project, onRemove, onCancel }: {
 
 /** Projects as collapsible groups with their sessions; the mobile drawer is controlled by `open`. */
 export default function Sidebar({
-  projects, sessions, active, onSelect, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
+  projects, sessions, projectPins, sessionPins, onTogglePinProject, onTogglePinSession,
+  active, onSelect, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
   githubProjectId, githubProjectRemoved, activeSession,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -324,7 +375,7 @@ export default function Sidebar({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [actionError, setActionError] = useState<{ id: string; message: string } | null>(null);
-  const groups = groupSessionsByProject(projects, sessions);
+  const groups = groupSessionsByProject(projects, sessions, sessionPins);
 
   const toggle = (id: string) => {
     setCollapsed((prev) => {
@@ -370,14 +421,18 @@ export default function Sidebar({
                 <section key="removed" aria-labelledby="sidebar-removed-projects">
                   <h3 id="sidebar-removed-projects" className="px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-500">Removed projects</h3>
                   <div className="space-y-1">
-                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd onSelect={onSelect} onDelete={onDeleteSession} />)}
+                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
                   </div>
                 </section>
               );
             }
             const isCollapsed = collapsed.has(project.id);
+            const isPinned = project.id in projectPins;
             const edit = editing?.id === project.id ? editing : null;
             const listId = `sidebar-project-${project.id}`;
+            // A collapsed project stands in for its rows: show that something inside is working or waiting.
+            const working = isCollapsed && rows.some((s) => s.busy);
+            const waiting = working && rows.some((s) => s.busy && s.awaitingPermission);
             return (
               <section key={project.id} aria-label={project.name}>
                 <div className="flex items-center gap-1">
@@ -400,7 +455,9 @@ export default function Sidebar({
                       className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs hover:bg-zinc-900"
                     >
                       <span aria-hidden="true" className="w-3 shrink-0 text-zinc-600">{isCollapsed ? "▸" : "▾"}</span>
+                      <ActivityDot busy={working} awaitingPermission={waiting} />
                       <span className="min-w-0 flex-1 truncate font-medium text-zinc-200">{project.name}</span>
+                      {isPinned && <span title="Pinned" className="shrink-0 text-zinc-500"><PinIcon pinned /><span className="sr-only">Pinned</span></span>}
                       <WorktreeBadge project={project} projects={projects} />
                       {project.exists === false && (
                         <span title={`Folder not found: ${project.displayPath}`} className="shrink-0 text-[10px] text-amber-400">missing</span>
@@ -433,6 +490,11 @@ export default function Sidebar({
                 {menuFor === project.id && (
                   <ProjectMenu
                     name={project.name}
+                    pinned={isPinned}
+                    onTogglePin={() => {
+                      setMenuFor(null);
+                      onTogglePinProject(project.id);
+                    }}
                     onClose={closeMenu}
                     onRename={() => {
                       setMenuFor(null);
@@ -459,7 +521,7 @@ export default function Sidebar({
                   <p role="alert" className="my-1 rounded bg-red-950/50 px-2 py-1.5 text-xs text-red-300">{actionError.message}</p>
                 )}
                 <div id={listId} hidden={isCollapsed} className="mt-0.5 space-y-1 pl-2">
-                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd={false} onSelect={onSelect} onDelete={onDeleteSession} />)}
+                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd={false} pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
                   {rows.length === 0 && <p className="px-2 py-1 text-[11px] text-zinc-600">No sessions yet.</p>}
                 </div>
               </section>

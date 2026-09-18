@@ -1,16 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import ContextBar from "./ContextBar";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import AddProjectDialog from "./AddProjectDialog";
+import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL, worktreeTarget } from "@/lib/branch-matching";
+import { pinnedFirst } from "@/lib/pins";
 import { sessionIdFromPath, sessionPath } from "@/lib/session-routes";
-import type { AgentInfo, ProjectSummary, SessionSummary } from "@/lib/types";
+import type { AgentInfo, ProjectSummary, SessionListEvent, SessionSummary } from "@/lib/types";
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -42,7 +44,13 @@ export default function Chat() {
   const [creating, setCreating] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  /** The current list, for stream handlers that must not close over a stale render. */
+  const sessionsRef = useRef(sessions);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
   const { projects, loading: projectsLoading, addProject, renameProject, removeProject, refresh: refreshProjects } = useProjects();
+  const { projectPins, sessionPins, toggleProjectPin, toggleSessionPin, prune: prunePins } = usePins();
+  /** Pinned projects first (most recently pinned on top), then creation order: the sidebar's and the start page's order. */
+  const orderedProjects = useMemo(() => pinnedFirst(projects, projectPins), [projects, projectPins]);
   /** The project picked this page load, or null to fall back to the remembered/newest one. */
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
   /** The start page's worktree choice, tied to the project it was made for so a project change resets it. */
@@ -51,6 +59,14 @@ export default function Chat() {
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
   const [showSidebar, setShowSidebar] = useState(false);
+
+  /** Refetch the whole list; used when the live feed names a session this page does not know. */
+  const refetchSessions = useCallback(async (signal?: AbortSignal) => {
+    const r = await fetch("/api/sessions", { signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { sessions: fetched } = (await r.json()) as { sessions: SessionSummary[] };
+    if (!signal?.aborted) setSessions(fetched);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -82,6 +98,48 @@ export default function Chat() {
     void load();
     return () => controller.abort();
   }, []);
+
+  // Follow the list live once it has loaded: other sessions' busy, permission, connection, title,
+  // and activity changes, plus sessions created or deleted from another browser. The open session's
+  // own stream still patches its git state and agent state.
+  useEffect(() => {
+    if (loading || sessionError) return;
+    const controller = new AbortController();
+    const es = new EventSource("/api/sessions/stream");
+    es.onmessage = (m) => {
+      const event = JSON.parse(m.data) as SessionListEvent;
+      switch (event.type) {
+        case "snapshot": {
+          const byId = new Map(event.sessions.map((s) => [s.id, s]));
+          // The snapshot decides what exists; entries it lacks were deleted while we were not listening.
+          setSessions((prev) => prev.filter((s) => byId.has(s.id)).map((s) => ({ ...s, ...byId.get(s.id) })));
+          // A session created while we were not listening needs its full entry (folder, branch, project).
+          const known = new Set(sessionsRef.current.map((s) => s.id));
+          if (event.sessions.some((s) => !known.has(s.id))) refetchSessions(controller.signal).catch(() => {});
+          return;
+        }
+        case "created":
+          setSessions((prev) => (prev.some((s) => s.id === event.session.id) ? prev : [event.session, ...prev]));
+          return;
+        case "updated":
+          setSessions((prev) => prev.map((s) => (s.id === event.id ? { ...s, ...event.patch } : s)));
+          return;
+        case "deleted":
+          setSessions((prev) => prev.filter((s) => s.id !== event.id));
+          return;
+      }
+    };
+    return () => {
+      controller.abort();
+      es.close();
+    };
+  }, [loading, sessionError, refetchSessions]);
+
+  // Pins outlive their projects and sessions in storage; forget the ones for things that are gone.
+  useEffect(() => {
+    if (loading || sessionError || projectsLoading) return;
+    prunePins(projects.map((p) => p.id), sessions.map((s) => s.id));
+  }, [loading, sessionError, projectsLoading, projects, sessions, prunePins]);
 
   // The project new sessions start in: the chosen one while it exists, else the remembered one, else the newest.
   // Projects only arrive after mount, so this stays "" during server rendering and hydration.
@@ -233,8 +291,12 @@ export default function Chat() {
   return (
     <div className="flex h-dvh bg-zinc-950 text-zinc-100">
       <Sidebar
-        projects={projects}
+        projects={orderedProjects}
         sessions={sessions}
+        projectPins={projectPins}
+        sessionPins={sessionPins}
+        onTogglePinProject={toggleProjectPin}
+        onTogglePinSession={toggleSessionPin}
         active={active}
         onSelect={(id) => selectSession(id)}
         onDeleteSession={deleteSession}
@@ -262,7 +324,7 @@ export default function Chat() {
         sessionId={active}
         session={activeSession}
         start={{
-          projects,
+          projects: orderedProjects,
           selectedProjectId,
           onSelectProject: selectProject,
           onAddProject: () => setShowAddProject(true),
