@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readTurnPage } from "../src/lib/session-pages.ts";
+import { coalesceTextChunks, readTurnPage } from "../src/lib/session-pages.ts";
 import { createMemorySessionStore } from "../src/lib/session-store.ts";
 
 /** Turns of `sizes[i]` events each: a `user` event followed by updates and a `turn_end`. */
@@ -76,4 +76,32 @@ test("a store that reports more but returns nothing ends the page instead of loo
   const page = await readTurnPage(flaky, "s", { before: 2, minEvents: 10 });
   assert.deepEqual(page.events.map(({ seq }) => seq), [0, 1]);
   assert.equal(page.hasMore, false);
+});
+
+const chunk = (seq, kind, text) => ({ seq, ts: seq * 10, type: "update", update: { sessionUpdate: kind, content: { type: "text", text } } });
+
+test("adjacent text chunks of one kind merge into one event that keeps the first seq", () => {
+  const events = [
+    { seq: 0, ts: 0, type: "user", text: "hi" },
+    chunk(1, "agent_thought_chunk", "th"), chunk(2, "agent_thought_chunk", "ink"),
+    chunk(3, "agent_message_chunk", "Hel"), chunk(4, "agent_message_chunk", "lo"), chunk(5, "agent_message_chunk", "!"),
+    { seq: 6, ts: 60, type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t", title: "ls", status: "completed" } },
+    chunk(7, "agent_message_chunk", "done"),
+    { seq: 8, ts: 80, type: "turn_end", stopReason: "end_turn" },
+  ];
+  const merged = coalesceTextChunks(events);
+  assert.deepEqual(merged.map((e) => e.seq), [0, 1, 3, 6, 7, 8]);
+  assert.deepEqual(merged[1], chunk(1, "agent_thought_chunk", "think"));
+  assert.deepEqual(merged[2], chunk(3, "agent_message_chunk", "Hello!"));
+  assert.deepEqual(merged[4], chunk(7, "agent_message_chunk", "done"));
+  assert.deepEqual(merged[3], events[6]);
+  // The input is left alone.
+  assert.equal(events[3].update.content.text, "Hel");
+});
+
+test("non-text chunks and other updates are passed through untouched", () => {
+  const image = { seq: 1, ts: 0, type: "update", update: { sessionUpdate: "agent_message_chunk", content: { type: "image", data: "…", mimeType: "image/png" } } };
+  const events = [chunk(0, "agent_message_chunk", "a"), image, chunk(2, "agent_message_chunk", "b")];
+  assert.deepEqual(coalesceTextChunks(events), events);
+  assert.deepEqual(coalesceTextChunks([]), []);
 });

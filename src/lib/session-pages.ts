@@ -38,3 +38,50 @@ export async function readTurnPage(store: SessionStore, id: string, { before, mi
     cursor = events[0].seq;
   }
 }
+
+/** `update` events whose content can be concatenated: adjacent ones of the same kind merge into one. */
+type TextChunkEvent = StoredEvent & {
+  type: "update";
+  update: { sessionUpdate: "agent_message_chunk" | "agent_thought_chunk"; content: { type: "text"; text: string } };
+};
+
+function isTextChunk(event: StoredEvent): event is TextChunkEvent {
+  if (event.type !== "update") return false;
+  const { sessionUpdate, content } = event.update as { sessionUpdate: string; content?: { type?: string; text?: unknown } };
+  return (sessionUpdate === "agent_message_chunk" || sessionUpdate === "agent_thought_chunk")
+    && content?.type === "text" && typeof content.text === "string";
+}
+
+/**
+ * Merge each run of adjacent text chunks of the same kind into one event, keeping the first
+ * chunk's seq and timestamp. Agents stream a few characters per chunk, so a page of raw events is
+ * mostly envelope; viewers concatenate adjacent chunks anyway. Cursors are unaffected: a page
+ * always starts with a `user` event, and the stream tail is followed from `nextSeq`, not from the
+ * seq of the page's last event.
+ */
+export function coalesceTextChunks(events: StoredEvent[]): StoredEvent[] {
+  const merged: StoredEvent[] = [];
+  let run: TextChunkEvent | null = null;
+  let text = "";
+  const flush = () => {
+    if (!run) return;
+    merged.push({ ...run, update: { ...run.update, content: { ...run.update.content, text } } });
+    run = null;
+  };
+  for (const event of events) {
+    if (isTextChunk(event)) {
+      if (run && run.update.sessionUpdate === event.update.sessionUpdate) {
+        text += event.update.content.text;
+        continue;
+      }
+      flush();
+      run = event;
+      text = event.update.content.text;
+      continue;
+    }
+    flush();
+    merged.push(event);
+  }
+  flush();
+  return merged;
+}

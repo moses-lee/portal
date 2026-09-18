@@ -1,19 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { PermissionOption, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PermissionOption } from "@agentclientprotocol/sdk";
+import type { PermissionBlock } from "@/lib/transcript";
 
-export type PermissionResponse =
-  | { outcome: "selected"; optionId: string; optionName: string }
-  | { outcome: "cancelled" };
-
-export type PermissionBlock = {
-  kind: "permission";
-  requestId: string;
-  toolCall: ToolCallUpdate;
-  options: PermissionOption[];
-  response: PermissionResponse | null;
-};
+export type { PermissionBlock, PermissionResponse } from "@/lib/transcript";
 
 const PREVIEW_LIMIT = 400;
 

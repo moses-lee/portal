@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession, readEvents, ready } from "@/lib/acp";
+import { jsonResponse } from "@/lib/compress";
 
 export const dynamic = "force-dynamic";
 
@@ -26,5 +27,5 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (before === null || limit === null || limit < 1) {
     return NextResponse.json({ error: "Invalid page cursor." }, { status: 400 });
   }
-  return NextResponse.json(await readEvents(id, { before, limit: Math.min(limit, MAX_LIMIT) }));
+  return jsonResponse(req, await readEvents(id, { before, limit: Math.min(limit, MAX_LIMIT) }));
 }

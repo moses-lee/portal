@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSession, listSessions, ready, toMeta } from "@/lib/acp";
 import { defaultAgentId, getAgent } from "@/lib/agents";
+import { jsonResponse } from "@/lib/compress";
 import { errorStatus, resolveDirectory } from "@/lib/fs-paths";
 import { displayPath } from "@/lib/git-info";
 import { projects } from "@/lib/projects";
@@ -9,9 +10,9 @@ import { checkSameOrigin } from "@/lib/shell-http";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
   await Promise.all([projects.ready, ready]);
-  return NextResponse.json({
+  return jsonResponse(req, {
     sessions: await Promise.all(
       listSessions().map((meta) => summarizeSession(meta, projects.get(meta.projectId) ?? null)),
     ),

@@ -4,13 +4,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import ReactMarkdown from "react-markdown";
-import PermissionCard, { type PermissionBlock } from "./PermissionCard";
+import PermissionCard from "./PermissionCard";
 import SessionControls, { applyConfigChange } from "./SessionControls";
 import CommandPalette, { commandInsertText, findCommandToken, matchCommands } from "./CommandPalette";
 import ContextBar from "./ContextBar";
 import StartPage, { type StartPageProps } from "./StartPage";
-import type { EventPage, PortalEvent, SessionLink, SessionMetaEvent, SessionState, SessionSummary, SetConfigRequest, StoredEvent } from "@/lib/types";
-import type { AvailableCommand, SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
+import type { EventPage, PortalEvent, SessionLink, SessionMetaEvent, SessionState, SessionSummary, SetConfigRequest } from "@/lib/types";
+import { appendEvent, firstSeq, lastSeq, segment, type Block, type History, type ToolBlock } from "@/lib/transcript";
+import type { HistoryCache } from "@/lib/history-cache";
+import type { AvailableCommand } from "@agentclientprotocol/sdk";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ssr: false,
@@ -23,154 +25,6 @@ const STICK_THRESHOLD = 80;
 const LOAD_OLDER_THRESHOLD = 240;
 
 const sessionUrl = (id: string, suffix = "") => `/api/sessions/${encodeURIComponent(id)}${suffix}`;
-
-type ToolBlock = {
-  kind: "tool";
-  id: string;
-  title: string;
-  toolKind?: string | null;
-  status?: string | null;
-  content: ToolCallContent[];
-  rawInput?: unknown;
-  rawOutput?: unknown;
-};
-type Block =
-  | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
-  | { kind: "thought"; text: string }
-  | ToolBlock
-  | { kind: "plan"; entries: { content: string; status: string }[] }
-  | PermissionBlock
-  | { kind: "turn_end"; stopReason: string }
-  | { kind: "error"; message: string };
-
-function reduce(events: StoredEvent[]): Block[] {
-  const blocks: Block[] = [];
-  const tools = new Map<string, ToolBlock>();
-  const permissions = new Map<string, PermissionBlock>();
-  const last = () => blocks[blocks.length - 1];
-  // The server settles every open prompt before it ends a turn, so a request still unanswered when a
-  // server-side turn_end or error arrives (a restart cut the turn off) can no longer be answered.
-  const closeOpenPermissions = () => {
-    for (const b of permissions.values()) if (b.response === null) b.response = { outcome: "cancelled" };
-  };
-  const appendText = (kind: "assistant" | "thought", text: string) => {
-    const l = last();
-    if (l && l.kind === kind) l.text += text;
-    else blocks.push({ kind, text });
-  };
-  for (const ev of events) {
-    switch (ev.type) {
-      case "user":
-        blocks.push({ kind: "user", text: ev.text });
-        break;
-      case "turn_end":
-        closeOpenPermissions();
-        blocks.push({ kind: "turn_end", stopReason: ev.stopReason });
-        break;
-      case "error":
-        // Client-only notices (negative seq) describe a failed request, not the end of the turn.
-        if (ev.seq >= 0) closeOpenPermissions();
-        blocks.push({ kind: "error", message: ev.message });
-        break;
-      case "permission_request": {
-        const b: PermissionBlock = { kind: "permission", requestId: ev.requestId, toolCall: ev.toolCall, options: ev.options, response: null };
-        permissions.set(ev.requestId, b);
-        blocks.push(b);
-        break;
-      }
-      case "permission_response": {
-        const b = permissions.get(ev.requestId);
-        if (!b) break;
-        b.response = ev.outcome === "selected"
-          ? { outcome: "selected", optionId: ev.optionId, optionName: ev.optionName }
-          : { outcome: "cancelled" };
-        break;
-      }
-      case "turn_start":
-        break;
-      case "update": {
-        const u: SessionUpdate = ev.update;
-        switch (u.sessionUpdate) {
-          case "agent_message_chunk":
-            if (u.content.type === "text") appendText("assistant", u.content.text);
-            break;
-          case "agent_thought_chunk":
-            if (u.content.type === "text") appendText("thought", u.content.text);
-            break;
-          case "tool_call": {
-            const b: ToolBlock = {
-              kind: "tool",
-              id: u.toolCallId,
-              title: u.title,
-              toolKind: u.kind,
-              status: u.status ?? "pending",
-              content: u.content ?? [],
-              rawInput: u.rawInput,
-              rawOutput: u.rawOutput,
-            };
-            tools.set(b.id, b);
-            blocks.push(b);
-            break;
-          }
-          case "tool_call_update": {
-            const b = tools.get(u.toolCallId);
-            if (!b) break;
-            if (u.title) b.title = u.title;
-            if (u.kind) b.toolKind = u.kind;
-            if (u.status) b.status = u.status;
-            if (u.content) b.content = u.content;
-            if (u.rawInput !== undefined) b.rawInput = u.rawInput;
-            if (u.rawOutput !== undefined) b.rawOutput = u.rawOutput;
-            break;
-          }
-          case "plan":
-          case "plan_update": {
-            const entries = (u as { entries?: { content: string; status: string }[] }).entries ?? [];
-            const l = last();
-            if (l && l.kind === "plan") l.entries = entries;
-            else blocks.push({ kind: "plan", entries });
-            break;
-          }
-          default:
-            break;
-        }
-      }
-    }
-  }
-  return blocks;
-}
-
-/** One turn of the transcript: a `user` event and everything the agent did in response. */
-type Turn = { key: number; events: StoredEvent[]; blocks: Block[] };
-
-/**
- * The loaded part of the log, reduced turn by turn. Pages start at turn boundaries and tool,
- * plan, and permission updates only ever refer to their own turn, so a live event re-reduces
- * only the last turn and an older page only adds turns in front.
- */
-type History = { turns: Turn[]; hasMore: boolean };
-
-function segment(events: StoredEvent[]): Turn[] {
-  const turns: Turn[] = [];
-  for (const event of events) {
-    const current = turns.at(-1);
-    if (current && event.type !== "user") current.events.push(event);
-    else turns.push({ key: event.seq, events: [event], blocks: [] });
-  }
-  for (const turn of turns) turn.blocks = reduce(turn.events);
-  return turns;
-}
-
-function appendEvent({ turns, hasMore }: History, event: StoredEvent): History {
-  const current = turns.at(-1);
-  if (!current || event.type === "user") return { turns: [...turns, { key: event.seq, events: [event], blocks: reduce([event]) }], hasMore };
-  const events = [...current.events, event];
-  return { turns: [...turns.slice(0, -1), { ...current, events, blocks: reduce(events) }], hasMore };
-}
-
-const firstSeq = ({ turns }: History) => turns[0]?.events[0]?.seq;
-const lastSeq = ({ turns }: History) => turns.at(-1)?.events.at(-1)?.seq;
 
 const statusIcon: Record<string, string> = {
   pending: "○",
@@ -301,6 +155,8 @@ export type SessionPaneProps = {
   onSessionUpdate: (id: string, patch: Partial<SessionSummary>) => void;
   /** The session was deleted (by this or another viewer). */
   onSessionDeleted: (id: string) => void;
+  /** Reduced transcripts from earlier visits, so a return renders at once; this pane keeps its entry current. */
+  historyCache: HistoryCache;
   showShell: boolean;
   onShowShell: (open: boolean) => void;
   shellSize: number;
@@ -309,11 +165,17 @@ export type SessionPaneProps = {
 
 /** The main column: header, transcript, message box, controls, and terminals for one session. */
 export default function SessionPane({
-  sessionId, session, start, startContext, onOpenSidebar, onBack, onSessionUpdate, onSessionDeleted,
+  sessionId, session, start, startContext, onOpenSidebar, onBack, onSessionUpdate, onSessionDeleted, historyCache,
   showShell, onShowShell, shellSize, onShellSize,
 }: SessionPaneProps) {
-  const [history, setHistory] = useState<History>({ turns: [], hasMore: false });
-  const [historyLoading, setHistoryLoading] = useState(!!sessionId);
+  // A session seen before renders from the cache on the first paint; the stream then fills in the rest.
+  const [initial] = useState(() => (sessionId ? historyCache.get(sessionId) : undefined));
+  const [history, setHistory] = useState<History>(initial?.history ?? { turns: [], hasMore: false });
+  const [historyLoading, setHistoryLoading] = useState(!!sessionId && !initial);
+  /** Seq of the newest streamed event held; the stream reopens from here and the cache entry records it. */
+  const cursorRef = useRef(initial?.cursor ?? -1);
+  /** True once `history` reflects the log (a page or a cache hit); before that it must not be cached. */
+  const loadedRef = useRef(!!initial);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -361,28 +223,31 @@ export default function SessionPane({
       if (meta.cwdMissing !== undefined) patch.cwdMissing = meta.cwdMissing;
       onSessionUpdate(sessionId, patch);
     };
-    const open = async () => {
-      setHistoryLoading(true);
+    // `fresh` skips the cache: the stream no longer holds the events after our cursor.
+    const open = async ({ fresh = false } = {}) => {
+      const cached = fresh ? undefined : historyCache.get(sessionId);
+      if (!cached) setHistoryLoading(true);
       try {
-        const r = await fetch(sessionUrl(sessionId, "/events"), { signal: controller.signal });
-        if (r.status === 404) {
+        const entry = cached ?? await historyCache.load(sessionId, { fresh });
+        if (controller.signal.aborted) return;
+        if (!entry) {
           setNotFound(true);
           return;
         }
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const page = (await r.json()) as EventPage;
-        if (controller.signal.aborted) return;
         stickRef.current = true;
-        setHistory({ turns: segment(page.events), hasMore: page.hasMore });
+        cursorRef.current = entry.cursor;
+        loadedRef.current = true;
+        setHistory(entry.history);
         // The page is authoritative: whatever prompt was in flight has either started or failed by now.
         pendingPromptRef.current = false;
         es?.close();
-        const mine = new EventSource(sessionUrl(sessionId, `/stream?since=${page.nextSeq - 1}`));
+        const mine = new EventSource(sessionUrl(sessionId, `/stream?since=${entry.cursor}`));
         es = mine;
         mine.onmessage = (m) => {
           if (es !== mine) return;
           const ev = JSON.parse(m.data) as PortalEvent;
           const seq = Number(m.lastEventId);
+          cursorRef.current = Math.max(cursorRef.current, seq);
           setHistory((prev) => {
             const last = lastSeq(prev);
             return last !== undefined && last >= seq ? prev : appendEvent(prev, { ...ev, seq, ts: Date.now() });
@@ -396,11 +261,12 @@ export default function SessionPane({
         });
         // The server no longer holds the events between our cursor and now: start over from a fresh page.
         mine.addEventListener("reset", () => {
-          if (es === mine) void open();
+          if (es === mine) void open({ fresh: true });
         });
         mine.addEventListener("deleted", () => {
           if (es !== mine) return;
           mine.close();
+          historyCache.delete(sessionId);
           onSessionDeleted(sessionId);
         });
       } catch {
@@ -415,7 +281,12 @@ export default function SessionPane({
       es?.close();
       es = null;
     };
-  }, [sessionId, onSessionUpdate, onSessionDeleted]);
+  }, [sessionId, onSessionUpdate, onSessionDeleted, historyCache]);
+
+  // Keep the cache entry current so the next visit starts from this history and cursor.
+  useEffect(() => {
+    if (sessionId && loadedRef.current) historyCache.set(sessionId, { history, cursor: cursorRef.current });
+  }, [sessionId, history, historyCache]);
 
   // Fetch the page before the oldest loaded event and prepend it without moving the viewport.
   const loadOlder = async () => {

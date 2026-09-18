@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { BranchBadge } from "./ContextBar";
 import GithubPanel, { GITHUB_PANEL_HEADER_PX } from "./GithubPanel";
@@ -21,6 +21,8 @@ export type SidebarProps = {
   /** Active session id. */
   active: string | null;
   onSelect: (sessionId: string) => void;
+  /** The pointer has rested on a session row: warm its transcript ahead of a click. */
+  onPrefetch: (sessionId: string) => void;
   /** May reject; the message is shown under the session. */
   onDeleteSession: (sessionId: string) => void | Promise<void>;
   /** Open the start page with this project selected (the `+` on a project row). */
@@ -112,13 +114,17 @@ function ActivityDot({ busy, awaitingPermission }: { busy: boolean; awaitingPerm
   );
 }
 
-function SessionRow({ session, active, showCwd, pinned, onSelect, onDelete, onTogglePin }: {
+/** A mouse resting on a row this long (ms) counts as intent to open it; a pass-over does not prefetch. */
+const PREFETCH_HOVER_MS = 100;
+
+function SessionRow({ session, active, showCwd, pinned, onSelect, onPrefetch, onDelete, onTogglePin }: {
   session: SessionSummary;
   active: boolean;
   /** Show the directory on the row itself (used when there is no project header above it). */
   showCwd: boolean;
   pinned: boolean;
   onSelect: (sessionId: string) => void;
+  onPrefetch: (sessionId: string) => void;
   onDelete: (sessionId: string) => void | Promise<void>;
   onTogglePin: (sessionId: string) => void;
 }) {
@@ -126,6 +132,21 @@ function SessionRow({ session, active, showCwd, pinned, onSelect, onDelete, onTo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const title = session.title ?? session.agentName;
+  const hoverRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHover = () => {
+    if (hoverRef.current) clearTimeout(hoverRef.current);
+    hoverRef.current = null;
+  };
+  useEffect(() => cancelHover, []);
+  const startHover = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    // Touch and pen have no hover; their first contact is the click itself.
+    if (e.pointerType !== "mouse" || active) return;
+    cancelHover();
+    hoverRef.current = setTimeout(() => {
+      hoverRef.current = null;
+      onPrefetch(session.id);
+    }, PREFETCH_HOVER_MS);
+  };
   const remove = async () => {
     setBusy(true);
     setError(null);
@@ -141,6 +162,8 @@ function SessionRow({ session, active, showCwd, pinned, onSelect, onDelete, onTo
       <div className="flex items-start">
         <button
           onClick={() => onSelect(session.id)}
+          onPointerEnter={startHover}
+          onPointerLeave={cancelHover}
           aria-current={active ? "true" : undefined}
           title={session.cwd}
           className="block min-w-0 flex-1 px-2 py-1.5 text-left text-xs"
@@ -362,7 +385,7 @@ function RemoveConfirm({ project, onRemove, onCancel }: {
 /** Projects as collapsible groups with their sessions; the mobile drawer is controlled by `open`. */
 export default function Sidebar({
   projects, sessions, projectPins, sessionPins, onTogglePinProject, onTogglePinSession,
-  active, onSelect, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
+  active, onSelect, onPrefetch, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
   githubProjectId, githubProjectRemoved, activeSession,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -421,7 +444,7 @@ export default function Sidebar({
                 <section key="removed" aria-labelledby="sidebar-removed-projects">
                   <h3 id="sidebar-removed-projects" className="px-2 py-1 text-[11px] uppercase tracking-wide text-zinc-500">Removed projects</h3>
                   <div className="space-y-1">
-                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
+                    {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} onPrefetch={onPrefetch} showCwd pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
                   </div>
                 </section>
               );
@@ -521,7 +544,7 @@ export default function Sidebar({
                   <p role="alert" className="my-1 rounded bg-red-950/50 px-2 py-1.5 text-xs text-red-300">{actionError.message}</p>
                 )}
                 <div id={listId} hidden={isCollapsed} className="mt-0.5 space-y-1 pl-2">
-                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} showCwd={false} pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
+                  {rows.map((s) => <SessionRow key={s.id} session={s} active={s.id === active} onPrefetch={onPrefetch} showCwd={false} pinned={s.id in sessionPins} onSelect={onSelect} onDelete={onDeleteSession} onTogglePin={onTogglePinSession} />)}
                   {rows.length === 0 && <p className="px-2 py-1 text-[11px] text-zinc-600">No sessions yet.</p>}
                 </div>
               </section>

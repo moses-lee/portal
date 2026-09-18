@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { jsonResponse } from "@/lib/compress";
 import { errorStatus } from "@/lib/fs-paths";
 import { readGithubSummary } from "@/lib/github-summary";
 import { projects } from "@/lib/projects";
@@ -22,7 +23,7 @@ export async function GET(req: Request, { params }: Context) {
   if (!project) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
   const fetch = new URL(req.url).searchParams.get("fetch") === "1";
   try {
-    return NextResponse.json({ summary: await readGithubSummary(project.path, { fetch }) });
+    return jsonResponse(req, { summary: await readGithubSummary(project.path, { fetch }) });
   } catch (err) {
     return fail(err);
   }

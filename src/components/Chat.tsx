@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import ContextBar from "./ContextBar";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
@@ -11,8 +11,9 @@ import { useProjects } from "./useProjects";
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL, worktreeTarget } from "@/lib/branch-matching";
 import { pinnedFirst } from "@/lib/pins";
+import { createHistoryCache } from "@/lib/history-cache";
 import { sessionIdFromPath, sessionPath } from "@/lib/session-routes";
-import type { AgentInfo, ProjectSummary, SessionListEvent, SessionSummary } from "@/lib/types";
+import type { AgentInfo, EventPage, ProjectSummary, SessionListEvent, SessionSummary } from "@/lib/types";
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -33,8 +34,23 @@ function storeProjectId(id: string) {
 }
 
 /** The app shell: sidebar, session list, project selection, and the pane for the session named by the URL. */
+/** The latest transcript page for the history cache; null when the session is gone. */
+async function fetchHistoryPage(id: string): Promise<EventPage | null> {
+  const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/events`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()) as EventPage;
+}
+
+/**
+ * Change the URL without a server round trip. Next syncs `usePathname` with the native history
+ * API, and the session routes render nothing of their own, so a router navigation (which fetches
+ * the route's payload first) would only delay the switch.
+ */
+const pushPath = (path: string) => window.history.pushState(null, "", path);
+const replacePath = (path: string) => window.history.replaceState(null, "", path);
+
 export default function Chat() {
-  const router = useRouter();
   const pathname = usePathname();
   /** The open session comes from the URL, so refresh, back, and shared links all land on it. */
   const active = useMemo(() => sessionIdFromPath(pathname ?? "/"), [pathname]);
@@ -59,6 +75,8 @@ export default function Chat() {
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
   const [showSidebar, setShowSidebar] = useState(false);
+  /** Reduced transcripts of visited (and hovered) sessions, for instant switches. */
+  const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
 
   /** Refetch the whole list; used when the live feed names a session this page does not know. */
   const refetchSessions = useCallback(async (signal?: AbortSignal) => {
@@ -126,6 +144,7 @@ export default function Chat() {
           return;
         case "deleted":
           setSessions((prev) => prev.filter((s) => s.id !== event.id));
+          historyCache.delete(event.id);
           return;
       }
     };
@@ -133,7 +152,7 @@ export default function Chat() {
       controller.abort();
       es.close();
     };
-  }, [loading, sessionError, refetchSessions]);
+  }, [loading, sessionError, refetchSessions, historyCache]);
 
   // Pins outlive their projects and sessions in storage; forget the ones for things that are gone.
   useEffect(() => {
@@ -160,7 +179,7 @@ export default function Chat() {
 
   /** Navigate to a session (or the start page); the URL drives the rest. */
   const selectSession = (sessionId: string | null) => {
-    if (sessionId !== active) router.push(sessionId ? sessionPath(sessionId) : "/");
+    if (sessionId !== active) pushPath(sessionId ? sessionPath(sessionId) : "/");
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
     if (projectId && projects.some((p) => p.id === projectId)) selectProject(projectId);
@@ -174,8 +193,8 @@ export default function Chat() {
   /** Another viewer deleted the open session, or the server dropped it: leave it. */
   const sessionDeleted = useCallback((id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
-    router.replace("/");
-  }, [router]);
+    replacePath("/");
+  }, []);
 
   /** `DELETE /api/sessions/[id]`; leaves the session if it is open. Rejects with the server's message. */
   const deleteSession = async (sessionId: string) => {
@@ -190,7 +209,8 @@ export default function Chat() {
       throw new Error(j.error ?? "Could not delete the session. Try again.");
     }
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    if (sessionId === active) router.replace("/");
+    historyCache.delete(sessionId);
+    if (sessionId === active) replacePath("/");
   };
 
   const canCreate = !loading && !projectsLoading && !creating && !!selectedAgentId && !!selectedProjectId;
@@ -215,7 +235,7 @@ export default function Chat() {
   /** The sidebar's `+`: open the start page with `projectId` selected so the worktree picker is available. */
   const startIn = (projectId: string) => {
     selectProject(projectId);
-    if (active) router.push("/");
+    if (active) pushPath("/");
     setShowSidebar(false);
   };
 
@@ -251,7 +271,7 @@ export default function Chat() {
       // The worktree choice was for this start only; the next start page begins at Original again.
       setWorktreePick(null);
       setSessions((prev) => [session, ...prev]);
-      router.push(sessionPath(session.id));
+      pushPath(sessionPath(session.id));
       setShowSidebar(false);
     } catch {
       setSessionError("Could not create a session. Check the server connection and try again.");
@@ -299,6 +319,7 @@ export default function Chat() {
         onTogglePinSession={toggleSessionPin}
         active={active}
         onSelect={(id) => selectSession(id)}
+        onPrefetch={(id) => historyCache.prefetch(id)}
         onDeleteSession={deleteSession}
         onNewSession={startIn}
         onAddProject={() => setShowAddProject(true)}
@@ -344,6 +365,7 @@ export default function Chat() {
         onBack={() => selectSession(null)}
         onSessionUpdate={updateSession}
         onSessionDeleted={sessionDeleted}
+        historyCache={historyCache}
         showShell={showShell}
         onShowShell={setShowShell}
         shellSize={shellSize}

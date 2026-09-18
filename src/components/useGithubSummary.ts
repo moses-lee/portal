@@ -64,8 +64,9 @@ function useDocumentVisible() {
 
 /**
  * The GitHub panel's data for one project: `GET /api/projects/<id>/github`, polled every 15 s while
- * `enabled` and the tab is visible (with a `git fetch` every 60 s), plus a fetching refresh whenever
- * the active session switches branch or finishes a turn.
+ * `enabled` and the tab is visible, plus a refresh whenever the active session switches branch or
+ * finishes a turn. Only every fourth poll (60 s) and the manual refresh run `git fetch`: a fetch
+ * takes seconds and would otherwise compete with the transcript download on every session switch.
  */
 export function useGithubSummary({ projectId, enabled, session }: {
   projectId: string | null;
@@ -130,7 +131,7 @@ export function useGithubSummary({ projectId, enabled, session }: {
   // First load for a project (even while collapsed, so the header is informative), then polling while active.
   useEffect(() => {
     if (!projectId) return;
-    if (loadedForRef.current !== projectId || active) void load(true);
+    if (loadedForRef.current !== projectId || active) void load(false);
     if (!active) return;
     let tick = 0;
     const timer = setInterval(() => {
@@ -164,7 +165,7 @@ export function useGithubSummary({ projectId, enabled, session }: {
     if (triggerRef.current) clearTimeout(triggerRef.current);
     triggerRef.current = setTimeout(() => {
       triggerRef.current = null;
-      void loadRef.current(true);
+      void loadRef.current(false);
     }, TRIGGER_DEBOUNCE_MS);
   }, [sessionId, sessionProjectId, branch, busy, projectId]);
   // A pending trigger for the previous project must not supersede the new project's first load.
