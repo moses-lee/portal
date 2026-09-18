@@ -30,7 +30,8 @@ export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdo
 
 type ExecError = Error & { code?: string | number; stderr?: string; killed?: boolean };
 
-function execMessage(err: unknown): string {
+/** git's stderr, a timeout note, or the error's own message. */
+export function execMessage(err: unknown): string {
   const e = err as ExecError;
   const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
   if (stderr) return stderr;
@@ -39,7 +40,7 @@ function execMessage(err: unknown): string {
 }
 
 /** Run git in `cwd`; failures become 409s carrying git's own stderr. */
-async function git(cwd: string, args: string[], timeout = LIST_TIMEOUT): Promise<string> {
+export async function git(cwd: string, args: string[], timeout = LIST_TIMEOUT): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd, timeout, maxBuffer: MAX_BUFFER, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -51,11 +52,28 @@ async function git(cwd: string, args: string[], timeout = LIST_TIMEOUT): Promise
 }
 
 /** Like `git`, but a non-zero exit yields null instead of throwing. */
-async function gitMaybe(cwd: string, args: string[], timeout = LIST_TIMEOUT): Promise<string | null> {
+export async function gitMaybe(cwd: string, args: string[], timeout = LIST_TIMEOUT): Promise<string | null> {
   return git(cwd, args, timeout).catch(() => null);
 }
 
-const defaultGh: GhRunner = (args, { cwd }) => execFileAsync("gh", args, {
+/**
+ * Like `git`, but a non-zero exit is reported as `code` with the output git produced, for commands
+ * whose exit status carries meaning (e.g. `merge-tree`). Only failing to run git at all throws.
+ */
+export async function gitResult(cwd: string, args: string[], timeout = LIST_TIMEOUT): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync("git", args, {
+      cwd, timeout, maxBuffer: MAX_BUFFER, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    const e = err as ExecError & { stdout?: string };
+    if (typeof e?.code === "number" && !e.killed) return { code: e.code, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+    throw new WorktreeError(execMessage(err), 409);
+  }
+}
+
+export const defaultGh: GhRunner = (args, { cwd }) => execFileAsync("gh", args, {
   cwd, timeout: 20_000, maxBuffer: MAX_BUFFER,
   env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GIT_TERMINAL_PROMPT: "0" },
 });
@@ -155,16 +173,24 @@ export async function listBranches(repoRoot: string): Promise<{ defaultBranch: s
 
 const PULL_FIELDS = "number,title,headRefName,updatedAt,isCrossRepository,state";
 
-function ghFailureReason(err: unknown): string {
+/** Short reason a gh call could not answer, e.g. "gh is not installed" or "gh is not logged in". */
+export function ghFailureReason(err: unknown): string {
   const e = err as ExecError;
   if (e?.code === "ENOENT") return "gh is not installed";
   const stderr = typeof e?.stderr === "string" ? e.stderr.trim() : "";
   const lower = stderr.toLowerCase();
-  if (/auth login|not logged/.test(lower)) return "gh is not logged in";
+  // Checked first: gh's "none of the git remotes ... please use `gh auth login`" would otherwise read as a login problem.
   if (/no git remotes|not a git repository|could not determine|none of the git remotes/.test(lower)) {
     return "origin is not a GitHub repository";
   }
+  if (/auth login|not logged/.test(lower)) return "gh is not logged in";
   return stderr.split("\n")[0] || (e instanceof Error ? e.message : String(err)) || "gh failed";
+}
+
+/** True when gh's failure means GitHub has no such PR, as opposed to gh being unable to ask. */
+export function ghSaysNoSuchPull(err: unknown): boolean {
+  const stderr = String((err as ExecError)?.stderr ?? "").toLowerCase();
+  return /could not resolve|no pull requests found|not found/.test(stderr);
 }
 
 function toPull(raw: unknown): PullInfo | null {
@@ -204,10 +230,7 @@ export async function getPull(repoRoot: string, number: number, gh: GhRunner = d
   try {
     ({ stdout } = await gh(["pr", "view", String(number), "--json", PULL_FIELDS], { cwd: repoRoot }));
   } catch (err) {
-    const stderr = String((err as ExecError)?.stderr ?? "").toLowerCase();
-    if (/could not resolve|no pull requests found|not found/.test(stderr)) {
-      throw new WorktreeError(`PR #${number} not found.`, 404);
-    }
+    if (ghSaysNoSuchPull(err)) throw new WorktreeError(`PR #${number} not found.`, 404);
     throw new WorktreeError(ghFailureReason(err), 409);
   }
   let parsed: unknown;

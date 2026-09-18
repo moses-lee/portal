@@ -173,3 +173,113 @@ export type SetConfigRequest =
 
 /** Body of `POST /api/sessions/[id]/permission`. `optionId: null` cancels the request. */
 export type PermissionAnswerRequest = { requestId: string; optionId: string | null };
+
+/** One row of the GitHub panel's commit log. */
+export type CommitRow = {
+  sha: string;
+  /** Abbreviated sha, e.g. "72b845f". */
+  short: string;
+  subject: string;
+  author: string;
+  /** Epoch ms of the committer date. */
+  committedAt: number;
+  /** True for the local HEAD commit. */
+  head: boolean;
+  /** True for the commit the branch's upstream (`origin/<branch>`) points at. */
+  remoteHead: boolean;
+  /** True for the merge-base row that anchors the branch's own commits to the base branch. */
+  base: boolean;
+};
+
+/** Response of `GET /api/projects/<id>/github/log?before=<cursor>`: one page further back in history. */
+export type CommitPage = {
+  commits: CommitRow[];
+  /** Opaque cursor to pass back as `before` for the next page, or null when there is nothing older. */
+  cursor: string | null;
+};
+
+export type CheckState = "passing" | "failing" | "pending" | "skipped";
+
+/** One CI check or commit status from the PR's status rollup. */
+export type CheckRun = {
+  name: string;
+  state: CheckState;
+  url: string | null;
+};
+
+/** The PR head's CI status, from `gh pr view --json statusCheckRollup`. */
+export type CheckSummary = {
+  /** Worst state across `checks`: failing beats pending beats passing. */
+  state: "passing" | "failing" | "pending";
+  passing: number;
+  failing: number;
+  pending: number;
+  checks: CheckRun[];
+};
+
+/** The pull request whose head is the panel's branch, in any state. */
+export type PullSummary = {
+  number: number;
+  title: string;
+  /** GitHub login of the author. */
+  author: string;
+  url: string;
+  state: "open" | "closed" | "merged";
+  draft: boolean;
+  baseBranch: string;
+  /** Sha of the PR head as GitHub knows it; the matching commit row shows the CI dot. */
+  headSha: string;
+  reviewDecision: "approved" | "changes_requested" | "review_required" | null;
+  /** Unresolved review threads, or null when the GraphQL lookup failed. */
+  unresolvedThreads: number | null;
+  /** Issue (conversation) comments, excluding review comments; null when unknown. */
+  comments: number | null;
+  /** Null when the PR has no checks. */
+  checks: CheckSummary | null;
+  /** GitHub's own merge verdict, used for conflicts when the local check is unavailable. */
+  mergeable: "mergeable" | "conflicting" | "unknown";
+};
+
+/** Whether the branch merges cleanly into its base (the PR base, else the default branch). */
+export type ConflictSummary =
+  | { status: "clean"; base: string; source: "local" | "github" }
+  | { status: "conflicts"; base: string; source: "local" | "github"; files: string[] }
+  | { status: "unknown"; base: string | null; reason: string };
+
+/** Response of `GET /api/projects/<id>/github`: everything the sidebar's GitHub panel shows. */
+export type GithubSummary = {
+  /** Checked-out branch, or null when HEAD is detached. */
+  branch: string | null;
+  detached: boolean;
+  /** From `origin/HEAD`, falling back to main then master; null when none exist. */
+  defaultBranch: string | null;
+  /** `origin/<name>` the branch tracks, or null when it has no upstream ("not published"). */
+  upstream: string | null;
+  /** Commits on HEAD that the upstream lacks. 0 without an upstream. */
+  ahead: number;
+  /** Commits on the upstream that HEAD lacks. 0 without an upstream. */
+  behind: number;
+  /** Epoch ms of the last `git fetch` Portal ran for this repository, or null when it never has. */
+  fetchedAt: number | null;
+  /** git's message when the last fetch failed; null after a success. */
+  fetchError: string | null;
+  /** `https://github.com/<owner>/<name>` from the origin URL, or null when origin is not GitHub. */
+  repoUrl: string | null;
+  /** The ref the log is relative to (`origin/<base>`), or null when `commits` is just HEAD's history. */
+  logBase: string | null;
+  /**
+   * Newest first. With `logBase`, the branch's own commits followed by the merge-base row; a branch with
+   * more own commits than fit on the first page defers the merge-base row to the page that reaches it.
+   */
+  commits: CommitRow[];
+  /** Opaque cursor to pass to `/github/log?before=` for older commits, or null when there is nothing older. */
+  cursor: string | null;
+  /** The branch's PR, or null when there is none or gh could not answer (see `pullError`). */
+  pull: PullSummary | null;
+  /** Short reason when gh could not answer, e.g. "gh is not logged in"; null when it simply found no PR. */
+  pullError: string | null;
+  /** Null on a detached HEAD or when there is no base to compare against. */
+  conflicts: ConflictSummary | null;
+  /** Epoch ms when this snapshot was taken. */
+  at: number;
+};

@@ -203,6 +203,13 @@ export default function Chat() {
   };
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+  // The GitHub panel follows the open session's project, else the project new sessions start in.
+  // Nothing until the session list has loaded, so it does not fetch the start page's project and then switch.
+  const activeSession = sessions.find((s) => s.id === active);
+  const githubProjectId = active
+    ? (!loading && activeSession && projects.some((p) => p.id === activeSession.projectId) ? activeSession.projectId : null)
+    : selectedProjectId || null;
+  const githubProjectRemoved = !!active && !!activeSession && activeSession.projectId !== "" && !githubProjectId;
   // Where the start page's next session runs when a worktree is chosen (git projects only).
   const startTarget = selectedProject ? worktreeTarget(selectedProject, worktreeChoice) : null;
   const startContext = startTarget && selectedProject?.git ? (
@@ -237,6 +244,9 @@ export default function Chat() {
         onRemoveProject={removeProject}
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
+        githubProjectId={githubProjectId}
+        githubProjectRemoved={githubProjectRemoved}
+        activeSession={activeSession}
       />
       <AddProjectDialog
         open={showAddProject}
@@ -250,7 +260,7 @@ export default function Chat() {
       <SessionPane
         key={active ?? ""}
         sessionId={active}
-        session={sessions.find((s) => s.id === active)}
+        session={activeSession}
         start={{
           projects,
           selectedProjectId,

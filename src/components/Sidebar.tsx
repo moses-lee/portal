@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { BranchBadge } from "./ContextBar";
+import GithubPanel, { GITHUB_PANEL_HEADER_PX } from "./GithubPanel";
 import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
 import { groupSessionsByProject } from "@/lib/session-groups";
 import { WorktreeBadge } from "./WorktreeBadge";
@@ -25,7 +27,53 @@ export type SidebarProps = {
   /** Mobile drawer state; on `md` and up the sidebar is always visible. */
   open: boolean;
   onClose: () => void;
+  /** The project the GitHub panel shows: the active session's, else the start page's; null for none. */
+  githubProjectId: string | null;
+  /** The active session's project was removed from Portal, so the panel shows nothing for it. */
+  githubProjectRemoved: boolean;
+  /** The active session, whose branch switches and turn ends refresh the GitHub panel. */
+  activeSession?: SessionSummary;
 };
+
+const GITHUB_COLLAPSED_KEY = "portal.githubPanel.collapsed";
+const GITHUB_SIZE_KEY = "portal.githubPanel.size";
+const GITHUB_DEFAULT_SIZE = 33;
+/** Tailwind's `md` breakpoint, where the sidebar stops being a drawer. */
+const DESKTOP_QUERY = "(min-width: 768px)";
+
+function subscribeDesktop(onChange: () => void) {
+  const query = window.matchMedia(DESKTOP_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+const noopSubscribe = () => () => {};
+
+/** The GitHub panel's remembered layout; null on the server, where there is no storage to read. */
+type GithubLayout = { collapsed: boolean; size: number };
+
+/** Collapsed by default on small screens, where the sidebar is a drawer. */
+function readGithubLayout(): GithubLayout | null {
+  if (typeof window === "undefined") return null;
+  const defaultCollapsed = !window.matchMedia(DESKTOP_QUERY).matches;
+  try {
+    const collapsed = localStorage.getItem(GITHUB_COLLAPSED_KEY);
+    const size = Number(localStorage.getItem(GITHUB_SIZE_KEY));
+    return {
+      collapsed: collapsed === null ? defaultCollapsed : collapsed === "1",
+      size: Number.isFinite(size) && size > 0 && size < 100 ? size : GITHUB_DEFAULT_SIZE,
+    };
+  } catch {
+    return { collapsed: defaultCollapsed, size: GITHUB_DEFAULT_SIZE };
+  }
+}
+
+function storeGithubLayout(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage is a convenience; the layout still holds for this page load.
+  }
+}
 
 type Editing = { id: string; mode: "rename" | "remove" };
 
@@ -264,8 +312,15 @@ function RemoveConfirm({ project, onRemove, onCancel }: {
 /** Projects as collapsible groups with their sessions; the mobile drawer is controlled by `open`. */
 export default function Sidebar({
   projects, sessions, active, onSelect, onDeleteSession, onNewSession, onAddProject, onRenameProject, onRemoveProject, open, onClose,
+  githubProjectId, githubProjectRemoved, activeSession,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  /** True on `md` and up, where the sidebar is always visible; the drawer's `open` governs below that. */
+  const desktop = useSyncExternalStore(subscribeDesktop, () => window.matchMedia(DESKTOP_QUERY).matches, () => true);
+  /** False during server rendering and hydration, so the storage-dependent panel only renders once the markup can differ. */
+  const mounted = useSyncExternalStore(noopSubscribe, () => true, () => false);
+  const [githubLayout, setGithubLayout] = useState<GithubLayout | null>(readGithubLayout);
+  const githubPanelRef = usePanelRef();
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [actionError, setActionError] = useState<{ id: string; message: string } | null>(null);
@@ -291,20 +346,21 @@ export default function Sidebar({
 
   const closeMenu = useCallback(() => setMenuFor(null), []);
 
-  return (
-    <>
-      <aside
-        className={`${open ? "flex" : "hidden"} absolute inset-y-0 left-0 z-20 w-72 flex-col border-r border-zinc-800 bg-zinc-950 p-3 md:static md:flex`}
-      >
-        <div className="mb-3 text-sm font-semibold tracking-wide text-zinc-400">portal</div>
-        <button
-          type="button"
-          onClick={onAddProject}
-          className="mb-4 rounded border border-zinc-700 px-3 py-1.5 text-sm font-medium hover:bg-zinc-800"
-        >
-          + Add project
-        </button>
-        <nav aria-label="Projects and sessions" className="flex-1 space-y-2 overflow-y-auto">
+  const setGithubCollapsed = (value: boolean) => {
+    setGithubLayout((prev) => (prev ? { ...prev, collapsed: value } : prev));
+    storeGithubLayout(GITHUB_COLLAPSED_KEY, value ? "1" : "0");
+  };
+
+  const toggleGithub = () => {
+    const panel = githubPanelRef.current;
+    if (!githubLayout || !panel) return;
+    if (githubLayout.collapsed) panel.resize(`${githubLayout.size}%`);
+    else panel.collapse();
+    setGithubCollapsed(!githubLayout.collapsed);
+  };
+
+  const nav = (
+    <nav aria-label="Projects and sessions" className="min-h-0 flex-1 space-y-2 overflow-y-auto">
           {projects.length === 0 && groups.length === 0 && (
             <p className="px-2 text-xs text-zinc-500">No projects yet. Add a folder to start a session.</p>
           )}
@@ -409,7 +465,67 @@ export default function Sidebar({
               </section>
             );
           })}
-        </nav>
+    </nav>
+  );
+
+  return (
+    <>
+      <aside
+        className={`${open ? "flex" : "hidden"} absolute inset-y-0 left-0 z-20 w-72 flex-col border-r border-zinc-800 bg-zinc-950 p-3 md:static md:flex`}
+      >
+        <div className="mb-3 text-sm font-semibold tracking-wide text-zinc-400">portal</div>
+        <button
+          type="button"
+          onClick={onAddProject}
+          className="mb-4 rounded border border-zinc-700 px-3 py-1.5 text-sm font-medium hover:bg-zinc-800"
+        >
+          + Add project
+        </button>
+        <Group
+          orientation="vertical"
+          className="min-h-0 flex-1"
+          onLayoutChanged={(layout, meta) => {
+            // The library can collapse or expand the panel on its own (a drag past the minimum, a group
+            // resize), so the state always follows it; only user resizes are remembered across page loads.
+            const panel = githubPanelRef.current;
+            if (!panel || layout.github === undefined) return;
+            const collapsed = panel.isCollapsed();
+            const size = Math.round(layout.github * 10) / 10;
+            setGithubLayout((prev) => (prev ? { collapsed, size: collapsed ? prev.size : size } : prev));
+            if (!meta.isUserInteraction) return;
+            storeGithubLayout(GITHUB_COLLAPSED_KEY, collapsed ? "1" : "0");
+            if (!collapsed) storeGithubLayout(GITHUB_SIZE_KEY, String(size));
+          }}
+        >
+          <Panel id="sessions" minSize="20%" className="flex min-h-0 flex-col">
+            {nav}
+          </Panel>
+          {mounted && githubLayout && (
+            <Separator aria-label="Resize GitHub panel" className="h-1.5 shrink-0 bg-zinc-800 transition-colors hover:bg-indigo-500 focus-visible:bg-indigo-500 focus-visible:outline-none" />
+          )}
+          {mounted && githubLayout && (
+            <Panel
+              id="github"
+              panelRef={githubPanelRef}
+              collapsible
+              collapsedSize={GITHUB_PANEL_HEADER_PX}
+              groupResizeBehavior="preserve-pixel-size"
+              defaultSize={githubLayout.collapsed ? GITHUB_PANEL_HEADER_PX : `${githubLayout.size}%`}
+              minSize="15%"
+              maxSize="80%"
+              className="flex min-h-0 flex-col overflow-hidden"
+            >
+              <GithubPanel
+                projectId={githubProjectId}
+                projectRemoved={githubProjectRemoved}
+                session={activeSession}
+                collapsed={githubLayout.collapsed}
+                onToggle={toggleGithub}
+                visible={desktop || open}
+              />
+            </Panel>
+          )}
+        </Group>
       </aside>
       {open && <button aria-label="Close sessions sidebar" className="absolute inset-0 z-10 bg-black/60 md:hidden" onClick={onClose} />}
     </>
