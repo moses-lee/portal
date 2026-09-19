@@ -25,7 +25,7 @@ import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
 import { pinnedFirst } from "@/lib/pins";
 import { createHistoryCache } from "@/lib/history-cache";
-import { byRecentActivity } from "@/lib/session-groups";
+import { byRecentActivity, orderProjectsByActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
   applyConfigChange,
@@ -132,10 +132,10 @@ export default function Chat() {
     toggleSessionPin,
     prune: prunePins,
   } = usePins();
-  /** Pinned projects first (most recently pinned on top), then creation order: the sidebar's and the start page's order. */
+  /** Pinned projects first (most recently pinned on top), then most recently worked in: the sidebar's and the start page's order. */
   const orderedProjects = useMemo(
-    () => pinnedFirst(projects, projectPins),
-    [projects, projectPins],
+    () => pinnedFirst(orderProjectsByActivity(projects, sessions), projectPins),
+    [projects, sessions, projectPins],
   );
   /** The project picked this page load, or null to fall back to the remembered/newest one. */
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
   ArchiveRestore,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Folder,
   FolderGit2,
   MoreHorizontal,
@@ -46,7 +48,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { groupSessionsByProject } from "@/lib/session-groups";
+import { capSessions, groupSessionsByProject } from "@/lib/session-groups";
+import {
+  parseCollapsed,
+  pruneCollapsed,
+  serializeCollapsed,
+} from "@/lib/collapsed-projects";
 import { agentActivity, activityLabels } from "@/lib/agent-activity";
 import { relativeAge } from "@/lib/relative-age";
 import type { PinMap } from "@/lib/pins";
@@ -292,7 +299,22 @@ function SidebarContent(props: SidebarProps) {
   } = props;
   /** The workspace (projects and conversations) or the list of removed projects. */
   const [view, setView] = useState<"workspace" | "removed">("workspace");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  /** Collapsed projects, remembered per browser so decluttering survives a reload. */
+  const [storedCollapsed, storeCollapsed] = usePreference(
+    "portal.sidebar.collapsed",
+    "[]",
+  );
+  const collapsed = useMemo(
+    () => parseCollapsed(storedCollapsed),
+    [storedCollapsed],
+  );
+  /**
+   * Projects showing every conversation instead of the first few. Deliberately not persisted: it is
+   * a "let me find that one session" action, not a layout preference.
+   */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<{
     id: string;
@@ -336,13 +358,49 @@ function SidebarContent(props: SidebarProps) {
           group.project.name.toLowerCase().includes(q),
       );
   }, [projects, sessions, sessionPins, query]);
-  const toggle = (id: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+  /**
+   * Write the collapsed set, forgetting ids of projects that are gone. Pruning here rather than in an
+   * effect keeps a background tab, whose project list goes stale until it is looked at again, from
+   * dropping a project that another tab just collapsed.
+   */
+  const storeCollapsedIds = (ids: Iterable<string>) => {
+    const next = new Set(ids);
+    storeCollapsed(
+      serializeCollapsed(
+        projects.length === 0
+          ? next
+          : pruneCollapsed(
+              next,
+              projects.map((project) => project.id),
+            ),
+      ),
+    );
+  };
+  /** Collapse projects, dropping any "show all" they had: reopening one starts from the short list again. */
+  const collapse = (ids: Iterable<string>) => {
+    const next = new Set(collapsed);
+    for (const id of ids) next.add(id);
+    storeCollapsedIds(next);
+    setExpanded((prev) => {
+      const kept = [...prev].filter((id) => !next.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
     });
+  };
+  const toggle = (id: string) => {
+    if (!collapsed.has(id)) return collapse([id]);
+    const next = new Set(collapsed);
+    next.delete(id);
+    storeCollapsedIds(next);
+  };
+  // Measured over every project rather than the search-filtered `groups`: the button edits the stored
+  // state, so scoping it to the current query would fold, or forget, an arbitrary subset of projects.
+  const allCollapsed =
+    projects.length > 0 &&
+    projects.every((project) => collapsed.has(project.id));
+  const toggleAll = () => {
+    if (!allCollapsed) return collapse(projects.map((project) => project.id));
+    storeCollapsedIds([]);
+  };
   return (
     <div className="sidebar-content">
       <div className="mb-4 flex items-center gap-2 px-2">
@@ -419,8 +477,17 @@ function SidebarContent(props: SidebarProps) {
         </div>
         <div className="mb-2 flex items-center px-2">
           <span className="flex-1 text-[10px] font-semibold tracking-[.12em] text-muted-foreground/80 uppercase">
-            Workspace
+            Projects
           </span>
+          <IconButton
+            label={allCollapsed ? "Expand all projects" : "Collapse all projects"}
+            size="icon-xs"
+            disabled={projects.length === 0}
+            onClick={toggleAll}
+            className="text-muted-foreground"
+          >
+            {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+          </IconButton>
           <IconButton
             label="Add project"
             size="icon-xs"
@@ -450,6 +517,11 @@ function SidebarContent(props: SidebarProps) {
               : null;
             const waiting = rows.some((s) => s.awaitingPermission);
             const working = rows.some((s) => s.busy);
+            // A search shows every match; otherwise the list is cut until "Show more" asks for the rest.
+            const capped = capSessions(rows, sessionPins, active);
+            const hiddenCount = rows.length - capped.length;
+            const showingAll = expanded.has(project.id);
+            const visible = query || showingAll ? rows : capped;
             return (
               <section key={project.id} aria-label={project.name}>
                 <div className="mb-0.5 flex items-center gap-0.5 px-1">
@@ -591,7 +663,7 @@ function SidebarContent(props: SidebarProps) {
                   hidden={isCollapsed}
                   className="space-y-0.5"
                 >
-                  {rows.map((session) => (
+                  {visible.map((session) => (
                     <SessionRow
                       key={session.id}
                       session={session}
@@ -608,6 +680,24 @@ function SidebarContent(props: SidebarProps) {
                     <p className="px-3 py-3 text-[11px] text-muted-foreground">
                       No conversations yet
                     </p>
+                  )}
+                  {!query && hiddenCount > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-expanded={showingAll}
+                      onClick={() =>
+                        setExpanded((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(project.id)) next.delete(project.id);
+                          else next.add(project.id);
+                          return next;
+                        })
+                      }
+                      className="h-7 w-full justify-start rounded-lg px-3 text-[11px] text-muted-foreground"
+                    >
+                      {showingAll ? "Show less" : `Show ${hiddenCount} more`}
+                    </Button>
                   )}
                 </div>
               </section>

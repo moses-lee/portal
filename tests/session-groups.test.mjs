@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupSessionsByProject } from "../src/lib/session-groups.ts";
+import { capSessions, groupSessionsByProject, orderProjectsByActivity } from "../src/lib/session-groups.ts";
 
 function project(id, createdAt = 0) {
   return { id, name: id, path: `/repos/${id}`, createdAt };
@@ -82,4 +82,66 @@ test("pinned sessions lead their group, each part most recently active first", (
   ], { "old-pinned": 100, "new-pinned": 50, "orphan-pinned": 10 });
   assert.deepEqual(groups[0].sessions.map((s) => s.id), ["new-pinned", "old-pinned", "newest", "mid"]);
   assert.deepEqual(groups[1].sessions.map((s) => s.id), ["orphan-pinned", "orphan"]);
+});
+
+test("orderProjectsByActivity puts the most recently worked in project first", () => {
+  const projects = [project("a", 1), project("b", 2), project("c", 3)];
+  const sessions = [session("s1", "a", 50), session("s2", "b", 10), session("s3", "a", 20)];
+  assert.deepEqual(orderProjectsByActivity(projects, sessions).map((p) => p.id), ["a", "b", "c"]);
+});
+
+test("orderProjectsByActivity ranks a session-less project by its own createdAt", () => {
+  // "fresh" was added moments ago and outranks a project last worked in long before it.
+  const projects = [project("stale", 1), project("fresh", 100)];
+  const sessions = [session("s1", "stale", 40)];
+  assert.deepEqual(orderProjectsByActivity(projects, sessions).map((p) => p.id), ["fresh", "stale"]);
+  // Once work happens in "stale" again it comes back to the top.
+  assert.deepEqual(
+    orderProjectsByActivity(projects, [...sessions, session("s2", "stale", 200)]).map((p) => p.id),
+    ["stale", "fresh"],
+  );
+});
+
+test("orderProjectsByActivity ranks a project by its newest session even when it was added later", () => {
+  // "fresh" was added after "other" was last worked in, but owns only an older session. Ranking on
+  // the newest of the two keeps it on top; falling back to the session alone would sink it.
+  const projects = [project("fresh", 100), project("other", 1)];
+  const sessions = [session("s1", "fresh", 40), session("s2", "other", 60)];
+  assert.deepEqual(orderProjectsByActivity(projects, sessions).map((p) => p.id), ["fresh", "other"]);
+});
+
+test("orderProjectsByActivity breaks equal ranks on createdAt, newest first, and does not mutate its input", () => {
+  // Both rank 10: "a" through its session, "b" through being added at the same moment.
+  const projects = [project("a", 1), project("b", 10)];
+  const frozen = [...projects];
+  assert.deepEqual(
+    orderProjectsByActivity(projects, [session("s1", "a", 10)]).map((p) => p.id),
+    ["b", "a"],
+  );
+  assert.deepEqual(orderProjectsByActivity(projects, []).map((p) => p.id), ["b", "a"]);
+  assert.deepEqual(projects, frozen);
+});
+
+test("capSessions keeps the first few unpinned sessions", () => {
+  const rows = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"].map((id, i) => session(id, "a", 100 - i));
+  assert.deepEqual(capSessions(rows, {}, null).map((s) => s.id), ["s1", "s2", "s3", "s4", "s5"]);
+  assert.deepEqual(capSessions(rows, {}, null, 2).map((s) => s.id), ["s1", "s2"]);
+  // Nothing to hide: the list comes back whole.
+  assert.deepEqual(capSessions(rows.slice(0, 3), {}, null).map((s) => s.id), ["s1", "s2", "s3"]);
+});
+
+test("capSessions always shows pinned sessions and caps only the unpinned tail", () => {
+  const rows = ["p1", "p2", "p3", "p4", "p5", "p6", "s1", "s2"].map((id, i) => session(id, "a", 100 - i));
+  const pins = Object.fromEntries(["p1", "p2", "p3", "p4", "p5", "p6"].map((id) => [id, 1]));
+  assert.deepEqual(
+    capSessions(rows, pins, null, 1).map((s) => s.id),
+    ["p1", "p2", "p3", "p4", "p5", "p6", "s1"],
+  );
+});
+
+test("capSessions keeps the open session visible past the cap, in its sorted position", () => {
+  const rows = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"].map((id, i) => session(id, "a", 100 - i));
+  assert.deepEqual(capSessions(rows, {}, "s7").map((s) => s.id), ["s1", "s2", "s3", "s4", "s5", "s7"]);
+  // An open session already within the cap does not buy an extra row.
+  assert.deepEqual(capSessions(rows, {}, "s3").map((s) => s.id), ["s1", "s2", "s3", "s4", "s5"]);
 });

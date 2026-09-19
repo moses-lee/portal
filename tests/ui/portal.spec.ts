@@ -4,9 +4,13 @@ import {
   events,
   failingGithubSummary,
   firstTitle,
+  makeSession,
+  manySessions,
+  project,
   secondTitle,
   setupPortal,
   removedProject,
+  worktree,
 } from "./fixtures";
 import { buildGitActionPrompt } from "../../src/lib/git-action-prompt";
 import { defaultSettings } from "../../src/lib/settings";
@@ -863,4 +867,166 @@ test("the Removed view explains unrestorable rows and deletes their conversation
   await expect(
     sidebar.getByRole("navigation", { name: "Projects and sessions" }),
   ).toBeVisible();
+});
+
+test("a project lists five conversations and reveals the rest on request", async ({
+  page,
+}) => {
+  await setupPortal(page, { sessions: manySessions() });
+  await page.goto("/");
+  const portalSection = page.getByRole("region", { name: "portal" });
+
+  // The five most recent show; the older three are only a count until asked for.
+  await expect(portalSection.getByRole("button", { name: "Conversation 5", exact: true })).toBeVisible();
+  await expect(portalSection.getByRole("button", { name: "Conversation 6", exact: true })).toHaveCount(0);
+  const more = portalSection.getByRole("button", { name: "Show 3 more" });
+  await expect(more).toBeVisible();
+  // The cap is per project: the worktree's single conversation is untouched.
+  await expect(
+    page.getByRole("region", { name: worktree.name }).getByRole("button", { name: "Show" }),
+  ).toHaveCount(0);
+
+  await more.click();
+  await expect(portalSection.getByRole("button", { name: "Conversation 8", exact: true })).toBeVisible();
+  await portalSection.getByRole("button", { name: "Show less" }).click();
+  await expect(portalSection.getByRole("button", { name: "Conversation 8", exact: true })).toHaveCount(0);
+
+  // A search shows every match rather than hiding results behind the cap.
+  await page.getByRole("textbox", { name: "Search sessions" }).fill("Conversation");
+  await expect(portalSection.getByRole("button", { name: "Conversation 8", exact: true })).toBeVisible();
+  await expect(portalSection.getByRole("button", { name: /^Show/ })).toHaveCount(0);
+});
+
+test("the conversation you have open stays listed past the cap", async ({ page }) => {
+  await setupPortal(page, { sessions: manySessions() });
+  // m7 sorts seventh, so the cap would hide it if the sidebar did not keep the open one.
+  await page.goto("/sessions/m7");
+  const portalSection = page.getByRole("region", { name: "portal" });
+  const open = portalSection.getByRole("button", { name: "Conversation 7", exact: true });
+  await expect(open).toHaveAttribute("aria-current", "page");
+  // It keeps its sorted position: still after the fifth, and only the remaining two are hidden.
+  await expect(portalSection.getByRole("button", { name: "Show 2 more" })).toBeVisible();
+  await expect(portalSection.getByRole("button", { name: "Conversation 6", exact: true })).toHaveCount(0);
+});
+
+test("collapse all folds every project, survives a reload, and expands again", async ({
+  page,
+}) => {
+  await setupPortal(page, { sessions: manySessions() });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const first = sidebar.getByRole("button", { name: "Conversation 1", exact: true });
+  await expect(first).toBeVisible();
+
+  await sidebar.getByRole("button", { name: "Collapse all projects" }).click();
+  await expect(first).toBeHidden();
+  await expect(sidebar.getByRole("button", { name: "Worktree work", exact: true })).toBeHidden();
+  const expandAll = sidebar.getByRole("button", { name: "Expand all projects" });
+  await expect(expandAll).toBeVisible();
+
+  await page.reload();
+  await expect(first).toBeHidden();
+  // Searching still surfaces matches inside collapsed projects.
+  await page.getByRole("textbox", { name: "Search sessions" }).fill("Conversation 1");
+  await expect(first).toBeVisible();
+  await page.getByRole("textbox", { name: "Search sessions" }).fill("");
+  await expect(first).toBeHidden();
+
+  await sidebar.getByRole("button", { name: "Expand all projects" }).click();
+  await expect(first).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Collapse all projects" })).toBeVisible();
+});
+
+test("projects are ordered by most recent activity, below pinned ones", async ({
+  page,
+}) => {
+  const base = Date.now();
+  await setupPortal(page, {
+    // Explicit createdAt so the ranking comes from the sessions, not from when the fixtures loaded.
+    projects: [
+      { ...project, createdAt: 1 },
+      { ...worktree, createdAt: 2 },
+    ],
+    sessions: [
+      { ...makeSession("a1", "Older work", "claude", project), lastActiveAt: base - 3_600_000 },
+      { ...makeSession("b1", "Newer work", "codex", worktree), lastActiveAt: base },
+    ],
+  });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const regions = sidebar
+    .getByRole("navigation", { name: "Projects and sessions" })
+    .getByRole("region");
+  const names = () =>
+    regions.evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("aria-label")),
+    );
+  await expect.poll(names).toEqual([worktree.name, project.name]);
+
+  // A pin outranks recency.
+  await sidebar.getByRole("button", { name: `Actions for project ${project.name}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Pin project" }).click();
+  await expect.poll(names).toEqual([project.name, worktree.name]);
+});
+
+test("collapsing one project folds only it and forgets its expanded list", async ({
+  page,
+}) => {
+  await setupPortal(page, { sessions: manySessions() });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const portalSection = page.getByRole("region", { name: project.name, exact: true });
+  const eighth = portalSection.getByRole("button", { name: "Conversation 8", exact: true });
+  const header = sidebar.locator(`button[aria-controls="project-${project.id}"]`);
+  const worktreeRow = sidebar.getByRole("button", { name: "Worktree work", exact: true });
+
+  await portalSection.getByRole("button", { name: "Show 3 more" }).click();
+  await expect(eighth).toBeVisible();
+
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(eighth).toBeHidden();
+  // Folding one project leaves the others alone.
+  await expect(worktreeRow).toBeVisible();
+
+  // Reopening starts from the short list again rather than restoring the "show all".
+  await header.click();
+  await expect(eighth).toBeHidden();
+  await expect(portalSection.getByRole("button", { name: "Show 3 more" })).toBeVisible();
+
+  await header.click();
+  await page.reload();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(worktreeRow).toBeVisible();
+});
+
+test("collapse all covers projects the search filtered out", async ({ page }) => {
+  await setupPortal(page, { sessions: manySessions() });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const search = page.getByRole("textbox", { name: "Search sessions" });
+  const headers = [project.id, worktree.id].map((id) =>
+    sidebar.locator(`button[aria-controls="project-${id}"]`),
+  );
+
+  // Only the portal project matches, but the button edits the stored state for every project.
+  await search.fill("Conversation");
+  await sidebar.getByRole("button", { name: "Collapse all projects" }).click();
+  await search.fill("");
+  for (const header of headers)
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+});
+
+test("the collapse toggle is disabled when there are no projects", async ({
+  page,
+}) => {
+  await setupPortal(page, { projects: [], sessions: [] });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await expect(
+    sidebar.getByText("Add a project to create your first conversation."),
+  ).toBeVisible();
+  await expect(
+    sidebar.getByRole("button", { name: "Collapse all projects" }),
+  ).toBeDisabled();
 });

@@ -139,6 +139,23 @@ export const sessions = [
   makeSession("s2", secondTitle, "codex"),
   makeSession("s3", "Review the pull request and its checks", "codex", project),
 ];
+/**
+ * Eight conversations in `project`, most recently active first, and one in the worktree: enough to
+ * push a project past the sidebar's five-row cap.
+ */
+export function manySessions(): SessionSummary[] {
+  const base = Date.now();
+  return [
+    ...Array.from({ length: 8 }, (_, i) =>
+      makeSession(`m${i + 1}`, `Conversation ${i + 1}`, "claude", project),
+    ).map((entry, i) => ({ ...entry, lastActiveAt: base - i * 60_000 })),
+    {
+      ...makeSession("w1", "Worktree work", "codex", worktree),
+      lastActiveAt: base - 10 * 60_000,
+    },
+  ];
+}
+
 const raw: PortalEvent[] = [
   {
     type: "user",
@@ -406,6 +423,10 @@ export async function setupPortal(
     realSettings?: boolean;
     /** Rows of `GET /api/projects/removed`; restoring one lists it as a project with one session. */
     removed?: RemovedProjectSummary[];
+    /** Replaces the default three conversations, for tests of sidebar grouping, ordering, and capping. */
+    sessions?: SessionSummary[];
+    /** Replaces the default two projects. */
+    projects?: ProjectSummary[];
     /** Talk to Portal's state: what `/api/portal`, its messages, items, and stream answer with. */
     portal?: {
       status?: Partial<OrchestratorStatus>;
@@ -414,8 +435,10 @@ export async function setupPortal(
     };
   } = {},
 ) {
-  const currentSessions = structuredClone(sessions);
-  const currentProjects: ProjectSummary[] = [project, worktree];
+  const currentSessions = structuredClone(options.sessions ?? sessions);
+  const currentProjects: ProjectSummary[] = structuredClone(
+    options.projects ?? [project, worktree],
+  );
   const currentRemoved = structuredClone(options.removed ?? []);
   const live = {
     // Timed from now, not from module load, so "next check in 7 min" holds however long the run has been going.
@@ -575,7 +598,10 @@ export async function setupPortal(
           createdAt: now,
           exists: true,
           worktree: row.worktree,
-          git: { ...project.git!, branch: row.worktree?.branch ?? "main" },
+          git: {
+            ...(currentProjects[0]?.git ?? project.git!),
+            branch: row.worktree?.branch ?? "main",
+          },
         };
         currentProjects.push(restored);
         currentSessions.push({
@@ -595,7 +621,9 @@ export async function setupPortal(
           "created",
           "",
           body.agentId,
-          body.projectId === "p1" ? project : worktree,
+          currentProjects.find((p) => p.id === body.projectId) ??
+            currentProjects[0] ??
+            project,
         ),
         // A new session is the most recently active one.
         lastActiveAt: now,
