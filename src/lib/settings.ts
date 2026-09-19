@@ -1,5 +1,7 @@
 import { defaultOrchestratorSettings, orchestratorProviders } from "./orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "./orchestrator/types.ts";
+import { defaultScripts, mergeScripts, scriptsOverrides } from "./scripts.ts";
+import type { ScriptsPatch, ScriptsSettings } from "./scripts.ts";
 
 /** The GitHub panel's one-click actions on a pull request; each sends a prompt to the agent. */
 export type GitActionKind = "checks" | "conflicts" | "review";
@@ -13,6 +15,8 @@ export type Settings = {
   version: 1;
   gitActions: { prompts: GitActionPrompts };
   orchestrator: OrchestratorSettings;
+  /** User scripts run before certain actions; see scripts.ts. */
+  scripts: ScriptsSettings;
 };
 
 /**
@@ -22,6 +26,7 @@ export type Settings = {
 export type SettingsPatch = {
   gitActions?: { prompts?: Partial<Record<GitActionKind, string>> };
   orchestrator?: OrchestratorSettingsPatch;
+  scripts?: ScriptsPatch;
 };
 
 export const gitActionKinds: readonly GitActionKind[] = ["checks", "conflicts", "review"];
@@ -50,6 +55,7 @@ export const defaultSettings: Settings = {
     },
   },
   orchestrator: defaultOrchestratorSettings,
+  scripts: defaultScripts,
 };
 
 export function isOrchestratorProvider(value: unknown): value is OrchestratorProvider {
@@ -97,6 +103,7 @@ export function mergeSettings(overrides: SettingsPatch | null | undefined): Sett
     version: 1,
     gitActions: { prompts: mergePrompts(defaultSettings.gitActions.prompts, overrides?.gitActions?.prompts) },
     orchestrator: mergeOrchestrator(defaultSettings.orchestrator, overrides?.orchestrator),
+    scripts: mergeScripts(defaultSettings.scripts, overrides?.scripts),
   };
 }
 
@@ -128,13 +135,16 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   if (given.idleIntervalMinutes !== base.idleIntervalMinutes) orchestrator.idleIntervalMinutes = given.idleIntervalMinutes;
   if (Object.keys(orchestrator).length > 0) result.orchestrator = orchestrator;
 
+  const scripts = scriptsOverrides(settings.scripts);
+  if (scripts) result.scripts = scripts;
+
   return result;
 }
 
 /**
  * `settings` with `patch` laid on top. A blank prompt in the patch resets that prompt to its
- * default; orchestrator fields take the patch's value when present and keep the current one
- * otherwise. Sections the patch does not mention are preserved as they are.
+ * default; orchestrator and script fields take the patch's value when present and keep the
+ * current one otherwise. Sections the patch does not mention are preserved as they are.
  */
 export function applySettingsPatch(settings: Settings, patch: SettingsPatch): Settings {
   return {
@@ -143,5 +153,6 @@ export function applySettingsPatch(settings: Settings, patch: SettingsPatch): Se
       prompts: mergePrompts(defaultSettings.gitActions.prompts, { ...settings.gitActions.prompts, ...patch.gitActions?.prompts }),
     },
     orchestrator: mergeOrchestrator(settings.orchestrator, patch.orchestrator),
+    scripts: mergeScripts(settings.scripts, patch.scripts),
   };
 }

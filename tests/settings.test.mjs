@@ -10,6 +10,7 @@ import {
   orchestratorLimits,
   settingsOverrides,
 } from "../src/lib/settings.ts";
+import { defaultScriptSettings, defaultScripts, mergeScripts, scriptKinds, scriptLimits, scriptsOverrides } from "../src/lib/scripts.ts";
 
 const orchestratorDefaults = defaultOrchestratorSettings;
 
@@ -48,6 +49,7 @@ test("mergeSettings fills in defaults and ignores blank overrides", () => {
     version: 1,
     gitActions: { prompts: { ...defaultSettings.gitActions.prompts, checks: "Look at CI" } },
     orchestrator: orchestratorDefaults,
+    scripts: defaultScripts,
   });
   // Non-string values are treated as absent.
   assert.deepEqual(mergeSettings({ gitActions: { prompts: { checks: 42 } } }), defaultSettings);
@@ -164,4 +166,55 @@ test("applySettingsPatch touches only the section a patch names", () => {
   assert.deepEqual(applySettingsPatch(start, { orchestrator: {} }), start);
   assert.deepEqual(applySettingsPatch(start, {}), start);
   assert.notEqual(applySettingsPatch(start, {}).orchestrator.apiKeys, start.orchestrator.apiKeys, "does not alias the input");
+});
+
+test("scriptKinds names every default script, each off with a timeout within the limit", () => {
+  assert.deepEqual(scriptKinds, ["preWorktreeDelete"]);
+  assert.deepEqual(Object.keys(defaultSettings.scripts).sort(), [...scriptKinds].sort());
+  for (const kind of scriptKinds) {
+    assert.deepEqual(defaultSettings.scripts[kind], defaultScriptSettings);
+    assert.equal(defaultSettings.scripts[kind].command, "", "off by default");
+  }
+  assert.ok(defaultScriptSettings.timeoutSeconds <= scriptLimits.timeoutSeconds);
+  assert.equal(defaultScriptSettings.abortOnFailure, true);
+});
+
+test("mergeSettings applies script overrides field by field and trims the command", () => {
+  const merged = mergeSettings({ scripts: { preWorktreeDelete: { command: "  make clean \n", abortOnFailure: false, timeoutSeconds: 30 } } });
+  assert.deepEqual(merged.gitActions, defaultSettings.gitActions);
+  assert.deepEqual(merged.orchestrator, orchestratorDefaults);
+  assert.deepEqual(merged.scripts.preWorktreeDelete, { command: "make clean", abortOnFailure: false, timeoutSeconds: 30 });
+  assert.notEqual(mergeSettings({}).scripts, defaultSettings.scripts, "returns a fresh scripts section");
+  assert.notEqual(mergeSettings({}).scripts.preWorktreeDelete, defaultSettings.scripts.preWorktreeDelete);
+
+  // Ill-typed or out-of-range values leave the default in place; a blank command is a real value (off).
+  const lenient = mergeSettings({ scripts: { preWorktreeDelete: { command: 7, abortOnFailure: "yes", timeoutSeconds: 0 } } });
+  assert.deepEqual(lenient.scripts, defaultScripts);
+  assert.equal(mergeSettings({ scripts: { preWorktreeDelete: { timeoutSeconds: scriptLimits.timeoutSeconds + 1 } } }).scripts.preWorktreeDelete.timeoutSeconds, defaultScriptSettings.timeoutSeconds);
+  assert.equal(mergeSettings({ scripts: { preWorktreeDelete: { timeoutSeconds: 2.5 } } }).scripts.preWorktreeDelete.timeoutSeconds, defaultScriptSettings.timeoutSeconds);
+  assert.equal(mergeScripts(mergeSettings({ scripts: { preWorktreeDelete: { command: "x" } } }).scripts, { preWorktreeDelete: { command: "  " } }).preWorktreeDelete.command, "");
+  // Unknown script kinds are ignored.
+  assert.deepEqual(mergeSettings({ scripts: { postCreate: { command: "x" } } }).scripts, defaultScripts);
+});
+
+test("settingsOverrides writes only the script fields that differ, and round-trips", () => {
+  assert.equal(scriptsOverrides(defaultScripts), undefined);
+  const merged = mergeSettings({ scripts: { preWorktreeDelete: { command: "make clean" } } });
+  assert.deepEqual(settingsOverrides(merged), { scripts: { preWorktreeDelete: { command: "make clean" } } });
+  assert.deepEqual(mergeSettings(settingsOverrides(merged)), merged);
+  const toggled = mergeSettings({ scripts: { preWorktreeDelete: { abortOnFailure: false, timeoutSeconds: defaultScriptSettings.timeoutSeconds } } });
+  assert.deepEqual(settingsOverrides(toggled), { scripts: { preWorktreeDelete: { abortOnFailure: false } } });
+});
+
+test("applySettingsPatch layers script fields and keeps the ones a patch leaves out", () => {
+  const first = applySettingsPatch(defaultSettings, { scripts: { preWorktreeDelete: { command: "make clean", timeoutSeconds: 60 } } });
+  const second = applySettingsPatch(first, { scripts: { preWorktreeDelete: { abortOnFailure: false } } });
+  assert.deepEqual(second.scripts.preWorktreeDelete, { command: "make clean", abortOnFailure: false, timeoutSeconds: 60 });
+  // A blank command turns the script off but keeps its other fields for next time.
+  const off = applySettingsPatch(second, { scripts: { preWorktreeDelete: { command: "" } } });
+  assert.deepEqual(off.scripts.preWorktreeDelete, { command: "", abortOnFailure: false, timeoutSeconds: 60 });
+  // Other sections are untouched.
+  assert.deepEqual(off.gitActions, defaultSettings.gitActions);
+  assert.deepEqual(off.orchestrator, defaultSettings.orchestrator);
+  assert.deepEqual(applySettingsPatch(second, { gitActions: { prompts: { checks: "x" } } }).scripts, second.scripts);
 });

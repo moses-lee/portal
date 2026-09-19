@@ -13,6 +13,8 @@ import {
   settingsOverrides,
 } from "./settings.ts";
 import type { GitActionKind, Settings, SettingsPatch } from "./settings.ts";
+import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "./scripts.ts";
+import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "./scripts.ts";
 
 /** A settings change the caller got wrong; `status` is the HTTP status to answer with. */
 export class SettingsError extends Error {
@@ -48,6 +50,7 @@ export type SettingsFile = {
     idleIntervalMinutes?: number;
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
   };
+  scripts?: ScriptsPatch;
 };
 
 /** The overrides read from a file, without the version marker. */
@@ -93,6 +96,49 @@ function checkApiKey(provider: string, value: unknown): Checked<string> {
     return { error: `The ${provider} API key is too long (${trimmed.length} characters; the limit is ${MAX_API_KEY_LENGTH}).` };
   }
   return { value: trimmed };
+}
+
+/** One script's fields from a PATCH or a file: each checked on its own, a message for the first bad one. */
+function checkScriptField(kind: ScriptKind, field: keyof ScriptSettingsPatch, value: unknown): Checked<string | number | boolean> {
+  switch (field) {
+    case "command": {
+      if (typeof value !== "string") return { error: `The ${kind} script command must be a string.` };
+      const trimmed = value.trim();
+      if (trimmed.length > scriptLimits.commandLength) {
+        return { error: `The ${kind} script command is too long (${trimmed.length} characters; the limit is ${scriptLimits.commandLength}).` };
+      }
+      // A NUL makes spawn() throw synchronously; other control characters have no place in a command either.
+      if (CONTROL_CHARACTERS.test(trimmed)) return { error: `The ${kind} script command must not contain control characters.` };
+      return { value: trimmed };
+    }
+    case "abortOnFailure":
+      if (typeof value !== "boolean") return { error: `${kind}.abortOnFailure must be a boolean.` };
+      return { value };
+    case "timeoutSeconds":
+      if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > scriptLimits.timeoutSeconds) {
+        return { error: `${kind}.timeoutSeconds must be a whole number of seconds between 1 and ${scriptLimits.timeoutSeconds}.` };
+      }
+      return { value: value as number };
+  }
+}
+
+/** Control characters other than newline, carriage return, and tab. */
+const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+function parseScriptsPatch(given: unknown): ScriptsPatch {
+  if (!isPlainObject(given)) throw new SettingsError("scripts must be an object.", 400);
+  const scripts: ScriptsPatch = {};
+  for (const [kind, fields] of Object.entries(given)) {
+    if (!isScriptKind(kind)) throw new SettingsError(`Unknown script "${kind}"; expected one of ${scriptKinds.join(", ")}.`, 400);
+    if (!isPlainObject(fields)) throw new SettingsError(`scripts.${kind} must be an object.`, 400);
+    const patch: ScriptSettingsPatch = {};
+    for (const field of scriptFields) {
+      if (fields[field] === undefined) continue;
+      (patch as Record<string, unknown>)[field] = required(checkScriptField(kind, field, fields[field]));
+    }
+    scripts[kind] = patch;
+  }
+  return scripts;
 }
 
 function parsePromptsPatch(given: unknown): Partial<Record<GitActionKind, string>> {
@@ -144,7 +190,7 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
 
 /**
  * Check a PATCH body from the network. Unknown keys beside the known sections and fields are
- * ignored, but prompt kinds and API key providers must be known, and every value must have the
+ * ignored, but prompt kinds, script kinds, and API key providers must be known, and every value must have the
  * right type and size. Strings are trimmed. Only the sections present in `input` appear in the result.
  */
 export function parseSettingsPatch(input: unknown): SettingsPatch {
@@ -155,7 +201,25 @@ export function parseSettingsPatch(input: unknown): SettingsPatch {
     patch.gitActions = input.gitActions.prompts === undefined ? {} : { prompts: parsePromptsPatch(input.gitActions.prompts) };
   }
   if (input.orchestrator !== undefined) patch.orchestrator = parseOrchestratorPatch(input.orchestrator);
+  if (input.scripts !== undefined) patch.scripts = parseScriptsPatch(input.scripts);
   return patch;
+}
+
+/** The scripts section of a settings file, field by field like the others; a bad value falls back to its default. */
+function parseScriptsFile(given: unknown): SettingsFile["scripts"] {
+  if (!isPlainObject(given)) return undefined;
+  const scripts: ScriptsPatch = {};
+  for (const kind of scriptKinds) {
+    const fields = given[kind];
+    if (!isPlainObject(fields)) continue;
+    const patch: ScriptSettingsPatch = {};
+    for (const field of scriptFields) {
+      const checked = checkScriptField(kind, field, fields[field]);
+      if ("value" in checked) (patch as Record<string, unknown>)[field] = checked.value;
+    }
+    if (Object.keys(patch).length > 0) scripts[kind] = patch;
+  }
+  return Object.keys(scripts).length > 0 ? scripts : undefined;
 }
 
 /**
@@ -210,6 +274,8 @@ export function parseSettingsFile(text: string): FileOverrides | null {
   if (gitActions) overrides.gitActions = gitActions;
   const orchestrator = parseOrchestratorFile(parsed.orchestrator);
   if (orchestrator) overrides.orchestrator = orchestrator;
+  const scripts = parseScriptsFile(parsed.scripts);
+  if (scripts) overrides.scripts = scripts;
   return overrides;
 }
 

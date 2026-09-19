@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultOrchestratorSettings } from "../src/lib/orchestrator/types.ts";
+import { defaultScriptSettings, defaultScripts, scriptLimits } from "../src/lib/scripts.ts";
 import { defaultSettings } from "../src/lib/settings.ts";
 import { SettingsError, createSettingsStore, defaultSettingsFile, parseSettingsFile, parseSettingsPatch } from "../src/lib/settings-store.ts";
 
@@ -61,6 +62,7 @@ test("patch() writes only the overrides, creates the parent directory, and a fre
     version: 1,
     gitActions: { prompts: { ...defaults, checks: "Look at CI" } },
     orchestrator: orchestratorDefaults,
+    scripts: defaultScripts,
   });
   assert.ok(existsSync(path.dirname(file)), "parent directory created");
   // The file will hold API keys: private to the user, like the orchestrator's directory.
@@ -470,4 +472,72 @@ test("serializes concurrent patches so none is lost", async (t) => {
   });
   assert.deepEqual(readdirSync(path.dirname(file)), ["settings.json"]);
   assert.deepEqual((await open().read()).gitActions.prompts, { checks: "A", conflicts: "B", review: "C" });
+});
+
+test("script patches: fields are stored as overrides, trimmed, and a blank command turns the script off", async (t) => {
+  const { file, open } = setup(t);
+  const store = open();
+  const one = await store.patch({ scripts: { preWorktreeDelete: { command: "  bazel clean  " } } });
+  assert.deepEqual(one.scripts.preWorktreeDelete, { ...defaultScriptSettings, command: "bazel clean" });
+  // Newlines and tabs are fine: a script may span lines.
+  assert.equal((await store.patch({ scripts: { preWorktreeDelete: { command: "make clean\n\tmake distclean" } } })).scripts.preWorktreeDelete.command, "make clean\n\tmake distclean");
+  await store.patch({ scripts: { preWorktreeDelete: { command: "bazel clean" } } });
+  assert.deepEqual(readJson(file), { version: 1, scripts: { preWorktreeDelete: { command: "bazel clean" } } });
+
+  const two = await store.patch({ scripts: { preWorktreeDelete: { abortOnFailure: false, timeoutSeconds: 45 } } });
+  assert.deepEqual(two.scripts.preWorktreeDelete, { command: "bazel clean", abortOnFailure: false, timeoutSeconds: 45 });
+  assert.deepEqual(readJson(file).scripts, { preWorktreeDelete: { command: "bazel clean", abortOnFailure: false, timeoutSeconds: 45 } });
+  assert.deepEqual(await open().read(), two, "a fresh store reloads them");
+
+  const off = await store.patch({ scripts: { preWorktreeDelete: { command: "" } } });
+  assert.equal(off.scripts.preWorktreeDelete.command, "");
+  assert.deepEqual(readJson(file).scripts, { preWorktreeDelete: { abortOnFailure: false, timeoutSeconds: 45 } });
+
+  // Back to every default: the section disappears from the file.
+  await store.patch({ scripts: { preWorktreeDelete: { abortOnFailure: true, timeoutSeconds: defaultScriptSettings.timeoutSeconds } } });
+  assert.deepEqual(readJson(file), { version: 1 });
+  // An empty patch for a known script is accepted and changes nothing.
+  assert.deepEqual(await store.patch({ scripts: { preWorktreeDelete: {} } }), defaultSettings);
+  assert.deepEqual(await store.patch({ scripts: {} }), defaultSettings);
+});
+
+test("rejects malformed script patches with 400 before touching the disk", async (t) => {
+  const { file, open } = setup(t);
+  const store = open();
+  await rejects400(store.patch({ scripts: "make clean" }), /scripts must be an object/);
+  await rejects400(store.patch({ scripts: { postCreate: { command: "x" } } }), /Unknown script "postCreate"/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: "x" } }), /scripts.preWorktreeDelete must be an object/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { command: 5 } } }), /command must be a string/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { command: "x".repeat(scriptLimits.commandLength + 1) } } }), /too long/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { command: "echo hi\u0000" } } }), /control characters/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { command: "echo \u001b[31mred" } } }), /control characters/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { abortOnFailure: "no" } } }), /abortOnFailure must be a boolean/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { timeoutSeconds: 0 } } }), /timeoutSeconds must be a whole number/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { timeoutSeconds: scriptLimits.timeoutSeconds + 1 } } }), /timeoutSeconds/);
+  await rejects400(store.patch({ scripts: { preWorktreeDelete: { timeoutSeconds: "30" } } }), /timeoutSeconds/);
+  assert.ok(!existsSync(file));
+  // Unknown fields inside a known script are ignored, like elsewhere.
+  assert.deepEqual(await store.patch({ scripts: { preWorktreeDelete: { colour: "blue" } } }), defaultSettings);
+});
+
+test("bad script values in the file fall back to defaults field by field", async (t) => {
+  const { file, open } = setup(t);
+  mkdirSync(path.dirname(file), { recursive: true });
+  const warn = t.mock.method(console, "warn", () => {});
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    scripts: {
+      preWorktreeDelete: { command: " make clean ", abortOnFailure: "yes", timeoutSeconds: 99999 },
+      postCreate: { command: "ignored" },
+    },
+  }));
+  const settings = await open().read();
+  assert.deepEqual(settings.scripts.preWorktreeDelete, { ...defaultScriptSettings, command: "make clean" });
+  assert.equal(warn.mock.callCount(), 0, "a well-formed file with bad values is not corrupt");
+  writeFileSync(file, JSON.stringify({ version: 1, scripts: "make clean" }));
+  assert.deepEqual(await open().read(), defaultSettings);
+  assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, scripts: { preWorktreeDelete: { command: 3, timeoutSeconds: 12 } } })), {
+    scripts: { preWorktreeDelete: { timeoutSeconds: 12 } },
+  });
+  assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, scripts: { preWorktreeDelete: { command: 3 } } })), {});
 });

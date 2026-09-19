@@ -1,9 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import ResponsiveDialog from "./ResponsiveDialog";
-import { useSettings, type SettingsSection } from "./useSettings";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { Bot, GitBranch, SquareTerminal, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -12,11 +24,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+} from "@/components/ui/sidebar";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   orchestratorProviders,
   type OrchestratorProvider,
 } from "@/lib/orchestrator/types";
+import {
+  isScriptEnabled,
+  scriptDefinitions,
+  scriptKinds,
+  scriptLimits,
+  type ScriptKind,
+  type ScriptSettings,
+} from "@/lib/scripts";
 import {
   defaultSettings,
   gitActionKinds,
@@ -24,6 +63,44 @@ import {
   type GitActionKind,
   type SettingsPatch,
 } from "@/lib/settings";
+import { useMediaQuery } from "./useMediaQuery";
+import { usePreference } from "./usePreference";
+import {
+  isSettingsSection,
+  settingsSections,
+  useSettings,
+  type SettingsSection,
+} from "./useSettings";
+
+/** Each section's nav entry and the heading of its pane. */
+const sectionMeta: Record<
+  SettingsSection,
+  { label: string; description: string; icon: LucideIcon }
+> = {
+  gitActions: {
+    label: "Git actions",
+    description:
+      "Prompts pasted into a new conversation from the source control panel. The PR, checks, or conflicts are appended automatically.",
+    icon: GitBranch,
+  },
+  orchestrator: {
+    label: "Talk to Portal",
+    description:
+      "The assistant that keeps an eye on your sessions and pull requests. Choose the model it runs on, how often it checks in, and the API key it uses. Keys never leave this machine.",
+    icon: Bot,
+  },
+  scripts: {
+    label: "Scripts",
+    description:
+      "Shell commands Portal runs on this machine before certain actions. Leave a command empty to turn its script off.",
+    icon: SquareTerminal,
+  },
+};
+
+/** The section shown when nothing asked for one and none is remembered. */
+const defaultSection: SettingsSection = "gitActions";
+/** localStorage key for the last section viewed, so Settings reopens where it was left. */
+const SECTION_PREFERENCE = "portal.settings.section";
 
 const promptLabels: Record<GitActionKind, string> = {
   checks: "Failing checks",
@@ -37,7 +114,8 @@ const providerLabels: Record<OrchestratorProvider, string> = {
 };
 
 /** Talk to Portal fields that are typed into and saved when the user leaves them. */
-type OrchestratorTextField = "model" | "intervalMinutes" | "idleIntervalMinutes";
+type OrchestratorTextField =
+  "model" | "intervalMinutes" | "idleIntervalMinutes";
 const orchestratorTextFields: readonly OrchestratorTextField[] = [
   "model",
   "intervalMinutes",
@@ -49,12 +127,25 @@ const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
   idleIntervalMinutes: "Check every … minutes while no browser is connected",
 };
 
+/** Script fields that are typed into and saved when the user leaves them; the toggle saves on its own. */
+type ScriptTextField = "command" | "timeoutSeconds";
+const scriptTextFields: readonly ScriptTextField[] = [
+  "command",
+  "timeoutSeconds",
+];
+type ScriptTextKey = `${ScriptKind}.${ScriptTextField}`;
+const scriptTextKey = (
+  kind: ScriptKind,
+  field: ScriptTextField,
+): ScriptTextKey => `${kind}.${field}`;
+
 /** Every field with its own save state. */
 type FieldKey =
   | GitActionKind
   | "provider"
   | OrchestratorTextField
-  | `apiKey.${OrchestratorProvider}`;
+  | `apiKey.${OrchestratorProvider}`
+  | `script.${ScriptKind}.${keyof ScriptSettings}`;
 
 type FieldStatus = { kind: "saved" } | { kind: "error"; message: string };
 
@@ -64,9 +155,9 @@ type FieldStatus = { kind: "saved" } | { kind: "error"; message: string };
  */
 function useFieldFeedback() {
   const [saving, setSaving] = useState<Partial<Record<FieldKey, boolean>>>({});
-  const [status, setStatus] = useState<
-    Partial<Record<FieldKey, FieldStatus>>
-  >({});
+  const [status, setStatus] = useState<Partial<Record<FieldKey, FieldStatus>>>(
+    {},
+  );
   const inFlight = useRef(new Set<FieldKey>());
   const timers = useRef(new Map<FieldKey, ReturnType<typeof setTimeout>>());
   useEffect(
@@ -134,7 +225,7 @@ export default function SettingsDialog({
   onClose,
 }: {
   open: boolean;
-  /** The section to scroll to and focus when opening; null opens at the top. */
+  /** The section to show and focus when opening; null reopens the last one viewed. */
   section?: SettingsSection | null;
   onClose: () => void;
 }) {
@@ -160,8 +251,27 @@ export default function SettingsDialog({
   const [apiKeyDrafts, setApiKeyDrafts] = useState<
     Partial<Record<OrchestratorProvider, string>>
   >({});
-  const gitActionsRef = useRef<HTMLElement>(null);
-  const orchestratorRef = useRef<HTMLElement>(null);
+  const [scriptDrafts, setScriptDrafts] = useState<
+    Partial<Record<ScriptTextKey, string>>
+  >({});
+  const paneRef = useRef<HTMLDivElement>(null);
+
+  // The section on screen. The last one viewed is remembered in this browser; an explicit request
+  // (the Talk to Portal page's "Add API key", say) wins over it for that opening.
+  const [remembered, setRemembered] = usePreference(
+    SECTION_PREFERENCE,
+    defaultSection,
+  );
+  const rememberedSection = isSettingsSection(remembered)
+    ? remembered
+    : defaultSection;
+  const [active, setActive] = useState<SettingsSection>(
+    section ?? rememberedSection,
+  );
+  const showSection = (next: SettingsSection) => {
+    setActive(next);
+    setRemembered(next);
+  };
 
   // The dialog stays mounted while closed, so a save that failed after closing (flushDrafts runs in
   // the background) would otherwise greet the next open with a stale error and the draft behind it.
@@ -175,23 +285,27 @@ export default function SettingsDialog({
       setDrafts({});
       setOrchestratorDrafts({});
       setApiKeyDrafts({});
+      setScriptDrafts({});
+      setActive(section ?? rememberedSection);
     }
   }
 
-  // Land on the requested section once the dialog and its fields are on screen. Keyed on whether
-  // settings have loaded, not on their value, so a save while open does not yank focus back.
+  // A section asked for by name counts as viewed, so the next plain open returns to it too. In an
+  // effect rather than the reset above because remembering writes localStorage.
+  useEffect(() => {
+    if (open && section) setRemembered(section);
+  }, [open, section, setRemembered]);
+
+  // Land in the requested section's first field once the dialog and its fields are on screen. Keyed
+  // on whether settings have loaded, not on their value, so a save while open does not yank focus back.
   const loaded = settings !== null;
   useEffect(() => {
     if (!open || !section || !loaded) return;
-    const target =
-      section === "orchestrator"
-        ? orchestratorRef.current
-        : gitActionsRef.current;
-    if (!target) return;
+    const pane = paneRef.current;
+    if (!pane) return;
     // Radix focuses the dialog on mount; wait a frame so this focus wins.
     const frame = requestAnimationFrame(() => {
-      target.scrollIntoView({ block: "start" });
-      target
+      pane
         .querySelector<HTMLElement>(
           "button:not([disabled]), input:not([disabled]), textarea:not([disabled])",
         )
@@ -219,6 +333,13 @@ export default function SettingsDialog({
       if (!(provider in prev)) return prev;
       const next = { ...prev };
       delete next[provider];
+      return next;
+    });
+  const clearScriptDraft = (key: ScriptTextKey) =>
+    setScriptDrafts((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
       return next;
     });
 
@@ -305,13 +426,75 @@ export default function SettingsDialog({
     );
 
   /** Saves the typed key and, when that works, leaves the editing state. A blank draft has nothing to save and just leaves it. */
-  const submitApiKey = async (provider: OrchestratorProvider, draft: string) => {
+  const submitApiKey = async (
+    provider: OrchestratorProvider,
+    draft: string,
+  ) => {
     const trimmed = draft.trim();
     if (!trimmed) {
       clearApiKeyDraft(provider);
       return;
     }
     if (await saveApiKey(provider, trimmed)) clearApiKeyDraft(provider);
+  };
+
+  /** Checks a typed script value client-side, then persists it. A blank command is a valid value: it turns the script off. */
+  const saveScriptField = async (
+    kind: ScriptKind,
+    field: ScriptTextField,
+    value: string,
+  ) => {
+    if (!settings) return;
+    const key = scriptTextKey(kind, field);
+    const feedbackKey: FieldKey = `script.${kind}.${field}`;
+    const current = settings.scripts[kind];
+    const trimmed = value.trim();
+    let patch: SettingsPatch["scripts"];
+    if (field === "command") {
+      if (trimmed.length > scriptLimits.commandLength) {
+        setStatusFor(feedbackKey, {
+          kind: "error",
+          message: `The command is too long (the limit is ${scriptLimits.commandLength} characters).`,
+        });
+        return;
+      }
+      if (trimmed === current.command) {
+        clearScriptDraft(key);
+        return;
+      }
+      patch = { [kind]: { command: trimmed } };
+    } else {
+      const max = scriptLimits.timeoutSeconds;
+      const seconds = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+      if (!(seconds >= 1 && seconds <= max)) {
+        setStatusFor(feedbackKey, {
+          kind: "error",
+          message: `Enter a whole number of seconds between 1 and ${max}.`,
+        });
+        return;
+      }
+      if (seconds === current.timeoutSeconds) {
+        clearScriptDraft(key);
+        return;
+      }
+      patch = { [kind]: { timeoutSeconds: seconds } };
+    }
+    const ok = await run(
+      feedbackKey,
+      () => update({ scripts: patch }),
+      "Could not save the script.",
+    );
+    if (ok) clearScriptDraft(key);
+  };
+
+  const saveScriptToggle = (kind: ScriptKind, abortOnFailure: boolean) => {
+    if (!settings || abortOnFailure === settings.scripts[kind].abortOnFailure)
+      return;
+    void run(
+      `script.${kind}.abortOnFailure`,
+      () => update({ scripts: { [kind]: { abortOnFailure } } }),
+      "Could not save the setting.",
+    );
   };
 
   const flushDrafts = () => {
@@ -327,48 +510,43 @@ export default function SettingsDialog({
       const draft = apiKeyDrafts[provider];
       if (draft !== undefined) void submitApiKey(provider, draft);
     }
+    for (const kind of scriptKinds) {
+      for (const field of scriptTextFields) {
+        const draft = scriptDrafts[scriptTextKey(kind, field)];
+        if (draft !== undefined) void saveScriptField(kind, field, draft);
+      }
+    }
   };
 
-  return (
-    <ResponsiveDialog
-      open={open}
-      onOpenChange={(value) => {
-        if (value) return;
-        flushDrafts();
-        onClose();
-      }}
-      title="Settings"
-      description="Portal preferences, saved on this machine."
-    >
-      <div className="space-y-6">
-        {error && !anyError && (
-          <p
-            role="alert"
-            className="rounded-xl bg-destructive/10 p-3 text-xs text-destructive"
-          >
-            {error}
-          </p>
-        )}
-        {!settings && !error && (
-          <p role="status" className="text-xs text-muted-foreground">
-            Loading settings…
-          </p>
-        )}
+  const close = () => {
+    flushDrafts();
+    onClose();
+  };
 
-        <section
-          ref={gitActionsRef}
-          aria-labelledby="settings-git-actions"
-          className="scroll-mt-4 space-y-4"
+  const notices = (
+    <>
+      {error && !anyError && (
+        <p
+          role="alert"
+          className="rounded-xl bg-destructive/10 p-3 text-xs text-destructive"
         >
-          <div className="space-y-1">
-            <h3 id="settings-git-actions" className="text-sm font-medium">
-              Git actions
-            </h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Prompts pasted into a new conversation from the source control
-              panel. The PR, checks, or conflicts are appended automatically.
-            </p>
-          </div>
+          {error}
+        </p>
+      )}
+      {!settings && !error && (
+        <p role="status" className="text-xs text-muted-foreground">
+          Loading settings…
+        </p>
+      )}
+    </>
+  );
+
+  const pane = (
+    <div ref={paneRef} className="space-y-6">
+      {notices}
+      {active === "gitActions" && (
+        <section aria-labelledby="settings-git-actions" className="space-y-4">
+          <SectionHeading id="settings-git-actions" section="gitActions" />
           {settings &&
             gitActionKinds.map((kind) => (
               <PromptField
@@ -392,22 +570,11 @@ export default function SettingsDialog({
               />
             ))}
         </section>
+      )}
 
-        <section
-          ref={orchestratorRef}
-          aria-labelledby="settings-orchestrator"
-          className="scroll-mt-4 space-y-4"
-        >
-          <div className="space-y-1">
-            <h3 id="settings-orchestrator" className="text-sm font-medium">
-              Talk to Portal
-            </h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              The assistant that keeps an eye on your sessions and pull
-              requests. Choose the model it runs on, how often it checks in,
-              and the API key it uses. Keys never leave this machine.
-            </p>
-          </div>
+      {active === "orchestrator" && (
+        <section aria-labelledby="settings-orchestrator" className="space-y-4">
+          <SectionHeading id="settings-orchestrator" section="orchestrator" />
           {settings && (
             <>
               <div className="grid gap-4 sm:grid-cols-2">
@@ -472,11 +639,15 @@ export default function SettingsDialog({
                     saving={!!saving[`apiKey.${provider}`]}
                     status={status[`apiKey.${provider}`] ?? null}
                     onChange={(value) =>
-                      setApiKeyDrafts((prev) => ({ ...prev, [provider]: value }))
+                      setApiKeyDrafts((prev) => ({
+                        ...prev,
+                        [provider]: value,
+                      }))
                     }
                     onSubmit={() => {
                       const draft = apiKeyDrafts[provider];
-                      if (draft !== undefined) void submitApiKey(provider, draft);
+                      if (draft !== undefined)
+                        void submitApiKey(provider, draft);
                     }}
                     onCancel={() => clearApiKeyDraft(provider)}
                     onClear={() => void saveApiKey(provider, "")}
@@ -486,24 +657,345 @@ export default function SettingsDialog({
             </>
           )}
         </section>
+      )}
 
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full"
-          onClick={() => {
-            flushDrafts();
-            onClose();
-          }}
+      {active === "scripts" && (
+        <section aria-labelledby="settings-scripts" className="space-y-6">
+          <SectionHeading id="settings-scripts" section="scripts" />
+          {settings &&
+            scriptKinds.map((kind) => (
+              <ScriptField
+                key={kind}
+                kind={kind}
+                settings={settings.scripts[kind]}
+                commandDraft={scriptDrafts[scriptTextKey(kind, "command")]}
+                timeoutDraft={
+                  scriptDrafts[scriptTextKey(kind, "timeoutSeconds")]
+                }
+                saving={{
+                  command: !!saving[`script.${kind}.command`],
+                  abortOnFailure: !!saving[`script.${kind}.abortOnFailure`],
+                  timeoutSeconds: !!saving[`script.${kind}.timeoutSeconds`],
+                }}
+                status={{
+                  command: status[`script.${kind}.command`] ?? null,
+                  abortOnFailure:
+                    status[`script.${kind}.abortOnFailure`] ?? null,
+                  timeoutSeconds:
+                    status[`script.${kind}.timeoutSeconds`] ?? null,
+                }}
+                onChange={(field, value) =>
+                  setScriptDrafts((prev) => ({
+                    ...prev,
+                    [scriptTextKey(kind, field)]: value,
+                  }))
+                }
+                onBlur={(field) => {
+                  const draft = scriptDrafts[scriptTextKey(kind, field)];
+                  if (draft !== undefined)
+                    void saveScriptField(kind, field, draft);
+                }}
+                onToggle={(value) => saveScriptToggle(kind, value)}
+              />
+            ))}
+        </section>
+      )}
+
+      <Button
+        type="button"
+        variant="secondary"
+        className="w-full"
+        onClick={close}
+      >
+        Done
+      </Button>
+    </div>
+  );
+
+  const onOpenChange = (value: boolean) => {
+    if (!value) close();
+  };
+
+  const desktop = useMediaQuery("(min-width: 640px)", true);
+  if (!desktop)
+    return (
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          side="bottom"
+          className="max-h-[90dvh] rounded-t-3xl pb-[max(24px,env(safe-area-inset-bottom))]"
         >
-          Done
-        </Button>
-      </div>
-    </ResponsiveDialog>
+          <SheetHeader className="px-6 pt-6">
+            <SheetTitle>Settings</SheetTitle>
+            <SheetDescription>
+              Portal preferences, saved on this machine.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="space-y-5 overflow-y-auto px-6">
+            <SectionSelect value={active} onChange={showSection} />
+            {pane}
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[min(85dvh,640px)] flex-row gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <DialogDescription className="sr-only">
+          Portal preferences, saved on this machine.
+        </DialogDescription>
+        <SidebarProvider
+          className="h-full w-full flex-row items-stretch"
+          style={{ "--sidebar-width": "12rem", minHeight: 0 } as CSSProperties}
+        >
+          <Sidebar collapsible="none" className="border-r">
+            <SidebarHeader className="px-4 pt-6 pb-2">
+              <DialogTitle>Settings</DialogTitle>
+            </SidebarHeader>
+            <SidebarContent>
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  <nav aria-label="Settings sections">
+                    <SidebarMenu>
+                      {settingsSections.map((entry) => {
+                        const Icon = sectionMeta[entry].icon;
+                        return (
+                          <SidebarMenuItem key={entry}>
+                            <SidebarMenuButton
+                              isActive={entry === active}
+                              onClick={() => showSection(entry)}
+                              aria-current={
+                                entry === active ? "page" : undefined
+                              }
+                            >
+                              <Icon />
+                              <span>{sectionMeta[entry].label}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  </nav>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </SidebarContent>
+          </Sidebar>
+          <div className="min-w-0 flex-1 overflow-y-auto p-7 pt-6">{pane}</div>
+        </SidebarProvider>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-/** The line under a field: the error, "Saved", "Saving…", or the unsaved-draft hint. */
+/** A section pane's heading: the same label as its nav entry, then what the section is for. */
+function SectionHeading({
+  id,
+  section,
+}: {
+  id: string;
+  section: SettingsSection;
+}) {
+  return (
+    <div className="space-y-1">
+      <h3 id={id} className="text-sm font-medium">
+        {sectionMeta[section].label}
+      </h3>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {sectionMeta[section].description}
+      </p>
+    </div>
+  );
+}
+
+/** The mobile stand-in for the section sidebar. */
+function SectionSelect({
+  value,
+  onChange,
+}: {
+  value: SettingsSection;
+  onChange: (section: SettingsSection) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="space-y-2">
+      <label htmlFor={id} className="text-xs font-medium">
+        Section
+      </label>
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          if (isSettingsSection(next)) onChange(next);
+        }}
+      >
+        <SelectTrigger id={id} className="w-full text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {settingsSections.map((entry) => (
+            <SelectItem key={entry} value={entry}>
+              {sectionMeta[entry].label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/**
+ * One script: its command (blank means off), whether a failure stops the action, and how long it
+ * may run. The command and timeout save when the field is left; the toggle saves as it is flipped.
+ */
+function ScriptField({
+  kind,
+  settings,
+  commandDraft,
+  timeoutDraft,
+  saving,
+  status,
+  onChange,
+  onBlur,
+  onToggle,
+}: {
+  kind: ScriptKind;
+  settings: ScriptSettings;
+  commandDraft: string | undefined;
+  timeoutDraft: string | undefined;
+  saving: Record<keyof ScriptSettings, boolean>;
+  status: Record<keyof ScriptSettings, FieldStatus | null>;
+  onChange: (field: ScriptTextField, value: string) => void;
+  onBlur: (field: ScriptTextField) => void;
+  onToggle: (abortOnFailure: boolean) => void;
+}) {
+  const id = useId();
+  const commandId = `${id}-command`;
+  const commandStatusId = `${id}-command-status`;
+  const toggleId = `${id}-abort`;
+  const toggleStatusId = `${id}-abort-status`;
+  const timeoutId = `${id}-timeout`;
+  const timeoutStatusId = `${id}-timeout-status`;
+  const stateId = `${id}-state`;
+  const toggleMeaningId = `${id}-abort-meaning`;
+  const definition = scriptDefinitions[kind];
+  const command = commandDraft ?? settings.command;
+  const enabled = isScriptEnabled(settings);
+  return (
+    <div className="space-y-4 rounded-xl border border-border/60 p-4">
+      <div className="space-y-1">
+        <div className="flex h-6 items-center justify-between gap-2">
+          <label htmlFor={commandId} className="text-xs font-medium">
+            {definition.label}
+          </label>
+          <span
+            id={stateId}
+            className={
+              enabled
+                ? "rounded-full bg-emerald-500/15 px-2 text-[10px] font-medium leading-5 text-emerald-300"
+                : "rounded-full bg-white/8 px-2 text-[10px] font-medium leading-5 text-muted-foreground"
+            }
+          >
+            <span className="sr-only">Script is </span>
+            {enabled ? "On" : "Off"}
+          </span>
+        </div>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {definition.description}
+        </p>
+      </div>
+      <div className="space-y-2">
+        <Textarea
+          id={commandId}
+          rows={2}
+          value={command}
+          disabled={saving.command}
+          aria-describedby={
+            status.command ? `${stateId} ${commandStatusId}` : stateId
+          }
+          aria-invalid={status.command?.kind === "error" || undefined}
+          onChange={(e) => onChange("command", e.target.value)}
+          onBlur={() => onBlur("command")}
+          placeholder={definition.placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="min-h-14 resize-y font-mono text-xs leading-relaxed md:text-xs"
+        />
+        <FieldStatusText
+          id={commandStatusId}
+          status={status.command}
+          saving={saving.command}
+          dirty={commandDraft !== undefined}
+        />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <div className="flex h-6 items-center">
+            <label htmlFor={toggleId} className="text-xs font-medium">
+              If the script fails
+            </label>
+          </div>
+          <div className="flex h-8 items-center gap-2.5">
+            <Switch
+              id={toggleId}
+              checked={settings.abortOnFailure}
+              disabled={saving.abortOnFailure}
+              aria-describedby={
+                status.abortOnFailure
+                  ? `${toggleMeaningId} ${toggleStatusId}`
+                  : toggleMeaningId
+              }
+              onCheckedChange={onToggle}
+            />
+            <span
+              id={toggleMeaningId}
+              className="text-xs text-muted-foreground"
+            >
+              {settings.abortOnFailure
+                ? definition.onFailure.abort
+                : definition.onFailure.carryOn}
+            </span>
+          </div>
+          <FieldStatusText
+            id={toggleStatusId}
+            status={status.abortOnFailure}
+            saving={saving.abortOnFailure}
+          />
+        </div>
+        <div className="space-y-2">
+          <div className="flex h-6 items-center">
+            <label htmlFor={timeoutId} className="text-xs font-medium">
+              Timeout (seconds)
+            </label>
+          </div>
+          <Input
+            id={timeoutId}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={scriptLimits.timeoutSeconds}
+            step={1}
+            autoComplete="off"
+            value={timeoutDraft ?? String(settings.timeoutSeconds)}
+            disabled={saving.timeoutSeconds}
+            aria-describedby={
+              status.timeoutSeconds ? timeoutStatusId : undefined
+            }
+            aria-invalid={status.timeoutSeconds?.kind === "error" || undefined}
+            onChange={(e) => onChange("timeoutSeconds", e.target.value)}
+            onBlur={() => onBlur("timeoutSeconds")}
+            className="text-xs md:text-xs"
+          />
+          <FieldStatusText
+            id={timeoutStatusId}
+            status={status.timeoutSeconds}
+            saving={saving.timeoutSeconds}
+            dirty={timeoutDraft !== undefined}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FieldStatusText({
   id,
   status,

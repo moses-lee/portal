@@ -125,8 +125,12 @@ export function useSettings(): UseSettings {
  */
 
 /** Sections of the settings dialog a caller can ask to land on. */
-export type SettingsSection = "gitActions" | "orchestrator";
-const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator"];
+export type SettingsSection = "gitActions" | "orchestrator" | "scripts";
+export const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator", "scripts"];
+
+export function isSettingsSection(value: unknown): value is SettingsSection {
+  return typeof value === "string" && (settingsSections as readonly string[]).includes(value);
+}
 
 export type OpenSettingsDetail = { section?: SettingsSection };
 
@@ -148,7 +152,7 @@ export function useOpenSettingsRequests(onOpen: (section: SettingsSection | null
   useEffect(() => {
     const listen = (event: Event) => {
       const section = (event as CustomEvent<OpenSettingsDetail | undefined>).detail?.section;
-      handler.current(section && settingsSections.includes(section) ? section : null);
+      handler.current(isSettingsSection(section) ? section : null);
     };
     window.addEventListener(OPEN_SETTINGS_EVENT, listen);
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, listen);

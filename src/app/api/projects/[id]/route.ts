@@ -4,6 +4,7 @@ import { listSessions, ready } from "@/lib/acp";
 import { errorStatus } from "@/lib/fs-paths";
 import { readGitInfo } from "@/lib/git-info";
 import { projects } from "@/lib/projects";
+import { preWorktreeDeleteRun, runConfiguredScript } from "@/lib/script-runner";
 import { checkSameOrigin } from "@/lib/shell-http";
 import { mainWorktreeOf, removeWorktree } from "@/lib/worktrees";
 import type { Project } from "@/lib/types";
@@ -52,7 +53,10 @@ async function deleteWorktreeFolder(project: Project & { worktree: NonNullable<P
   if (!repoRoot && worktreeRoot) repoRoot = await mainWorktreeOf(worktreeRoot);
   // Without a folder and without a repository there is nothing left for git to clean up.
   if (!repoRoot) return;
-  await removeWorktree({ repoRoot, path: worktreeRoot ?? project.path, branch: project.worktree.branch, force });
+  const worktreePath = worktreeRoot ?? project.path;
+  // The user's pre-deletion script runs first, while the folder is still there; a forced retry runs it again.
+  if (exists) await runConfiguredScript("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
+  await removeWorktree({ repoRoot, path: worktreePath, branch: project.worktree.branch, force });
 }
 
 export async function DELETE(req: Request, { params }: Context) {

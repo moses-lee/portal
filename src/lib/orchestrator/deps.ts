@@ -8,13 +8,16 @@
  * imported by Node tests. The live deps therefore import those four lazily, on first use; the
  * pure helper modules are imported directly.
  */
-import { spawn } from "node:child_process";
 import { open } from "node:fs/promises";
 import os from "node:os";
-import { childEnv } from "../child-env.ts";
+import { execCommand } from "../exec-command.ts";
+import type { ExecResult } from "../exec-command.ts";
 import { listDirectories, resolveDirectory } from "../fs-paths.ts";
 import { type GitInfo, readGitInfo } from "../git-info.ts";
 import { fetchRepo, pullFastForward, readGithubSummary } from "../github-summary.ts";
+import { runConfiguredScript } from "../script-runner.ts";
+import type { ScriptOutcome, ScriptRunOptions } from "../script-runner.ts";
+import type { ScriptKind } from "../scripts.ts";
 import { summarizeProject } from "../projects-store.ts";
 import type { SettingsStore } from "../settings-store.ts";
 import type {
@@ -26,13 +29,12 @@ import { cloneRepo, getGithubLogin, readOriginUrl, searchAttentionPulls } from "
 import type { PullAttention } from "./types.ts";
 import { readWorktreeState, type WorktreeState } from "./worktree-state.ts";
 
-export type ExecResult = {
-  /** Exit code; null when the process was killed (timeout) or could not start. */
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-};
+// Kept here for the tests and tools that already import them from this module.
+export { execCommand };
+export type { ExecResult };
+
+/** The longest a user script may run inside a Talk to Portal tool call, whatever its own timeout says. */
+export const ORCHESTRATOR_SCRIPT_TIMEOUT_SECONDS = 240;
 
 export type PullState = "open" | "closed" | "merged";
 
@@ -107,6 +109,10 @@ export type OrchestratorDeps = {
     readFile(file: string, maxBytes: number): Promise<{ text: string; bytes: number; truncated: boolean }>;
     exec(command: string, opts: { cwd: string; timeoutMs: number; maxBytes: number }): Promise<ExecResult>;
   };
+  scripts: {
+    /** Run the user's script for `kind` as configured in settings; see script-runner.ts. Throws when it fails and the script says to abort. */
+    run(kind: ScriptKind, opts: ScriptRunOptions): Promise<ScriptOutcome>;
+  };
 };
 
 /** What the runtime needs from the settings store. */
@@ -115,98 +121,6 @@ export type OrchestratorSettingsStore = Pick<SettingsStore, "read" | "orchestrat
 // ---------------------------------------------------------------------------------------------
 // Process helpers, shared by the live deps and the tool tests
 // ---------------------------------------------------------------------------------------------
-
-/**
- * Collects a stream into at most `maxBytes`: the first half is kept as it arrives, the last half
- * rolls, and the amount dropped in between is noted in the text. Memory stays bounded however much
- * a command prints.
- */
-class BoundedOutput {
-  private head: Buffer[] = [];
-  private headBytes = 0;
-  private tail: Buffer[] = [];
-  private tailBytes = 0;
-  private omitted = 0;
-  private readonly half: number;
-
-  constructor(maxBytes: number) {
-    this.half = Math.max(1, Math.floor(maxBytes / 2));
-  }
-
-  push(chunk: Buffer) {
-    if (this.headBytes < this.half) {
-      const take = chunk.subarray(0, this.half - this.headBytes);
-      this.head.push(take);
-      this.headBytes += take.length;
-      chunk = chunk.subarray(take.length);
-      if (chunk.length === 0) return;
-    }
-    this.tail.push(chunk);
-    this.tailBytes += chunk.length;
-    while (this.tailBytes > this.half && this.tail.length > 0) {
-      const first = this.tail[0];
-      const excess = this.tailBytes - this.half;
-      if (first.length <= excess) {
-        this.tail.shift();
-        this.tailBytes -= first.length;
-        this.omitted += first.length;
-      } else {
-        this.tail[0] = first.subarray(excess);
-        this.tailBytes -= excess;
-        this.omitted += excess;
-      }
-    }
-  }
-
-  text(): string {
-    const head = Buffer.concat(this.head).toString("utf8");
-    const tail = Buffer.concat(this.tail).toString("utf8");
-    return this.omitted > 0 ? `${head}\n[... ${this.omitted} bytes omitted ...]\n${tail}` : head + tail;
-  }
-}
-
-/**
- * Run `command` through the shell in `cwd` with the user's environment (not the dev server's).
- * The child leads its own process group so a timeout kills everything it started, not just the
- * shell. Never rejects: a timeout or a start failure is reported in the result.
- */
-export function execCommand(command: string, { cwd, timeoutMs, maxBytes }: { cwd: string; timeoutMs: number; maxBytes: number }): Promise<ExecResult> {
-  return new Promise((resolve) => {
-    const stdout = new BoundedOutput(maxBytes);
-    const stderr = new BoundedOutput(maxBytes);
-    let timedOut = false;
-    let settled = false;
-    const finish = (result: ExecResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const child = spawn(command, { shell: true, detached: true, cwd, env: childEnv(), stdio: ["ignore", "pipe", "pipe"] });
-    const killGroup = () => {
-      if (child.pid === undefined) return;
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup();
-    }, timeoutMs);
-    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (err) => {
-      // Never started (bad cwd, no shell): the message is all there is to report.
-      killGroup();
-      finish({ code: null, stdout: stdout.text(), stderr: [stderr.text(), err.message].filter(Boolean).join("\n"), timedOut });
-    });
-    child.on("close", (code) => {
-      finish({ code: timedOut ? null : code, stdout: stdout.text(), stderr: stderr.text(), timedOut });
-    });
-  });
-}
 
 /** The first `maxBytes` of a file as UTF-8, with whether more followed. */
 export async function readFileCapped(file: string, maxBytes: number): Promise<{ text: string; bytes: number; truncated: boolean }> {
@@ -321,6 +235,10 @@ export function liveDeps(): OrchestratorDeps {
       resolveDirectory: (input) => resolveDirectory(input),
       readFile: readFileCapped,
       exec: execCommand,
+    },
+    scripts: {
+      // A tool call has five minutes (agent.ts CALL_TIMEOUT_MS); a script must leave time for git after it.
+      run: (kind, opts) => runConfiguredScript(kind, { ...opts, maxTimeoutSeconds: ORCHESTRATOR_SCRIPT_TIMEOUT_SECONDS }),
     },
   };
 }

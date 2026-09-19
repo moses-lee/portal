@@ -2,6 +2,8 @@
 
 import { useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
+import { useSettings } from "./useSettings";
+import { isScriptEnabled } from "@/lib/scripts";
 import type { ProjectSummary } from "@/lib/types";
 
 export function RenameField({
@@ -65,6 +67,13 @@ export function RemoveConfirm({
   } | null>(null);
   const isWorktree = !!project.worktree;
   const checkboxId = `sidebar-delete-worktree-${project.id}`;
+  // Deleting the folder runs the user's pre-deletion script first, when one is set; say so and show it running.
+  const { settings } = useSettings();
+  const runsScript =
+    isWorktree &&
+    deleteWorktree &&
+    !!settings &&
+    isScriptEnabled(settings.scripts.preWorktreeDelete);
 
   const submit = async (force: boolean) => {
     setBusy(true);
@@ -112,6 +121,7 @@ export function RemoveConfirm({
           </label>
           {deleteWorktree && (
             <p className="mb-2 text-zinc-500">
+              {runsScript && "Your pre-deletion script runs first. "}
               The branch is deleted too if it is fully merged.
             </p>
           )}
@@ -126,7 +136,7 @@ export function RemoveConfirm({
       {error && (
         <p
           role="alert"
-          className="mb-2 break-words rounded bg-red-950/50 px-2 py-1.5 text-red-300"
+          className="mb-2 break-words whitespace-pre-wrap rounded bg-red-950/50 px-2 py-1.5 text-red-300"
         >
           {error.message}
         </p>
@@ -138,7 +148,7 @@ export function RemoveConfirm({
           onClick={() => void submit(false)}
           className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600 disabled:opacity-50"
         >
-          {busy ? "Removing…" : "Remove"}
+          {busy ? (runsScript ? "Running script…" : "Removing…") : "Remove"}
         </button>
         {error?.dirty && (
           <button

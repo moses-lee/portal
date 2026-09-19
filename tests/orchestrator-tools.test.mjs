@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -399,4 +399,42 @@ test("memory tools read, write, and append; get_tick_digest leaves memory out", 
   const digestOut = await run(tools.get_tick_digest, {});
   assert.deepEqual(digestOut, { at: T0, since: null, changes: [], dueWatches: [], openItems: [] });
   assert.equal("memory" in digestOut, false);
+});
+
+test("remove_project runs the pre-deletion script in the worktree before git removes it, and a failure keeps the worktree", async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "portal-remove-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const parentPath = path.join(root, "repo");
+  const worktreePath = path.join(root, "worktree");
+  for (const dir of [parentPath, worktreePath]) mkdirSync(dir);
+  const projects = [
+    project({ id: "p1", path: parentPath }),
+    project({ id: "p2", name: "feat", path: worktreePath, worktree: { parentId: "p1", branch: "feat/x" } }),
+  ];
+  const order = [];
+  const { tools, state } = setup({
+    projects,
+    removeWorktree: async (opts) => { order.push(["removeWorktree", opts]); return { branchDeleted: false }; },
+    scripts: { run: async (kind, opts) => { order.push([kind, opts]); return { ran: true, ok: true, code: 0, stdout: "", stderr: "", timedOut: false }; } },
+  });
+  assert.deepEqual(await run(tools.remove_project, { id: "p2", deleteWorktree: true }), { id: "p2", removed: true, kept: false });
+  assert.deepEqual(order, [
+    ["preWorktreeDelete", { cwd: worktreePath, env: { PORTAL_WORKTREE_PATH: worktreePath, PORTAL_REPO_ROOT: parentPath, PORTAL_BRANCH: "feat/x" } }],
+    ["removeWorktree", { repoRoot: parentPath, path: worktreePath, branch: "feat/x", force: false }],
+  ]);
+  assert.deepEqual(state.removed, [{ id: "p2", keep: false }]);
+
+  // Without deleteWorktree nothing runs; the script is about the folder, not the project record.
+  const quiet = setup({ projects: [project({ id: "p1", path: parentPath }), project({ id: "p3", path: worktreePath, worktree: { parentId: "p1", branch: "feat/y" } })], removeWorktree: async () => { throw new Error("should not run"); } });
+  assert.deepEqual(await run(quiet.tools.remove_project, { id: "p3" }), { id: "p3", removed: true, kept: false });
+  assert.deepEqual(quiet.state.scripts, []);
+
+  // A script that aborts stops before git and before the project record is touched.
+  const failing = setup({
+    projects: [project({ id: "p1", path: parentPath }), project({ id: "p4", path: worktreePath, worktree: { parentId: "p1", branch: "feat/z" } })],
+    removeWorktree: async () => { throw new Error("should not run"); },
+    scripts: { run: async () => { throw Object.assign(new Error("The script exited with code 2."), { status: 409 }); } },
+  });
+  assert.deepEqual(await run(failing.tools.remove_project, { id: "p4", deleteWorktree: true, force: true }), { error: "The script exited with code 2." });
+  assert.deepEqual(failing.state.removed, []);
 });

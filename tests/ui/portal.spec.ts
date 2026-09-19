@@ -591,6 +591,75 @@ test("git action prompts persist across reloads and reset to their default", asy
   await expect(field).toHaveValue(defaultPrompt);
 });
 
+test("settings sections live in a sidebar, the last one viewed is remembered, and a script saves with its options", async ({
+  page,
+}, info) => {
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const openSettings = () =>
+    page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await openSettings();
+  const nav = dialog.getByRole("navigation", { name: "Settings sections" });
+  await expect(nav.getByRole("button")).toHaveText([
+    "Git actions",
+    "Talk to Portal",
+    "Scripts",
+  ]);
+  // Opening with nothing remembered lands on the first section; only its pane is on screen.
+  await expect(dialog.getByRole("heading", { name: "Git actions" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Scripts" })).toHaveCount(0);
+
+  await nav.getByRole("button", { name: "Scripts" }).click();
+  await expect(dialog.getByRole("heading", { name: "Scripts" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Git actions" })).toHaveCount(0);
+  const command = dialog.getByRole("textbox", { name: "Before deleting a worktree" });
+  await expect(command).toHaveValue("");
+  await expect(dialog.getByText("Script is Off")).toBeVisible();
+  await dialog.screenshot({
+    animations: "disabled",
+    path: info.outputPath("settings-scripts.png"),
+  });
+
+  // The command saves when the field is left; the mocked server echoes the patch back.
+  await command.fill("make clean");
+  await command.press("Tab");
+  await expect(dialog.getByRole("status")).toHaveText("Saved");
+  await expect(dialog.getByText("Script is On")).toBeVisible();
+  const toggle = dialog.getByRole("switch", { name: "If the script fails" });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  await expect(dialog.getByText("Carry on and delete anyway")).toBeVisible();
+  const timeout = dialog.getByRole("spinbutton", { name: "Timeout (seconds)" });
+  await expect(timeout).toHaveValue("300");
+  await timeout.fill("0");
+  await timeout.press("Tab");
+  await expect(
+    dialog.getByRole("alert").filter({ hasText: "whole number of seconds" }),
+  ).toBeVisible();
+  await timeout.fill("45");
+  await timeout.press("Tab");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  // Reopening lands on the section last viewed in this browser.
+  await openSettings();
+  await expect(dialog.getByRole("heading", { name: "Scripts" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // A deep link still wins over the remembered section.
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new CustomEvent("portal:open-settings", {
+        detail: { section: "orchestrator" },
+      }),
+    ),
+  );
+  await expect(dialog.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
+});
+
 test("source control actions draft a prompt on the start page without creating a session", async ({
   page,
 }, info) => {

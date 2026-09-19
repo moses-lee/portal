@@ -10,6 +10,7 @@ import { errorStatus } from "../fs-paths.ts";
 import { displayPath } from "../git-info.ts";
 import { githubRepoUrl } from "../github-summary.ts";
 import { parentOf } from "../removed-projects.ts";
+import { preWorktreeDeleteRun } from "../script-runner.ts";
 import type { Project, RemovedProject, WorktreeMeta } from "../types.ts";
 import type { OrchestratorDeps } from "./deps.ts";
 
@@ -92,7 +93,10 @@ async function deleteWorktreeFolder(deps: OrchestratorDeps, project: Project & {
   if (!repoRoot && worktreeRoot) repoRoot = await deps.git.mainWorktreeOf(worktreeRoot);
   // Without a folder and without a repository there is nothing left for git to clean up.
   if (!repoRoot) return;
-  await deps.git.removeWorktree({ repoRoot, path: worktreeRoot ?? project.path, branch: project.worktree.branch, force });
+  const worktreePath = worktreeRoot ?? project.path;
+  // The user's pre-deletion script runs first, while the folder is still there; a forced retry runs it again.
+  if (present) await deps.scripts.run("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
+  await deps.git.removeWorktree({ repoRoot, path: worktreePath, branch: project.worktree.branch, force });
 }
 
 /**

@@ -42,8 +42,8 @@ const emptyState = () => ({ modes: null, configOptions: [], commands: [] });
  * throws. `pulls` seeds the attention search; `github` and `fs` override those groups; anything
  * else overrides `git`. Set `state.promptFailure` to make `sessions.prompt` throw that message.
  */
-export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = [], github = {}, fs = {}, ...git } = {}) {
-  const state = { sessions, projects, events, pulls, prompts: [], created: [], removed: [], added: [], searches: [], promptFailure: null };
+export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = [], github = {}, fs = {}, scripts = {}, ...git } = {}) {
+  const state = { sessions, projects, events, pulls, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null };
   const reject = (what) => async () => { throw new Error(`${what} is not available in this test.`); };
   const deps = {
     sessions: {
@@ -128,6 +128,13 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
       readFile: reject("readFile"),
       exec: reject("exec"),
       ...fs,
+    },
+    scripts: {
+      run: async (kind, opts) => {
+        state.scripts.push({ kind, ...opts });
+        return { ran: false };
+      },
+      ...scripts,
     },
   };
   return { deps, state };
