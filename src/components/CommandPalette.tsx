@@ -1,13 +1,12 @@
 "use client";
 
+import { useLayoutEffect, useRef } from "react";
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 
 export type CommandTrigger = "/" | "$";
 
 /** The `/name` or `$name` token under the caret, if the caret sits inside one. */
 export type CommandToken = { start: number; end: number; trigger: CommandTrigger; query: string };
-
-export const MAX_MATCHES = 10;
 
 function isTrigger(ch: string): ch is CommandTrigger {
   return ch === "/" || ch === "$";
@@ -34,7 +33,7 @@ function bareName(command: AvailableCommand) {
 }
 
 /** Commands whose name starts with the query first, then those merely containing it. */
-export function matchCommands(commands: AvailableCommand[], query: string, limit = MAX_MATCHES) {
+export function matchCommands(commands: AvailableCommand[], query: string) {
   const q = query.toLowerCase();
   const prefix: AvailableCommand[] = [];
   const partial: AvailableCommand[] = [];
@@ -43,7 +42,7 @@ export function matchCommands(commands: AvailableCommand[], query: string, limit
     if (name.startsWith(q)) prefix.push(command);
     else if (name.includes(q)) partial.push(command);
   }
-  return [...prefix, ...partial].slice(0, limit);
+  return [...prefix, ...partial];
 }
 
 /** Text to put in the message box for a command: names that carry their own sigil are used verbatim. */
@@ -59,8 +58,23 @@ export default function CommandPalette({ id, matches, trigger, selected, onSelec
   onSelect: (command: AvailableCommand) => void;
   onHighlight: (index: number) => void;
 }) {
+  const listRef = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const option = list?.children[selected] as HTMLElement | undefined;
+    if (!list || !option) return;
+    // Scroll only the palette, keeping the composer and surrounding page in place.
+    const top = option.offsetTop;
+    const bottom = top + option.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
+  }, [matches, selected]);
+
   return (
     <ul
+      ref={listRef}
       id={id}
       role="listbox"
       aria-label="Commands"

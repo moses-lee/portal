@@ -310,6 +310,55 @@ test("slash command completion preserves IME and keyboard behavior", async ({
   ).toHaveLength(0);
 });
 
+for (const { trigger, agentId, name, partial } of [
+  { trigger: "/", agentId: "claude", name: "compact", partial: "autocompact" },
+  { trigger: "$", agentId: "codex", name: "release", partial: "prerelease" },
+]) {
+  test(`${trigger} completion exposes all commands and scrolls keyboard selections`, async ({ page }) => {
+    const session = makeSession("s1", firstTitle, agentId);
+    const sigil = trigger === "$" ? "$" : "";
+    session.state.commands = [
+      ...Array.from({ length: 30 }, (_, i) => ({
+        name: `${sigil}skill-${i + 1}`,
+        description: `Run skill ${i + 1}`,
+      })),
+      { name: sigil + partial, description: "A partial match" },
+      { name: sigil + name, description: "A command at the end of the list" },
+    ];
+    const fixture = await setupPortal(page, { sessions: [session] });
+    await page.goto("/sessions/s1");
+    const input = page.getByRole("combobox", { name: `Message ${session.agentName}` });
+    const palette = page.getByRole("listbox", { name: "Commands" });
+    const options = palette.getByRole("option");
+    await input.fill(trigger);
+    await expect(options).toHaveCount(session.state.commands.length);
+
+    // Wrapping backwards reaches the formerly hidden last command and scrolls it into view.
+    await input.press("ArrowUp");
+    await expect(options.last()).toHaveAttribute("aria-selected", "true");
+    await expect(options.last()).toBeInViewport({ ratio: 1 });
+    await expect(input).toBeFocused();
+    await input.press("ArrowDown");
+    await expect(options.first()).toHaveAttribute("aria-selected", "true");
+    await expect(options.first()).toBeInViewport({ ratio: 1 });
+
+    // Forward navigation also follows the selection beyond the old ten-result limit.
+    for (let i = 0; i < 12; i++) await input.press("ArrowDown");
+    await expect(options.nth(12)).toHaveAttribute("aria-selected", "true");
+    await expect(options.nth(12)).toBeInViewport({ ratio: 1 });
+
+    // Filtering still ranks prefix matches ahead of partial matches and resets the scroll.
+    await input.fill(trigger + name);
+    await expect(options).toHaveCount(2);
+    await expect(options.first()).toContainText(trigger + name);
+    await expect(options.last()).toContainText(trigger + partial);
+    await expect(options.first()).toBeInViewport({ ratio: 1 });
+    await input.press("Tab");
+    await expect(input).toHaveValue(`${trigger}${name} `);
+    expect(fixture.requests.filter((request) => request.path.endsWith("/prompt"))).toHaveLength(0);
+  });
+}
+
 test("tool details include readable diffs and code copy actions", async ({
   page,
 }) => {
