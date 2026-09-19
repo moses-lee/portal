@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { applySettingsPatch } from "@/lib/settings";
 import type { Settings, SettingsPatch } from "@/lib/settings";
 
@@ -116,4 +116,41 @@ export function useSettings(): UseSettings {
     ensureLoaded();
   }, []);
   return { settings, loading, error, update, refresh };
+}
+
+/*
+ * Opening the settings dialog from anywhere. The dialog is mounted once by the app shell; pages
+ * that are not its parent (the Talk to Portal page's "Add API key", say) ask for it with a window
+ * event instead of threading a callback through the tree.
+ */
+
+/** Sections of the settings dialog a caller can ask to land on. */
+export type SettingsSection = "gitActions" | "orchestrator";
+const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator"];
+
+export type OpenSettingsDetail = { section?: SettingsSection };
+
+/** Dispatched on `window` as a `CustomEvent<OpenSettingsDetail>` to open the settings dialog. */
+export const OPEN_SETTINGS_EVENT = "portal:open-settings";
+
+/** Opens the settings dialog wherever it is mounted, scrolled to `section` when given. */
+export function openSettings(section?: SettingsSection) {
+  window.dispatchEvent(new CustomEvent<OpenSettingsDetail>(OPEN_SETTINGS_EVENT, { detail: { section } }));
+}
+
+/** For the dialog's host: calls `onOpen` with the requested section (null when none) whenever OPEN_SETTINGS_EVENT fires. */
+export function useOpenSettingsRequests(onOpen: (section: SettingsSection | null) => void) {
+  // Kept in a ref so the listener is registered once and still calls the newest callback.
+  const handler = useRef(onOpen);
+  useEffect(() => {
+    handler.current = onOpen;
+  }, [onOpen]);
+  useEffect(() => {
+    const listen = (event: Event) => {
+      const section = (event as CustomEvent<OpenSettingsDetail | undefined>).detail?.section;
+      handler.current(section && settingsSections.includes(section) ? section : null);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, listen);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, listen);
+  }, []);
 }

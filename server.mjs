@@ -18,6 +18,9 @@ async function shutdown() {
   stopping = true;
   terminals.disposeAll();
   io.close();
+  // Stop the orchestrator's scheduler and any turn it is running before its sessions go away; like
+  // the ACP runtime below, it lives on a global shared with Next's bundle (see src/lib/orchestrator/runtime.ts).
+  await globalThis.__portalOrchestrator?.dispose().catch(() => {});
   // Stop the agent processes and flush pending session writes; the runtime lives on the global
   // shared with Next's bundle (see src/lib/acp.ts) because this file cannot import it directly.
   await globalThis.__portalMultiAgentAcp?.dispose().catch(() => {});

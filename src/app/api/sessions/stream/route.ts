@@ -1,4 +1,5 @@
 import { listSessions, onSessionsChange, ready, type SessionListChange } from "@/lib/acp";
+import { presence } from "@/lib/presence";
 import { projects } from "@/lib/projects";
 import { summarizeSession } from "@/lib/session-summary";
 import type { SessionListEvent } from "@/lib/types";
@@ -21,6 +22,8 @@ export async function GET(req: Request) {
       let closed = false;
       let ping: ReturnType<typeof setInterval> | null = null;
       let unsubscribe = () => {};
+      // Any open Portal tab counts as an attended Portal for the orchestrator's scheduler.
+      const leave = presence.open();
       const write = (frame: string) => {
         if (closed) return;
         try {
@@ -32,6 +35,7 @@ export async function GET(req: Request) {
         if (closed) return;
         closed = true;
         unsubscribe();
+        leave();
         if (ping) clearInterval(ping);
         req.signal.removeEventListener("abort", cleanup);
         try { controller.close(); } catch {}

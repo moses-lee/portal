@@ -13,6 +13,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   SquarePen,
   TerminalSquare,
   Trash2,
@@ -73,6 +74,10 @@ export type SidebarProps = {
   onTerminal: () => void;
   /** True while the standalone terminal page is open. */
   terminalActive: boolean;
+  /** Open Talk to Portal, the orchestrator's page. */
+  onPortal: () => void;
+  /** True while Talk to Portal is open. */
+  portalActive: boolean;
   onAddProject: () => void;
   onOpenSettings: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
@@ -274,6 +279,8 @@ function SidebarContent(props: SidebarProps) {
     onHome,
     onTerminal,
     terminalActive,
+    onPortal,
+    portalActive,
     onAddProject,
     onRenameProject,
     onRemoveProject,
@@ -374,6 +381,15 @@ function SidebarContent(props: SidebarProps) {
         />
       ) : (
         <>
+        <Button
+          variant="ghost"
+          onClick={onPortal}
+          aria-current={portalActive ? "page" : undefined}
+          className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${portalActive ? "text-foreground" : "text-foreground/80"}`}
+        >
+          <Sparkles className="size-4" />
+          Talk to Portal
+        </Button>
         <Button
           variant="ghost"
           onClick={onHome}
