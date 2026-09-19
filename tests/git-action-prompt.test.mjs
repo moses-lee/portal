@@ -69,11 +69,13 @@ test("conflicts is available from the local merge check, PR or not", () => {
   assert.equal(gitActionAvailable("conflicts", summary({ branch: null, detached: true, conflicts: null })), false, "detached HEAD");
 });
 
-test("review is available with unresolved threads, changes requested, or comments", () => {
+test("review is available with unresolved threads or changes requested, not general comments", () => {
   assert.equal(gitActionAvailable("review", summary()), false, "no PR");
   assert.equal(gitActionAvailable("review", summary({ pull: pull() })), false, "nothing to review");
   assert.equal(gitActionAvailable("review", summary({ pull: pull({ unresolvedThreads: 1 }) })), true);
-  assert.equal(gitActionAvailable("review", summary({ pull: pull({ comments: 2 }) })), true);
+  assert.equal(gitActionAvailable("review", summary({ pull: pull({ comments: 2 }) })), false);
+  assert.equal(gitActionAvailable("review", summary({ pull: pull({ comments: 2, reviewDecision: "approved" }) })), false);
+  assert.equal(gitActionAvailable("review", summary({ pull: pull({ comments: 2, unresolvedThreads: null }) })), false, "comments do not imply unresolved feedback when the count is unknown");
   assert.equal(gitActionAvailable("review", summary({ pull: pull({ reviewDecision: "changes_requested" }) })), true);
   assert.equal(gitActionAvailable("review", summary({ pull: pull({ reviewDecision: "approved" }) })), false);
   assert.equal(gitActionAvailable("review", summary({ pull: pull({ reviewDecision: "review_required" }) })), false);

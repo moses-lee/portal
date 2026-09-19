@@ -294,6 +294,16 @@ export type ConflictSummary =
   | { status: "conflicts"; base: string; source: "local" | "github"; files: string[] }
   | { status: "unknown"; base: string | null; reason: string };
 
+/** PR totals from GitHub, or committed branch changes since its merge base. */
+export type DiffSummary = {
+  source: "pull" | "branch";
+  baseBranch: string;
+  additions: number;
+  deletions: number;
+  /** Includes binary files and counts a rename as one changed file. */
+  files: number;
+};
+
 /** Response of `GET /api/projects/<id>/github`: everything the sidebar's GitHub panel shows. */
 export type GithubSummary = {
   /** Checked-out branch, or null when HEAD is detached. */
@@ -328,6 +338,8 @@ export type GithubSummary = {
   pullError: string | null;
   /** Null on a detached HEAD or when there is no base to compare against. */
   conflicts: ConflictSummary | null;
+  /** Null when a comparison is unavailable; excludes uncommitted working tree changes. */
+  diff: DiffSummary | null;
   /** Epoch ms when this snapshot was taken. */
   at: number;
 };

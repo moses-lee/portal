@@ -70,7 +70,7 @@ function useDocumentVisible() {
  */
 export function useGithubSummary({ projectId, enabled, session }: {
   projectId: string | null;
-  /** Panel expanded and the sidebar visible; polling pauses otherwise. */
+  /** The inspector is visible; polling pauses otherwise. */
   enabled: boolean;
   /** The active session, whose branch changes and turn ends trigger a refresh when it belongs to the project. */
   session: SessionSummary | undefined;
@@ -128,7 +128,7 @@ export function useGithubSummary({ projectId, enabled, session }: {
 
   const active = enabled && visible && !!projectId;
 
-  // First load for a project (even while collapsed, so the header is informative), then polling while active.
+  // First load for a project, then polling while the inspector and document are visible.
   useEffect(() => {
     if (!projectId) return;
     if (loadedForRef.current !== projectId || active) void load(false);

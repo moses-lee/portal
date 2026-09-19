@@ -7,7 +7,7 @@ import type { GithubSummary, PullSummary } from "./types.ts";
  * block (PR, failing checks, conflicting files, or review state) drawn from a `GithubSummary`.
  */
 
-/** True when the summary has something for this action to act on, so the panel should show its button. */
+/** True when the summary has an issue for this action to investigate; otherwise its button is disabled. */
 export function gitActionAvailable(kind: GitActionKind, summary: GithubSummary): boolean {
   switch (kind) {
     case "checks":
@@ -17,7 +17,7 @@ export function gitActionAvailable(kind: GitActionKind, summary: GithubSummary):
     case "review": {
       const pull = summary.pull;
       if (!pull) return false;
-      return (pull.unresolvedThreads ?? 0) > 0 || pull.reviewDecision === "changes_requested" || (pull.comments ?? 0) > 0;
+      return (pull.unresolvedThreads ?? 0) > 0 || pull.reviewDecision === "changes_requested";
     }
   }
 }

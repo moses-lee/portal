@@ -233,6 +233,7 @@ export const githubSummary: GithubSummary = {
   fetchError: null,
   repoUrl: "https://github.com/example/portal",
   logBase: "origin/main",
+  diff: { source: "pull", baseBranch: "main", additions: 123, deletions: 45, files: 8 },
   commits: [
     {
       sha: "abc123",

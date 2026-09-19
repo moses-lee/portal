@@ -1,8 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
 import GithubPanel from "./GithubPanel";
-import IconButton from "./IconButton";
 import { useMediaQuery } from "./useMediaQuery";
 import {
   Sheet,
@@ -34,8 +32,7 @@ export default function GithubInspector({
       projectId={projectId}
       projectRemoved={projectRemoved}
       session={session}
-      collapsed={false}
-      onToggle={onClose}
+      onClose={onClose}
       visible={open}
       onGitAction={
         // The sheet covers the composer the action just filled; get out of its way.
@@ -58,7 +55,8 @@ export default function GithubInspector({
       >
         <SheetContent
           id="github-inspector"
-          className="!w-[min(380px,92vw)] gap-5 p-5 pt-12"
+          className="!w-[min(380px,92vw)] gap-0 p-4"
+          showCloseButton={false}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             document.getElementById("github-toggle")?.focus();
@@ -77,20 +75,8 @@ export default function GithubInspector({
     <aside
       id="github-inspector"
       aria-label="GitHub inspector"
-      className="glass-subtle flex w-[340px] shrink-0 flex-col border-l border-white/5 px-5 py-4 animate-in fade-in slide-in-from-right-2 duration-200"
+      className="glass-subtle flex w-[340px] shrink-0 flex-col border-l border-white/5 px-4 py-4 animate-in fade-in slide-in-from-right-2 duration-200"
     >
-      <div className="mb-4 flex items-center justify-between">
-        <span className="text-[10px] font-semibold tracking-[.12em] text-muted-foreground uppercase">
-          Source control
-        </span>
-        <IconButton
-          label="Close GitHub inspector"
-          onClick={onClose}
-          className="text-muted-foreground"
-        >
-          <X className="size-4" />
-        </IconButton>
-      </div>
       {panel}
     </aside>
   );

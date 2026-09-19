@@ -139,9 +139,38 @@ test("a feature branch lists its own commits plus the merge-base row and counts 
   assert.equal(summary.pull, null);
   assert.equal(summary.pullError, null);
   assert.deepEqual(summary.conflicts, { status: "clean", base: "main", source: "local" });
+  assert.deepEqual(summary.diff, { source: "branch", baseBranch: "main", additions: 0, deletions: 0, files: 0 });
   assert.equal(summary.at, 5);
   assert.deepEqual(calls.map((c) => c.args.slice(0, 3)), [["pr", "view", "feat"]]);
   assert.equal(calls[0].cwd, f.main);
+});
+
+test("branch totals use the merge base, include binary files and unusual renames, and exclude working changes", async (t) => {
+  const f = fixture(t);
+  commitFile(f.main, "remove.txt", "obsolete\n", "base file", 1_000_010);
+  git(f.main, ["push", "-q", "origin", "main"]);
+  git(f.main, ["checkout", "-q", "-b", "feat"]);
+  git(f.main, ["mv", "a.txt", "renamed\tline\nfile.txt"]);
+  git(f.main, ["rm", "remove.txt"]);
+  writeFileSync(path.join(f.main, "binary.dat"), Buffer.from([0, 1, 2, 3]));
+  writeFileSync(path.join(f.main, "lines.txt"), "alpha\nbeta\n");
+  git(f.main, ["add", "."]);
+  commit(f.main, "branch files", 1_000_100);
+
+  // The base advances independently; its later changes must not enter the feature's totals.
+  git(f.main, ["checkout", "-q", "main"]);
+  commitFile(f.main, "a.txt", "new base\nmore base\n", "base advanced", 1_000_200);
+  git(f.main, ["push", "-q", "origin", "main"]);
+  git(f.main, ["checkout", "-q", "feat"]);
+  writeFileSync(path.join(f.main, "lines.txt"), "staged\n");
+  git(f.main, ["add", "lines.txt"]);
+  writeFileSync(path.join(f.main, "lines.txt"), "unstaged\n");
+  writeFileSync(path.join(f.main, "untracked.txt"), "untracked\n");
+  const status = git(f.main, ["status", "--porcelain", "-z"]);
+
+  const summary = await readGithubSummary(f.main, { gh: noPulls().gh });
+  assert.deepEqual(summary.diff, { source: "branch", baseBranch: "main", additions: 2, deletions: 1, files: 4 });
+  assert.equal(git(f.main, ["status", "--porcelain", "-z"]), status, "reading totals leaves the index and working tree intact");
 });
 
 test("fetchRepo picks up origin's new commit and pullFastForward catches up", async (t) => {
@@ -253,6 +282,7 @@ test("conflicts are detected locally against origin/<base> without touching the 
 const prView = {
   number: 42, title: "Add the panel", author: { login: "moses" }, url: "https://github.com/o/r/pull/42", state: "OPEN",
   isDraft: true, baseRefName: "release", headRefName: "feat", headRefOid: "", mergeable: "MERGEABLE", reviewDecision: "CHANGES_REQUESTED",
+  additions: 123, deletions: 45, changedFiles: 8,
   statusCheckRollup: [
     { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "https://ci/lint" },
     { __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null, detailsUrl: "https://ci/test" },
@@ -301,7 +331,8 @@ test("a PR from gh is mapped with its checks and counts, and the log anchors on 
   assert.deepEqual(summary.commits.map((row) => [row.sha, row.base]), [[featTip, false], [releaseTip, true]]);
   assert.equal(summary.cursor, `${releaseTip}:1`);
   assert.deepEqual(summary.conflicts, { status: "clean", base: "release", source: "local" });
-  assert.deepEqual(calls[0].args, ["pr", "view", "feat", "--json", "number,title,author,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup"]);
+  assert.deepEqual(summary.diff, { source: "pull", baseBranch: "release", additions: 123, deletions: 45, files: 8 });
+  assert.deepEqual(calls[0].args, ["pr", "view", "feat", "--json", "number,title,author,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup,additions,deletions,changedFiles"]);
   assert.equal(calls.length, 3, "one pr view and two GraphQL pages");
   assert.deepEqual(calls[1].args.slice(0, 2), ["api", "graphql"]);
   assert.ok(calls[1].args.includes("owner={owner}") && calls[1].args.includes("name={repo}") && calls[1].args.includes("number=42"));
@@ -311,8 +342,48 @@ test("a PR from gh is mapped with its checks and counts, and the log anchors on 
   const again = await readGithubSummary(f.main, { gh });
   assert.equal(calls.length, 3);
   assert.deepEqual(again.pull, summary.pull);
+  assert.deepEqual(again.diff, summary.diff);
   await readGithubSummary(f.main, { gh, fetch: true });
   assert.equal(calls.length, 6, "fetch bypasses the gh cache");
+});
+
+test("PR totals retain zero values and remain available for closed and merged PRs", async (t) => {
+  const f = fixture(t);
+  featureBranch(f);
+  for (const state of ["OPEN", "CLOSED", "MERGED"]) {
+    const { gh } = fakeGh((args) => args[0] === "pr"
+      ? { stdout: JSON.stringify({ ...prView, state, additions: 0, deletions: 0, changedFiles: 2 }), stderr: "" }
+      : { stdout: JSON.stringify(graphqlCounts([])), stderr: "" });
+    const summary = await readGithubSummary(f.main, { gh, noPullCache: true });
+    assert.deepEqual(summary.diff, { source: "pull", baseBranch: "release", additions: 0, deletions: 0, files: 2 }, state);
+  }
+});
+
+test("missing or invalid PR totals fall back to committed changes against the PR base", async (t) => {
+  const f = fixture(t);
+  git(f.main, ["checkout", "-q", "-b", "release"]);
+  commitFile(f.main, "release.txt", "release\n", "release work", 1_000_100);
+  git(f.main, ["push", "-q", "-u", "origin", "release"]);
+  git(f.main, ["checkout", "-q", "-b", "feat"]);
+  commitFile(f.main, "feat.txt", "feature\n", "feature work", 1_000_200);
+  for (const invalid of [undefined, null, -1, 1.5, "12"]) {
+    const { gh } = fakeGh((args) => args[0] === "pr"
+      ? { stdout: JSON.stringify({ ...prView, changedFiles: invalid }), stderr: "" }
+      : { stdout: JSON.stringify(graphqlCounts([])), stderr: "" });
+    const summary = await readGithubSummary(f.main, { gh, noPullCache: true });
+    assert.deepEqual(summary.diff, { source: "branch", baseBranch: "release", additions: 1, deletions: 0, files: 1 });
+  }
+});
+
+test("a missing comparison base leaves totals unknown", async (t) => {
+  const f = fixture(t);
+  featureBranch(f);
+  const { gh } = fakeGh((args) => args[0] === "pr"
+    ? { stdout: JSON.stringify({ ...prView, changedFiles: null, baseRefName: "missing" }), stderr: "" }
+    : { stdout: JSON.stringify(graphqlCounts([])), stderr: "" });
+  const summary = await readGithubSummary(f.main, { gh });
+  assert.equal(summary.diff, null);
+  assert.equal(summary.pull.number, 42, "unavailable totals do not hide the PR");
 });
 
 test("check states: all passing, pending beats passing, skipped alone counts as passing, no checks is null", async (t) => {
@@ -394,6 +465,7 @@ test("a detached HEAD shows its history and asks gh nothing", async (t) => {
   assert.equal(summary.commits.length, 4);
   assert.equal(summary.cursor, null);
   assert.deepEqual([summary.pull, summary.pullError, summary.conflicts], [null, null, null]);
+  assert.equal(summary.diff, null);
   assert.equal(calls.length, 0);
 });
 
@@ -415,6 +487,7 @@ test("without an origin remote the fetch fails but the log still renders", async
   assert.deepEqual(summary.commits.map((row) => row.sha), [work, init]);
   assert.equal(summary.cursor, null);
   assert.deepEqual(summary.conflicts, { status: "unknown", base: "main", reason: "origin/main does not exist locally; fetch to compare." });
+  assert.deepEqual(summary.diff, { source: "branch", baseBranch: "main", additions: 0, deletions: 0, files: 0 }, "a local base works without a remote");
 });
 
 test("fetchRepo shares an in-flight fetch and skips fetches inside the minimum interval", async (t) => {
@@ -448,6 +521,7 @@ test("an empty repository yields a branch with no commits", async (t) => {
   assert.equal(summary.cursor, null);
   assert.equal(summary.logBase, null);
   assert.equal(summary.conflicts, null);
+  assert.equal(summary.diff, null);
   assert.deepEqual([summary.ahead, summary.behind, summary.upstream], [0, 0, null]);
   assert.equal(calls.length, 1, "gh is still asked about the branch");
   await rejectsWith(pullFastForward(root, { gh }), 409);
@@ -568,6 +642,7 @@ test("unrelated histories make the conflict check unknown rather than failing th
   assert.equal(summary.logBase, "origin/main");
   assert.deepEqual(summary.commits.map((row) => [row.sha, row.base]), [[lonely, false]], "no merge-base row without a merge base");
   assert.equal(summary.cursor, null);
+  assert.equal(summary.diff, null, "a failed merge-base comparison is unknown, not zero changes");
 });
 
 test("credentials in the origin URL never reach the fetch error", async (t) => {

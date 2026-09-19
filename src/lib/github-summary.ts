@@ -1,5 +1,5 @@
 import type {
-  CheckRun, CheckState, CheckSummary, CommitPage, CommitRow, ConflictSummary, GithubSummary, PullSummary,
+  CheckRun, CheckState, CheckSummary, CommitPage, CommitRow, ConflictSummary, DiffSummary, GithubSummary, PullSummary,
 } from "./types.ts";
 import {
   type GhRunner, WorktreeError, defaultGh, ghFailureReason, ghSaysNoSuchPull, git, gitMaybe, gitResult, repoRootOf,
@@ -16,7 +16,7 @@ const DEFAULT_FETCH_INTERVAL_MS = 20_000;
 const MAX_THREAD_PAGES = 10;
 
 type FetchResult = { fetchedAt: number | null; fetchError: string | null };
-type PullResult = { pull: PullSummary | null; pullError: string | null };
+type PullResult = { pull: PullSummary | null; pullError: string | null; diff: DiffSummary | null };
 
 /** Last fetch outcome per repository (keyed by its common git dir, so worktrees share it). */
 const fetchResults = new Map<string, FetchResult & { finishedAt: number }>();
@@ -259,7 +259,17 @@ function toPullSummary(raw: unknown): PullSummary | null {
   };
 }
 
-const PULL_FIELDS = "number,title,author,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup";
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function toPullDiff(raw: unknown, baseBranch: string): DiffSummary | null {
+  const p = asRecord(raw);
+  if (!baseBranch || !p || !isCount(p.additions) || !isCount(p.deletions) || !isCount(p.changedFiles)) return null;
+  return { source: "pull", baseBranch, additions: p.additions, deletions: p.deletions, files: p.changedFiles };
+}
+
+const PULL_FIELDS = "number,title,author,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup,additions,deletions,changedFiles";
 
 const COUNTS_QUERY = `query($owner:String!,$name:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
@@ -300,24 +310,24 @@ async function readPull(repoRoot: string, branch: string, gh: GhRunner): Promise
   try {
     ({ stdout } = await gh(["pr", "view", branch, "--json", PULL_FIELDS], { cwd: repoRoot }));
   } catch (err) {
-    if (ghSaysNoSuchPull(err)) return { pull: null, pullError: null };
-    return { pull: null, pullError: ghFailureReason(err) };
+    if (ghSaysNoSuchPull(err)) return { pull: null, pullError: null, diff: null };
+    return { pull: null, pullError: ghFailureReason(err), diff: null };
   }
   let parsed: unknown;
   try { parsed = JSON.parse(stdout); } catch { parsed = null; }
-  if (asRecord(parsed)?.headRefName !== branch) return { pull: null, pullError: null };
+  if (asRecord(parsed)?.headRefName !== branch) return { pull: null, pullError: null, diff: null };
   const pull = toPullSummary(parsed);
-  if (!pull) return { pull: null, pullError: "gh returned unexpected output" };
+  if (!pull) return { pull: null, pullError: "gh returned unexpected output", diff: null };
   const counts = await readCounts(repoRoot, pull.number, gh);
-  return { pull: { ...pull, ...counts }, pullError: null };
+  return { pull: { ...pull, ...counts }, pullError: null, diff: toPullDiff(parsed, pull.baseBranch) };
 }
 
 async function cachedPull(repoRoot: string, branch: string, gh: GhRunner, now: number, bypass: boolean): Promise<PullResult> {
   // gh has no `--` separator: a name that looks like a flag cannot be looked up safely.
-  if (branch.startsWith("-")) return { pull: null, pullError: null };
+  if (branch.startsWith("-")) return { pull: null, pullError: null, diff: null };
   const key = `${repoRoot}|${branch}`;
   const hit = pullCache.get(key);
-  if (hit && !bypass && hit.expires > now) return { pull: hit.pull, pullError: hit.pullError };
+  if (hit && !bypass && hit.expires > now) return { pull: hit.pull, pullError: hit.pullError, diff: hit.diff };
   const result = await readPull(repoRoot, branch, gh);
   pullCache.set(key, { ...result, expires: now + PULL_CACHE_MS });
   return result;
@@ -373,6 +383,44 @@ async function readConflicts(repoRoot: string, base: string, headSha: string, pu
   }
 }
 
+/** Parse NUL-delimited numstat, including the extra old/new path fields used for renames. */
+function parseDiffStats(out: string): Pick<DiffSummary, "additions" | "deletions" | "files"> | null {
+  if (out === "") return { additions: 0, deletions: 0, files: 0 };
+  if (!out.endsWith("\0")) return null;
+  const records = out.slice(0, -1).split("\0");
+  let additions = 0;
+  let deletions = 0;
+  let files = 0;
+  for (let i = 0; i < records.length; i++) {
+    const record = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(records[i]);
+    if (!record) return null;
+    const [, added, removed, filename] = record;
+    if (filename === "") {
+      // With -z a rename is `<added>\t<removed>\t\0<old>\0<new>\0`.
+      if (!records[i + 1] || !records[i + 2]) return null;
+      i += 2;
+    }
+    if (added === "-" || removed === "-") {
+      if (added !== "-" || removed !== "-") return null;
+    } else {
+      additions += Number(added);
+      deletions += Number(removed);
+      if (!isCount(additions) || !isCount(deletions)) return null;
+    }
+    files++;
+  }
+  return { additions, deletions, files };
+}
+
+async function readBranchDiff(repoRoot: string, base: string, headSha: string, remoteBaseSha: string | null): Promise<DiffSummary | null> {
+  const baseSha = remoteBaseSha || (await gitMaybe(repoRoot, ["rev-parse", "--verify", "-q", `refs/heads/${base}^{commit}`]))?.trim();
+  if (!baseSha) return null;
+  // Explicit commit endpoints exclude index/worktree changes. Three dots compare from the merge base.
+  const out = await gitMaybe(repoRoot, ["diff", "--numstat", "-z", "--find-renames", "--no-ext-diff", "--no-textconv", `${baseSha}...${headSha}`, "--"]);
+  const stats = out === null ? null : parseDiffStats(out);
+  return stats ? { source: "branch", baseBranch: base, ...stats } : null;
+}
+
 type ReadOptions = { gh: GhRunner; fetch: boolean; now: () => number; noPullCache: boolean; logCap: number };
 
 async function buildSummary(repoRoot: string, { gh, fetch, now, noPullCache, logCap }: ReadOptions): Promise<GithubSummary> {
@@ -398,17 +446,19 @@ async function buildSummary(repoRoot: string, { gh, fetch, now, noPullCache, log
   }
   const repoUrl = remote ? githubRepoUrl(remote) : null;
 
-  const { pull, pullError } = branch === null ? { pull: null, pullError: null } : await cachedPull(repoRoot, branch, gh, now(), fetch || noPullCache);
+  const { pull, pullError, diff: pullDiff } = branch === null ? { pull: null, pullError: null, diff: null } : await cachedPull(repoRoot, branch, gh, now(), fetch || noPullCache);
 
   const base = (pull?.state === "open" && pull.baseBranch) || defaultBranch;
   let logBase: string | null = null;
   let commits: CommitRow[] = [];
   let cursor: string | null = null;
   let conflicts: ConflictSummary | null = null;
+  let diff = pullDiff;
+  let baseSha: string | null = null;
   if (marks.headSha && (detached || !base || branch === base)) {
     ({ commits, cursor } = await logPage(repoRoot, { start: marks.headSha, skip: 0, exclude: null }, marks));
   } else if (marks.headSha && base) {
-    const baseSha = (await gitMaybe(repoRoot, ["rev-parse", "--verify", "-q", `origin/${base}^{commit}`]))?.trim();
+    baseSha = (await gitMaybe(repoRoot, ["rev-parse", "--verify", "-q", `refs/remotes/origin/${base}^{commit}`]))?.trim() || null;
     if (baseSha) {
       logBase = `origin/${base}`;
       ({ commits, cursor } = await logPage(repoRoot, { start: marks.headSha, skip: 0, exclude: baseSha }, marks, logCap));
@@ -419,11 +469,14 @@ async function buildSummary(repoRoot: string, { gh, fetch, now, noPullCache, log
   } else if (!detached && base && branch !== base) {
     conflicts = { status: "unknown", base, reason: "The branch has no commits yet." };
   }
+  if (!diff && !detached && marks.headSha && base && branch !== base) {
+    diff = await readBranchDiff(repoRoot, base, marks.headSha, baseSha);
+  }
 
   return {
     branch, detached, defaultBranch, upstream, ahead, behind,
     fetchedAt: fetched.fetchedAt, fetchError: fetched.fetchError,
-    repoUrl, logBase, commits, cursor, pull, pullError, conflicts, at: now(),
+    repoUrl, logBase, commits, cursor, pull, pullError, conflicts, diff, at: now(),
   };
 }
 

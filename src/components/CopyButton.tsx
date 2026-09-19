@@ -9,10 +9,13 @@ export default function CopyButton({
   text,
   label = "Copy",
   className,
+  iconOnly = false,
 }: {
   text: string;
   label?: string;
   className?: string;
+  /** Keep the idle button compact, showing text only for success or failure feedback. */
+  iconOnly?: boolean;
 }) {
   const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -38,7 +41,10 @@ export default function CopyButton({
       title={label}
     >
       {status === "copied" ? <Check /> : <Copy />}
-      <span aria-live="polite" className="text-xs">
+      <span
+        aria-live="polite"
+        className={iconOnly && status === "idle" ? "sr-only" : "text-xs"}
+      >
         {status === "copied"
           ? "Copied"
           : status === "failed"
