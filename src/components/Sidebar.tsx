@@ -486,7 +486,7 @@ function SidebarContent(props: SidebarProps) {
                       )}
                       {isCollapsed && working && (
                         <span
-                          className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-indigo-300"}`}
+                          className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-[#2fe36b]"}`}
                           aria-label={waiting ? "Needs approval" : "Working"}
                         />
                       )}
