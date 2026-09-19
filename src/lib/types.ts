@@ -25,6 +25,39 @@ export type Project = {
   worktree?: WorktreeMeta;
 };
 
+/**
+ * A project the user removed while conversations still referenced it. Kept, with its original
+ * `id`, so restoring it relinks those conversations without touching their records.
+ */
+export type RemovedProject = Project & {
+  removedAt: number;
+  /** For a worktree: the parent project's folder at removal time, so a re-added parent (new id) is still found. */
+  parentPath?: string;
+};
+
+/** One row of `GET /api/projects/removed`: a removed project and whether Portal can bring it back. */
+export type RemovedProjectSummary = {
+  /** The original project id; sessions still carry it as their `projectId`. */
+  id: string;
+  name: string;
+  path: string;
+  displayPath: string;
+  worktree?: WorktreeMeta;
+  /** Epoch ms; null for conversations whose project vanished without a removal record. */
+  removedAt: number | null;
+  /** True when the folder still exists on the host. */
+  exists: boolean;
+  /** Name of the worktree's original project when it is still listed. */
+  parentName: string | null;
+  /** Conversations that still point at this project. */
+  sessionCount: number;
+  /** Epoch ms of the most recent of those conversations, or null with none. */
+  lastActiveAt: number | null;
+  /** False when restoring cannot work; `reason` says why. */
+  restorable: boolean;
+  reason: string | null;
+};
+
 /** One branch of a project's repository, merged across the local branch and `origin/<name>`. */
 export type BranchInfo = {
   /** Short name, e.g. "feat/foo". */

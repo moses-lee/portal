@@ -13,12 +13,14 @@ import AddProjectDialog from "./AddProjectDialog";
 import SettingsDialog from "./SettingsDialog";
 import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
+import { useRemovedProjects } from "./useRemovedProjects";
 import { useSettings } from "./useSettings";
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
 import { pinnedFirst } from "@/lib/pins";
 import { createHistoryCache } from "@/lib/history-cache";
+import { byRecentActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
   applyConfigChange,
@@ -106,6 +108,14 @@ export default function Chat() {
     removeProject,
     refresh: refreshProjects,
   } = useProjects();
+  /** Projects removed while conversations still pointed at them; the sidebar's Removed view. */
+  const {
+    removed: removedProjects,
+    error: removedError,
+    refresh: refreshRemoved,
+    restore: restoreRemoved,
+    discard: discardRemoved,
+  } = useRemovedProjects();
   const {
     projectPins,
     sessionPins,
@@ -156,7 +166,7 @@ export default function Chat() {
   /** Reduced transcripts of visited (and hovered) sessions, for instant switches. */
   const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
 
-  /** Refetch the whole list; used when the live feed names a session this page does not know. */
+  /** Refetch the whole list; used when the live feed names a session this page does not know. Resolves with the list. */
   const refetchSessions = useCallback(async (signal?: AbortSignal) => {
     const r = await fetch("/api/sessions", { signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -164,6 +174,7 @@ export default function Chat() {
       sessions: SessionSummary[];
     };
     if (!signal?.aborted) setSessions(fetched);
+    return fetched;
   }, []);
 
   useEffect(() => {
@@ -388,6 +399,39 @@ export default function Chat() {
     historyCache.delete(sessionId);
     writeDraft(sessionId, "");
     if (sessionId === active) replacePath("/");
+    // A removed project's last conversation going away drops its Removed row.
+    void refreshRemoved();
+  };
+
+  /** Remove a project; while conversations reference it, it moves to the Removed view. */
+  const removeProjectFromWorkspace: typeof removeProject = async (id, opts) => {
+    await removeProject(id, opts);
+    void refreshRemoved();
+  };
+
+  /**
+   * Bring a removed project back (recreating its worktree when needed), then open its most recent
+   * conversation; opening a persisted session is what reconnects its agent.
+   */
+  const restoreProject = async (id: string) => {
+    const project = await restoreRemoved(id);
+    // The project is back either way; a failed refetch only costs the jump to its conversation.
+    const [, fetched] = await Promise.all([
+      refreshProjects(),
+      refetchSessions().catch(() => sessionsRef.current),
+    ]);
+    selectProject(project.id);
+    const newest = fetched
+      .filter((s) => s.projectId === project.id)
+      .sort(byRecentActivity)[0];
+    pushPath(newest ? sessionPath(newest.id) : "/");
+    setShowSidebar(false);
+  };
+
+  /** Delete a removed project's conversations for good; the list feed leaves the open one if it was among them. */
+  const discardRemovedProject = async (id: string) => {
+    await discardRemoved(id);
+    await refetchSessions().catch(() => {});
   };
 
   const canCreate =
@@ -615,7 +659,12 @@ export default function Chat() {
         onRenameProject={async (id, name) => {
           await renameProject(id, name);
         }}
-        onRemoveProject={removeProject}
+        onRemoveProject={removeProjectFromWorkspace}
+        removedProjects={removedProjects}
+        removedError={removedError}
+        onRefreshRemoved={refreshRemoved}
+        onRestoreProject={restoreProject}
+        onDiscardRemoved={discardRemovedProject}
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
         onHome={() => selectSession(null)}

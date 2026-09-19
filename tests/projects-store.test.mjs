@@ -202,3 +202,97 @@ test("renames legacy \"<parent> · <branch>\" worktree projects to their branch 
   assert.equal(dropLegacyWorktreeNames(store.list()), null);
   assert.equal(dropLegacyWorktreeNames([]), null);
 });
+
+test("remove with keep leaves a restorable record; restore brings the project back under its id", async (t) => {
+  const { home, file, open } = setup(t);
+  const store = open();
+  const parent = await store.add({ path: path.join(home, "one") });
+  const wt = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat" } });
+
+  await store.remove(wt.id, { keep: true });
+  assert.deepEqual(store.list(), [parent]);
+  assert.equal(store.get(wt.id), undefined);
+  const record = store.getRemoved(wt.id);
+  assert.ok(record && typeof record.removedAt === "number");
+  assert.deepEqual({ ...record, removedAt: undefined }, { ...wt, parentPath: parent.path, removedAt: undefined });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).removed, [record]);
+
+  const reloaded = open();
+  await reloaded.ready;
+  assert.deepEqual(reloaded.listRemoved(), [record]);
+
+  const restored = await reloaded.restore(wt.id);
+  assert.deepEqual(restored, wt, "the restored project carries no removal fields");
+  assert.deepEqual(reloaded.list(), [parent, wt]);
+  assert.deepEqual(reloaded.listRemoved(), []);
+  assert.equal("removed" in JSON.parse(readFileSync(file, "utf8")), false, "an empty removed list is not written");
+});
+
+test("remove without keep forgets the project; restore and forget on unknown ids", async (t) => {
+  const { home, open } = setup(t);
+  const store = open();
+  const one = await store.add({ path: path.join(home, "one") });
+  await store.remove(one.id);
+  assert.deepEqual(store.listRemoved(), []);
+  await rejectsWith(store.restore(one.id), 404);
+  assert.equal(await store.forgetRemoved(one.id), false);
+});
+
+test("restore refuses a missing folder or a path another project now covers; forgetRemoved drops the record", async (t) => {
+  const { home, open } = setup(t);
+  const store = open();
+  const one = await store.add({ path: path.join(home, "one") });
+  await store.remove(one.id, { keep: true });
+  rmSync(one.path, { recursive: true });
+  await rejectsWith(store.restore(one.id), 409, (err) => assert.match(err.message, /folder is missing/));
+  mkdirSync(one.path);
+  const other = await store.add({ path: one.path, name: "Other" });
+  // Re-adding the same folder revives the removed record instead of creating a new project.
+  assert.equal(other.id, one.id);
+  assert.equal(other.name, "Other");
+  assert.deepEqual(store.listRemoved(), []);
+
+  await store.remove(other.id, { keep: true });
+  assert.equal(await store.forgetRemoved(other.id), true);
+  assert.deepEqual(store.listRemoved(), []);
+  assert.equal(store.get(other.id), undefined);
+});
+
+test("adding a worktree at a removed project's path revives it with the new worktree details", async (t) => {
+  const { home, open } = setup(t);
+  const store = open();
+  const parent = await store.add({ path: path.join(home, "one") });
+  const wt = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat" } });
+  await store.remove(wt.id, { keep: true });
+  const again = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat" } });
+  assert.deepEqual(again, wt);
+  assert.deepEqual(store.list().map((p) => p.id), [parent.id, wt.id]);
+});
+
+test("restore can point a worktree at a re-added parent; plain add keeps a revived worktree's details", async (t) => {
+  const { home, open } = setup(t);
+  const store = open();
+  const parent = await store.add({ path: path.join(home, "one") });
+  const wt = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat" } });
+  await store.remove(wt.id, { keep: true });
+  const restored = await store.restore(wt.id, { worktree: { parentId: "new-parent", branch: "feat" } });
+  assert.deepEqual(restored.worktree, { parentId: "new-parent", branch: "feat" });
+
+  await store.remove(wt.id, { keep: true });
+  const revived = await store.add({ path: path.join(home, "two") });
+  assert.equal(revived.id, wt.id);
+  assert.deepEqual(revived.worktree, { parentId: "new-parent", branch: "feat" });
+});
+
+test("removed records are sorted newest first and bad ones are dropped on load", async (t) => {
+  const { home, file, open } = setup(t);
+  const a = { id: "a", name: "a", path: path.join(home, "one"), createdAt: 1, removedAt: 5 };
+  const b = { id: "b", name: "b", path: path.join(home, "two"), createdAt: 2, removedAt: 9 };
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ version: 1, projects: [], removed: [a, { id: "bad" }, b, { ...a, id: "c", removedAt: "x" }] }));
+  const warn = t.mock.method(console, "warn", () => {});
+  const store = open();
+  await store.ready;
+  assert.deepEqual(store.listRemoved(), [b, a]);
+  assert.equal(warn.mock.callCount(), 2);
+});

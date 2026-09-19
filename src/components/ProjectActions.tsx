@@ -93,7 +93,8 @@ export function RemoveConfirm({
         <>
           <p className="mb-2 text-zinc-300">
             Remove <span className="font-medium">{project.name}</span> from
-            Portal?
+            Portal? Any conversations it still has move to Removed, where you
+            can bring it back.
           </p>
           <label
             htmlFor={checkboxId}
@@ -118,7 +119,8 @@ export function RemoveConfirm({
       ) : (
         <p className="mb-2 text-zinc-300">
           Remove <span className="font-medium">{project.name}</span> from
-          Portal? Its sessions stay and the folder is untouched.
+          Portal? The folder is untouched. Any conversations it still has move
+          to Removed, where you can bring it back.
         </p>
       )}
       {error && (

@@ -3,6 +3,7 @@ import { applySettingsPatch, defaultSettings } from "../../src/lib/settings";
 import type {
   GithubSummary,
   ProjectSummary,
+  RemovedProjectSummary,
   SessionSummary,
   StoredEvent,
   SessionMetaEvent,
@@ -32,6 +33,21 @@ export const worktree: ProjectSummary = {
   displayPath: "~/.portal/worktrees/portal/improve-chat-experience",
   worktree: { parentId: "p1", branch: "feature/improve-chat-experience" },
   git: { ...project.git!, branch: "feature/improve-chat-experience" },
+};
+/** A removed worktree project whose folder is gone but whose branch and parent survive. */
+export const removedProject: RemovedProjectSummary = {
+  id: "p9",
+  name: "feat/old-branch",
+  path: "/workspace/portal-old",
+  displayPath: "~/.portal/worktrees/portal/feat-old-branch",
+  worktree: { parentId: "p1", branch: "feat/old-branch" },
+  removedAt: now - 7200000,
+  exists: false,
+  parentName: "portal",
+  sessionCount: 2,
+  lastActiveAt: now - 86400000,
+  restorable: true,
+  reason: null,
 };
 export const firstTitle =
   "Improve the chat experience and simplify the agent settings";
@@ -300,9 +316,13 @@ export async function setupPortal(
      * answering with the defaults, for tests of persistence itself.
      */
     realSettings?: boolean;
+    /** Rows of `GET /api/projects/removed`; restoring one lists it as a project with one session. */
+    removed?: RemovedProjectSummary[];
   } = {},
 ) {
   const currentSessions = structuredClone(sessions);
+  const currentProjects: ProjectSummary[] = [project, worktree];
+  const currentRemoved = structuredClone(options.removed ?? []);
   const history = options.history ?? events;
   const requests: { path: string; method: string; body: unknown }[] = [];
   let failSend = false;
@@ -390,7 +410,35 @@ export async function setupPortal(
         defaultAgentId: "claude",
       });
     if (path === "/api/projects")
-      return json({ projects: [project, worktree] });
+      return json({ projects: currentProjects });
+    if (path === "/api/projects/removed")
+      return json({ removed: currentRemoved });
+    const removedMatch = path.match(/^\/api\/projects\/removed\/([^/]+)(\/restore)?$/);
+    if (removedMatch) {
+      const index = currentRemoved.findIndex((row) => row.id === removedMatch[1]);
+      if (index === -1) return json({ error: "Unknown removed project." }, 404);
+      const [row] = currentRemoved.splice(index, 1);
+      if (removedMatch[2] && method === "POST") {
+        const restored: ProjectSummary = {
+          id: row.id,
+          name: row.name,
+          path: row.path,
+          displayPath: row.displayPath,
+          createdAt: now,
+          exists: true,
+          worktree: row.worktree,
+          git: { ...project.git!, branch: row.worktree?.branch ?? "main" },
+        };
+        currentProjects.push(restored);
+        currentSessions.push({
+          ...makeSession("s9", "Finish the old branch", "codex", restored),
+          lastActiveAt: row.lastActiveAt ?? now,
+        });
+        return json({ project: restored });
+      }
+      if (method === "DELETE") return route.fulfill({ status: 204 });
+      return json({ error: `Unexpected test request: ${method} ${path}` }, 400);
+    }
     if (path === "/api/sessions" && method === "GET")
       return json({ sessions: currentSessions });
     if (path === "/api/sessions" && method === "POST") {
