@@ -9,16 +9,23 @@ import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import TerminalPage from "./TerminalPage";
+import PortalPage from "./PortalPage";
 import AddProjectDialog from "./AddProjectDialog";
 import SettingsDialog from "./SettingsDialog";
 import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
-import { useSettings } from "./useSettings";
+import { useRemovedProjects } from "./useRemovedProjects";
+import {
+  useOpenSettingsRequests,
+  useSettings,
+  type SettingsSection,
+} from "./useSettings";
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
 import { pinnedFirst } from "@/lib/pins";
 import { createHistoryCache } from "@/lib/history-cache";
+import { byRecentActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
   applyConfigChange,
@@ -26,7 +33,9 @@ import {
   nextConfigChange,
 } from "@/lib/session-config";
 import {
+  isPortalPath,
   isTerminalPath,
+  portalPath,
   sessionIdFromPath,
   sessionPath,
   terminalPath,
@@ -86,7 +95,9 @@ export default function Chat() {
   const active = useMemo(() => sessionIdFromPath(pathname ?? "/"), [pathname]);
   /** The standalone terminal page: no session, no start page. */
   const terminalOpen = isTerminalPath(pathname ?? "/");
-  const onStartPage = !active && !terminalOpen;
+  /** Talk to Portal: the orchestrator's thread, outside every project and session. */
+  const portalOpen = isPortalPath(pathname ?? "/");
+  const onStartPage = !active && !terminalOpen && !portalOpen;
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -106,6 +117,14 @@ export default function Chat() {
     removeProject,
     refresh: refreshProjects,
   } = useProjects();
+  /** Projects removed while conversations still pointed at them; the sidebar's Removed view. */
+  const {
+    removed: removedProjects,
+    error: removedError,
+    refresh: refreshRemoved,
+    restore: restoreRemoved,
+    discard: discardRemoved,
+  } = useRemovedProjects();
   const {
     projectPins,
     sessionPins,
@@ -132,6 +151,13 @@ export default function Chat() {
   } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  /** The section a `portal:open-settings` event asked for; null when the dialog was opened from its button. */
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection | null>(null);
+  useOpenSettingsRequests((section) => {
+    setSettingsSection(section);
+    setShowSettings(true);
+  });
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
   const [showSidebar, setShowSidebar] = useState(false);
@@ -156,7 +182,7 @@ export default function Chat() {
   /** Reduced transcripts of visited (and hovered) sessions, for instant switches. */
   const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
 
-  /** Refetch the whole list; used when the live feed names a session this page does not know. */
+  /** Refetch the whole list; used when the live feed names a session this page does not know. Resolves with the list. */
   const refetchSessions = useCallback(async (signal?: AbortSignal) => {
     const r = await fetch("/api/sessions", { signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -164,6 +190,7 @@ export default function Chat() {
       sessions: SessionSummary[];
     };
     if (!signal?.aborted) setSessions(fetched);
+    return fetched;
   }, []);
 
   useEffect(() => {
@@ -338,7 +365,7 @@ export default function Chat() {
 
   /** Navigate to a session (or the start page); the URL drives the rest. */
   const selectSession = (sessionId: string | null) => {
-    if (sessionId !== active || terminalOpen)
+    if (sessionId !== active || terminalOpen || portalOpen)
       pushPath(sessionId ? sessionPath(sessionId) : "/");
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
@@ -388,6 +415,39 @@ export default function Chat() {
     historyCache.delete(sessionId);
     writeDraft(sessionId, "");
     if (sessionId === active) replacePath("/");
+    // A removed project's last conversation going away drops its Removed row.
+    void refreshRemoved();
+  };
+
+  /** Remove a project; while conversations reference it, it moves to the Removed view. */
+  const removeProjectFromWorkspace: typeof removeProject = async (id, opts) => {
+    await removeProject(id, opts);
+    void refreshRemoved();
+  };
+
+  /**
+   * Bring a removed project back (recreating its worktree when needed), then open its most recent
+   * conversation; opening a persisted session is what reconnects its agent.
+   */
+  const restoreProject = async (id: string) => {
+    const project = await restoreRemoved(id);
+    // The project is back either way; a failed refetch only costs the jump to its conversation.
+    const [, fetched] = await Promise.all([
+      refreshProjects(),
+      refetchSessions().catch(() => sessionsRef.current),
+    ]);
+    selectProject(project.id);
+    const newest = fetched
+      .filter((s) => s.projectId === project.id)
+      .sort(byRecentActivity)[0];
+    pushPath(newest ? sessionPath(newest.id) : "/");
+    setShowSidebar(false);
+  };
+
+  /** Delete a removed project's conversations for good; the list feed leaves the open one if it was among them. */
+  const discardRemovedProject = async (id: string) => {
+    await discardRemoved(id);
+    await refetchSessions().catch(() => {});
   };
 
   const canCreate =
@@ -440,6 +500,19 @@ export default function Chat() {
   const openTerminal = () => {
     if (!terminalOpen) pushPath(terminalPath());
     setShowSidebar(false);
+  };
+
+  /** The sidebar's Talk to Portal button: open the orchestrator's page. */
+  const openPortal = () => {
+    if (!portalOpen) pushPath(portalPath());
+    setShowSidebar(false);
+  };
+
+  /** The sidebar toggle shared by the pages without a session header of their own. */
+  const toggleSidebar = () => {
+    if (desktop)
+      setSidebarPreference(sidebarPreference === "true" ? "false" : "true");
+    else setShowSidebar(true);
   };
 
   /** Start a session in `projectId`, first turning a non-Original `choice` into its worktree project. */
@@ -615,12 +688,19 @@ export default function Chat() {
         onRenameProject={async (id, name) => {
           await renameProject(id, name);
         }}
-        onRemoveProject={removeProject}
+        onRemoveProject={removeProjectFromWorkspace}
+        removedProjects={removedProjects}
+        removedError={removedError}
+        onRefreshRemoved={refreshRemoved}
+        onRestoreProject={restoreProject}
+        onDiscardRemoved={discardRemovedProject}
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
         onHome={() => selectSession(null)}
         onTerminal={openTerminal}
         terminalActive={terminalOpen}
+        onPortal={openPortal}
+        portalActive={portalOpen}
         desktopOpen={sidebarPreference === "true"}
         onCollapse={() => setSidebarPreference("false")}
       />
@@ -634,18 +714,19 @@ export default function Chat() {
       />
       <SettingsDialog
         open={showSettings}
-        onClose={() => setShowSettings(false)}
+        section={settingsSection}
+        onClose={() => {
+          setShowSettings(false);
+          setSettingsSection(null);
+        }}
       />
-      {terminalOpen ? (
-        <TerminalPage
-          onOpenSidebar={() => {
-            if (desktop)
-              setSidebarPreference(
-                sidebarPreference === "true" ? "false" : "true",
-              );
-            else setShowSidebar(true);
-          }}
+      {portalOpen ? (
+        <PortalPage
+          onOpenSidebar={toggleSidebar}
+          onOpenSession={selectSession}
         />
+      ) : terminalOpen ? (
+        <TerminalPage onOpenSidebar={toggleSidebar} />
       ) : (
       /* Keyed by session so switching remounts the pane with fresh history; terminals keep running server-side. */
       <SessionPane
@@ -695,7 +776,7 @@ export default function Chat() {
         onShellSize={setShellSize}
       />
       )}
-      {showGithub && !terminalOpen && (
+      {showGithub && !terminalOpen && !portalOpen && (
         <GithubInspector
           open={showGithub}
           onClose={() => setGithubPreference("false")}

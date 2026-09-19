@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  WorktreeError, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, portalWorktreesDir,
+  WorktreeError, ensureWorktree, getPull, hasBranch, listBranches, listPulls, mainWorktreeOf, portalWorktreesDir,
   removeWorktree, repoRootOf, sanitizeBranchForPath,
 } from "../src/lib/worktrees.ts";
 
@@ -296,4 +296,15 @@ test("getPull returns any state, 404 when missing, and 409 when gh is unavailabl
   await rejectsWith(getPull("/repo", 999, missing.gh), 404, (err) => assert.equal(err.message, "PR #999 not found."));
   const loggedOut = fakeGh(() => { throw ghError("gh auth login required"); });
   await rejectsWith(getPull("/repo", 1, loggedOut.gh), 409, (err) => assert.equal(err.message, "gh is not logged in"));
+});
+
+test("hasBranch sees local, origin-only, and worktree branches but not missing ones", async (t) => {
+  const f = fixture(t);
+  assert.equal(await hasBranch(f.main, "local/only"), true);
+  assert.equal(await hasBranch(f.main, "remote-only"), true);
+  assert.equal(await hasBranch(f.main, "wt-branch"), true);
+  assert.equal(await hasBranch(f.main, "nope"), false);
+  // `local` is only a prefix of `local/only`, not a branch of its own.
+  assert.equal(await hasBranch(f.main, "local"), false);
+  assert.equal(await hasBranch(path.join(f.root, "missing"), "main"), false);
 });

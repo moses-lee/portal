@@ -1,0 +1,20 @@
+/** The tool loop shared by chat turns and ticks; one agent instance per turn, built over that turn's tools. */
+import { type LanguageModel, ToolLoopAgent, stepCountIs } from "ai";
+import type { ProviderOptions } from "./model.ts";
+import type { OrchestratorTools } from "./tools/index.ts";
+
+/** Model calls per turn before the loop stops; enough for a review setup, too few to spin. */
+export const MAX_STEPS = 24;
+/** Wall-clock budget for one turn or tick, passed as `timeout` on every call. */
+export const CALL_TIMEOUT_MS = 5 * 60_000;
+
+export type OrchestratorAgent = ToolLoopAgent<never, OrchestratorTools>;
+
+export function createOrchestratorAgent({ model, tools, system, providerOptions }: {
+  model: LanguageModel;
+  tools: OrchestratorTools;
+  system: string;
+  providerOptions?: ProviderOptions;
+}): OrchestratorAgent {
+  return new ToolLoopAgent({ model, tools, instructions: system, stopWhen: stepCountIs(MAX_STEPS), providerOptions });
+}

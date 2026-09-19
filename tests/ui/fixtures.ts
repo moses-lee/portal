@@ -3,11 +3,18 @@ import { applySettingsPatch, defaultSettings } from "../../src/lib/settings";
 import type {
   GithubSummary,
   ProjectSummary,
+  RemovedProjectSummary,
   SessionSummary,
   StoredEvent,
   SessionMetaEvent,
   PortalEvent,
 } from "../../src/lib/types";
+import type {
+  Item,
+  OrchestratorMessage,
+  OrchestratorStatus,
+  TickReport,
+} from "../../src/lib/orchestrator/types";
 
 const now = Date.now();
 export const project: ProjectSummary = {
@@ -32,6 +39,21 @@ export const worktree: ProjectSummary = {
   displayPath: "~/.portal/worktrees/portal/improve-chat-experience",
   worktree: { parentId: "p1", branch: "feature/improve-chat-experience" },
   git: { ...project.git!, branch: "feature/improve-chat-experience" },
+};
+/** A removed worktree project whose folder is gone but whose branch and parent survive. */
+export const removedProject: RemovedProjectSummary = {
+  id: "p9",
+  name: "feat/old-branch",
+  path: "/workspace/portal-old",
+  displayPath: "~/.portal/worktrees/portal/feat-old-branch",
+  worktree: { parentId: "p1", branch: "feat/old-branch" },
+  removedAt: now - 7200000,
+  exists: false,
+  parentName: "portal",
+  sessionCount: 2,
+  lastActiveAt: now - 86400000,
+  restorable: true,
+  reason: null,
 };
 export const firstTitle =
   "Improve the chat experience and simplify the agent settings";
@@ -262,6 +284,87 @@ export const failingGithubSummary: GithubSummary = {
   },
 };
 
+/** Talk to Portal's defaults: ready, idle, one check due in seven minutes (`setupPortal` re-times it per test). */
+export const portalStatus: OrchestratorStatus = {
+  ready: true,
+  provider: "openai",
+  model: "gpt-5-mini",
+  busy: false,
+  intervalMinutes: 10,
+  idleIntervalMinutes: 60,
+  presence: 1,
+  lastTick: null,
+  nextTickAt: now + 7 * 60_000,
+  openItems: { needs_you: 1, ideas: 0 },
+};
+
+/** A failing-checks item on PR #42 with one action of each browser-side kind. */
+export const portalItem: Item = {
+  id: "i1",
+  list: "needs_you",
+  kind: "pr_checks_failing",
+  title: "Checks are failing on example/portal#42",
+  body: "**Unit tests** failed on the latest push. The other check passed.",
+  links: { projectId: "p2", sessionId: "s1", pull: { repo: "example/portal", number: 42, url: "https://github.com/example/portal/pull/42" } },
+  actions: [
+    { type: "open_session", sessionId: "s1" },
+    { type: "open_url", url: "https://github.com/example/portal/pull/42" },
+    { type: "ask_portal", text: "Set up a fix for example/portal#42" },
+  ],
+  fingerprint: "pr_checks_failing:example/portal#42",
+  status: "open",
+  createdAt: now - 600_000,
+  updatedAt: now - 600_000,
+  snoozedUntil: null,
+};
+
+/** One user question, then a scheduled tick's answer that ran a tool and produced `portalItem`. */
+export const portalMessages: OrchestratorMessage[] = [
+  {
+    id: "m1",
+    role: "user",
+    metadata: { at: now - 3_600_000 },
+    parts: [{ type: "text", text: "What needs me today?" }],
+  },
+  {
+    id: "m2",
+    role: "assistant",
+    metadata: { at: now - 3_500_000 },
+    parts: [{ type: "text", text: "Nothing yet. I will keep an eye on your pull requests." }],
+  },
+  {
+    id: "m3",
+    role: "assistant",
+    metadata: { at: now - 600_000, tick: { id: "t1", reason: "schedule" }, itemIds: ["i1"] },
+    parts: [
+      { type: "step-start" },
+      {
+        type: "tool-get_tick_digest",
+        toolCallId: "call1",
+        state: "output-available",
+        input: {},
+        output: { changes: 1 },
+      },
+      { type: "text", text: "The **unit tests** on PR #42 started failing after your last push." },
+    ],
+  },
+];
+
+export const portalTickReport: TickReport = {
+  id: "t2",
+  reason: "manual",
+  startedAt: now,
+  finishedAt: now + 1500,
+  modelInvoked: true,
+  changes: 2,
+  itemsCreated: ["i2"],
+  itemsUpdated: [],
+  itemsResolved: [],
+  log: ["Considered PR #42: still failing."],
+  error: null,
+  usage: { inputTokens: 1200, outputTokens: 80 },
+};
+
 declare global {
   interface Window {
     __portalEmit: (
@@ -271,6 +374,7 @@ declare global {
       seq?: number,
     ) => void;
     __portalSessions: SessionSummary[];
+    __portalLive: { status: OrchestratorStatus; items: Item[] };
   }
 }
 
@@ -300,16 +404,35 @@ export async function setupPortal(
      * answering with the defaults, for tests of persistence itself.
      */
     realSettings?: boolean;
+    /** Rows of `GET /api/projects/removed`; restoring one lists it as a project with one session. */
+    removed?: RemovedProjectSummary[];
+    /** Talk to Portal's state: what `/api/portal`, its messages, items, and stream answer with. */
+    portal?: {
+      status?: Partial<OrchestratorStatus>;
+      messages?: OrchestratorMessage[];
+      items?: Item[];
+    };
   } = {},
 ) {
   const currentSessions = structuredClone(sessions);
+  const currentProjects: ProjectSummary[] = [project, worktree];
+  const currentRemoved = structuredClone(options.removed ?? []);
+  const live = {
+    // Timed from now, not from module load, so "next check in 7 min" holds however long the run has been going.
+    status: { ...portalStatus, nextTickAt: Date.now() + 7 * 60_000, ...options.portal?.status },
+    items: structuredClone(options.portal?.items ?? [portalItem]),
+  };
+  const portalThread = structuredClone(options.portal?.messages ?? portalMessages);
   const history = options.history ?? events;
   const requests: { path: string; method: string; body: unknown }[] = [];
   let failSend = false;
   let sendDelay = 0;
+  /** When set, `POST /api/portal/messages` answers 409 `{ error }` the way the runtime does while a check is running. */
+  let failPortalSend: string | null = null;
   await page.addInitScript(
-    ({ sessions }) => {
+    ({ sessions, live }) => {
       window.__portalSessions = sessions;
+      window.__portalLive = live;
       const sources = new Set<PreviewEventSource>();
       class PreviewEventSource extends EventTarget {
         url: string;
@@ -326,7 +449,11 @@ export async function setupPortal(
                 { type: "snapshot", sessions: window.__portalSessions },
                 "message",
               );
-            else
+            else if (url === "/api/portal/stream") {
+              this.send({ type: "status", status: window.__portalLive.status }, "message");
+              this.send({ type: "items", items: window.__portalLive.items }, "message");
+              this.send({ type: "watches", watches: [] }, "message");
+            } else
               this.send(
                 window.__portalSessions.find((session) =>
                   url.includes(`/sessions/${session.id}/`),
@@ -356,7 +483,7 @@ export async function setupPortal(
           if (source.url.includes(match)) source.send(data, type, seq);
       };
     },
-    { sessions: currentSessions },
+    { sessions: currentSessions, live },
   );
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -381,6 +508,47 @@ export async function setupPortal(
             : defaultSettings,
       });
     }
+    if (path === "/api/portal") return json({ status: live.status });
+    if (path === "/api/portal/messages" && method === "GET")
+      return json({ messages: portalThread });
+    if (path === "/api/portal/messages" && method === "POST") {
+      if (failPortalSend) return json({ error: failPortalSend }, 409);
+      // Like the runtime: keep the user message and the reply, and answer with the AI SDK UI message stream.
+      const reply = `Portal reply to: ${body?.message?.parts?.[0]?.text ?? ""}`;
+      portalThread.push(body.message, {
+        id: `reply-${portalThread.length}`,
+        role: "assistant",
+        metadata: { at: now },
+        parts: [{ type: "text", text: reply }],
+      });
+      const chunks = [
+        { type: "start", messageId: `reply-${portalThread.length - 1}` },
+        { type: "text-start", id: "t" },
+        { type: "text-delta", id: "t", delta: reply },
+        { type: "text-end", id: "t" },
+        { type: "finish" },
+      ];
+      return route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream",
+          "x-vercel-ai-ui-message-stream": "v1",
+        },
+        body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join(""),
+      });
+    }
+    if (path === "/api/portal/cancel") return route.fulfill({ status: 204 });
+    if (path === "/api/portal/tick") return json({ report: portalTickReport });
+    if (path === "/api/portal/items") return json({ items: live.items });
+    if (path === "/api/portal/watches") return json({ watches: [] });
+    const itemMatch = path.match(/^\/api\/portal\/items\/([^/]+)(?:\/actions\/(\d+))?$/);
+    if (itemMatch) {
+      const item = live.items.find((row) => row.id === itemMatch[1]);
+      if (!item) return json({ error: "Unknown item." }, 404);
+      if (itemMatch[2] !== undefined) return json({ sessionId: "s1" });
+      Object.assign(item, body, { updatedAt: now });
+      return json({ item });
+    }
     if (path === "/api/agents")
       return json({
         agents: [
@@ -390,7 +558,35 @@ export async function setupPortal(
         defaultAgentId: "claude",
       });
     if (path === "/api/projects")
-      return json({ projects: [project, worktree] });
+      return json({ projects: currentProjects });
+    if (path === "/api/projects/removed")
+      return json({ removed: currentRemoved });
+    const removedMatch = path.match(/^\/api\/projects\/removed\/([^/]+)(\/restore)?$/);
+    if (removedMatch) {
+      const index = currentRemoved.findIndex((row) => row.id === removedMatch[1]);
+      if (index === -1) return json({ error: "Unknown removed project." }, 404);
+      const [row] = currentRemoved.splice(index, 1);
+      if (removedMatch[2] && method === "POST") {
+        const restored: ProjectSummary = {
+          id: row.id,
+          name: row.name,
+          path: row.path,
+          displayPath: row.displayPath,
+          createdAt: now,
+          exists: true,
+          worktree: row.worktree,
+          git: { ...project.git!, branch: row.worktree?.branch ?? "main" },
+        };
+        currentProjects.push(restored);
+        currentSessions.push({
+          ...makeSession("s9", "Finish the old branch", "codex", restored),
+          lastActiveAt: row.lastActiveAt ?? now,
+        });
+        return json({ project: restored });
+      }
+      if (method === "DELETE") return route.fulfill({ status: 204 });
+      return json({ error: `Unexpected test request: ${method} ${path}` }, 400);
+    }
     if (path === "/api/sessions" && method === "GET")
       return json({ sessions: currentSessions });
     if (path === "/api/sessions" && method === "POST") {
@@ -539,6 +735,13 @@ export async function setupPortal(
     },
     delaySend: (delay: number) => {
       sendDelay = delay;
+    },
+    failPortalSend: (error: string | null = "Portal is running a check. Try again in a moment.") => {
+      failPortalSend = error;
+    },
+    /** Adds to the thread `GET /api/portal/messages` answers with, the way a tick does; pair with a `messages` stream event. */
+    appendPortalMessage: (message: OrchestratorMessage) => {
+      portalThread.push(structuredClone(message));
     },
   };
 }

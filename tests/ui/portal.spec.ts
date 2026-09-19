@@ -6,6 +6,7 @@ import {
   firstTitle,
   secondTitle,
   setupPortal,
+  removedProject,
 } from "./fixtures";
 import { buildGitActionPrompt } from "../../src/lib/git-action-prompt";
 import { defaultSettings } from "../../src/lib/settings";
@@ -708,4 +709,89 @@ test("the sidebar opens a standalone terminal page with its own URL", async ({
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
+});
+
+test("the Removed view lists removed projects, restores one, and opens its conversation", async ({
+  page,
+}) => {
+  const fixture = await setupPortal(page, { removed: [removedProject] });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const workspace = sidebar.getByRole("navigation", {
+    name: "Projects and sessions",
+  });
+  await expect(workspace).toBeVisible();
+  // Conversations of removed projects no longer show up as a group in the workspace.
+  await expect(sidebar.getByText("Removed projects")).toHaveCount(0);
+
+  await sidebar.getByRole("button", { name: "Removed", exact: true }).click();
+  const view = sidebar.getByRole("region", { name: "Removed projects" });
+  await expect(view).toBeVisible();
+  await expect(workspace).toHaveCount(0);
+  const row = view.getByRole("listitem", { name: "feat/old-branch" });
+  await expect(row.getByText("portal · feat/old-branch")).toBeVisible();
+  await expect(row.getByText("2 conversations · removed 2h ago")).toBeVisible();
+
+  await row.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(workspace).toBeVisible();
+  expect(
+    fixture.requests.filter(
+      (request) =>
+        request.path === "/api/projects/removed/p9/restore" &&
+        request.method === "POST",
+    ),
+  ).toHaveLength(1);
+  await expect(page).toHaveURL(/\/sessions\/s9$/);
+  await expect(
+    workspace.getByRole("button", {
+      name: "Finish the old branch",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-current", "page");
+});
+
+test("the Removed view explains unrestorable rows and deletes their conversations after confirming", async ({
+  page,
+}) => {
+  const fixture = await setupPortal(page, {
+    removed: [
+      {
+        ...removedProject,
+        id: "p8",
+        name: "old-tools",
+        worktree: undefined,
+        restorable: false,
+        reason: "The project folder is missing.",
+        sessionCount: 1,
+      },
+    ],
+  });
+  await page.goto("/");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await sidebar.getByRole("button", { name: "Removed", exact: true }).click();
+  const view = sidebar.getByRole("region", { name: "Removed projects" });
+  const row = view.getByRole("listitem", { name: "old-tools" });
+  await expect(row.getByText("The project folder is missing.")).toBeVisible();
+  await expect(row.getByRole("button", { name: "Restore" })).toHaveCount(0);
+
+  await row.getByRole("button", { name: "Delete conversations" }).click();
+  await row.getByRole("button", { name: "Cancel" }).click();
+  expect(
+    fixture.requests.filter((request) => request.method === "DELETE"),
+  ).toHaveLength(0);
+  await row.getByRole("button", { name: "Delete conversations" }).click();
+  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(view.getByText("Nothing to bring back")).toBeVisible();
+  expect(
+    fixture.requests.filter(
+      (request) =>
+        request.path === "/api/projects/removed/p8" &&
+        request.method === "DELETE",
+    ),
+  ).toHaveLength(1);
+
+  await view.getByRole("button", { name: "Back to workspace" }).click();
+  await expect(
+    sidebar.getByRole("navigation", { name: "Projects and sessions" }),
+  ).toBeVisible();
 });

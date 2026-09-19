@@ -300,6 +300,14 @@ export async function ensureWorktree({ repoRoot, branch, create = false, worktre
   throw new WorktreeError(`Branch ${branch} does not exist.`, 404);
 }
 
+/** True when `branch` exists as a local branch or as `origin/<branch>` (exact name, not a prefix). */
+export async function hasBranch(repoRoot: string, branch: string): Promise<boolean> {
+  const refs = [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`];
+  // for-each-ref matches whole path components, so `feat` would also list `feat/sub`; keep exact names only.
+  const out = await gitMaybe(repoRoot, ["for-each-ref", "--format=%(refname)", ...refs]);
+  return !!out && out.split("\n").some((line) => refs.includes(line.trim()));
+}
+
 async function isMergedIntoDefault(repoRoot: string, branch: string): Promise<boolean> {
   const { defaultBranch } = await collectBranches(repoRoot);
   if (!defaultBranch || defaultBranch === branch) return false;

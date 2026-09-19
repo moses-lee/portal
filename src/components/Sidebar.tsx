@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
+  ArchiveRestore,
   ChevronRight,
   Folder,
   FolderGit2,
@@ -12,6 +13,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   SquarePen,
   TerminalSquare,
   Trash2,
@@ -21,6 +23,7 @@ import AgentLogo from "./AgentLogo";
 import IconButton from "./IconButton";
 import PortalMark from "./PortalMark";
 import { RenameField, RemoveConfirm } from "./ProjectActions";
+import RemovedProjects from "./RemovedProjects";
 import { useMediaQuery } from "./useMediaQuery";
 import { usePreference } from "./usePreference";
 import { Button } from "@/components/ui/button";
@@ -48,7 +51,11 @@ import { agentActivity, activityLabels } from "@/lib/agent-activity";
 import { relativeAge } from "@/lib/relative-age";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
-import type { ProjectSummary, SessionSummary } from "@/lib/types";
+import type {
+  ProjectSummary,
+  RemovedProjectSummary,
+  SessionSummary,
+} from "@/lib/types";
 
 export type SidebarProps = {
   projects: ProjectSummary[];
@@ -67,6 +74,10 @@ export type SidebarProps = {
   onTerminal: () => void;
   /** True while the standalone terminal page is open. */
   terminalActive: boolean;
+  /** Open Talk to Portal, the orchestrator's page. */
+  onPortal: () => void;
+  /** True while Talk to Portal is open. */
+  portalActive: boolean;
   onAddProject: () => void;
   onOpenSettings: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
@@ -74,6 +85,14 @@ export type SidebarProps = {
     id: string,
     opts?: RemoveProjectOptions,
   ) => void | Promise<void>;
+  /** Rows of the Removed view; the count shows on its button. */
+  removedProjects: RemovedProjectSummary[];
+  removedError: string | null;
+  onRefreshRemoved: () => void | Promise<void>;
+  /** Bring a removed project back; the sidebar returns to the workspace view once it resolves. */
+  onRestoreProject: (id: string) => Promise<void>;
+  /** Delete a removed project's conversations and forget it. */
+  onDiscardRemoved: (id: string) => Promise<void>;
   open: boolean;
   onClose: () => void;
   desktopOpen: boolean;
@@ -260,10 +279,19 @@ function SidebarContent(props: SidebarProps) {
     onHome,
     onTerminal,
     terminalActive,
+    onPortal,
+    portalActive,
     onAddProject,
     onRenameProject,
     onRemoveProject,
+    removedProjects,
+    removedError,
+    onRefreshRemoved,
+    onRestoreProject,
+    onDiscardRemoved,
   } = props;
+  /** The workspace (projects and conversations) or the list of removed projects. */
+  const [view, setView] = useState<"workspace" | "removed">("workspace");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<{
@@ -283,11 +311,17 @@ function SidebarContent(props: SidebarProps) {
   }, []);
   const groups = useMemo(() => {
     const q = query.toLowerCase().trim();
+    // Conversations of removed projects live in the Removed view, not here.
     return groupSessionsByProject(projects, sessions, sessionPins)
+      .flatMap((group) =>
+        group.project
+          ? [{ project: group.project, sessions: group.sessions }]
+          : [],
+      )
       .map((group) => ({
         ...group,
         sessions:
-          !q || group.project?.name.toLowerCase().includes(q)
+          !q || group.project.name.toLowerCase().includes(q)
             ? group.sessions
             : group.sessions.filter((s) =>
                 `${s.title} ${s.agentName} ${s.git?.branch ?? ""} ${s.displayCwd}`
@@ -299,7 +333,7 @@ function SidebarContent(props: SidebarProps) {
         (group) =>
           !q ||
           group.sessions.length > 0 ||
-          group.project?.name.toLowerCase().includes(q),
+          group.project.name.toLowerCase().includes(q),
       );
   }, [projects, sessions, sessionPins, query]);
   const toggle = (id: string) =>
@@ -333,136 +367,150 @@ function SidebarContent(props: SidebarProps) {
           <X />
         </Button>
       </div>
-      <Button
-        variant="ghost"
-        onClick={onHome}
-        className="mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px]"
-      >
-        <SquarePen className="size-4" />
-        New conversation
-      </Button>
-      <Button
-        variant="ghost"
-        onClick={onTerminal}
-        aria-current={terminalActive ? "page" : undefined}
-        className={`mb-3 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${terminalActive ? "text-foreground" : "text-foreground/80"}`}
-      >
-        <TerminalSquare className="size-4" />
-        Terminal
-      </Button>
-      <div className="relative mb-4">
-        <Search className="pointer-events-none absolute left-2 top-2.5 size-3.5 text-muted-foreground" />
-        <Input
-          aria-label="Search sessions"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search conversations"
-          className="h-8 rounded-lg border-transparent bg-transparent pl-8 text-xs shadow-none dark:bg-transparent focus-visible:bg-white/5"
+      {view === "removed" ? (
+        <RemovedProjects
+          rows={removedProjects}
+          error={removedError}
+          onBack={() => setView("workspace")}
+          onRefresh={onRefreshRemoved}
+          onRestore={async (id) => {
+            await onRestoreProject(id);
+            setView("workspace");
+          }}
+          onDiscard={onDiscardRemoved}
         />
-      </div>
-      <div className="mb-2 flex items-center px-2">
-        <span className="flex-1 text-[10px] font-semibold tracking-[.12em] text-muted-foreground/80 uppercase">
-          Workspace
-        </span>
-        <IconButton
-          label="Add project"
-          size="icon-xs"
-          onClick={onAddProject}
-          className="text-muted-foreground"
+      ) : (
+        <>
+        <Button
+          variant="ghost"
+          onClick={onPortal}
+          aria-current={portalActive ? "page" : undefined}
+          className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${portalActive ? "text-foreground" : "text-foreground/80"}`}
         >
-          <Plus />
-        </IconButton>
-      </div>
-      <nav
-        aria-label="Projects and sessions"
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4"
-      >
-        {groups.length === 0 && (
-          <p className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
-            {query
-              ? "No matching conversations."
-              : "Add a project to create your first conversation."}
-          </p>
-        )}
-        {groups.map(({ project, sessions: rows }) => {
-          const isCollapsed = !query && !!project && collapsed.has(project.id);
-          const isPinned = !!project && project.id in projectPins;
-          const edit = editing?.id === project?.id ? editing : null;
-          const parent = project?.worktree
-            ? projects.find((p) => p.id === project.worktree?.parentId)
-            : null;
-          const waiting = rows.some((s) => s.awaitingPermission);
-          const working = rows.some((s) => s.busy);
-          return (
-            <section
-              key={project?.id ?? "removed"}
-              aria-label={project?.name ?? "Removed projects"}
-            >
-              <div className="mb-0.5 flex items-center gap-0.5 px-1">
-                {edit?.mode === "rename" && project ? (
-                  <RenameField
-                    inputRef={renameInput}
-                    initial={project.name}
-                    onCancel={() => setEditing(null)}
-                    onCommit={(name) => {
-                      setEditing(null);
-                      setError(null);
-                      Promise.resolve(onRenameProject(project.id, name)).catch(
-                        (e) =>
-                          setError({
-                            id: project.id,
-                            message:
-                              e instanceof Error
-                                ? e.message
-                                : "Could not rename project.",
-                          }),
-                      );
-                    }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!project}
-                    onClick={() => project && toggle(project.id)}
-                    aria-expanded={!isCollapsed}
-                    aria-controls={`project-${project?.id ?? "removed"}`}
-                    title={
-                      project
-                        ? `${project.name} · ${project.displayPath}`
-                        : undefined
-                    }
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
-                  >
-                    {project?.git ? (
-                      <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-medium text-zinc-300">
-                        {project?.name ?? "Removed projects"}
-                      </span>
-                      {parent && (
-                        <span className="block truncate text-[10px] text-muted-foreground">
-                          {parent.name}
-                        </span>
-                      )}
-                    </span>
-                    {isPinned && (
-                      <Pin className="size-2.5 shrink-0 text-muted-foreground" />
-                    )}
-                    {isCollapsed && working && (
-                      <span
-                        className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-indigo-300"}`}
-                        aria-label={waiting ? "Needs approval" : "Working"}
-                      />
-                    )}
-                    <ChevronRight
-                      className={`size-3 shrink-0 text-muted-foreground transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+          <Sparkles className="size-4" />
+          Talk to Portal
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={onHome}
+          className="mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px]"
+        >
+          <SquarePen className="size-4" />
+          New conversation
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={onTerminal}
+          aria-current={terminalActive ? "page" : undefined}
+          className={`mb-3 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${terminalActive ? "text-foreground" : "text-foreground/80"}`}
+        >
+          <TerminalSquare className="size-4" />
+          Terminal
+        </Button>
+        <div className="relative mb-4">
+          <Search className="pointer-events-none absolute left-2 top-2.5 size-3.5 text-muted-foreground" />
+          <Input
+            aria-label="Search sessions"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search conversations"
+            className="h-8 rounded-lg border-transparent bg-transparent pl-8 text-xs shadow-none dark:bg-transparent focus-visible:bg-white/5"
+          />
+        </div>
+        <div className="mb-2 flex items-center px-2">
+          <span className="flex-1 text-[10px] font-semibold tracking-[.12em] text-muted-foreground/80 uppercase">
+            Workspace
+          </span>
+          <IconButton
+            label="Add project"
+            size="icon-xs"
+            onClick={onAddProject}
+            className="text-muted-foreground"
+          >
+            <Plus />
+          </IconButton>
+        </div>
+        <nav
+          aria-label="Projects and sessions"
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4"
+        >
+          {groups.length === 0 && (
+            <p className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
+              {query
+                ? "No matching conversations."
+                : "Add a project to create your first conversation."}
+            </p>
+          )}
+          {groups.map(({ project, sessions: rows }) => {
+            const isCollapsed = !query && collapsed.has(project.id);
+            const isPinned = project.id in projectPins;
+            const edit = editing?.id === project.id ? editing : null;
+            const parent = project.worktree
+              ? projects.find((p) => p.id === project.worktree?.parentId)
+              : null;
+            const waiting = rows.some((s) => s.awaitingPermission);
+            const working = rows.some((s) => s.busy);
+            return (
+              <section key={project.id} aria-label={project.name}>
+                <div className="mb-0.5 flex items-center gap-0.5 px-1">
+                  {edit?.mode === "rename" ? (
+                    <RenameField
+                      inputRef={renameInput}
+                      initial={project.name}
+                      onCancel={() => setEditing(null)}
+                      onCommit={(name) => {
+                        setEditing(null);
+                        setError(null);
+                        Promise.resolve(onRenameProject(project.id, name)).catch(
+                          (e) =>
+                            setError({
+                              id: project.id,
+                              message:
+                                e instanceof Error
+                                  ? e.message
+                                  : "Could not rename project.",
+                            }),
+                        );
+                      }}
                     />
-                  </button>
-                )}
-                {project && (
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => toggle(project.id)}
+                      aria-expanded={!isCollapsed}
+                      aria-controls={`project-${project.id}`}
+                      title={`${project.name} · ${project.displayPath}`}
+                      className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
+                    >
+                      {project.git ? (
+                        <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-zinc-300">
+                          {project.name}
+                        </span>
+                        {parent && (
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {parent.name}
+                          </span>
+                        )}
+                      </span>
+                      {isPinned && (
+                        <Pin className="size-2.5 shrink-0 text-muted-foreground" />
+                      )}
+                      {isCollapsed && working && (
+                        <span
+                          className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-[#2fe36b]"}`}
+                          aria-label={waiting ? "Needs approval" : "Working"}
+                        />
+                      )}
+                      <ChevronRight
+                        className={`size-3 shrink-0 text-muted-foreground transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                      />
+                    </button>
+                  )}
                   <IconButton
                     label={`New conversation in ${project.name}`}
                     size="icon-xs"
@@ -471,112 +519,130 @@ function SidebarContent(props: SidebarProps) {
                   >
                     <SquarePen />
                   </IconButton>
-                )}
-                {project && (
                   <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Actions for project ${project.name}`}
-                        className="text-muted-foreground"
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Actions for project ${project.name}`}
+                          className="text-muted-foreground"
+                        >
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        side="right"
+                        onCloseAutoFocus={(event) => {
+                          if (renameInput.current) {
+                            event.preventDefault();
+                            renameInput.current.focus();
+                          }
+                        }}
                       >
-                        <MoreHorizontal />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="start"
-                      side="right"
-                      onCloseAutoFocus={(event) => {
-                        if (renameInput.current) {
-                          event.preventDefault();
-                          renameInput.current.focus();
-                        }
-                      }}
-                    >
-                      <DropdownMenuItem
-                        onSelect={() => onTogglePinProject(project.id)}
-                      >
-                        {isPinned ? <PinOff /> : <Pin />}
-                        {isPinned ? "Unpin project" : "Pin project"}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() =>
-                          setEditing({ id: project.id, mode: "rename" })
-                        }
-                      >
-                        Rename
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={() =>
-                          setEditing({ id: project.id, mode: "remove" })
-                        }
-                      >
-                        <Trash2 />
-                        Remove project
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-              {project?.exists === false && (
-                <p className="px-3 pb-2 text-[11px] text-amber-300">
-                  Project folder is missing
-                </p>
-              )}
-              {edit?.mode === "remove" && project && (
-                <RemoveConfirm
-                  project={project}
-                  onCancel={() => setEditing(null)}
-                  onRemove={async (options) => {
-                    await onRemoveProject(project.id, options);
-                    setEditing(null);
-                  }}
-                />
-              )}
-              {error?.id === project?.id && (
-                <p role="alert" className="px-3 text-xs text-destructive">
-                  {error?.message}
-                </p>
-              )}
-              <div
-                id={`project-${project?.id ?? "removed"}`}
-                hidden={isCollapsed}
-                className="space-y-0.5"
-              >
-                {rows.map((session) => (
-                  <SessionRow
-                    key={session.id}
-                    session={session}
-                    active={session.id === active}
-                    pinned={session.id in sessionPins}
-                    now={now || session.lastActiveAt}
-                    onSelect={onSelect}
-                    onPrefetch={onPrefetch}
-                    onDelete={onDeleteSession}
-                    onTogglePin={onTogglePinSession}
-                  />
-                ))}
-                {rows.length === 0 && (
-                  <p className="px-3 py-3 text-[11px] text-muted-foreground">
-                    No conversations yet
+                        <DropdownMenuItem
+                          onSelect={() => onTogglePinProject(project.id)}
+                        >
+                          {isPinned ? <PinOff /> : <Pin />}
+                          {isPinned ? "Unpin project" : "Pin project"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            setEditing({ id: project.id, mode: "rename" })
+                          }
+                        >
+                          Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={() =>
+                            setEditing({ id: project.id, mode: "remove" })
+                          }
+                        >
+                          <Trash2 />
+                          Remove project
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
+                {project.exists === false && (
+                  <p className="px-3 pb-2 text-[11px] text-amber-300">
+                    Project folder is missing
                   </p>
                 )}
-              </div>
-            </section>
-          );
-        })}
-      </nav>
-      <Button
-        variant="ghost"
-        onClick={props.onOpenSettings}
-        className="mt-3 h-10 justify-start gap-2 rounded-xl px-3 text-xs text-muted-foreground"
-      >
-        <Settings className="size-3.5" />
-        Settings
-      </Button>
+                {edit?.mode === "remove" && (
+                  <RemoveConfirm
+                    project={project}
+                    onCancel={() => setEditing(null)}
+                    onRemove={async (options) => {
+                      await onRemoveProject(project.id, options);
+                      setEditing(null);
+                    }}
+                  />
+                )}
+                {error?.id === project.id && (
+                  <p role="alert" className="px-3 text-xs text-destructive">
+                    {error?.message}
+                  </p>
+                )}
+                <div
+                  id={`project-${project.id}`}
+                  hidden={isCollapsed}
+                  className="space-y-0.5"
+                >
+                  {rows.map((session) => (
+                    <SessionRow
+                      key={session.id}
+                      session={session}
+                      active={session.id === active}
+                      pinned={session.id in sessionPins}
+                      now={now || session.lastActiveAt}
+                      onSelect={onSelect}
+                      onPrefetch={onPrefetch}
+                      onDelete={onDeleteSession}
+                      onTogglePin={onTogglePinSession}
+                    />
+                  ))}
+                  {rows.length === 0 && (
+                    <p className="px-3 py-3 text-[11px] text-muted-foreground">
+                      No conversations yet
+                    </p>
+                  )}
+                </div>
+              </section>
+            );
+          })}
+        </nav>
+        <div className="mt-3 flex flex-col gap-0.5">
+          <Button
+            variant="ghost"
+            aria-label="Removed"
+            onClick={() => setView("removed")}
+            className="h-10 justify-start gap-2 rounded-xl px-3 text-xs text-muted-foreground"
+          >
+            <ArchiveRestore className="size-3.5" />
+            Removed
+            {removedProjects.length > 0 && (
+              <span
+                aria-hidden="true"
+                className="ml-auto rounded-full bg-white/8 px-1.5 text-[10px] leading-4 text-foreground/70"
+              >
+                {removedProjects.length}
+              </span>
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={props.onOpenSettings}
+            className="h-10 justify-start gap-2 rounded-xl px-3 text-xs text-muted-foreground"
+          >
+            <Settings className="size-3.5" />
+            Settings
+          </Button>
+        </div>
+        </>
+      )}
     </div>
   );
 }

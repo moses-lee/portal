@@ -292,16 +292,26 @@
   border-bottom: 1px solid #ffffff08;
 }
 .status-dot {
+  position: relative;
   display: inline-block;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: #91a89e;
 }
+/* Working: a green core with a sonar ring expanding from it, the same ping the conversation's orb uses. */
 [data-activity="working"] > .status-dot {
-  background: #afa9ed;
-  box-shadow: 0 0 8px #a3a2ed55;
-  animation: status-breathe 1.8s ease-in-out infinite;
+  background: #2fe36b;
+  box-shadow: 0 0 9px #2fe36b99;
+}
+[data-activity="working"] > .status-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid #4cf584;
+  opacity: 0;
+  animation: ind-orb-ping 1.6s ease-out infinite;
 }
 [data-activity="waiting"] > .status-dot {
   background: #edbb6a;

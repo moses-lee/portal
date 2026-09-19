@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { NextResponse } from "next/server";
+import { listSessions, ready } from "@/lib/acp";
 import { errorStatus } from "@/lib/fs-paths";
 import { readGitInfo } from "@/lib/git-info";
 import { projects } from "@/lib/projects";
@@ -69,8 +70,11 @@ export async function DELETE(req: Request, { params }: Context) {
       if (!project.worktree) return NextResponse.json({ error: "This project is not a worktree." }, { status: 400 });
       await deleteWorktreeFolder({ ...project, worktree: project.worktree }, force);
     }
-    // Sessions created from this project keep running; they simply lose their group.
-    await projects.remove(id);
+    // Sessions created from this project keep running. While any exist, the project is kept as a
+    // removed record so the Removed view can bring it (and them) back; otherwise it is forgotten.
+    await ready;
+    const keep = listSessions().some((session) => session.projectId === id);
+    await projects.remove(id, { keep });
     return new Response(null, { status: 204 });
   } catch (err) {
     return fail(err);
