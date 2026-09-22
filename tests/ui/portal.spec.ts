@@ -310,6 +310,84 @@ test("slash command completion preserves IME and keyboard behavior", async ({
   ).toHaveLength(0);
 });
 
+test("Up and Down recall this session's sent prompts like a shell", async ({
+  page,
+}) => {
+  const fixture = await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const input = page.getByRole("combobox", { name: "Message Claude Code" });
+  const sent = () =>
+    fixture.requests.filter((request) => request.path.endsWith("/prompt"));
+
+  // Nothing sent yet: Up leaves the draft alone.
+  await input.fill("draft");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("draft");
+
+  // A failed send is not history; the accepted ones are, trimmed and without a repeated entry.
+  fixture.failSend();
+  await input.fill("never accepted");
+  await input.press("Enter");
+  await expect(page.getByRole("main").getByRole("alert")).toBeVisible();
+  fixture.failSend(false);
+  for (const text of ["first prompt", "second\nprompt  ", "second\nprompt"]) {
+    const count = sent().length;
+    await input.fill(text);
+    await input.press("Enter");
+    await expect.poll(() => sent().length).toBe(count + 1);
+    await expect(input).toHaveValue("");
+  }
+
+  // Up recalls the newest first with the caret at the end; a multi-line entry moves the caret up
+  // a line before stepping further back, and the oldest entry stays put.
+  await input.fill("half-typed");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("second\nprompt");
+  expect(await input.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(13);
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("second\nprompt");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("first prompt");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("first prompt");
+
+  // Down walks forward and past the newest entry restores the half-typed draft.
+  await input.press("End");
+  await input.press("ArrowDown");
+  await expect(input).toHaveValue("second\nprompt");
+  await input.press("ArrowDown");
+  await expect(input).toHaveValue("half-typed");
+  await input.press("ArrowDown");
+  await expect(input).toHaveValue("half-typed");
+
+  // Editing a recalled entry makes it the draft: browsing starts over from the newest.
+  await input.press("ArrowUp");
+  await input.press("ArrowUp");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("first prompt");
+  await input.pressSequentially(" again");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("second\nprompt");
+  await input.press("ArrowDown");
+  await expect(input).toHaveValue("first prompt again");
+
+  // History is per session, and survives a reload.
+  await page.getByRole("button", { name: secondTitle, exact: true }).click();
+  const other = page.getByRole("combobox", { name: "Message Codex" });
+  await other.press("ArrowUp");
+  await expect(other).toHaveValue("");
+  await page.getByRole("button", { name: firstTitle, exact: true }).click();
+  await page.reload();
+  await input.fill("");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("second\nprompt");
+
+  // The command palette keeps the arrows while it is open.
+  await input.fill("/");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("/");
+});
+
 for (const { trigger, agentId, name, partial } of [
   { trigger: "/", agentId: "claude", name: "compact", partial: "autocompact" },
   { trigger: "$", agentId: "codex", name: "release", partial: "prerelease" },

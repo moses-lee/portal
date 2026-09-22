@@ -147,6 +147,15 @@ test("a refused send keeps the text in the composer and shows the server's reaso
   ).toBeVisible();
   await expect(input).toHaveValue("");
   await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+
+  // Up recalls what the server took, once: the refused attempt is not a second history entry.
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("Which PRs are waiting on me?");
+  await input.press("Home");
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("Which PRs are waiting on me?");
+  await input.press("ArrowDown");
+  await expect(input).toHaveValue("");
 });
 
 test("while a check is running, the composer waits and Ask Portal hands its text to the composer", async ({

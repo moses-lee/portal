@@ -21,6 +21,7 @@ import {
   InputGroupAddon,
   InputGroupTextarea,
 } from "@/components/ui/input-group";
+import { atHistoryEdge, readPromptHistory } from "@/lib/prompt-history";
 
 const noCommands: AvailableCommand[] = [];
 
@@ -40,6 +41,7 @@ export default function ChatComposer({
   context,
   error,
   describedBy,
+  historyKey,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -56,12 +58,21 @@ export default function ChatComposer({
   context?: ReactNode;
   error?: string | null;
   describedBy?: string;
+  /** Recall this conversation's earlier prompts with Up/Down (see `@/lib/prompt-history`). */
+  historyKey?: string;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
   const [paletteClosed, setPaletteClosed] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const pendingCaret = useRef<number | null>(null);
+  /**
+   * Where Up/Down browsing stands: the entry shown and the draft to restore past the newest one.
+   * `shown` detects any other change to the text (typing, a send clearing it), which ends browsing.
+   */
+  const browsing = useRef<{ index: number; shown: string; draft: string } | null>(
+    null,
+  );
   const token = useMemo(
     () => (commands.length ? findCommandToken(value, caret) : null),
     [commands, value, caret],
@@ -80,6 +91,40 @@ export default function ChatComposer({
     setCaret(pendingCaret.current);
     setPaletteIndex(0);
     setPaletteClosed(true);
+  };
+  const replaceText = (text: string) => {
+    if (text === value) {
+      textarea.current?.setSelectionRange(text.length, text.length);
+      return;
+    }
+    pendingCaret.current = text.length;
+    onChange(text);
+    setCaret(text.length);
+  };
+  /** Show the previous (Up) or next (Down) prompt; false when there is nothing to move to. */
+  const browseHistory = (direction: "up" | "down") => {
+    if (!historyKey) return false;
+    const entries = readPromptHistory(historyKey);
+    let state = browsing.current;
+    if (state && (state.shown !== value || state.index >= entries.length))
+      state = browsing.current = null;
+    if (direction === "up") {
+      if (state?.index === 0 || !entries.length) return false;
+      const index = state ? state.index - 1 : entries.length - 1;
+      browsing.current = { index, shown: entries[index], draft: state?.draft ?? value };
+      replaceText(entries[index]);
+      return true;
+    }
+    if (!state) return false;
+    if (state.index < entries.length - 1) {
+      const index = state.index + 1;
+      browsing.current = { ...state, index, shown: entries[index] };
+      replaceText(entries[index]);
+    } else {
+      browsing.current = null;
+      replaceText(state.draft);
+    }
+    return true;
   };
   useLayoutEffect(() => {
     if (!textarea.current) return;
@@ -161,6 +206,23 @@ export default function ChatComposer({
                     setPaletteClosed(true);
                     return;
                   }
+                }
+                if (
+                  (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+                  !event.shiftKey &&
+                  !event.altKey &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  atHistoryEdge(
+                    value,
+                    event.currentTarget.selectionStart,
+                    event.currentTarget.selectionEnd,
+                    event.key === "ArrowUp" ? "up" : "down",
+                  ) &&
+                  browseHistory(event.key === "ArrowUp" ? "up" : "down")
+                ) {
+                  event.preventDefault();
+                  return;
                 }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();

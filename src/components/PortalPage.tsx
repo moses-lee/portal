@@ -14,6 +14,7 @@ import { openSettings } from "./useSettings";
 import { usePortalStream } from "./usePortalStream";
 import { Button } from "@/components/ui/button";
 import { clearSubmittedDraft, readDraft, writeDraft } from "@/lib/drafts";
+import { recordPrompt } from "@/lib/prompt-history";
 import {
   MessageScroller,
   MessageScrollerContent,
@@ -28,6 +29,7 @@ import type {
 } from "@/lib/orchestrator/types";
 
 const DRAFT_ID = "portal:orchestrator";
+const HISTORY_KEY = "portal:orchestrator";
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
 
 /** The header's one-line summary of where the orchestrator stands. */
@@ -115,7 +117,10 @@ export default function PortalPage({
     onFinish: ({ isError }) => {
       const text = inFlight.current;
       inFlight.current = null;
-      if (text !== null && !isError) clearSubmittedDraft(DRAFT_ID, text);
+      if (text !== null && !isError) {
+        clearSubmittedDraft(DRAFT_ID, text);
+        recordPrompt(HISTORY_KEY, text);
+      }
     },
     onError: (error) => {
       setChatError(describeChatError(error));
@@ -132,6 +137,7 @@ export default function PortalPage({
   useEffect(() => {
     if (chatStatus !== "streaming" || inFlight.current === null) return;
     clearSubmittedDraft(DRAFT_ID, inFlight.current);
+    recordPrompt(HISTORY_KEY, inFlight.current);
     inFlight.current = null;
   }, [chatStatus]);
 
@@ -407,6 +413,7 @@ export default function PortalPage({
           busy={responding || checking}
           disabled={!ready}
           label="Message Portal"
+          historyKey={HISTORY_KEY}
           placeholder={ready ? "Ask Portal…" : "Add an API key to talk to Portal"}
           error={chatError}
           settings={composerHint}

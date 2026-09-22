@@ -13,6 +13,7 @@ import AuroraBackground from "./AuroraBackground";
 import { Button } from "@/components/ui/button";
 import { useDraft } from "./useDraft";
 import { clearSubmittedDraft } from "@/lib/drafts";
+import { recordPrompt, sessionHistoryKey } from "@/lib/prompt-history";
 import { applyConfigChange } from "@/lib/session-config";
 import { agentActivity } from "@/lib/agent-activity";
 import type {
@@ -308,6 +309,7 @@ export default function SessionPane({
         );
       }
       clearSubmittedDraft(sessionId, draft);
+      recordPrompt(sessionHistoryKey(sessionId), text);
       setScrollRequest((request) => request + 1);
     } catch (error) {
       setSendError(
@@ -541,6 +543,7 @@ export default function SessionPane({
                 stopping={stopping}
                 disabled={notFound}
                 commands={sessionState?.commands}
+                historyKey={sessionId ? sessionHistoryKey(sessionId) : undefined}
                 label={`Message ${agentName}`}
                 placeholder={`Message ${agentName}…`}
                 describedBy={session ? "session-context" : undefined}

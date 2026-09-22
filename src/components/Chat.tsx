@@ -6,6 +6,11 @@ import dynamic from "next/dynamic";
 import { useMediaQuery } from "./useMediaQuery";
 import { usePreference } from "./usePreference";
 import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
+import {
+  forgetPromptHistory,
+  recordPrompt,
+  sessionHistoryKey,
+} from "@/lib/prompt-history";
 import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import TerminalPage from "./TerminalPage";
@@ -271,6 +276,7 @@ export default function Chat() {
           setSessions((prev) => prev.filter((s) => s.id !== event.id));
           historyCache.delete(event.id);
           writeDraft(event.id, "");
+          forgetPromptHistory(sessionHistoryKey(event.id));
           return;
       }
     };
@@ -414,6 +420,7 @@ export default function Chat() {
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
     historyCache.delete(sessionId);
     writeDraft(sessionId, "");
+    forgetPromptHistory(sessionHistoryKey(sessionId));
     if (sessionId === active) replacePath("/");
     // A removed project's last conversation going away drops its Removed row.
     void refreshRemoved();
@@ -616,6 +623,7 @@ export default function Chat() {
             );
           }
           clearSubmittedDraft(session.id, firstPrompt);
+          recordPrompt(sessionHistoryKey(session.id), firstPrompt);
           setInitialSend(null);
         } catch (error) {
           setInitialSend({
