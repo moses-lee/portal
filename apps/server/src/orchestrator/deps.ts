@@ -17,6 +17,7 @@ import type { ScriptKind } from "@portal/shared/scripts";
 import { toMeta } from "../lib/acp-runtime.ts";
 import type { AppContext } from "../context.ts";
 import { summarizeProject } from "../projects/store.ts";
+import { loadServerKey } from "../settings/crypto.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
   SessionMeta, SessionState, WorktreeMeta,
@@ -120,7 +121,13 @@ export type OrchestratorDeps = {
 };
 
 /** What the runtime needs from the settings store. */
-export type OrchestratorSettingsStore = Pick<AppContext["settings"], "read" | "orchestrator" | "apiKey" | "subscribe">;
+export type OrchestratorSettingsStore = Pick<AppContext["settings"], "read" | "orchestrator" | "apiKey" | "subscribe"> & {
+  /**
+   * Secrets besides the API keys that must never reach the model (the server key's text): tool
+   * output is redacted of them too. Optional so test fakes need not provide it.
+   */
+  serverSecrets?(): Promise<string[]>;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Process helpers, shared by the live deps and the tool tests
@@ -243,11 +250,14 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
 }
 
 /** The settings service as the runtime sees it, looked up on every call. */
-export function liveSettingsStore(ctx: Pick<AppContext, "settings">): OrchestratorSettingsStore {
+export function liveSettingsStore(ctx: Pick<AppContext, "settings" | "config">): OrchestratorSettingsStore {
+  // Read once: the settings service has already loaded (or created) the key at boot.
+  let serverKeyText: Promise<string[]> | null = null;
   return {
     read: () => ctx.settings.read(),
     orchestrator: () => ctx.settings.orchestrator(),
     apiKey: (provider) => ctx.settings.apiKey(provider),
     subscribe: (listener) => ctx.settings.subscribe(listener),
+    serverSecrets: () => (serverKeyText ??= loadServerKey(ctx.config.portalHome).then(({ key }) => [key.toString("base64")], () => [])),
   };
 }

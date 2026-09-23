@@ -20,7 +20,7 @@ export type Schedule = {
 
 export type ToolContext = {
   store: OrchestratorStore;
-  settings: Pick<OrchestratorSettingsStore, "read" | "orchestrator" | "apiKey">;
+  settings: Pick<OrchestratorSettingsStore, "read" | "orchestrator" | "apiKey" | "serverSecrets">;
   deps: OrchestratorDeps;
   /** Ids of items created or updated during this turn; the runtime attaches them to the assistant message. */
   touched: Set<string>;
@@ -90,10 +90,16 @@ export function redactKeys(output: unknown, keys: string[]): unknown {
   }
 }
 
-/** Every tool of `tools` with its output passed through `redactKeys` against the keys stored for all providers. */
+/**
+ * Every tool of `tools` with its output passed through `redactKeys` against the keys stored for
+ * all providers and the server key: a read-only command such as `grep -r ~` must not carry either
+ * into the thread.
+ */
 export function withRedaction<T extends Record<string, Tool>>(ctx: Pick<ToolContext, "settings">, tools: T): T {
-  const keys = () => Promise.all(orchestratorProviders.map((provider) => ctx.settings.apiKey(provider).catch(() => null)))
-    .then((found) => found.filter((key): key is string => typeof key === "string" && key.length > 0));
+  const keys = () => Promise.all([
+    ...orchestratorProviders.map((provider) => ctx.settings.apiKey(provider).catch(() => null)),
+    ctx.settings.serverSecrets ? ctx.settings.serverSecrets().catch(() => []) : [],
+  ]).then((found) => found.flat().filter((key): key is string => typeof key === "string" && key.length > 0));
   const wrapped: Record<string, Tool> = {};
   for (const [name, tool] of Object.entries(tools)) {
     const execute = tool.execute;

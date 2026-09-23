@@ -2,7 +2,8 @@
 
 Status as of 2026-09-23. This is the working plan for turning Portal from a chat UI with a
 timer-driven assistant into a coordinator that knows the user's world, runs its own background
-work, and keeps an auditable memory. Phase 1 (the server split) is done; phases 2 and 3 are next.
+work, and keeps an auditable memory. Phase 1 (the server split) is merged and live; phase 2 (the
+orchestrator core) is built on `feat/orchestrator-v2` (§1.5); phase 3 is next.
 
 Companion research (outside the repo, in the author's notes): Muse product/architecture,
 Muse agent design, Muse memory deep-dive, Instinct memory, agent-memory survey, the original
@@ -91,6 +92,41 @@ the new server with the default `PORTAL_HOME` against an empty database imports 
 renames `settings.json` (it holds plain-text keys). Stop the old instances first, or run the new
 stack with a scratch `PORTAL_HOME` to try it. `pnpm --filter @portal/server run import --dry-run`
 previews the import.
+
+### 1.5 What phase 2 delivered (branch `feat/orchestrator-v2`)
+
+Built by the integrator plus five parallel agents (jobs, world, memory, approvals, web) under
+`docs/phase-2-brief.md`, then merged, fixed, and checked live.
+
+- **Layout.** The orchestrator moved to `apps/server/src/orchestrator/`: `hub.ts` (shared parts and
+  domain services read at call time), `turn.ts` (every model turn: role model, run record, system
+  prompt with CORE.md, world, and retrieved memory, tools redacted, gated, and logged), `tick.ts`,
+  and one directory per domain (`activity/`, `jobs/`, `world/`, `memory/`, `approvals/`), each with
+  a store interface, memory and Postgres stores, service, tools, routes, and prompt guidance.
+  Contracts per domain in `packages/contracts/src/{activity,jobs,world,memory,approvals}.ts`.
+- **Data.** Migrations 0002–0005: all phase 2 tables; watches became intents with check jobs, tick
+  reports became tick-job runs, the Ideas list is gone (open ideas resolved).
+- **Behaviour.** Threads with one lock each (only the agent opens side threads); the tick is a job
+  and chat never waits for it; agent-scheduled jobs (`every`/`cron`/`at`) and intents with trigger,
+  budget, cooldown, and expiry; helpers as sub-turns; the world state rendered into every prompt
+  and `resolve_pull`/`resolve_repo`/`resolve_session`; curated memory with inbox, revisions,
+  CORE.md, scoped retrieval, and a quote rule so only the user's own words become user_stated;
+  deterministic approvals with scoped grants, a dialog, and job pausing; a chat role (default
+  `claude-opus-5-5`) and a bookkeeping role (default `claude-haiku-4-5`) with the model following
+  the provider; usage on every run; the activity log.
+- **Fold-in fixes.** Dismissals stick until the condition clears; `kind` is patchable; a capped tick
+  keeps the snapshot; short sessions count as finished; reviews of other people's PRs get a
+  reviewer's brief (or the orchestrator's own prompt from memory).
+- **UI.** Tabs Chat (threads), Goals (intents, upcoming jobs, runs), Activity, Memory (entities,
+  records with provenance, inbox, revisions), System (CORE.md, the world as the model sees it,
+  grants); a live status line; the approvals dialog app-wide; the bookkeeping model in Settings.
+- **Verified.** Server 540, web 59, shared 36 tests; Playwright 69; live on a scratch instance over a
+  clone of the real database: "review PR 2367" resolved to liquid-labs-inc/monorepo with no
+  question and started a review; chat answered in 5 s during a tick; a delete raised the approval
+  dialog and a denial was respected; a remembered preference showed in the memory browser with its
+  quote. The migrations ran cleanly on the real data.
+- **Before cut-over.** The live database stores only an OpenAI key; the new defaults are Anthropic,
+  so add an Anthropic key in Settings (or pick OpenAI models for both roles) after merging.
 
 ---
 
@@ -296,8 +332,11 @@ data with its diff visible in the UI; the activity log explains every action the
 
 ## 7. Open questions
 
-- Cut-over timing: switch the live Portal to the new stack before phase 2 starts, or after.
-- Whether side threads share the main thread's memory retrieval scope by default.
-- Notification surface beyond the Portal UI (Telegram via Hermes) and which events qualify.
+Settled during phase 2: the live Portal was cut over before phase 2; side threads are opened by the
+agent only and retrieve memory for their own scope (plus CORE.md); no notifications outside the
+Portal UI for now.
+
+- Chat turns carry about 70k input tokens (tool schemas for every domain plus 40 messages of
+  history). Cost is not a constraint, but trimming tool sets per turn may matter for latency.
 - Embeddings: not needed for phase 2 (scoped retrieval plus full-text search); pgvector is
   installed if phase 3 wants semantic search over the journal.

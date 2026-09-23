@@ -239,6 +239,12 @@ test("tool outputs never carry a stored API key, and read_file refuses the setti
   const echo = await run(tools.run_command, { cwd: dir, command: `echo ${secret} ${secret}` });
   assert.equal(echo.stdout.trim(), `${REDACTED} ${REDACTED}`);
   assert.equal((await run(tools.read_file, { path: "relative/path" })).error, "Path must be absolute (or start with ~/).");
+
+  // The server key is redacted too: a read-only command like `grep -r ~` could otherwise print it.
+  const serverKey = "c2VydmVyLWtleS1ieXRlcy1mb3ItdGVzdHMtb25seQ==";
+  const keyed = setup({ settings: { ...fakeSettings({ key: secret }), serverSecrets: async () => [serverKey] }, fs: { exec: execCommand, readFile: readFileCapped } });
+  const grep = await run(keyed.tools.run_command, { cwd: dir, command: `echo server.key:${serverKey}` });
+  assert.equal(grep.stdout.trim(), `server.key:${REDACTED}`);
 });
 
 test("read_file caps at 8 KB by default and at 32 KB at most", async (t) => {
