@@ -5,6 +5,7 @@ import {
   applySettingsPatch,
   defaultSettings,
   gitActionKinds,
+  isClockTime,
   isOrchestratorProvider,
   mergeSettings,
   orchestratorLimits,
@@ -72,6 +73,7 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
     bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
     intervalMinutes: 5,
     idleIntervalMinutes: 120,
+    consolidation: orchestratorDefaults.consolidation,
     apiKeys: { openai: false, anthropic: true },
   });
   assert.ok(!JSON.stringify(merged).includes("sk-ant-secret"), "the key text never reaches the wire form");
@@ -127,6 +129,26 @@ test("settingsOverrides writes only the orchestrator fields that differ, and nev
   assert.deepEqual(settingsOverrides(both), { gitActions: { prompts: { checks: "A" } }, orchestrator: { intervalMinutes: 3 } });
 });
 
+test("consolidation settings merge field by field, null turns a trigger off, and only differences are written", () => {
+  assert.deepEqual(orchestratorDefaults.consolidation, { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 });
+  assert.ok(orchestratorDefaults.consolidation.inboxThreshold <= orchestratorLimits.inboxThreshold);
+  assert.ok(orchestratorDefaults.consolidation.minIntervalMinutes <= orchestratorLimits.minIntervalMinutes);
+  for (const good of ["00:00", "03:00", "23:59", "09:05"]) assert.ok(isClockTime(good), good);
+  for (const bad of ["24:00", "3:00", "03:60", "0300", "", null, 300]) assert.equal(isClockTime(bad), false, String(bad));
+
+  const off = mergeSettings({ orchestrator: { consolidation: { nightlyAt: null, inboxThreshold: null } } });
+  assert.deepEqual(off.orchestrator.consolidation, { nightlyAt: null, inboxThreshold: null, minIntervalMinutes: 60 });
+  assert.deepEqual(settingsOverrides(off), { orchestrator: { consolidation: { nightlyAt: null, inboxThreshold: null } } });
+  assert.deepEqual(mergeSettings(settingsOverrides(off)), off);
+
+  const lenient = mergeSettings({ orchestrator: { consolidation: { nightlyAt: "25:00", inboxThreshold: 0, minIntervalMinutes: 1.5 } } });
+  assert.deepEqual(lenient.orchestrator.consolidation, orchestratorDefaults.consolidation);
+
+  const moved = applySettingsPatch(off, { orchestrator: { consolidation: { nightlyAt: "04:30" } } });
+  assert.deepEqual(moved.orchestrator.consolidation, { nightlyAt: "04:30", inboxThreshold: null, minIntervalMinutes: 60 }, "fields the patch leaves out stay");
+  assert.notEqual(mergeSettings({}).orchestrator.consolidation, defaultSettings.orchestrator.consolidation, "a fresh consolidation section");
+});
+
 test("applySettingsPatch layers a patch on top and resets blank prompts to defaults", () => {
   const start = mergeSettings({ gitActions: { prompts: { checks: "A", review: "B" } } });
   const next = applySettingsPatch(start, { gitActions: { prompts: { review: "", conflicts: "C" } } });
@@ -149,6 +171,7 @@ test("applySettingsPatch touches only the section a patch names", () => {
     bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
     intervalMinutes: 5,
     idleIntervalMinutes: 30,
+    consolidation: orchestratorDefaults.consolidation,
     apiKeys: { openai: false, anthropic: true },
   });
 
