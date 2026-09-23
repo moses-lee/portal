@@ -7,18 +7,22 @@
  *
  * Idempotent: the `legacy_import` settings row marks a finished import and a second run is a no-op
  * unless forced. A forced run merges: rows whose id already exists are kept as they are, and the
- * orchestrator's thread, ticks, snapshot and memory are only written into an empty table.
+ * orchestrator's thread, ticks, snapshot and memory are only written into an empty table. Old
+ * watches arrive as intents (with a check job while active) and old tick reports as tick runs.
  */
 import { chmod, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { count, eq, inArray, sql } from "drizzle-orm";
 import type { StoredEvent } from "@portal/contracts/types";
 import type { Db } from "../db/client.ts";
+import { stripNul } from "../db/sanitize.ts";
 import {
-  orchestratorDocuments, orchestratorItems, orchestratorMessages, orchestratorTicks, orchestratorWatches, projects, removedProjects,
-  sessionEvents, sessions, settings,
+  intents, jobRuns, jobs, orchestratorDocuments, orchestratorItems, orchestratorMessages, projects, removedProjects, sessionEvents, sessions,
+  settings,
 } from "../db/schema.ts";
-import type { Item, Watch } from "../orchestrator/types.ts";
+import { intentFromWatch, itemWithIntentLinks, runFromTick } from "../orchestrator/jobs/legacy.ts";
+import { intentColumns, jobColumns, runColumns } from "../orchestrator/jobs/pg-store.ts";
+import type { Item } from "../orchestrator/types.ts";
 import { createPgOrchestratorStore } from "../orchestrator/pg-store.ts";
 import { createPgProjectsBackend } from "../projects/pg-store.ts";
 import { loadServerKey } from "../settings/crypto.ts";
@@ -44,7 +48,9 @@ export type ImportCounts = {
   apiKeys: number;
   messages: number;
   items: number;
-  watches: number;
+  /** Old watches, imported as intents. */
+  intents: number;
+  /** Old tick reports, imported as runs of the tick job. */
   ticks: number;
   snapshot: number;
   memory: number;
@@ -84,7 +90,7 @@ const silent: ImportLog = { info() {}, warn() {} };
 
 const emptyCounts = (): ImportCounts => ({
   projects: 0, removedProjects: 0, sessions: 0, events: 0, settings: 0, apiKeys: 0,
-  messages: 0, items: 0, watches: 0, ticks: 0, snapshot: 0, memory: 0,
+  messages: 0, items: 0, intents: 0, ticks: 0, snapshot: 0, memory: 0,
 });
 
 /** The marker row, or null when no import has finished. */
@@ -116,7 +122,7 @@ export function describeCounts(counts: ImportCounts): string {
     `${plural(counts.projects, "project")} (${counts.removedProjects} removed)`,
     `${plural(counts.sessions, "session")} (${plural(counts.events, "event")})`,
     `${plural(counts.settings, "settings section")} (${plural(counts.apiKeys, "API key")})`,
-    `${plural(counts.messages, "message")}, ${plural(counts.items, "item")}, ${plural(counts.watches, "watch", "watches")}, ${plural(counts.ticks, "tick")}`,
+    `${plural(counts.messages, "message")}, ${plural(counts.items, "item")}, ${plural(counts.intents, "intent")}, ${plural(counts.ticks, "tick")}`,
     `snapshot ${counts.snapshot ? "yes" : "no"}, memory ${counts.memory ? "yes" : "no"}`,
   ].join("; ");
 }
@@ -243,7 +249,7 @@ async function countLegacy(legacy: Legacy): Promise<ImportCounts> {
   }
   if (legacy.orchestrator) {
     const o = legacy.orchestrator;
-    Object.assign(counts, { messages: o.messages.length, items: o.items.length, watches: o.watches.length, ticks: o.ticks.length });
+    Object.assign(counts, { messages: o.messages.length, items: o.items.length, intents: o.watches.length, ticks: o.ticks.length });
     counts.snapshot = o.snapshot ? 1 : 0;
     counts.memory = o.memory !== null ? 1 : 0;
   }
@@ -293,30 +299,34 @@ type Body = Record<string, unknown>;
 
 async function writeOrchestrator(db: Db, legacy: LegacyOrchestrator, counts: ImportCounts) {
   const store = createPgOrchestratorStore({ db });
-  const isEmpty = async (table: typeof orchestratorMessages | typeof orchestratorTicks) => ((await db.select({ n: count() }).from(table))[0]?.n ?? 0) === 0;
+  const isEmpty = async (table: typeof orchestratorMessages) => ((await db.select({ n: count() }).from(table))[0]?.n ?? 0) === 0;
   if (legacy.messages.length > 0 && (await isEmpty(orchestratorMessages))) {
     await store.writeMessages(legacy.messages);
     counts.messages = legacy.messages.length;
   }
-  // Items and watches keep their ids (the model and the UI address them by id), so they are inserted
+  // Items and intents keep their ids (the model and the UI address them by id), so they are inserted
   // as rows with the store's columns rather than created anew. Oldest first, so ordinals rise with createdAt.
-  for (const slice of chunks(legacy.items)) {
+  for (const slice of chunks(legacy.items.map(itemWithIntentLinks))) {
     const rows = await db.insert(orchestratorItems).values(slice.map((item: Item) => ({
       id: item.id, list: item.list, status: item.status, fingerprint: item.fingerprint,
       createdAt: item.createdAt, updatedAt: item.updatedAt, snoozedUntil: item.snoozedUntil, body: item as unknown as Body,
     }))).onConflictDoNothing().returning({ id: orchestratorItems.id });
     counts.items += rows.length;
   }
-  for (const slice of chunks(legacy.watches)) {
-    const rows = await db.insert(orchestratorWatches).values(slice.map((watch: Watch) => ({
-      id: watch.id, status: watch.status, createdAt: watch.createdAt, updatedAt: watch.updatedAt,
-      lastCheckedAt: watch.lastCheckedAt, body: watch as unknown as Body,
-    }))).onConflictDoNothing().returning({ id: orchestratorWatches.id });
-    counts.watches += rows.length;
+  const at = Date.now();
+  for (const watch of legacy.watches) {
+    const { intent, job } = intentFromWatch(stripNul(watch), at);
+    const rows = await db.insert(intents).values({ id: intent.id, ...intentColumns(intent) }).onConflictDoNothing().returning({ id: intents.id });
+    if (rows.length === 0) continue;
+    counts.intents++;
+    if (job) await db.insert(jobs).values({ id: job.id, ...jobColumns(job) }).onConflictDoNothing();
   }
-  if (legacy.ticks.length > 0 && (await isEmpty(orchestratorTicks))) {
-    for (const tick of legacy.ticks) await store.appendTick(tick);
-    counts.ticks = legacy.ticks.length;
+  const tickRuns = (await db.select({ n: count() }).from(jobRuns).where(eq(jobRuns.kind, "tick")))[0]?.n ?? 0;
+  if (legacy.ticks.length > 0 && tickRuns === 0) {
+    for (const slice of chunks(legacy.ticks.map((tick) => stripNul(runFromTick(tick))))) {
+      const rows = await db.insert(jobRuns).values(slice.map((run) => ({ id: run.id, ...runColumns(run) }))).onConflictDoNothing().returning({ id: jobRuns.id });
+      counts.ticks += rows.length;
+    }
   }
   const hasDocument = async (key: string) => (await db.select({ key: orchestratorDocuments.key }).from(orchestratorDocuments).where(eq(orchestratorDocuments.key, key))).length > 0;
   if (legacy.snapshot && !(await hasDocument("snapshot"))) {

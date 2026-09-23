@@ -443,8 +443,8 @@ export type BuildDigestOptions = {
   store: OrchestratorStore;
   snapshot: TickSnapshot;
   prevSnapshot: TickSnapshot | null;
-  /** The current tick interval; a watch is due once it has waited this long. */
-  intervalMs: number;
+  /** The current tick interval. Unused since due watches became intents; kept so callers need not change. */
+  intervalMs?: number;
   now: number;
   /** Flip expired snoozes back to open in the store (a tick); false only looks (get_tick_digest). */
   wakeSnoozed?: boolean;
@@ -454,7 +454,7 @@ export type BuildDigestOptions = {
  * Everything the tick prompt is built from. Snoozed items whose time has passed are flipped back
  * to open here (and count as open), so the model sees them again without a separate pass.
  */
-export async function buildDigest({ store, snapshot, prevSnapshot, intervalMs, now, wakeSnoozed = true }: BuildDigestOptions): Promise<TickDigest> {
+export async function buildDigest({ store, snapshot, prevSnapshot, now, wakeSnoozed = true }: BuildDigestOptions): Promise<TickDigest> {
   const open: Item[] = [];
   const snoozed: Item[] = [];
   for (const item of await store.listItems()) {
@@ -465,13 +465,10 @@ export async function buildDigest({ store, snapshot, prevSnapshot, intervalMs, n
     } else snoozed.push(item);
   }
   const changes = diffSnapshots(prevSnapshot, snapshot, [...open, ...snoozed]);
-  const dueWatches = (await store.listWatches())
-    .filter((watch) => watch.status === "active" && (watch.lastCheckedAt === null || now - watch.lastCheckedAt >= intervalMs));
   return {
     at: now,
     since: prevSnapshot?.at ?? null,
     changes,
-    dueWatches,
     openItems: open.map(({ id, list, kind, title, fingerprint }) => ({ id, list, kind, title, fingerprint })),
     memory: truncateBytes(await store.readMemory(), MEMORY_PROMPT_BYTES),
   };

@@ -307,8 +307,6 @@ export type TickDigest = {
   /** Timestamp of the snapshot this was diffed against; null on the very first tick. */
   since: number | null;
   changes: DigestChange[];
-  /** Active watches whose `lastCheckedAt` is older than the interval (or never). */
-  dueWatches: Watch[];
   /** Open and snoozed-but-expired items, briefly. */
   openItems: Pick<Item, "id" | "list" | "kind" | "title" | "fingerprint">[];
   /** The user's memory file, verbatim (capped). */

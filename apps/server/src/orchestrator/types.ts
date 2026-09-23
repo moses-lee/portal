@@ -5,7 +5,7 @@
  * server's modules keep importing everything from one place.
  */
 import type {
-  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickReason, TickReport, TickSnapshot, Watch, WatchPatch,
+  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickReason, TickReport, TickSnapshot,
 } from "@portal/contracts/orchestrator";
 
 import type { OrchestratorHub } from "./hub.ts";
@@ -22,8 +22,8 @@ export type ThreadPatch = Partial<Pick<Thread, "title" | "status" | "scope" | "i
 
 /**
  * Persistence for the orchestrator, in Postgres (`orchestrator_*` tables, see `src/db/schema.ts`):
- * one row per message, item, watch, and tick report; the snapshot and the memory text are single
- * documents. Changes to one kind of record are serialized so read-modify-writes never lose each
+ * one row per message and item; the snapshot and the memory text are single documents (jobs, runs,
+ * and intents have their own store, see `jobs/store.ts`). Changes to one kind of record are serialized so read-modify-writes never lose each
  * other's work. An in-memory implementation backs tests.
  */
 export interface OrchestratorStore {
@@ -49,16 +49,8 @@ export interface OrchestratorStore {
   createItem(item: Omit<Item, "id" | "createdAt" | "updatedAt" | "status" | "snoozedUntil"> & Partial<Pick<Item, "status" | "snoozedUntil">>): Promise<Item>;
   updateItem(id: string, patch: ItemPatch): Promise<Item>;
 
-  listWatches(): Promise<Watch[]>;
-  getWatch(id: string): Promise<Watch | null>;
-  createWatch(watch: Pick<Watch, "intent" | "notes"> & Partial<Pick<Watch, "links">>): Promise<Watch>;
-  updateWatch(id: string, patch: WatchPatch): Promise<Watch>;
-
   readSnapshot(): Promise<TickSnapshot | null>;
   writeSnapshot(snapshot: TickSnapshot): Promise<void>;
-
-  listTicks(): Promise<TickReport[]>;
-  appendTick(report: TickReport): Promise<void>;
 
   readMemory(): Promise<string>;
   writeMemory(text: string): Promise<void>;
@@ -86,6 +78,7 @@ export interface OrchestratorRuntime {
   chat(userMessage: OrchestratorMessage, threadId?: string): Promise<Response>;
   /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
   cancel(threadId?: string): void;
+  /** Runs the tick job now and answers its report (a skipped report when a tick is already running). */
   runTick(reason: TickReason): Promise<TickReport>;
 
   listItems(): Promise<Item[]>;
@@ -96,14 +89,13 @@ export interface OrchestratorRuntime {
    * answers `{ approvalId }` and runs once approved.
    */
   performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string; approvalId?: string }>;
-  listWatches(): Promise<Watch[]>;
-  updateWatch(id: string, patch: WatchPatch): Promise<Watch>;
+  /** The newest tick reports (the tick job's runs), newest last. */
   listTicks(): Promise<TickReport[]>;
 
   // Browser presence (which interval applies) comes from the presence counter in the context, which
   // every SSE route opens/closes; the runtime subscribes to it rather than being told.
 
   subscribe(listener: (event: OrchestratorEvent) => void): () => void;
-  /** Stops the scheduler, the job worker, and any in-flight turn. */
+  /** Stops the job worker and any in-flight turn. */
   dispose(): Promise<void>;
 }

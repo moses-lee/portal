@@ -1,13 +1,13 @@
 /**
  * Record rules for the orchestrator store, shared by every backend: ids, the memory cap, shape
- * guards, patch validation, and how a new or patched item/watch is built. The in-memory store here
+ * guards, patch validation, and how a new or patched item is built. The in-memory store here
  * backs tests and disposable runtimes; the Postgres store (`src/orchestrator/pg-store.ts`) applies
  * the same rules so a backend swap cannot change behaviour.
  */
 import { randomBytes } from "node:crypto";
 import type {
   Item, ItemAction, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickReport,
-  TickSnapshot, Watch, WatchPatch,
+  TickSnapshot,
 } from "./types.ts";
 import { MAIN_THREAD_ID, emptyScope } from "./types.ts";
 
@@ -21,9 +21,6 @@ export class OrchestratorStoreError extends Error {
   }
 }
 
-/** How many tick reports the store keeps (the newest). */
-export const MAX_TICK_REPORTS = 50;
-
 /** Size cap for the memory text, in bytes of UTF-8. Longer text is truncated, not rejected. */
 export const MAX_MEMORY_BYTES = 32 * 1024;
 
@@ -31,7 +28,6 @@ const TRUNCATION_NOTE = "\n\n[Portal truncated this file: memory is capped at 32
 
 const itemLists = new Set(["needs_you", "ideas"]);
 const itemStatuses = new Set(["open", "snoozed", "resolved", "dismissed"]);
-const watchStatuses = new Set(["active", "done", "cancelled"]);
 
 /**
  * A short, URL-safe id (8 base64url characters; 48 bits). The model reads and echoes these, so
@@ -83,29 +79,20 @@ export function isItem(value: unknown): value is Item {
     && typeof value.createdAt === "number" && typeof value.updatedAt === "number" && isNullableNumber(value.snoozedUntil);
 }
 
-export function isWatch(value: unknown): value is Watch {
-  const links = isRecord(value) ? value.links : null;
-  return isRecord(value) && typeof value.id === "string" && typeof value.intent === "string" && typeof value.notes === "string"
-    && watchStatuses.has(value.status as string) && isRecord(links)
-    && Array.isArray(links.sessionIds) && Array.isArray(links.projectIds) && Array.isArray(links.pulls)
-    && typeof value.createdAt === "number" && typeof value.updatedAt === "number" && isNullableNumber(value.lastCheckedAt);
-}
-
 // ---------------------------------------------------------------------------------------------
 // Patch validation
 // ---------------------------------------------------------------------------------------------
 
 /*
- * The store is the last line of defence for `updateItem`/`updateWatch`: the API routes take a JSON
+ * The store is the last line of defence for `updateItem`: the API routes take a JSON
  * body and the model's tools take whatever it produced, and a record the guards below reject would
  * break the page and the model's reads of it (and the file store used to drop it). So a patch is
- * reduced to the keys `ItemPatch`/`WatchPatch` allow (anything else is ignored), every value is
+ * reduced to the keys `ItemPatch` allows (anything else is ignored), every value is
  * checked to the depth the UI relies on, and the merged record is run through the same guard
  * before it is written.
  */
 
 const isString = (value: unknown): value is string => typeof value === "string";
-const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
 const isOptionalString = (value: unknown): value is string | undefined => value === undefined || isString(value);
 
 function isPullRef(value: unknown): value is PullRef {
@@ -114,7 +101,7 @@ function isPullRef(value: unknown): value is PullRef {
 
 function isItemLinks(value: unknown): value is ItemLinks {
   return isRecord(value) && isOptionalString(value.projectId) && isOptionalString(value.sessionId)
-    && isOptionalString(value.watchId) && (value.pull === undefined || isPullRef(value.pull));
+    && isOptionalString(value.watchId) && isOptionalString(value.intentId) && (value.pull === undefined || isPullRef(value.pull));
 }
 
 /** The string fields each action type needs; `label` (and `agentId` for start_session) are optional extras. */
@@ -131,11 +118,6 @@ function isItemAction(value: unknown): value is ItemAction {
   if (!isRecord(value) || !isString(value.type) || !(value.type in actionFields)) return false;
   return actionFields[value.type as ItemAction["type"]].every((field) => isString(value[field]))
     && isOptionalString(value.label) && (value.type !== "start_session" || isOptionalString(value.agentId));
-}
-
-function isWatchLinks(value: unknown): value is Watch["links"] {
-  return isRecord(value) && isStringArray(value.sessionIds) && isStringArray(value.projectIds)
-    && Array.isArray(value.pulls) && value.pulls.every(isPullRef);
 }
 
 const oneOf = (values: Set<string>) => [...values].join(", ");
@@ -169,17 +151,6 @@ export function parseItemPatch(input: unknown): ItemPatch {
   });
 }
 
-/** Reduce unknown input to a valid `WatchPatch`, or throw a 400 `OrchestratorStoreError`. */
-export function parseWatchPatch(input: unknown): WatchPatch {
-  return pickPatch<WatchPatch>("watch", input, {
-    intent: { check: isString, expected: "a string" },
-    notes: { check: isString, expected: "a string" },
-    status: { check: (v) => isString(v) && watchStatuses.has(v), expected: `one of ${oneOf(watchStatuses)}` },
-    links: { check: isWatchLinks, expected: "{ sessionIds: string[], projectIds: string[], pulls: { repo, number, url }[] }" },
-    lastCheckedAt: { check: isNullableEpoch, expected: "an integer (epoch ms) or null" },
-  });
-}
-
 export function isTickReport(value: unknown): value is TickReport {
   return isRecord(value) && typeof value.id === "string" && typeof value.reason === "string"
     && typeof value.startedAt === "number" && typeof value.finishedAt === "number" && Array.isArray(value.log);
@@ -195,10 +166,8 @@ export function isTickSnapshot(value: unknown): value is TickSnapshot {
 // ---------------------------------------------------------------------------------------------
 
 export type ItemInput = Parameters<OrchestratorStore["createItem"]>[0];
-export type WatchInput = Parameters<OrchestratorStore["createWatch"]>[0];
 
 export const unknownItem = (id: string) => new OrchestratorStoreError(`Unknown item "${id}".`, 404);
-export const unknownWatch = (id: string) => new OrchestratorStoreError(`Unknown watch "${id}".`, 404);
 
 /** A clock value strictly after `previous`, so "changed since" comparisons never miss a same-millisecond update. */
 const after = (previous: number) => Math.max(Date.now(), previous + 1);
@@ -233,23 +202,6 @@ export function buildItem(input: ItemInput, id: string, at = Date.now()): Item {
 /** `current` with an already-parsed patch applied; identity and creation time are kept, `updatedAt` advances. */
 export function patchItem(current: Item, allowed: ItemPatch): Item {
   return loadable("item", checkSnooze({ ...current, ...allowed, id: current.id, createdAt: current.createdAt, updatedAt: after(current.updatedAt) }), isItem);
-}
-
-export function buildWatch(input: WatchInput, id: string, at = Date.now()): Watch {
-  return {
-    id,
-    intent: input.intent,
-    notes: input.notes,
-    status: "active",
-    links: input.links ?? { sessionIds: [], projectIds: [], pulls: [] },
-    createdAt: at,
-    updatedAt: at,
-    lastCheckedAt: null,
-  };
-}
-
-export function patchWatch(current: Watch, allowed: WatchPatch): Watch {
-  return loadable("watch", { ...current, ...allowed, id: current.id, createdAt: current.createdAt, updatedAt: after(current.updatedAt) }, isWatch);
 }
 
 export const unknownThread = (id: string) => new OrchestratorStoreError(`Unknown thread "${id}".`, 404);
@@ -324,22 +276,13 @@ export function createMemoryOrchestratorStore(): OrchestratorStore {
   const threads = new Map<string, Thread>([[MAIN_THREAD_ID, mainThread()]]);
   /** Newest first. */
   let items: Item[] = [];
-  /** Newest first. */
-  let watches: Watch[] = [];
   let snapshot: TickSnapshot | null = null;
-  /** Newest last, at most MAX_TICK_REPORTS. */
-  let ticks: TickReport[] = [];
   let memory = "";
 
   function requireItem(id: string): Item {
     const item = items.find((candidate) => candidate.id === id);
     if (!item) throw unknownItem(id);
     return item;
-  }
-  function requireWatch(id: string): Watch {
-    const watch = watches.find((candidate) => candidate.id === id);
-    if (!watch) throw unknownWatch(id);
-    return watch;
   }
 
   function requireThread(id: string): Thread {
@@ -402,36 +345,11 @@ export function createMemoryOrchestratorStore(): OrchestratorStore {
       return item;
     },
 
-    async listWatches() {
-      return [...watches];
-    },
-    async getWatch(id) {
-      return watches.find((watch) => watch.id === id) ?? null;
-    },
-    async createWatch(input) {
-      const watch = buildWatch(input, newId((id) => watches.some((existing) => existing.id === id)));
-      watches = [watch, ...watches];
-      return watch;
-    },
-    async updateWatch(id, patch) {
-      const allowed = parseWatchPatch(patch);
-      const watch = patchWatch(requireWatch(id), allowed);
-      watches = watches.map((existing) => (existing.id === id ? watch : existing));
-      return watch;
-    },
-
     async readSnapshot() {
       return snapshot;
     },
     async writeSnapshot(next) {
       snapshot = next;
-    },
-
-    async listTicks() {
-      return [...ticks];
-    },
-    async appendTick(report) {
-      ticks = [...ticks, report].slice(-MAX_TICK_REPORTS);
     },
 
     async readMemory() {

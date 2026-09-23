@@ -13,17 +13,28 @@ import { T0, fakeDeps, fakeSettings, project, sessionMeta } from "./fixtures/orc
 
 const options = { toolCallId: "call", messages: [] };
 
-const digest = { at: T0, since: null, changes: [], dueWatches: [], openItems: [], memory: "secret notes" };
+const digest = { at: T0, since: null, changes: [], openItems: [], memory: "secret notes" };
 
 function setup({ interactive = true, settings = fakeSettings(), ...overrides } = {}) {
   const store = createMemoryOrchestratorStore();
   const { deps, state } = fakeDeps(overrides);
   const touched = new Set();
+  // Turns build the classic tools over the domain context; setup_pr_reviews reaches the jobs service through it.
+  const intents = [];
+  const hub = {
+    jobs: {
+      createIntent: async (input, how) => {
+        intents.push({ input, how });
+        return { intent: { id: `i${intents.length}`, ...input }, job: { id: `j${intents.length}` } };
+      },
+    },
+  };
   const ctx = {
     store, deps, touched, settings, interactive, now: () => T0,
     self: { digest: async () => digest, schedule: async () => ({}), lastTick: async () => null },
+    hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job" },
   };
-  return { tools: createTools(ctx), store, deps, state, touched };
+  return { tools: createTools(ctx), store, deps, state, touched, intents };
 }
 
 /** Call a tool the way the SDK does: the input goes through its zod schema first, so bounds are asserted for real. */
@@ -40,7 +51,7 @@ test("every tool has a description and an input schema; a tick gets the fixed su
     assert.ok(tool.inputSchema, `${name} has an input schema`);
     assert.equal(typeof tool.execute, "function", `${name} executes`);
   }
-  assert.ok(Object.keys(tools).length >= 50);
+  assert.ok(Object.keys(tools).length >= 45);
   for (const name of TICK_TOOLS) assert.ok(tools[name], `${name} exists`);
 
   const { tools: tick } = setup({ interactive: false });
@@ -138,34 +149,6 @@ test("snooze, dismiss, and list items", async () => {
   const dismissed = await run(tools.dismiss_item, { id: item.id });
   assert.equal(dismissed.status, "dismissed");
   assert.equal((await store.getItem(item.id)).snoozedUntil, null);
-});
-
-test("watches: create, update merges links, list previews notes, close", async () => {
-  const { tools, store } = setup();
-  const watch = await run(tools.create_watch, { intent: "Review PRs 1 and 2", links: { sessionIds: ["s1"] } });
-  assert.deepEqual(watch.links, { sessionIds: ["s1"], projectIds: [], pulls: [] });
-  assert.equal(watch.status, "active");
-  const updated = await run(tools.update_watch, { id: watch.id, notes: "Both sessions running.", links: { projectIds: ["p1"] } });
-  assert.deepEqual(updated.links, { sessionIds: ["s1"], projectIds: ["p1"], pulls: [] });
-  assert.equal(updated.notes, "Both sessions running.");
-  const listed = await run(tools.list_watches, {});
-  assert.equal(listed.watches.length, 1);
-  assert.equal(listed.watches[0].notes, "Both sessions running.");
-  assert.equal(listed.watches[0].notesTruncated, undefined);
-
-  const long = `${"x".repeat(300)} END`;
-  await run(tools.update_watch, { id: watch.id, notes: long });
-  const preview = (await run(tools.list_watches, {})).watches[0];
-  assert.equal(preview.notes.length, 201);
-  assert.ok(preview.notes.endsWith("…"));
-  assert.equal(preview.notesTruncated, true);
-  assert.equal((await store.getWatch(watch.id)).notes, long, "the store keeps the whole text");
-  assert.equal((await run(tools.update_watch, { id: watch.id, notes: "n".repeat(4001) })).invalidInput, true);
-
-  const closed = await run(tools.close_watch, { id: watch.id });
-  assert.equal(closed.status, "done");
-  assert.equal((await store.getWatch(watch.id)).status, "done");
-  assert.equal((await run(tools.list_watches, {})).watches.length, 0);
 });
 
 test("run_command returns exit code and output, truncating long output head and tail", async () => {
@@ -336,9 +319,9 @@ test("create_session mirrors the sessions route, sends the first prompt, and rep
   assert.equal(state.created.length, 2, "the session was created once");
 });
 
-test("setup_pr_reviews checks out each PR, starts a review session, and creates one watch", async () => {
+test("setup_pr_reviews checks out each PR, starts a review session, and creates one intent that reports the findings", async () => {
   const pulls = { 1: "feat/one", 2: "feat/two", 3: "fork/three" };
-  const { tools, state, store } = setup({
+  const { tools, state, intents } = setup({
     projects: [project()],
     getPull: async (repoRoot, number) => {
       if (!pulls[number]) throw Object.assign(new Error(`PR #${number} not found.`), { status: 404 });
@@ -358,11 +341,18 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
   ]);
   assert.equal(state.prompts[0].id, "s1");
   assert.equal(state.prompts[0].text, "Review this PR.\n\nPR #1: https://github.com/acme/app/pull/1");
-  const watch = await store.getWatch(result.watchId);
-  assert.equal(watch.intent, "Review PRs 1, 2, 3, 4 on acme/app");
-  assert.deepEqual(watch.links.sessionIds, ["s1", "s2"]);
-  assert.deepEqual(watch.links.projectIds, ["p1", "p2", "p3"]);
-  assert.deepEqual(watch.links.pulls.map((pull) => pull.number), [1, 2]);
+  assert.equal(result.intentId, "i1");
+  const [{ input, how }] = intents;
+  assert.match(input.text, /^Review PRs 1, 2 on acme\/app; tell me the findings when the review sessions finish/);
+  assert.match(input.trigger, /s1, s2/);
+  assert.match(input.action, /findings/);
+  assert.equal(input.fireBudget, 1);
+  assert.deepEqual(input.check, { type: "every", everyMs: 5 * 60_000 });
+  assert.deepEqual(input.scope.sessionIds, ["s1", "s2"]);
+  assert.deepEqual(input.scope.projectIds, ["p1", "p2", "p3"]);
+  assert.deepEqual(input.scope.pulls.map((pull) => pull.number), [1, 2]);
+  assert.deepEqual(input.scope.repos, ["acme/app"]);
+  assert.deepEqual(how, { actor: "agent", runId: "run1", threadId: "main" });
 
   const custom = await run(tools.setup_pr_reviews, { projectId: "p1", numbers: [1], prompt: "Just summarise." });
   assert.equal(state.prompts.at(-1).text, "Just summarise.\n\nPR #1: https://github.com/acme/app/pull/1");
@@ -390,7 +380,7 @@ test("the legacy memory-file tools are gone; get_tick_digest leaves memory out",
   const { tools } = setup();
   for (const name of ["read_memory", "write_memory", "append_memory"]) assert.equal(tools[name], undefined, name);
   const digestOut = await run(tools.get_tick_digest, {});
-  assert.deepEqual(digestOut, { at: T0, since: null, changes: [], dueWatches: [], openItems: [] });
+  assert.deepEqual(digestOut, { at: T0, since: null, changes: [], openItems: [] });
   assert.equal("memory" in digestOut, false);
 });
 

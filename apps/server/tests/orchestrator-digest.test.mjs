@@ -501,7 +501,7 @@ test("snapshotActivity treats a quietly offline session as idle and a lost agent
   assert.equal(snapshotActivity({ ...base, link: { status: "connecting" } }), "connecting");
 });
 
-test("buildDigest wakes expired snoozes, picks due watches, caps memory, and diffs against snoozed items too", async () => {
+test("buildDigest wakes expired snoozes, caps memory, and diffs against snoozed items too", async () => {
   const store = createMemoryOrchestratorStore();
   const base = { list: "needs_you", kind: "custom", title: "t", body: "", links: {}, actions: [] };
   const open = await store.createItem({ ...base, fingerprint: "custom:open" });
@@ -509,13 +509,6 @@ test("buildDigest wakes expired snoozes, picks due watches, caps memory, and dif
   const sleeping = await store.createItem({ ...base, fingerprint: "custom:sleeping", status: "snoozed", snoozedUntil: T0 + 60_000 });
   const snoozedWaiting = await store.createItem({ ...base, kind: "session_waiting", fingerprint: "session_waiting:s2", status: "snoozed", snoozedUntil: T0 + 60_000 });
   await store.createItem({ ...base, fingerprint: "custom:done", status: "resolved" });
-  const never = await store.createWatch({ intent: "never checked", notes: "" });
-  const recent = await store.createWatch({ intent: "checked recently", notes: "" });
-  await store.updateWatch(recent.id, { lastCheckedAt: T0 - 1000 });
-  const stale = await store.createWatch({ intent: "checked long ago", notes: "" });
-  await store.updateWatch(stale.id, { lastCheckedAt: T0 - 600_001 });
-  const done = await store.createWatch({ intent: "done", notes: "" });
-  await store.updateWatch(done.id, { status: "done" });
   await store.writeMemory("m".repeat(MEMORY_PROMPT_BYTES + 100));
 
   const prev = snap({ sessions: { s1: session(), s2: session({ activity: "waiting" }) } });
@@ -528,7 +521,7 @@ test("buildDigest wakes expired snoozes, picks due watches, caps memory, and dif
   assert.deepEqual(digest.openItems[0], { id: digest.openItems[0].id, list: "needs_you", kind: "custom", title: "t", fingerprint: digest.openItems[0].fingerprint });
   assert.equal((await store.getItem(expired.id)).status, "open");
   assert.equal((await store.getItem(sleeping.id)).status, "snoozed");
-  assert.deepEqual(digest.dueWatches.map((watch) => watch.id).sort(), [never.id, stale.id].sort());
+  assert.equal("dueWatches" in digest, false, "watches became intents, checked by their own jobs");
   assert.deepEqual(fingerprints(digest.changes), ["session_waiting:s1", "session_waiting:s2"]);
   assert.equal(digest.changes[1].resolvesItemId, snoozedWaiting.id, "a snoozed item whose condition cleared is resolved");
   assert.ok(Buffer.byteLength(digest.memory, "utf8") <= MEMORY_PROMPT_BYTES);

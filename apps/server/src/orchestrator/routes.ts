@@ -14,7 +14,7 @@ import { openEventStream } from "../http/sse.ts";
 import { registerApprovalRoutes } from "./approvals/routes.ts";
 import { registerJobRoutes } from "./jobs/routes.ts";
 import { registerMemoryRoutes } from "./memory/routes.ts";
-import { parseItemPatch, parseWatchPatch } from "./store.ts";
+import { parseItemPatch } from "./store.ts";
 import type { OrchestratorEvent, OrchestratorMessage } from "./types.ts";
 import { MAIN_THREAD_ID } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
@@ -166,14 +166,14 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return reply.code(204).send();
   });
 
-  /** `POST /api/portal/tick` — runs one manual tick now and answers `{ report }` when it finishes. */
+  /** `POST /api/portal/tick` — runs the tick job now and answers `{ report }` when it finishes (a skipped report while a tick runs). */
   app.post("/api/portal/tick", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     return { report: await runtime.runTick("manual") };
   });
 
-  /** `GET /api/portal/ticks` — the last tick reports, newest last `{ ticks }`. */
+  /** `GET /api/portal/ticks` — the last tick reports (the tick job's runs), newest last `{ ticks }`. */
   app.get("/api/portal/ticks", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
@@ -209,25 +209,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return runtime.performAction(req.params.id, actionIndex);
   });
 
-  /** `GET /api/portal/watches` — `{ watches }`. */
-  app.get("/api/portal/watches", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    return { watches: await runtime.listWatches() };
-  });
-
-  /** `PATCH /api/portal/watches/:id` — body `WatchPatch` -> `{ watch }`; 400 for a body that is not one. */
-  app.patch<IdParams>("/api/portal/watches/:id", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    const body = readObject(req.body);
-    if (!body) return notAnObject(reply);
-    return { watch: await runtime.updateWatch(req.params.id, parseWatchPatch(body)) };
-  });
-
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `watches`, `threads`, `approvals`, and `intents`, then forwards every runtime event as
+   * `items`, `threads`, `approvals`, and `intents`, then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter tick interval.
    */
@@ -235,12 +219,12 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
-    const [status, items, watches, threads, approvals, intents] = await Promise.all([
-      runtime.status(), runtime.listItems(), runtime.listWatches(), runtime.listThreads(), runtime.hub.approvals.pending(),
+    const [status, items, threads, approvals, intents] = await Promise.all([
+      runtime.status(), runtime.listItems(), runtime.listThreads(), runtime.hub.approvals.pending(),
       runtime.hub.jobs.listIntents({ status: ["active"] }),
     ]);
     const opening: OrchestratorEvent[] = [
-      { type: "status", status }, { type: "items", items }, { type: "watches", watches }, { type: "threads", threads },
+      { type: "status", status }, { type: "items", items }, { type: "threads", threads },
       { type: "approvals", approvals }, { type: "intents", intents },
     ];
     const stream = openEventStream(req, reply);

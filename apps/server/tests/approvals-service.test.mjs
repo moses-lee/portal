@@ -24,7 +24,8 @@ function setup(t, { approvals: approvalStore = createMemoryApprovalStore(), stor
   const runtime = createOrchestratorRuntime({
     store, settingsStore: fakeSettings({ key: null }), deps, timers, presence: fakePresence(),
     domains: {
-      jobs: (hub) => ({ ...createJobsService(hub), runNow: async (jobId, trigger) => { resumed.push([jobId, trigger]); return null; } }),
+      // No worker: these tests drive the clock and count timers, and only need runNow recorded.
+      jobs: (hub) => ({ ...createJobsService(hub), start: () => {}, runNow: async (jobId, trigger) => { resumed.push([jobId, trigger]); return null; } }),
       approvals: (hub) => createApprovalsService(hub, { store: approvalStore }),
     },
   });
