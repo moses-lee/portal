@@ -1,4 +1,4 @@
-import type { SessionLink } from "./types.ts";
+import type { SessionLink } from "@portal/contracts/types";
 
 export type AgentActivity =
   "idle" | "working" | "waiting" | "connecting" | "error";

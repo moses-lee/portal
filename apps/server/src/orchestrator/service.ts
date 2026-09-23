@@ -1,7 +1,7 @@
 /**
  * Talk to Portal: the orchestrator runtime over the Postgres store and the server's own services.
  * Creating it starts the scheduler, so ticks run from boot whether or not a browser ever opens the
- * page (the web app did this in `instrumentation.ts`).
+ * page.
  */
 import type { AppContext } from "../context.ts";
 import { liveDeps, liveSettingsStore } from "../lib/orchestrator/deps.ts";

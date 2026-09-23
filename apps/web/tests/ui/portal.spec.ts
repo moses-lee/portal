@@ -702,7 +702,7 @@ test("git action prompts persist across reloads and reset to their default", asy
   ).toBeVisible();
   await expect(field).toHaveValue(defaultPrompt);
   await expect(reset).toHaveCount(0);
-  // Unique so a stale settings file from another run can never satisfy the assertions.
+  // Unique so settings saved by another run can never satisfy the assertions.
   const custom = `Find out why the checks fail (${Date.now()})`;
   await field.fill(custom);
   await field.press("Tab");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultOrchestratorSettings, orchestratorProviders } from "../src/lib/orchestrator/types.ts";
+import { defaultOrchestratorSettings, orchestratorProviders } from "@portal/contracts/orchestrator";
 import {
   applySettingsPatch,
   defaultSettings,
@@ -9,8 +9,8 @@ import {
   mergeSettings,
   orchestratorLimits,
   settingsOverrides,
-} from "../src/lib/settings.ts";
-import { defaultScriptSettings, defaultScripts, mergeScripts, scriptKinds, scriptLimits, scriptsOverrides } from "../src/lib/scripts.ts";
+} from "../src/settings.ts";
+import { defaultScriptSettings, defaultScripts, mergeScripts, scriptKinds, scriptLimits, scriptsOverrides } from "../src/scripts.ts";
 
 const orchestratorDefaults = defaultOrchestratorSettings;
 

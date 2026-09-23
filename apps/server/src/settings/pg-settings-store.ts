@@ -7,8 +7,8 @@
 import { eq, inArray } from "drizzle-orm";
 import { orchestratorProviders } from "../lib/orchestrator/types.ts";
 import type { OrchestratorProvider } from "../lib/orchestrator/types.ts";
-import type { SettingsPatch } from "../lib/settings.ts";
-import { isOrchestratorProvider } from "../lib/settings.ts";
+import type { SettingsPatch } from "@portal/shared/settings";
+import { isOrchestratorProvider } from "@portal/shared/settings";
 import { parseStoredOverrides } from "../lib/settings-store.ts";
 import type { SettingsStore } from "../lib/settings-store.ts";
 import type { Db } from "../db/client.ts";

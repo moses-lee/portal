@@ -1,5 +1,5 @@
 /**
- * `/api/portal/**`: ported from apps/web/src/app/api/portal. Every route (reads included, as on the
+ * `/api/portal/**`, as the web app's Next.js routes served it. Every route (reads included, as on the
  * web) is same-origin checked first; runtime and store errors carry their HTTP status (409 busy or
  * not ready, 404 unknown item, 400 bad patch) and reach the browser as `{ error }` through the
  * app's error handler.

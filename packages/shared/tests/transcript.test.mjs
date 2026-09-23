@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendEvent, firstSeq, lastSeq, reduce, segment } from "../src/lib/transcript.ts";
+import { appendEvent, firstSeq, lastSeq, reduce, segment } from "../src/transcript.ts";
 
 const text = (seq, t, kind = "agent_message_chunk") => ({ seq, ts: 0, type: "update", update: { sessionUpdate: kind, content: { type: "text", text: t } } });
 const user = (seq, t) => ({ seq, ts: 0, type: "user", text: t });

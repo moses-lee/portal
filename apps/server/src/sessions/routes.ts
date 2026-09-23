@@ -1,4 +1,4 @@
-/** `/api/agents`, `/api/sessions/**`: ported from apps/web/src/app/api/{agents,sessions}. */
+/** `/api/agents`, `/api/sessions/**`, as the web app's Next.js routes served them. */
 import { stat } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
@@ -7,7 +7,8 @@ import { rejectCrossOrigin } from "../http/origin.ts";
 import { openEventStream } from "../http/sse.ts";
 import { toMeta, type SessionListChange } from "../lib/acp-runtime.ts";
 import { errorStatus, resolveDirectory } from "../lib/fs-paths.ts";
-import { displayPath, readGitInfo, sameGitInfo, type GitInfo } from "../lib/git-info.ts";
+import { sameGitInfo } from "@portal/shared/git-info";
+import { displayPath, readGitInfo, type GitInfo } from "../lib/git-info.ts";
 import { summarizeSession } from "../lib/session-summary.ts";
 import type { PermissionAnswerRequest, PortalEvent, SessionListEvent, SessionMetaEvent, SetConfigRequest } from "../lib/types.ts";
 

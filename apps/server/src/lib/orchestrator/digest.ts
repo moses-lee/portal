@@ -3,7 +3,7 @@
  * previous one, and hand the model only what changed. No model call happens here, so the tick
  * costs nothing when nothing moved and every rule below is unit-testable.
  */
-import { agentActivity } from "../agent-activity.ts";
+import { agentActivity } from "@portal/shared/agent-activity";
 import type { Project, SessionMeta, WorktreeMeta } from "../types.ts";
 import type { AttentionSearch, OrchestratorDeps } from "./deps.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "./github-attention.ts";

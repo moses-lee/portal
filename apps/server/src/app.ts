@@ -10,6 +10,7 @@ import { type AppContext, setContext } from "./context.ts";
 import { type Db, connect } from "./db/client.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { errorMessage, errorStatus } from "./http/errors.ts";
+import { importLegacyAtBoot } from "./import/boot.ts";
 import { presence } from "./lib/presence.ts";
 import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
@@ -44,10 +45,15 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     database = owned;
   }
 
+  // Before any service loads its cache from the tables the import fills.
+  await importLegacyAtBoot({ home: config.portalHome, db: database.db, log: app.log });
+
   const ctx = { config, db: database.db, sql: database.sql, log: app.log, presence } as AppContext;
   ctx.sessions = createSessionsService(ctx, sessions);
   ctx.projects = createProjectsService(ctx);
   ctx.settings = createSettingsService(ctx);
+  // A missing or broken server key fails the boot here rather than the first settings request.
+  await ctx.settings.ready;
   ctx.terminals = createTerminalsService(ctx);
   setContext(ctx);
   if (orchestrator) ctx.orchestrator = createOrchestratorService(ctx, typeof orchestrator === "object" ? orchestrator : {});

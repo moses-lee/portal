@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { displayPath, readGitInfo, sameGitInfo } from "../src/lib/git-info.ts";
+import { displayPath, readGitInfo } from "../src/lib/git-info.ts";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } }).toString().trim();
@@ -50,13 +50,4 @@ test("follows linked worktrees and ignores non-repositories", async (t) => {
   t.after(() => rmSync(plain, { recursive: true, force: true }));
   writeFileSync(path.join(plain, ".git"), "not a pointer\n");
   assert.equal(await readGitInfo(plain), null);
-});
-
-test("compares git info by repository and branch", () => {
-  const a = { root: "/r", displayRoot: "/r", branch: "main", detached: false };
-  assert.ok(sameGitInfo(null, null));
-  assert.ok(sameGitInfo(a, { ...a }));
-  assert.ok(!sameGitInfo(a, null));
-  assert.ok(!sameGitInfo(a, { ...a, branch: "dev" }));
-  assert.ok(!sameGitInfo(a, { ...a, detached: true }));
 });

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent template: runs `pnpm start` (Postgres up, then the server and the web app) from the
+  repository root at login, and restarts it if it exits. Build first (`pnpm build`), with the same
+  PORT / PORTAL_SERVER_* values as below: the proxy target is baked into the Next.js build.
+
+  Replace /Users/moses/repos/portal and /Users/moses with your checkout and home directory, then see
+  "Start at login" in README.md to install it. Docker (Colima) must be running too; `brew services start colima`
+  starts it at login. Until Docker answers, `pnpm db:up` fails and launchd retries every ThrottleInterval seconds.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.portal</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/moses/repos/portal</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/pnpm</string>
+    <string>start</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Homebrew (node, pnpm, docker, colima) and ~/.local/bin. launchd starts with a bare PATH. -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/Users/moses/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PORT</key>
+    <string>3000</string>
+    <key>PORTAL_SERVER_PORT</key>
+    <string>3100</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- launchd does not create this directory: `mkdir -p ~/Library/Logs/portal` before loading. -->
+  <key>StandardOutPath</key>
+  <string>/Users/moses/Library/Logs/portal/portal.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/moses/Library/Logs/portal/portal.err.log</string>
+</dict>
+</plist>

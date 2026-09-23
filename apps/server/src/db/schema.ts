@@ -77,7 +77,7 @@ export const settings = pgTable("settings", {
 
 /**
  * Provider API keys and other secrets, encrypted at rest with the server key
- * (`~/.portal/server.key`). Only the server ever decrypts them.
+ * (`<PORTAL_HOME>/server.key`). Only the server ever decrypts them.
  */
 export const credentials = pgTable("credentials", {
   /** e.g. "openai", "anthropic", "github". */

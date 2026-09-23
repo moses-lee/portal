@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { execCommand } from "../src/lib/exec-command.ts";
 import { ScriptError, describeFailure, runConfiguredScript, runScript } from "../src/lib/script-runner.ts";
-import { defaultScriptSettings, scriptDefinitions } from "../src/lib/scripts.ts";
+import { defaultScriptSettings, scriptDefinitions } from "@portal/shared/scripts";
 
 const settings = (overrides = {}) => ({ ...defaultScriptSettings, command: "true", ...overrides });
 

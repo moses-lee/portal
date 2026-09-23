@@ -5,7 +5,8 @@ import * as pty from "node-pty";
 import xterm from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 import { childEnv } from "../lib/child-env.ts";
-import { displayPath, readGitInfo, sameGitInfo } from "../lib/git-info.ts";
+import { sameGitInfo } from "@portal/shared/git-info";
+import { displayPath, readGitInfo } from "../lib/git-info.ts";
 import { readShellCwd } from "./shell-cwd.ts";
 import type { ShellEvent, ShellState } from "../lib/shell-types.ts";
 

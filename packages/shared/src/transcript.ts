@@ -4,7 +4,7 @@
  * exercise the reducer without React.
  */
 import type { PermissionOption, SessionUpdate, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import type { StoredEvent } from "./types.ts";
+import type { StoredEvent } from "@portal/contracts/types";
 
 export type PermissionResponse =
   | { outcome: "selected"; optionId: string; optionName: string }

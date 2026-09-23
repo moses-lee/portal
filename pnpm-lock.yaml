@@ -35,6 +35,9 @@ importers:
       '@portal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@portal/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@xterm/addon-serialize':
         specifier: 0.14.0
         version: 0.14.0
@@ -78,27 +81,18 @@ importers:
 
   apps/web:
     dependencies:
-      '@agentclientprotocol/claude-agent-acp':
-        specifier: ^0.81.0
-        version: 0.81.0(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))
-      '@agentclientprotocol/codex-acp':
-        specifier: ^1.13.0
-        version: 1.13.0
       '@agentclientprotocol/sdk':
         specifier: ^1.5.0
         version: 1.5.0(zod@4.6.5)
-      '@ai-sdk/anthropic':
-        specifier: ^4.0.58
-        version: 4.0.58(zod@4.6.5)
-      '@ai-sdk/openai':
-        specifier: ^4.0.71
-        version: 4.0.71(zod@4.6.5)
       '@ai-sdk/react':
         specifier: ^4.0.110
         version: 4.0.110(react@19.2.8)(zod@4.6.5)
       '@portal/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@portal/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@shadcn/react':
         specifier: ^0.3.1
         version: 0.3.1(@types/react@19.3.0)(react@19.2.8)
@@ -202,6 +196,19 @@ importers:
       ai:
         specifier: ^7.0.107
         version: 7.0.107(zod@4.6.5)
+
+  packages/shared:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^1.5.0
+        version: 1.5.0(zod@4.6.5)
+      '@portal/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
 packages:
 

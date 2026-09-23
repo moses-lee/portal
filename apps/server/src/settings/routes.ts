@@ -3,7 +3,7 @@ import type { AppContext } from "../context.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 
 /**
- * `/api/settings`: ported from apps/web/src/app/api/settings. Store errors (`SettingsError` carries
+ * `/api/settings`, as the web app's Next.js route served it. Store errors (`SettingsError` carries
  * its status) reach the global handler as `{ error }`, as the web route's `fail()` answered.
  */
 export function registerSettingsRoutes(app: FastifyInstance, ctx: AppContext): void {

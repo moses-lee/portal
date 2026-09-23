@@ -418,8 +418,8 @@ export async function setupPortal(
     /** What `GET /api/projects/<id>/github` answers; defaults to `githubSummary`. */
     github?: GithubSummary;
     /**
-     * Let `/api/settings` reach the test server (isolated by its temp PORTAL_HOME) instead of
-     * answering with the defaults, for tests of persistence itself.
+     * Let `/api/settings` reach the test server (isolated by its per-run `portal_e2e` database) instead
+     * of answering with the defaults, for tests of persistence itself.
      */
     realSettings?: boolean;
     /** Rows of `GET /api/projects/removed`; restoring one lists it as a project with one session. */
@@ -524,7 +524,7 @@ export async function setupPortal(
       });
     if (path === "/api/settings") {
       if (options.realSettings) return route.fallback();
-      // Parallel tests share the server's settings file; the defaults keep them independent of each other.
+      // Parallel tests share the server's settings; the defaults keep them independent of each other.
       return json({
         settings:
           method === "PATCH"

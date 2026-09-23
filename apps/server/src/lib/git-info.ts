@@ -1,3 +1,4 @@
+/** Node half of git info (reads `.git` and the home directory); the pure comparison is in `@portal/shared/git-info`. */
 import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,10 +10,6 @@ export function displayPath(directory: string) {
   const home = os.homedir();
   return directory === home ? "~" : directory.startsWith(home + path.sep)
     ? "~" + directory.slice(home.length) : directory;
-}
-
-export function sameGitInfo(a: GitInfo, b: GitInfo) {
-  return a === b || (!!a && !!b && a.root === b.root && a.branch === b.branch && a.detached === b.detached);
 }
 
 /** Locate the .git directory for a working tree, following worktree `gitdir:` pointers. */

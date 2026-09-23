@@ -8,7 +8,7 @@ import {
   sanitizeBranchForPath,
   shortenHome,
   worktreeTarget,
-} from "../src/lib/branch-matching.ts";
+} from "../src/branch-matching.ts";
 
 function branch(name, committedAt = 0, extra = {}) {
   return { name, local: true, remote: false, committedAt, worktreePath: null, ...extra };

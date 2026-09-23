@@ -28,5 +28,6 @@ export async function temporaryDatabase(t) {
     await admin.end();
   });
   await runMigrations(handle.db);
-  return handle;
+  // The connection string too, for tests that hand the database to a child process (the import CLI).
+  return Object.assign(handle, { url: url.toString() });
 }

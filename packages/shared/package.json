@@ -1,0 +1,25 @@
+{
+  "name": "@portal/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./agent-activity": "./src/agent-activity.ts",
+    "./branch-matching": "./src/branch-matching.ts",
+    "./git-info": "./src/git-info.ts",
+    "./scripts": "./src/scripts.ts",
+    "./settings": "./src/settings.ts",
+    "./transcript": "./src/transcript.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-timeout=15000 tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.5.0",
+    "@portal/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

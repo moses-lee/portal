@@ -12,7 +12,8 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "node --test --test-timeout=15000 --test-reporter=spec tests/*.test.mjs",
+    "test": "node --import ./tests/helpers/scratch-home.mjs --test --test-timeout=15000 --test-reporter=spec tests/*.test.mjs",
+    "import": "node src/import/cli.ts",
     "db:generate": "drizzle-kit generate",
     "postinstall": "node scripts/prepare-pty.mjs"
   },
@@ -24,6 +25,7 @@
     "@ai-sdk/openai": "^4.0.71",
     "@fastify/compress": "^9.2.0",
     "@portal/contracts": "workspace:*",
+    "@portal/shared": "workspace:*",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
     "ai": "^7.0.107",

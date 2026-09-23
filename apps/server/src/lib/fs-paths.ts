@@ -16,8 +16,8 @@ export class PathError extends Error {
 
 /**
  * HTTP status carried by a PathError-shaped error, else null. Duck-typed rather than
- * `instanceof`: the projects store lives on `globalThis` across dev HMR reloads, so the
- * error classes it throws may predate the ones a freshly reloaded route imports.
+ * `instanceof`, so any error with a numeric `status` in the 4xx/5xx range maps to that status,
+ * whichever module threw it.
  */
 export function errorStatus(err: unknown): number | null {
   const status = err instanceof Error ? (err as { status?: unknown }).status : undefined;

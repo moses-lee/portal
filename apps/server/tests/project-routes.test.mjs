@@ -7,7 +7,7 @@ import test from "node:test";
 import { buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import { context } from "../src/context.ts";
-import { defaultScriptSettings } from "../src/lib/scripts.ts";
+import { defaultScriptSettings } from "@portal/shared/scripts";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
 // git runs with the developer's config otherwise; the worktree routes shell out to it.

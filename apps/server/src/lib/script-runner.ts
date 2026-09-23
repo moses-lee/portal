@@ -6,8 +6,8 @@ import { context } from "../context.ts";
 import { childEnv } from "./child-env.ts";
 import { execCommand } from "./exec-command.ts";
 import type { ExecResult } from "./exec-command.ts";
-import { isScriptEnabled, scriptDefinitions } from "./scripts.ts";
-import type { ScriptKind, ScriptSettings, ScriptsSettings } from "./scripts.ts";
+import { isScriptEnabled, scriptDefinitions } from "@portal/shared/scripts";
+import type { ScriptKind, ScriptSettings, ScriptsSettings } from "@portal/shared/scripts";
 import type { Project, WorktreeMeta } from "./types.ts";
 
 export type ScriptRunOptions = {

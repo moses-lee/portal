@@ -13,7 +13,7 @@ import { type GitInfo, readGitInfo } from "../git-info.ts";
 import { fetchRepo, pullFastForward, readGithubSummary } from "../github-summary.ts";
 import { runConfiguredScript } from "../script-runner.ts";
 import type { ScriptOutcome, ScriptRunOptions } from "../script-runner.ts";
-import type { ScriptKind } from "../scripts.ts";
+import type { ScriptKind } from "@portal/shared/scripts";
 import { toMeta } from "../acp-runtime.ts";
 import { defaultAgentId, listAgents } from "../agents.ts";
 import type { AppContext } from "../../context.ts";

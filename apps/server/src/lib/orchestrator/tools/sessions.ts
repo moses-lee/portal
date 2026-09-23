@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { displayPath } from "../../git-info.ts";
-import { type Block, reduce, segment } from "../../transcript.ts";
+import { type Block, reduce, segment } from "@portal/shared/transcript";
 import type { SessionMeta, SessionState } from "../../types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
 import { snapshotActivity } from "../digest.ts";

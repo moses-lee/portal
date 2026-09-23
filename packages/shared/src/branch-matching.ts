@@ -1,5 +1,5 @@
-import type { GitInfo } from "./git-info.ts";
-import type { BranchInfo, BranchListing, PullInfo } from "./types.ts";
+import type { GitInfo } from "@portal/contracts/git-info";
+import type { BranchInfo, BranchListing, PullInfo } from "@portal/contracts/types";
 
 /** What the start page's worktree picker holds; Start turns anything but `original` into a worktree. */
 export type WorktreeChoice =

@@ -6,8 +6,8 @@
  */
 import { orchestratorProviders } from "../lib/orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings } from "../lib/orchestrator/types.ts";
-import { applySettingsPatch, isOrchestratorProvider, mergeSettings, settingsOverrides } from "../lib/settings.ts";
-import type { Settings, SettingsPatch } from "../lib/settings.ts";
+import { applySettingsPatch, isOrchestratorProvider, mergeSettings, settingsOverrides } from "@portal/shared/settings";
+import type { Settings, SettingsPatch } from "@portal/shared/settings";
 import { parseSettingsPatch } from "../lib/settings-store.ts";
 import type { SettingsStore } from "../lib/settings-store.ts";
 

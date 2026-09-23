@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import { credentials } from "../src/db/schema.ts";
-import { defaultSettings } from "../src/lib/settings.ts";
+import { defaultSettings } from "@portal/shared/settings";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
 async function setup(t) {

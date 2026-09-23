@@ -1,5 +1,5 @@
-import { defaultOrchestratorSettings, orchestratorProviders } from "./orchestrator/types.ts";
-import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "./orchestrator/types.ts";
+import { defaultOrchestratorSettings, orchestratorProviders } from "@portal/contracts/orchestrator";
+import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "@portal/contracts/orchestrator";
 import { defaultScripts, mergeScripts, scriptsOverrides } from "./scripts.ts";
 import type { ScriptsPatch, ScriptsSettings } from "./scripts.ts";
 

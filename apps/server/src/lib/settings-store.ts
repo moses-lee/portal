@@ -2,10 +2,10 @@ import os from "node:os";
 import path from "node:path";
 import { orchestratorProviders } from "./orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "./orchestrator/types.ts";
-import { gitActionKinds, isOrchestratorProvider, orchestratorLimits } from "./settings.ts";
-import type { GitActionKind, Settings, SettingsPatch } from "./settings.ts";
-import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "./scripts.ts";
-import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "./scripts.ts";
+import { gitActionKinds, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
+import type { GitActionKind, Settings, SettingsPatch } from "@portal/shared/settings";
+import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";
+import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "@portal/shared/scripts";
 
 /** A settings change the caller got wrong; `status` is the HTTP status to answer with. */
 export class SettingsError extends Error {
@@ -23,6 +23,19 @@ export class SettingsError extends Error {
  */
 export function defaultSettingsFile() {
   return path.join(process.env.PORTAL_HOME || path.join(os.homedir(), ".portal"), "settings.json");
+}
+
+/**
+ * Which of Portal's secret files `file` is, or null: the settings file and the importer's
+ * `settings.json.imported-*` backups (API keys in plain text) or the server key (which opens every
+ * stored credential). Compared case-insensitively, since macOS volumes usually are.
+ */
+export function portalSecretFile(file: string, home = path.dirname(defaultSettingsFile())): "settings" | "server-key" | null {
+  const resolved = path.resolve(file).toLowerCase();
+  if (path.dirname(resolved) !== path.resolve(home).toLowerCase()) return null;
+  const name = path.basename(resolved);
+  if (name === "settings.json" || name.startsWith("settings.json.imported-")) return "settings";
+  return name === "server.key" ? "server-key" : null;
 }
 
 /** The longest prompt accepted, after trimming. */

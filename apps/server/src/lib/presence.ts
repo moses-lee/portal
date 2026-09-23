@@ -1,7 +1,8 @@
 /**
  * How many browsers currently hold a Portal event stream open. Every long-lived SSE route
  * (`/api/sessions/stream`, `/api/portal/stream`) registers itself here so the orchestrator's
- * scheduler can tell an attended Portal from an idle one. Process-wide, HMR-safe.
+ * scheduler can tell an attended Portal from an idle one. Process-wide: every app built in this
+ * process (tests build several) shares the one count.
  */
 type Listener = (count: number) => void;
 

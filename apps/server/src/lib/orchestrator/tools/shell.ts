@@ -1,8 +1,9 @@
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { expandHome } from "../../fs-paths.ts";
 import { displayPath } from "../../git-info.ts";
-import { defaultSettingsFile } from "../../settings-store.ts";
+import { defaultSettingsFile, portalSecretFile } from "../../settings-store.ts";
 import { httpError } from "../ops.ts";
 import { type ToolContext, define } from "./context.ts";
 
@@ -40,8 +41,13 @@ export function shellTools({ deps }: ToolContext) {
       async ({ path: input, maxBytes = DEFAULT_FILE_BYTES }) => {
         const file = expandHome(input.trim());
         if (!path.isAbsolute(file)) throw httpError("Path must be absolute (or start with ~/).", 400);
-        // The settings file holds the API keys; nothing in it is the model's business.
-        if (path.resolve(file) === path.resolve(defaultSettingsFile())) throw httpError("Portal's settings file cannot be read here; use get_settings.", 403);
+        // The settings file (and its imported backups) holds the API keys and the server key opens them;
+        // none of it is the model's business. Realpaths (of both) catch a symlink pointing at one of them.
+        const home = path.dirname(defaultSettingsFile());
+        const real = (target: string) => realpath(target).catch(() => target);
+        const secret = portalSecretFile(file) ?? portalSecretFile(await real(file), await real(home));
+        if (secret === "settings") throw httpError("Portal's settings file cannot be read here; use get_settings.", 403);
+        if (secret === "server-key") throw httpError("Portal's server key cannot be read here.", 403);
         return { path: displayPath(file), ...(await deps.fs.readFile(file, maxBytes)) };
       },
     ),

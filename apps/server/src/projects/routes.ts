@@ -1,6 +1,6 @@
 /**
- * `/api/projects/**` and `/api/fs/dirs`, ported from the Next.js routes under
- * apps/web/src/app/api/{projects,fs} with the same URLs, validation, statuses and JSON shapes.
+ * `/api/projects/**` and `/api/fs/dirs`, with the URLs, validation, statuses and JSON shapes the web
+ * app's Next.js routes had.
  */
 import { stat } from "node:fs/promises";
 import path from "node:path";
