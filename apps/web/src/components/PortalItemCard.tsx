@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Brain,
   Check,
   ExternalLink,
   EyeOff,
@@ -98,6 +99,10 @@ export type ItemCardHandlers = {
   onPatched: (item: Item) => void;
   /** Open the approvals dialog on this request (an item that links one, or an action the server gated). */
   onReviewApproval: (approvalId: string) => void;
+  /** Open the Memory view (a `memory_reconfirm` item's button). */
+  onOpenMemory?: () => void;
+  /** Open a memory curation run (the digest line a curation pass posts). */
+  onOpenCurationRun?: (runId: string) => void;
 };
 
 /** "Resolved", "Dismissed", or "Snoozed until 09:00" for the badge row; null while the item is open. */
@@ -122,7 +127,8 @@ export function describeItemStatus(item: Item): string | null {
  * actions run in the browser; the rest go to `POST /api/portal/items/[id]/actions/[index]`, which
  * may answer `{ approvalId }` when the server gates the action: the approvals dialog takes over.
  * An item that links an approval (`approval_needed`) gets a "Review request" button for the same
- * dialog. Settled items render dimmed with their status in the badge row.
+ * dialog, and a `memory_reconfirm` item an "Open memory" button. Settled items render dimmed with
+ * their status in the badge row.
  */
 export default function PortalItemCard({
   item,
@@ -130,6 +136,7 @@ export default function PortalItemCard({
   onAsk,
   onPatched,
   onReviewApproval,
+  onOpenMemory,
 }: { item: Item } & ItemCardHandlers) {
   const [pending, setPending] = useState<number | "menu" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -213,6 +220,7 @@ export default function PortalItemCard({
 
   const settled = item.status === "resolved" || item.status === "dismissed";
   const approvalId = item.links.approvalId;
+  const memoryLink = item.kind === "memory_reconfirm" && onOpenMemory ? onOpenMemory : null;
   const statusLabel = describeItemStatus(item);
   return (
     <article
@@ -289,7 +297,7 @@ export default function PortalItemCard({
           <PortalMarkdown text={item.body} compact />
         </div>
       )}
-      {(item.actions.length > 0 || notice || approvalId) && (
+      {(item.actions.length > 0 || notice || approvalId || memoryLink) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {approvalId && !settled && (
             <Button
@@ -301,6 +309,12 @@ export default function PortalItemCard({
             >
               <ShieldQuestion />
               Review request
+            </Button>
+          )}
+          {memoryLink && (
+            <Button type="button" size="sm" variant="secondary" onClick={memoryLink} className="text-xs">
+              <Brain />
+              Open memory
             </Button>
           )}
           {item.actions.map((action, index) => (

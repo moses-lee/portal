@@ -2,7 +2,8 @@
  * Browser routes: `/` is the start page, `/sessions/<id>` opens one session, `/terminal` is the
  * standalone terminal page (shells that belong to no session), and `/portal/**` is Talk to Portal:
  * `/portal` the main thread, `/portal/threads/<id>` one of the agent's side threads, and
- * `/portal/goals`, `/portal/activity`, `/portal/memory[/<entityId>]`, `/portal/system` its views.
+ * `/portal/goals`, `/portal/activity`, `/portal/memory[/<entityId>]`, `/portal/system` its views;
+ * `/portal/memory/curation[/<runId>]` is memory curation: its runs, or one run's digest and diff.
  */
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
@@ -41,7 +42,8 @@ export const portalViews: readonly PortalView[] = ["chat", "goals", "activity", 
 /** Where a Talk to Portal path points; unknown sub-paths land on the main thread. */
 export type PortalLocation =
   | { view: "chat"; threadId: string }
-  | { view: "memory"; entityId: string | null }
+  /** `runId` present: the curation pane (null lists the runs, an id shows one). */
+  | { view: "memory"; entityId: string | null; runId?: string | null }
   | { view: "goals" | "activity" | "system" };
 
 function decodeSegment(segment: string): string | null {
@@ -59,12 +61,15 @@ export function portalLocation(pathname: string): PortalLocation {
     const id = decodeSegment(second);
     if (id) return { view: "chat", threadId: id };
   }
+  if (head === "memory" && second === "curation" && segments.length <= 3) {
+    return { view: "memory", entityId: null, runId: segments[2] ? decodeSegment(segments[2]) : null };
+  }
   if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
   if ((head === "goals" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
   return { view: "chat", threadId: "main" };
 }
 
-/** The path for a view, a thread (the main thread is plain `/portal`), or a memory entity. */
+/** The path for a view, a thread (the main thread is plain `/portal`), a memory entity, or a curation run. */
 export function portalPath(to: PortalLocation | PortalView = "chat"): string {
   const location: PortalLocation =
     typeof to === "string"
@@ -78,6 +83,7 @@ export function portalPath(to: PortalLocation | PortalView = "chat"): string {
     case "chat":
       return location.threadId === "main" ? "/portal" : `/portal/threads/${encodeURIComponent(location.threadId)}`;
     case "memory":
+      if (location.runId !== undefined) return location.runId ? `/portal/memory/curation/${encodeURIComponent(location.runId)}` : "/portal/memory/curation";
       return location.entityId ? `/portal/memory/${encodeURIComponent(location.entityId)}` : "/portal/memory";
     default:
       return `/portal/${location.view}`;

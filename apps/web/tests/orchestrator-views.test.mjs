@@ -93,6 +93,11 @@ test("portal paths round-trip every view", () => {
   assert.deepEqual(portalLocation("/portal/goals"), { view: "goals" });
   assert.deepEqual(portalLocation("/portal/memory"), { view: "memory", entityId: null });
   assert.deepEqual(portalLocation("/portal/memory/e1"), { view: "memory", entityId: "e1" });
+  assert.deepEqual(portalLocation("/portal/memory/curation"), { view: "memory", entityId: null, runId: null });
+  assert.deepEqual(portalLocation("/portal/memory/curation/r%201"), { view: "memory", entityId: null, runId: "r 1" });
+  assert.equal(portalPath({ view: "memory", entityId: null, runId: "r 1" }), "/portal/memory/curation/r%201");
+  assert.equal(portalPath({ view: "memory", entityId: null, runId: null }), "/portal/memory/curation");
+  assert.equal(portalPath({ view: "memory", entityId: "e1" }), "/portal/memory/e1");
   assert.deepEqual(portalLocation("/portal/nope/deeper"), { view: "chat", threadId: "main" });
   assert.equal(portalPath(), "/portal");
   assert.equal(portalPath("activity"), "/portal/activity");

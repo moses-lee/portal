@@ -14,6 +14,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Sparkles,
   SquareTerminal,
   Trash2,
   X,
@@ -23,6 +24,7 @@ import type { PortalLinks } from "../PortalPage";
 import ResponsiveDialog from "../ResponsiveDialog";
 import { useMediaQuery } from "../useMediaQuery";
 import { At, Badge, Empty, ErrorLine, Loading, SectionTitle, When, type Tone } from "./bits";
+import CurationView from "./CurationView";
 import { usePortalEvents, usePortalLive, useNow } from "./PortalLive";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -580,16 +582,23 @@ function RecordList({
  * The memory browser: entities grouped by type (with their active-record counts), one entity's
  * records with provenance, lineage, and revisions, and the inbox of proposed records to approve or
  * reject. Edits supersede (the old record stays in history); forgetting archives with a reason.
- * Everything refetches on `memory` events.
+ * Curation shows the consolidator's runs, "Run now", and each run's digest and diff. Everything
+ * refetches on `memory` events.
  */
 export default function MemoryView({
   entityId,
+  runId,
   onSelectEntity,
+  onSelectRun,
   links,
 }: {
   /** From the URL; null shows the inbox. */
   entityId: string | null;
+  /** From the URL: present (null or a run id) shows curation instead of the inbox or an entity. */
+  runId?: string | null;
   onSelectEntity: (entityId: string | null) => void;
+  /** Curation: null lists the runs, an id opens one. */
+  onSelectRun: (runId: string | null) => void;
   links: PortalLinks;
 }) {
   const { status } = usePortalLive();
@@ -658,19 +667,29 @@ export default function MemoryView({
   const byId = useMemo(() => new Map((shown?.records ?? []).map((record) => [record.id, record])), [shown]);
   const inboxById = useMemo(() => new Map((inbox ?? []).map((record) => [record.id, record])), [inbox]);
   const inboxCount = inbox?.length ?? status?.counts.inbox ?? 0;
+  const curating = runId !== undefined;
 
   const nav = (
     <nav aria-label="Memory" className="space-y-4">
       <div className="space-y-0.5">
         <button
           type="button"
-          aria-current={entityId === null ? "page" : undefined}
+          aria-current={entityId === null && !curating ? "page" : undefined}
           onClick={() => onSelectEntity(null)}
-          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] ${entityId === null ? "bg-white/8" : "hover:bg-white/5"}`}
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] ${entityId === null && !curating ? "bg-white/8" : "hover:bg-white/5"}`}
         >
           <Inbox className={`size-3.5 ${inboxCount ? "text-amber-300" : "text-muted-foreground"}`} />
           <span className="flex-1">Inbox</span>
           <span className="text-[11px] text-muted-foreground">{inboxCount}</span>
+        </button>
+        <button
+          type="button"
+          aria-current={curating ? "page" : undefined}
+          onClick={() => onSelectRun(null)}
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] ${curating ? "bg-white/8" : "hover:bg-white/5"}`}
+        >
+          <Sparkles className="size-3.5 text-muted-foreground" />
+          <span className="flex-1">Curation</span>
         </button>
       </div>
       <ErrorLine>{entitiesError}</ErrorLine>
@@ -703,7 +722,9 @@ export default function MemoryView({
   );
 
   const pane =
-    entityId === null ? (
+    curating ? (
+      <CurationView runId={runId ?? null} onSelectRun={onSelectRun} links={links} />
+    ) : entityId === null ? (
       <section aria-labelledby="memory-inbox">
         <SectionTitle id="memory-inbox" count={inbox?.length}>
           Inbox
@@ -776,7 +797,7 @@ export default function MemoryView({
       ) : (
         // Narrow screens: the list with the inbox under it, or one entity with a way back.
         <div className="min-w-0 flex-1 overflow-y-auto px-3 py-4 pb-16">
-          {entityId === null ? (
+          {entityId === null && !curating ? (
             <>
               {addButton}
               {nav}
