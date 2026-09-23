@@ -6,7 +6,7 @@
 import { guidance as approvalsGuidance } from "./approvals/prompt.ts";
 import { guidance as jobsGuidance } from "./jobs/prompt.ts";
 import { guidance as memoryGuidance } from "./memory/prompt.ts";
-import type { DigestChange, TickDigest, Watch } from "./types.ts";
+import type { DigestChange, TickDigest } from "./types.ts";
 import { guidance as worldGuidance } from "./world/prompt.ts";
 
 /** Each domain's lines for the system prompt, in a fixed order. */
@@ -75,16 +75,6 @@ function changeLines(change: DigestChange): string[] {
   return [line, "  detail (use as the item body):", ...change.detail.split("\n").map((row) => `    ${row}`)];
 }
 
-function watchLine(watch: Watch): string {
-  const { sessionIds, pulls } = watch.links;
-  const refs = [
-    sessionIds.length ? `sessions ${sessionIds.join(", ")}` : "",
-    pulls.length ? `PRs ${pulls.map((pull) => `${pull.repo}#${pull.number}`).join(", ")}` : "",
-  ].filter(Boolean).join("; ");
-  const notes = watch.notes.trim().replace(/\s+/g, " ").slice(0, 200);
-  return `- ${watch.id} "${watch.intent}" — last checked ${when(watch.lastCheckedAt)}${refs ? `; ${refs}` : ""}${notes ? `; notes: ${notes}` : ""}`;
-}
-
 /** The digest as the single user message of a tick, followed by what to do with it. */
 export function tickPrompt(digest: TickDigest): string {
   const since = digest.since === null ? "none (first tick: only current conditions are listed)" : when(digest.since);
@@ -94,18 +84,14 @@ export function tickPrompt(digest: TickDigest): string {
     `Changes (${digest.changes.length}):`,
     ...(digest.changes.length ? digest.changes.flatMap(changeLines) : ["- none"]),
     "",
-    `Due watches (${digest.dueWatches.length}):`,
-    ...(digest.dueWatches.length ? digest.dueWatches.map(watchLine) : ["- none"]),
-    "",
     `Open items (${digest.openItems.length}):`,
     ...(digest.openItems.length ? digest.openItems.map((item) => `- ${item.id} [${item.list}/${item.kind}] ${item.title} (${item.fingerprint})`) : ["- none"]),
     "",
-    "Do this with the item and watch tools:",
+    "Do this with the item tools:",
     "1. For every change marked RESOLVES: resolve_item that id.",
     "2. For a change with an existing item: update_item so its title and body match the summary and detail; otherwise leave it.",
     "3. For every other change: create_item with the given fingerprint (never one you made up). needs_you for what blocks the user (waiting or offline sessions, PRs needing attention, review requests); ideas for the rest (finished sessions, merged or closed PRs, merged branches, dirty worktrees). Body: the change's detail list when it has one, else at most three sentences. Give it one or two useful actions.",
-    "4. For every due watch: check its sessions with list_sessions/read_transcript and its PRs with get_pull, rewrite its notes with update_watch, create a watch_update item when the user is needed, close_watch when the intent is fulfilled.",
-    "5. Then reply with one to three sentences for the user about what changed (names, not ids), or with exactly NO_UPDATE when nothing is worth surfacing.",
+    "4. Then reply with one to three sentences for the user about what changed (names, not ids), or with exactly NO_UPDATE when nothing is worth surfacing.",
   ];
   return lines.join("\n");
 }

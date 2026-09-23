@@ -1,13 +1,18 @@
 import { z } from "zod";
 import type { Project } from "../../lib/types.ts";
+import type { DomainToolContext } from "../hub.ts";
 import { findProjectForRepo, httpError, repoOf, requireProject, startSession, worktreeProject } from "../ops.ts";
 import type { PullRef } from "../types.ts";
 import { type ToolContext, define, errorMessage } from "./context.ts";
 
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+/** How often the intent setup_pr_reviews creates checks whether the review sessions finished. */
+export const REVIEW_CHECK_MS = 5 * 60_000;
 
 export function compositeTools(ctx: ToolContext) {
-  const { deps, store, settings } = ctx;
+  const { deps, settings } = ctx;
+  // Turns build these tools over the domain context; a bare tool context (a test) has no jobs to watch with.
+  const domain = "hub" in ctx ? (ctx as DomainToolContext) : null;
 
   /** The project to work from: by id, by GitHub repo, or a fresh clone when Portal lacks the repo. */
   async function resolveProject({ projectId, repo }: { projectId?: string; repo?: string }): Promise<Project> {
@@ -21,7 +26,7 @@ export function compositeTools(ctx: ToolContext) {
 
   return {
     setup_pr_reviews: define(
-      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send the review prompt (the stored one unless prompt is given). Creates one watch over the sessions. Use this instead of doing the steps by hand.",
+      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send the review prompt (the stored one unless prompt is given). Creates one intent that reports the findings when the sessions finish. Use this instead of doing the steps by hand.",
       z.object({
         repo: z.string().regex(REPO_PATTERN, "Expected owner/name.").optional(),
         projectId: z.string().optional(),
@@ -52,17 +57,23 @@ export function compositeTools(ctx: ToolContext) {
             errors.push(`PR #${number}: ${errorMessage(err)}`);
           }
         }
-        if (sessions.length === 0) return { sessions, watchId: null, errors };
-        const watch = await store.createWatch({
-          intent: `Review PRs ${numbers.join(", ")} on ${origin.repo}`,
+        if (sessions.length === 0 || !domain) return { sessions, intentId: null, errors };
+        const sessionIds = sessions.map((entry) => entry.sessionId);
+        const { intent } = await domain.hub.jobs.createIntent({
+          text: `Review PRs ${sessions.map((entry) => entry.pr).join(", ")} on ${origin.repo}; tell me the findings when the review sessions finish`,
+          trigger: `Every review session (${sessionIds.join(", ")}) has finished its turn: idle, not waiting for permission, with its review in the transcript.`,
+          action: "Read each session's transcript and tell me the findings per PR (blocking issues first), with links to the PRs and sessions.",
           notes: [
             `Started ${sessions.length} review session(s): ${sessions.map((entry) => `#${entry.pr} -> ${entry.sessionId}`).join(", ")}.`,
             ...errors,
-            "Next: read each session's transcript once it is idle and summarise the findings for the user.",
           ].join("\n"),
-          links: { sessionIds: sessions.map((entry) => entry.sessionId), projectIds: [...new Set([project.id, ...sessions.map((entry) => entry.projectId)])], pulls },
-        });
-        return { sessions, watchId: watch.id, errors };
+          scope: {
+            sessionIds, projectIds: [...new Set([project.id, ...sessions.map((entry) => entry.projectId)])], pulls, repos: [origin.repo], taskTypes: ["code-review"],
+          },
+          fireBudget: 1,
+          check: { type: "every", everyMs: REVIEW_CHECK_MS },
+        }, { actor: "agent", runId: domain.turn.runId, threadId: domain.turn.threadId });
+        return { sessions, intentId: intent.id, errors };
       },
     ),
     get_settings: define(

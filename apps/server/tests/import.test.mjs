@@ -11,6 +11,7 @@ import { buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import * as schema from "../src/db/schema.ts";
 import { IMPORT_MARKER_KEY, describeCounts, importLegacyHome, readImportMarker } from "../src/import/import-legacy.ts";
+import { createPgJobsStore } from "../src/orchestrator/jobs/pg-store.ts";
 import { createPgOrchestratorStore } from "../src/orchestrator/pg-store.ts";
 import { createPgProjectsStore } from "../src/projects/pg-store.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
@@ -37,10 +38,11 @@ const item = (id, createdAt, extra = {}) => ({
   id, list: "needs_you", kind: "pr_checks_failing", title: `Item ${id}`, body: "Checks failed.", links: {}, actions: [],
   fingerprint: `fp-${id}`, status: "open", createdAt, updatedAt: createdAt, snoozedUntil: null, ...extra,
 });
-const watch = (id, createdAt) => ({
+const watch = (id, createdAt, extra = {}) => ({
   id, intent: `watch ${id}`, notes: "", status: "active", links: { sessionIds: [], projectIds: [], pulls: [] },
-  createdAt, updatedAt: createdAt, lastCheckedAt: null,
+  createdAt, updatedAt: createdAt, lastCheckedAt: null, ...extra,
 });
+const pull = { repo: "acme/app", number: 7, url: "https://github.com/acme/app/pull/7" };
 const tick = (n) => ({
   id: `t${n}`, reason: "schedule", startedAt: n * 1000, finishedAt: n * 1000 + 5, modelInvoked: false, changes: 0,
   itemsCreated: [], itemsUpdated: [], itemsResolved: [], log: [`tick ${n}`], error: null, usage: null,
@@ -95,8 +97,12 @@ function writeFixtureHome(t) {
     { id: "broken", role: "assistant" },
   ]));
   // Newest first, as the old store kept them; one duplicate id and one invalid record.
-  write("orchestrator/items.json", json([item("i2", 20), item("i1", 10), item("i1", 30, { title: "duplicate" }), { id: "nope" }]));
-  write("orchestrator/watches.json", json([watch("w2", 20), watch("w1", 10)]));
+  write("orchestrator/items.json", json([
+    item("i2", 20, { kind: "watch_update", links: { watchId: "w2" } }), item("i1", 10), item("i1", 30, { title: "duplicate" }), { id: "nope" },
+  ]));
+  write("orchestrator/watches.json", json([
+    watch("w2", 20, { notes: "Waiting on CI.", links: { sessionIds: ["s1"], projectIds: ["p1"], pulls: [pull] } }), watch("w1", 10, { status: "done" }),
+  ]));
   write("orchestrator/ticks.json", json(Array.from({ length: 55 }, (_, i) => tick(i))));
   write("orchestrator/snapshot.json", json({ at: 99, sessions: {}, pulls: {}, worktrees: {}, missingProjects: [] }));
   write("orchestrator/memory.md", "# Notes\n\nRemember this.\n");
@@ -107,7 +113,7 @@ function writeFixtureHome(t) {
 }
 
 async function tableCounts(db) {
-  const tables = ["sessions", "sessionEvents", "projects", "removedProjects", "settings", "credentials", "orchestratorMessages", "orchestratorItems", "orchestratorWatches", "orchestratorTicks", "orchestratorDocuments"];
+  const tables = ["sessions", "sessionEvents", "projects", "removedProjects", "settings", "credentials", "orchestratorMessages", "orchestratorItems", "intents", "jobs", "jobRuns", "orchestratorDocuments"];
   const out = {};
   for (const name of tables) out[name] = (await db.select({ n: count() }).from(schema[name]))[0].n;
   return out;
@@ -115,7 +121,7 @@ async function tableCounts(db) {
 
 const expectedCounts = {
   projects: 3, removedProjects: 1, sessions: 3, events: LONG_EVENTS + 3, settings: 2, apiKeys: 2,
-  messages: 2, items: 2, watches: 2, ticks: 50, snapshot: 1, memory: 1,
+  messages: 2, items: 2, intents: 2, ticks: 50, snapshot: 1, memory: 1,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -176,10 +182,23 @@ test("imports every domain and reads back through the real stores", async (t) =>
   const items = await orchestrator.listItems();
   assert.deepEqual(items.map((i) => [i.id, i.title]), [["i2", "Item i2"], ["i1", "Item i1"]]);
   assert.deepEqual(await orchestrator.getItem("i1"), item("i1", 10));
-  assert.deepEqual((await orchestrator.listWatches()).map((w) => w.id), ["w2", "w1"]);
-  const ticks = await orchestrator.listTicks();
+  // Watches arrive as intents (same ids); the active one gets a check job, and items link intents now.
+  assert.deepEqual(await orchestrator.getItem("i2"), { ...item("i2", 20), kind: "intent_update", links: { intentId: "w2" } });
+  const jobsStore = createPgJobsStore({ db });
+  const intents = await jobsStore.listIntents();
+  assert.deepEqual(intents.map((i) => [i.id, i.status, i.text]), [["w2", "active", "watch w2"], ["w1", "done", "watch w1"]]);
+  assert.equal(intents[0].notes, "Waiting on CI.");
+  assert.deepEqual(intents[0].scope, { projectIds: ["p1"], sessionIds: ["s1"], pulls: [pull], repos: ["acme/app"], people: [], taskTypes: [] });
+  assert.equal(intents[0].fireBudget, null);
+  const jobs = await jobsStore.listJobs();
+  assert.deepEqual(jobs.map((j) => [j.id, j.kind, j.intentId, j.status]), [["chk-w2", "intent_check", "w2", "active"]]);
+  assert.deepEqual(jobs[0].schedule, { type: "every", everyMs: 600_000 });
+  // Tick reports arrive as runs of the tick job, the newest 50.
+  const ticks = await jobsStore.listRuns({ jobId: "tick", limit: 100 });
   assert.equal(ticks.length, 50);
-  assert.deepEqual([ticks[0].id, ticks.at(-1).id], ["t5", "t54"]);
+  assert.deepEqual([ticks.at(-1).id, ticks[0].id], ["t5", "t54"]);
+  assert.deepEqual(ticks[0].result, tick(54));
+  assert.equal(ticks[0].kind, "tick");
   assert.equal((await orchestrator.readSnapshot()).at, 99);
   assert.equal(await orchestrator.readMemory(), "# Notes\n\nRemember this.\n");
 
@@ -268,14 +287,15 @@ test("fractional or out-of-range times in the orchestrator files are rounded or 
   assert.deepEqual(Object.keys(items).sort(), ["i1", "i2"]);
   assert.deepEqual([items.i1.createdAt, items.i1.snoozedUntil], [10, 1235]);
   assert.equal(items.i2.snoozedUntil, null);
-  assert.equal((await store.listWatches())[0].lastCheckedAt, 100);
-  assert.deepEqual((await store.listTicks()).map((r) => [r.startedAt, r.finishedAt]), [[1000, 1006]]);
+  const jobsStore = createPgJobsStore({ db });
+  assert.equal((await jobsStore.getIntent("w1")).lastCheckedAt, 100);
+  assert.deepEqual((await jobsStore.listRuns({ jobId: "tick" })).map((r) => [r.startedAt, r.finishedAt]), [[1000, 1006]]);
 });
 
 test("describeCounts pluralises each count", () => {
-  const one = { projects: 1, removedProjects: 0, sessions: 1, events: 1, settings: 1, apiKeys: 1, messages: 1, items: 1, watches: 1, ticks: 1, snapshot: 0, memory: 0 };
-  assert.equal(describeCounts(one), "1 project (0 removed); 1 session (1 event); 1 settings section (1 API key); 1 message, 1 item, 1 watch, 1 tick; snapshot no, memory no");
-  assert.match(describeCounts({ ...one, apiKeys: 2, watches: 0 }), /\(2 API keys\).*0 watches/);
+  const one = { projects: 1, removedProjects: 0, sessions: 1, events: 1, settings: 1, apiKeys: 1, messages: 1, items: 1, intents: 1, ticks: 1, snapshot: 0, memory: 0 };
+  assert.equal(describeCounts(one), "1 project (0 removed); 1 session (1 event); 1 settings section (1 API key); 1 message, 1 item, 1 intent, 1 tick; snapshot no, memory no");
+  assert.match(describeCounts({ ...one, apiKeys: 2, intents: 0 }), /\(2 API keys\).*0 intents/);
 });
 
 test("a dry run counts everything and writes nothing", async (t) => {

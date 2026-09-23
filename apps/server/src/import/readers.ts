@@ -9,15 +9,27 @@ import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { StoredEvent } from "@portal/contracts/types";
-import {
-  MAX_TICK_REPORTS, capMemory, isItem, isOrchestratorMessage, isTickReport, isTickSnapshot, isWatch,
-} from "../orchestrator/store.ts";
+import { capMemory, isItem, isOrchestratorMessage, isTickReport, isTickSnapshot } from "../orchestrator/store.ts";
 import type { Item, OrchestratorMessage, TickReport, TickSnapshot, Watch } from "../orchestrator/types.ts";
 import { SettingsError, parseSettingsFile, parseSettingsPatch } from "../lib/settings-store.ts";
 import type { Project, RemovedProject } from "../lib/types.ts";
 import { dropLegacyWorktreeNames, legacyProjectsFile, parseLegacyProjectsFile } from "../projects/legacy.ts";
 import { isSessionRecord, isStoredEvent, type SessionRecord } from "../sessions/store.ts";
 import { stripNul } from "../db/sanitize.ts";
+
+/** Tick reports the old store kept; the import takes as many (they become runs of the tick job). */
+export const MAX_TICK_REPORTS = 50;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+
+/** An old `watches.json` record (watches became intents). */
+export function isWatch(value: unknown): value is Watch {
+  const links = isRecord(value) ? value.links : null;
+  return isRecord(value) && typeof value.id === "string" && typeof value.intent === "string" && typeof value.notes === "string"
+    && ["active", "done", "cancelled"].includes(value.status as string) && isRecord(links)
+    && Array.isArray(links.sessionIds) && Array.isArray(links.projectIds) && Array.isArray(links.pulls)
+    && typeof value.createdAt === "number" && typeof value.updatedAt === "number" && (value.lastCheckedAt === null || typeof value.lastCheckedAt === "number");
+}
 
 /** A file's text, or null when it does not exist. */
 async function readText(file: string): Promise<string | null> {

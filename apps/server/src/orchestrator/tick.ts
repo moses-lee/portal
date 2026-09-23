@@ -1,8 +1,8 @@
 /**
  * One tick: read the world into a snapshot, diff it against the previous one, and when something
- * changed (or a watch is due) let the bookkeeping model turn the changes into items with the tick
- * tool subset. The report says what was considered and decided. Nothing here takes a thread lock:
- * chat turns go on while a tick runs.
+ * changed let the bookkeeping model turn the changes into items with the tick tool subset. The
+ * report says what was considered and decided. The tick job (`jobs/tick-job.ts`) runs this and
+ * records it as a run. Nothing here takes a thread lock: chat turns go on while a tick runs.
  */
 import { randomUUID } from "node:crypto";
 import { buildDigest, collectSnapshot } from "./digest.ts";
@@ -25,7 +25,7 @@ export function itemDelta(before: Map<string, Item>, after: Item[]) {
 }
 
 export type TickOptions = {
-  /** The interval that applies now; a watch is due once it has waited this long. */
+  /** The tick's interval right now (presence-aware). */
   intervalMs: number;
   self: ToolContext["self"];
   signal: AbortSignal;
@@ -51,9 +51,8 @@ export async function performTick(hub: OrchestratorHub, report: TickReport, { in
   const digest = await buildDigest({ store, snapshot, prevSnapshot: previous, intervalMs, now });
   report.changes = digest.changes.length;
   for (const change of digest.changes) log.push(`${change.resolvesItemId ? "Cleared" : "Changed"}: ${change.summary} (${change.fingerprint})`);
-  if (digest.dueWatches.length > 0) log.push(`Due watches: ${digest.dueWatches.map((watch) => watch.id).join(", ")}.`);
 
-  if (digest.changes.length > 0 || digest.dueWatches.length > 0) {
+  if (digest.changes.length > 0) {
     const touched = new Set<string>();
     const prepared = await prepareTurn(hub, {
       kind: "tick", role: "bookkeeping", trigger: report.reason === "manual" ? "manual" : "schedule", threadId: MAIN_THREAD_ID,
@@ -81,8 +80,6 @@ export async function performTick(hub: OrchestratorHub, report: TickReport, { in
     } else {
       log.push("No note for the user (NO_UPDATE).");
     }
-    for (const watch of digest.dueWatches) await store.updateWatch(watch.id, { lastCheckedAt: now }).catch(() => {});
-    if (digest.dueWatches.length > 0) hub.emit({ type: "watches", watches: await store.listWatches() });
   } else {
     log.push("Nothing changed; the model was not invoked.");
   }

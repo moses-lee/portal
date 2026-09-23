@@ -10,7 +10,7 @@
  */
 import type { LanguageModel, Tool } from "ai";
 import type { Approval } from "@portal/contracts/approvals";
-import type { Intent, Job, JobRun, RunKind, RunStatus, RunTrigger, RunUsage } from "@portal/contracts/jobs";
+import type { Intent, IntentPatch, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus, RunTrigger, RunUsage } from "@portal/contracts/jobs";
 import type { CoreDocument } from "@portal/contracts/memory";
 import type { WorldState } from "@portal/contracts/world";
 import type { Sql } from "postgres";
@@ -18,9 +18,9 @@ import type { Db } from "../db/client.ts";
 import type { ActivityService } from "./activity/service.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import type { ProviderOptions } from "./model.ts";
-import type { SchedulerTimers } from "./scheduler.ts";
+import type { SchedulerTimers } from "./jobs/timers.ts";
 import type { ToolContext } from "./tools/context.ts";
-import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, OrchestratorStore, Scope } from "./types.ts";
+import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, OrchestratorStore, Scope, TickReason, TickReport } from "./types.ts";
 
 export type ToolSet = Record<string, Tool>;
 
@@ -70,6 +70,16 @@ export type RunOutcome = {
   error?: string | null;
 };
 
+/** A new intent as the tools (and setup_pr_reviews) ask for it: what to watch, and how often to check. */
+export type IntentInput = Pick<Intent, "text" | "trigger" | "action"> & Partial<Pick<Intent, "notes" | "expiresAt" | "fireBudget" | "cooldownMs" | "threadId">> & {
+  scope?: Partial<Scope>;
+  check: JobSchedule;
+  /** Check right away instead of one interval from now. */
+  checkNow?: boolean;
+  /** The model that checks it (default bookkeeping). */
+  role?: ModelRole;
+};
+
 export interface JobsService {
   ready: Promise<void>;
   /** Start the worker loop (called once the whole hub is built). */
@@ -90,6 +100,30 @@ export interface JobsService {
   listIntents(filter?: { status?: Intent["status"][] }): Promise<Intent[]>;
   /** The job tools (schedule_job, cancel_job, create_intent, cancel_intent, run_helper, ...). */
   tools(ctx: DomainToolContext): ToolSet;
+
+  /** By next run (unscheduled last), then newest first. */
+  listJobs(filter?: { status?: JobStatus[]; kind?: JobKind[]; intentId?: string }): Promise<Job[]>;
+  getJob(id: string): Promise<Job | null>;
+  /** Apply a `JobPatch` (validated here: 400 for a bad one, 404 unknown, 409 when it cannot apply). */
+  updateJob(id: string, patch: unknown, actor: "user" | "agent" | "system"): Promise<Job>;
+  /** Newest first; `before` is a run id (the next page). */
+  listRuns(filter?: { jobId?: string; threadId?: string; kind?: RunKind; status?: RunStatus[]; before?: string; limit?: number }): Promise<JobRun[]>;
+  getRun(id: string): Promise<JobRun | null>;
+  /** Stop a job run or an inline helper of this process; false when it is not running here. */
+  cancelRun(id: string): Promise<boolean>;
+  getIntent(id: string): Promise<Intent | null>;
+  /** An intent and the job that checks it. */
+  createIntent(input: IntentInput, how: { actor: "user" | "agent" | "system"; runId?: string; threadId?: string | null }): Promise<{ intent: Intent; job: Job }>;
+  /** The UI's intent patch: cancel it, or re-activate it. */
+  updateIntent(id: string, patch: IntentPatch, actor: "user" | "agent" | "system"): Promise<Intent>;
+  /** Run the tick job now and answer its report (a skipped report when a tick is already running). */
+  runTick(reason: TickReason): Promise<TickReport>;
+  /** The newest tick report (in memory, so synchronous). */
+  lastTick(): TickReport | null;
+  /** The newest tick reports, newest last. */
+  listTicks(limit?: number): Promise<TickReport[]>;
+  /** The seeded tick job. */
+  tickJob(): Promise<Job | null>;
 }
 
 export interface WorldService {

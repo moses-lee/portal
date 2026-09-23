@@ -1,8 +1,9 @@
 /**
- * The orchestrator runtime: threads the user chats in (each with its own lock), the tick that turns
- * changes into items, and the events the page follows. It builds the hub (see `hub.ts`) over
- * whatever store, settings, deps, clock, and model it is given (tests pass fakes) and attaches the
- * domain services; `createOrchestratorService` in `service.ts` wires the live server into it.
+ * The orchestrator runtime: threads the user chats in (each with its own lock), the tick (a job the
+ * jobs service runs) that turns changes into items, and the events the page follows. It builds the
+ * hub (see `hub.ts`) over whatever store, settings, deps, clock, and model it is given (tests pass
+ * fakes) and attaches the domain services; `createOrchestratorService` in `service.ts` wires the
+ * live server into it.
  */
 import { randomUUID } from "node:crypto";
 import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
@@ -19,14 +20,13 @@ import { createJobsService } from "./jobs/service.ts";
 import { createMemoryService } from "./memory/service.ts";
 import { buildLanguageModel, providerOptionsFor, roleChoice } from "./model.ts";
 import { httpError, removeProject, startSession } from "./ops.ts";
-import { type SchedulerTimers, createScheduler, realTimers } from "./scheduler.ts";
-import { newId } from "./store.ts";
+import { type SchedulerTimers, realTimers } from "./jobs/timers.ts";
 import { performTick } from "./tick.ts";
 import type { ToolContext } from "./tools/index.ts";
 import { prepareTurn, runUsage } from "./turn.ts";
 import type {
   Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings, OrchestratorStatus, OrchestratorStore,
-  TickReason, TickReport,
+  TickReason,
 } from "./types.ts";
 import { MAIN_THREAD_ID } from "./types.ts";
 import { createWorldService } from "./world/service.ts";
@@ -37,11 +37,6 @@ export const HISTORY_WINDOW = 40;
 export const MAX_THREAD_MESSAGES = 200;
 /** What a tool part's input and output become once the message left the history window. */
 export const TRIMMED_TOOL_IO = "[trimmed from history]";
-/** The scheduler's first tick after the process starts. */
-export const FIRST_TICK_DELAY_MS = 60_000;
-/** Retry delay after a scheduled tick found a chat turn (or another tick) running. */
-export const BUSY_RETRY_MS = 60_000;
-
 export type { PresenceSource } from "./hub.ts";
 
 /** Builders for the domain services; tests and the live server swap in their own. */
@@ -137,19 +132,20 @@ export function createOrchestratorRuntime({
   activityStore = createMemoryActivityStore(), domains = {},
 }: OrchestratorRuntimeOptions): OrchestratorRuntime {
   const listeners = new Set<(event: OrchestratorEvent) => void>();
-  const startedAt = timers.now();
   /** The chat turn running in each thread; a thread takes one turn at a time. */
   const chatTurns = new Map<string, AbortController>();
-  /** The running tick, if any; ticks never overlap each other but never wait for chat. */
-  let tickController: AbortController | null = null;
-  /** The newest report, from the store at start and then from this process. */
-  let lastReport: TickReport | null = null;
-  /** When the last tick of this process finished; the schedule counts from here. */
-  let lastTickEnd: number | null = null;
-  let lastBusyAt: number | null = null;
   let disposed = false;
+  let statusQueued = false;
 
   function emit(event: OrchestratorEvent) {
+    // A run starting or ending, or a job rescheduled, changes the status line.
+    if ((event.type === "run" || event.type === "jobs") && !statusQueued) {
+      statusQueued = true;
+      queueMicrotask(() => {
+        statusQueued = false;
+        void emitStatus();
+      });
+    }
     for (const listener of listeners) {
       try {
         listener(event);
@@ -172,20 +168,21 @@ export function createOrchestratorRuntime({
     },
   } as OrchestratorHub;
   hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
-  hub.jobs = (domains.jobs ?? createJobsService)(hub);
+  hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, {
+    tick: (report, { intervalMs, signal }) => performTick(hub, report, { intervalMs, self, signal, trimThread: trimStoredThread }),
+    self: () => self,
+    trimThread: trimStoredThread,
+  })))(hub);
   hub.world = (domains.world ?? createWorldService)(hub);
   hub.memory = (domains.memory ?? createMemoryService)(hub);
   hub.approvals = (domains.approvals ?? createApprovalsService)(hub);
 
-  // Never rejects: everything awaits it, and the scheduler starts from it. Without the last report
-  // the first tick is simply planned from process start.
-  const ready = Promise.all([store.ready, hub.jobs.ready, hub.world.ready, hub.memory.ready, hub.approvals.ready]).then(async () => {
-    lastReport = (await store.listTicks()).at(-1) ?? null;
-  }).catch((err) => { console.error("Could not start the Portal orchestrator:", err); });
+  // Never rejects: everything awaits it, and the job worker starts from it.
+  const ready = Promise.all([store.ready, hub.jobs.ready, hub.world.ready, hub.memory.ready, hub.approvals.ready]).then(() => {})
+    .catch((err) => { console.error("Could not start the Portal orchestrator:", err); });
 
   const emitStatus = () => status().then((current) => emit({ type: "status", status: current })).catch(() => {});
   const emitItems = () => store.listItems().then((items) => emit({ type: "items", items })).catch(() => {});
-  const emitWatches = () => store.listWatches().then((watches) => emit({ type: "watches", watches })).catch(() => {});
 
   async function settingsAndKey() {
     const settings = await settingsStore.orchestrator();
@@ -197,22 +194,11 @@ export function createOrchestratorRuntime({
     return (presence.count() > 0 ? settings.intervalMinutes : settings.idleIntervalMinutes) * 60_000;
   }
 
-  async function nextTickAt(): Promise<number | null> {
-    if (disposed) return null;
-    const settings = await settingsStore.orchestrator();
-    // Ticks run on the bookkeeping model; without its key there is nothing to plan.
-    if (!(await settingsStore.apiKey(settings.bookkeeping.provider))) return null;
-    if (lastBusyAt !== null && lastBusyAt > (lastTickEnd ?? -Infinity)) return lastBusyAt + BUSY_RETRY_MS;
-    return lastTickEnd === null ? startedAt + FIRST_TICK_DELAY_MS : lastTickEnd + intervalMs(settings);
-  }
-
-  const scheduler = createScheduler({ tick: () => runTick("schedule"), nextTickAt, timers });
-  const unsubscribePresence = presence.subscribe(() => { void scheduler.reschedule(); void emitStatus(); });
-  const unsubscribeSettings = settingsStore.subscribe(() => { void scheduler.reschedule(); void emitStatus(); });
+  // The jobs service replans the tick (and every presence-aware job) itself; the page needs the new status.
+  const unsubscribePresence = presence.subscribe(() => { void emitStatus(); });
+  const unsubscribeSettings = settingsStore.subscribe(() => { void emitStatus(); });
   void ready.then(() => {
-    if (disposed) return;
-    hub.jobs.start();
-    return scheduler.reschedule();
+    if (!disposed) hub.jobs.start();
   });
 
   /** The digest as get_tick_digest reports it: a look, not a tick, so snoozes are left alone. */
@@ -227,13 +213,15 @@ export function createOrchestratorRuntime({
   const self: ToolContext["self"] = {
     digest: digestNow,
     schedule: async () => {
-      const { settings, apiKey } = await settingsAndKey();
+      const [{ settings }, tick, model] = await Promise.all([settingsAndKey(), hub.jobs.tickJob(), hub.model("bookkeeping")]);
+      const every = tick?.schedule.type === "every" ? tick.schedule : null;
       return {
-        ready: !!apiKey, intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes,
-        presence: presence.count(), nextTickAt: scheduler.plannedAt(), lastTickAt: lastReport?.finishedAt ?? null,
+        ready: !!model, intervalMinutes: every ? every.everyMs / 60_000 : settings.intervalMinutes,
+        idleIntervalMinutes: every ? (every.idleEveryMs ?? every.everyMs) / 60_000 : settings.idleIntervalMinutes,
+        presence: presence.count(), nextTickAt: tick?.nextRunAt ?? null, lastTickAt: hub.jobs.lastTick()?.finishedAt ?? null,
       };
     },
-    lastTick: async () => lastReport,
+    lastTick: async () => hub.jobs.lastTick(),
   };
 
   /** Keep a stored thread bounded; runs after every persisted turn. */
@@ -263,25 +251,21 @@ export function createOrchestratorRuntime({
   async function status(): Promise<OrchestratorStatus> {
     await ready;
     const { settings, apiKey } = await settingsAndKey();
-    const [items, watches, nextDue, inbox, approvals, intents] = await Promise.all([
-      store.listItems(), store.listWatches(), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(),
+    const [items, nextDue, tick, inbox, approvals, intents] = await Promise.all([
+      store.listItems(), hub.jobs.nextDue(), hub.jobs.tickJob(), hub.memory.inboxCount(), hub.approvals.pending(),
       hub.jobs.listIntents({ status: ["active"] }),
     ]);
     const open = (list: Item["list"]) => items.filter((item) => item.status === "open" && item.list === list).length;
-    const runs = hub.jobs.running().map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
-    const plannedTick = scheduler.plannedAt();
-    const nextJob = nextDue?.nextRunAt != null
-      ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt }
-      : plannedTick !== null ? { id: "tick", title: "Check for changes", at: plannedTick } : null;
+    const running = hub.jobs.running();
+    const runs = running.map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
+    const nextJob = nextDue?.nextRunAt != null ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt } : null;
     return {
-      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0 || tickController !== null,
+      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0 || running.some((run) => run.kind === "tick"),
       intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes, presence: presence.count(),
-      lastTick: lastReport, nextTickAt: plannedTick, openItems: { needs_you: open("needs_you"), ideas: open("ideas") },
+      lastTick: hub.jobs.lastTick(), nextTickAt: tick?.status === "active" ? tick.nextRunAt : null,
+      openItems: { needs_you: open("needs_you"), ideas: open("ideas") },
       busyThreads: [...chatTurns.keys()], runs, nextJob,
-      counts: {
-        needsYou: open("needs_you"), inbox, approvals: approvals.length,
-        intents: intents.length + watches.filter((watch) => watch.status === "active").length,
-      },
+      counts: { needsYou: open("needs_you"), inbox, approvals: approvals.length, intents: intents.length },
       line: statusLine(runs, nextJob, !!apiKey),
     };
   }
@@ -367,39 +351,10 @@ export function createOrchestratorRuntime({
     }
   }
 
-  async function runTick(reason: TickReason): Promise<TickReport> {
+  /** A tick now, through the tick job: its run is recorded and the next tick counts from its end. */
+  async function runTick(reason: TickReason) {
     await ready;
-    const report: TickReport = {
-      id: newId(), reason, startedAt: timers.now(), finishedAt: timers.now(), modelInvoked: false, changes: 0,
-      itemsCreated: [], itemsUpdated: [], itemsResolved: [], log: [], error: null, usage: null,
-    };
-    if (tickController || disposed) {
-      lastBusyAt = report.startedAt;
-      report.error = "busy";
-      report.log.push(disposed ? "Portal is shutting down." : "Skipped: a tick is already running; retrying in a minute.");
-      void scheduler.reschedule();
-      return report;
-    }
-    const controller = new AbortController();
-    tickController = controller;
-    void emitStatus();
-    try {
-      const { settings } = await settingsAndKey();
-      await performTick(hub, report, { intervalMs: intervalMs(settings), self, signal: controller.signal, trimThread: trimStoredThread });
-    } catch (err) {
-      report.error = errorMessage(err);
-      report.log.push(`Failed: ${report.error}`);
-    }
-    report.finishedAt = timers.now();
-    lastReport = report;
-    lastTickEnd = report.finishedAt;
-    await store.appendTick(report).catch((err: unknown) => console.error("Could not save the tick report:", err));
-    if (tickController === controller) tickController = null;
-    // Whatever started this tick, the next one counts from its end; the status pushed below carries that time.
-    await scheduler.reschedule();
-    emit({ type: "tick", report });
-    void emitStatus();
-    return report;
+    return hub.jobs.runTick(reason);
   }
 
   async function performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string; approvalId?: string }> {
@@ -462,13 +417,7 @@ export function createOrchestratorRuntime({
     runTick,
     listItems: () => store.listItems(),
     updateItem,
-    listWatches: () => store.listWatches(),
-    async updateWatch(id, patch) {
-      const watch = await store.updateWatch(id, patch);
-      void emitWatches();
-      return watch;
-    },
-    listTicks: () => store.listTicks(),
+    listTicks: () => hub.jobs.listTicks(),
     readMemory: () => store.readMemory(),
     writeMemory: (text) => store.writeMemory(text),
     performAction,
@@ -480,11 +429,9 @@ export function createOrchestratorRuntime({
     },
     async dispose() {
       disposed = true;
-      scheduler.stop();
       unsubscribePresence();
       unsubscribeSettings();
       for (const controller of chatTurns.values()) controller.abort();
-      tickController?.abort();
       await hub.jobs.dispose().catch((err: unknown) => console.error("Could not stop the job worker:", err));
     },
   };

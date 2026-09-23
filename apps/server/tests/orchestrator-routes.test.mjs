@@ -51,7 +51,7 @@ const itemInput = {
   fingerprint: "session_waiting:s1",
 };
 
-test("status, messages, ticks, items, watches, and memory answer their JSON shapes", async (t) => {
+test("status, messages, ticks, items, and memory answer their JSON shapes; watches are gone", async (t) => {
   const { app } = await setup(t);
   const status = await inject(app, "GET", "/api/portal");
   assert.equal(status.statusCode, 200);
@@ -64,7 +64,7 @@ test("status, messages, ticks, items, watches, and memory answer their JSON shap
   assert.deepEqual((await inject(app, "GET", "/api/portal/messages")).json(), { messages: [] });
   assert.deepEqual((await inject(app, "GET", "/api/portal/ticks")).json(), { ticks: [] });
   assert.deepEqual((await inject(app, "GET", "/api/portal/items")).json(), { items: [] });
-  assert.deepEqual((await inject(app, "GET", "/api/portal/watches")).json(), { watches: [] });
+  assert.equal((await inject(app, "GET", "/api/portal/watches")).statusCode, 404);
   assert.deepEqual((await inject(app, "GET", "/api/portal/memory")).json(), { memory: "" });
 
   const put = await inject(app, "PUT", "/api/portal/memory", { memory: "# Notes\n- prefers pnpm" });
@@ -78,13 +78,12 @@ test("status, messages, ticks, items, watches, and memory answer their JSON shap
   assert.equal((await inject(app, "POST", "/api/portal/cancel")).statusCode, 204);
 });
 
-test("items and watches: PATCH validates, 404s unknown ids, and persists; actions run server-side", async (t) => {
+test("items: PATCH validates, 404s unknown ids, and persists; actions run server-side", async (t) => {
   const { app, database, state } = await setup(t, { sessions: [sessionMeta()] });
-  // Items and watches are created by the model's tools; a second store over the same database stands in for them.
+  // Items are created by the model's tools; a second store over the same database stands in for them.
   const { createPgOrchestratorStore } = await import("../src/orchestrator/pg-store.ts");
   const store = createPgOrchestratorStore({ db: database.db });
   const item = await store.createItem(itemInput);
-  const watch = await store.createWatch({ intent: "Review PRs 1-3", notes: "Plan" });
 
   assert.deepEqual((await inject(app, "GET", "/api/portal/items")).json(), { items: [item] });
   assert.equal((await inject(app, "GET", "/api/portal")).json().status.openItems.needs_you, 1);
@@ -121,13 +120,6 @@ test("items and watches: PATCH validates, 404s unknown ids, and persists; action
   assert.equal((await inject(app, "POST", `/api/portal/items/${item.id}/actions/7`)).statusCode, 404);
   assert.equal((await inject(app, "POST", "/api/portal/items/nope0000/actions/0")).statusCode, 404);
 
-  assert.deepEqual((await inject(app, "GET", "/api/portal/watches")).json(), { watches: [watch] });
-  const done = await inject(app, "PATCH", `/api/portal/watches/${watch.id}`, { status: "done", notes: "All reviewed" });
-  assert.equal(done.statusCode, 200);
-  assert.equal(done.json().watch.status, "done");
-  assert.equal(done.json().watch.notes, "All reviewed");
-  assert.equal((await inject(app, "PATCH", `/api/portal/watches/${watch.id}`, { status: "paused" })).statusCode, 400);
-  assert.equal((await inject(app, "PATCH", "/api/portal/watches/nope0000", { notes: "x" })).statusCode, 404);
 });
 
 test("body validation: memory needs a string, messages need a user text part, and bad JSON is a 400", async (t) => {
@@ -149,7 +141,8 @@ test("cross-origin requests are refused with 403 on every route", async (t) => {
   const headers = { origin: "https://evil.example", host: "portal.local" };
   for (const [method, url] of [
     ["GET", "/api/portal"], ["GET", "/api/portal/items"], ["PATCH", "/api/portal/items/x"], ["POST", "/api/portal/items/x/actions/0"],
-    ["PATCH", "/api/portal/watches/x"], ["PUT", "/api/portal/memory"], ["POST", "/api/portal/messages"], ["POST", "/api/portal/tick"],
+    ["GET", "/api/portal/jobs"], ["PATCH", "/api/portal/jobs/x"], ["POST", "/api/portal/jobs/x/run"], ["GET", "/api/portal/runs"], ["GET", "/api/portal/runs/x"],
+    ["POST", "/api/portal/runs/x/cancel"], ["GET", "/api/portal/intents"], ["PATCH", "/api/portal/intents/x"], ["PUT", "/api/portal/memory"], ["POST", "/api/portal/messages"], ["POST", "/api/portal/tick"],
     ["POST", "/api/portal/cancel"], ["GET", "/api/portal/stream"],
   ]) {
     const response = await inject(app, method, url, method === "GET" ? undefined : {}, headers);
@@ -193,7 +186,7 @@ test("POST /api/portal/messages streams the UI message stream and persists both 
   assert.match(refused.json().error, /API key/);
 });
 
-test("GET /api/portal/stream opens with status, items, watches, forwards events, and counts presence", async (t) => {
+test("GET /api/portal/stream opens with status, items, threads, forwards events, and counts presence", async (t) => {
   const { app } = await setup(t);
   await app.listen({ port: 0, host: "127.0.0.1" });
   const { port } = app.server.address();
@@ -223,7 +216,7 @@ test("GET /api/portal/stream opens with status, items, watches, forwards events,
   }
   assert.equal((await next()).type, "status");
   assert.deepEqual(await next(), { type: "items", items: [] });
-  assert.deepEqual(await next(), { type: "watches", watches: [] });
+  assert.equal((await next()).type, "threads");
   assert.equal(presence.count(), before + 1, "an open stream counts as a present browser");
 
   // A runtime event reaches the stream: a manual tick emits status and tick events. (No keep-alive,

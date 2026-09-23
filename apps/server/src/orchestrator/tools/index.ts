@@ -1,5 +1,6 @@
 /**
- * Every tool the orchestrator's model can call, built over one `ToolContext` per turn. A tick gets
+ * The classic tools the orchestrator's model can call, built over one `ToolContext` per turn (each
+ * domain adds its own, see `turn.ts`). A tick gets
  * only `TICK_TOOLS`: tool schemas are re-sent on every model step, so the subset is the largest
  * token saving there is, and it keeps anything destructive (deleting sessions, removing worktrees,
  * running commands) out of unattended runs.
@@ -12,7 +13,6 @@ import { projectTools } from "./projects.ts";
 import { selfTools } from "./self.ts";
 import { sessionTools } from "./sessions.ts";
 import { shellTools } from "./shell.ts";
-import { watchTools } from "./watches.ts";
 
 export type { Schedule, ToolContext } from "./context.ts";
 
@@ -23,7 +23,6 @@ function allTools(ctx: ToolContext) {
     ...sessionTools(ctx),
     ...shellTools(ctx),
     ...itemTools(ctx),
-    ...watchTools(ctx),
     ...selfTools(ctx),
     ...compositeTools(ctx),
   };
@@ -31,10 +30,9 @@ function allTools(ctx: ToolContext) {
 
 export type OrchestratorTools = ReturnType<typeof allTools>;
 
-/** The tools a tick may call: items, watches, memory, and read-only looks at sessions and PRs. */
+/** The tools a tick may call: items, memory, and read-only looks at sessions and PRs. */
 export const TICK_TOOLS = [
   "list_items", "create_item", "update_item", "resolve_item", "snooze_item", "dismiss_item",
-  "create_watch", "update_watch", "list_watches", "close_watch",
   "read_memory", "append_memory",
   "list_sessions", "get_session", "read_transcript", "get_pull", "get_github_status",
 ] as const satisfies readonly (keyof OrchestratorTools)[];

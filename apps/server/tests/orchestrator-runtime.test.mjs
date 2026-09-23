@@ -2,10 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { MEMORY_PROMPT_BYTES } from "../src/orchestrator/digest.ts";
-import {
-  BUSY_RETRY_MS, FIRST_TICK_DELAY_MS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread,
-} from "../src/orchestrator/runtime.ts";
-import { RESCHEDULE_RETRY_MS } from "../src/orchestrator/scheduler.ts";
+import { FIRST_TICK_DELAY_MS } from "../src/orchestrator/jobs/tick-job.ts";
+import { HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread } from "../src/orchestrator/runtime.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { TICK_TOOLS } from "../src/orchestrator/tools/index.ts";
 import { T0, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
@@ -70,15 +68,14 @@ function storedMessage(i, role = i % 2 ? "assistant" : "user") {
   return { id: `m${i}`, role, parts, metadata: { at: T0 - (1000 - i) * 1000 } };
 }
 
-test("without an API key the runtime is not ready: chat is refused with 409 and the scheduler plans nothing", async (t) => {
-  const { runtime, settings, timers } = setup(t, { key: null });
+test("without an API key the runtime is not ready: chat is refused with 409 and a tick records that nothing was checked", async (t) => {
+  const { runtime, settings, model } = setup(t, { key: null, sessions: [waitingSession()] });
   await runtime.ready;
   await flush();
   const status = await runtime.status();
   assert.equal(status.ready, false);
   assert.equal(status.busy, false);
-  assert.equal(status.nextTickAt, null);
-  assert.equal(timers.pending.length, 0, "no tick is planned");
+  assert.equal(status.nextTickAt, T0 + FIRST_TICK_DELAY_MS, "the tick job is seeded a minute after start either way");
   await assert.rejects(runtime.chat(userMessage("hi")), (err) => {
     assert.equal(err.status, 409);
     assert.match(err.message, /API key/);
@@ -86,12 +83,16 @@ test("without an API key the runtime is not ready: chat is refused with 409 and 
   });
   assert.deepEqual(await runtime.history(), [], "the refused message is not stored");
 
-  // Adding a key through settings makes the scheduler plan the first tick a minute after start.
+  const report = await runtime.runTick("manual");
+  assert.equal(report.error, "not ready");
+  assert.equal(model.doGenerateCalls.length, 0);
+  const [run] = await runtime.hub.jobs.listRuns({ jobId: "tick" });
+  assert.equal(run.status, "succeeded");
+  assert.match(run.summary, /No API key/);
+
   await settings.change({ apiKey: "sk-new" });
   await flush();
   assert.equal((await runtime.status()).ready, true);
-  assert.equal((await runtime.status()).nextTickAt, T0 + FIRST_TICK_DELAY_MS);
-  assert.equal(timers.pending.length, 1);
 });
 
 test("a tick with an empty digest skips the model and still writes the snapshot and a report", async (t) => {
@@ -107,7 +108,14 @@ test("a tick with an empty digest skips the model and still writes the snapshot 
   const snapshot = await store.readSnapshot();
   assert.equal(snapshot.sessions.s1.activity, "idle");
   assert.equal(snapshot.sessions.s1.link, "live");
-  assert.deepEqual((await store.listTicks()).map((entry) => entry.id), [report.id]);
+  assert.deepEqual((await runtime.listTicks()).map((entry) => entry.id), [report.id]);
+  // The tick is a run of the tick job, with the report as its result and no model.
+  const run = await runtime.hub.jobs.getRun(report.id);
+  assert.equal(run.kind, "tick");
+  assert.equal(run.jobId, "tick");
+  assert.equal(run.trigger, "manual");
+  assert.equal(run.model, null);
+  assert.deepEqual(run.result, report);
   assert.deepEqual(await runtime.history(), []);
   assert.equal((await runtime.status()).lastTick.id, report.id);
   assert.ok(events.some((event) => event.type === "tick" && event.report.id === report.id));
@@ -176,18 +184,20 @@ test("a model failure is reported, not thrown, and the snapshot is kept for the 
   assert.match(report.error, /provider down/);
   assert.equal(report.modelInvoked, true);
   assert.equal(await store.readSnapshot(), null);
-  assert.equal((await store.listTicks()).length, 1);
+  assert.equal((await runtime.listTicks()).length, 1);
+  assert.equal((await runtime.hub.jobs.getRun(report.id)).status, "failed");
   assert.equal((await runtime.status()).busy, false);
 });
 
-test("the scheduler uses the idle interval with no browser and the active one with one, and moves earlier when settings shrink", async (t) => {
-  const { runtime, timers, presence, settings, store } = setup(t, { settings: { intervalMinutes: 10, idleIntervalMinutes: 60 } });
+test("the tick job uses the idle interval with no browser and the active one with one, and moves earlier when settings shrink", async (t) => {
+  const { runtime, timers, presence, settings } = setup(t, { settings: { intervalMinutes: 10, idleIntervalMinutes: 60 } });
   await runtime.ready;
   await flush();
   assert.equal((await runtime.status()).nextTickAt, T0 + FIRST_TICK_DELAY_MS);
+  assert.deepEqual((await runtime.status()).nextJob, { id: "tick", title: "Check for changes", at: T0 + FIRST_TICK_DELAY_MS });
 
   await timers.advance(FIRST_TICK_DELAY_MS);
-  const ticks = await store.listTicks();
+  const ticks = await runtime.listTicks();
   assert.equal(ticks.length, 1, "the first tick ran");
   assert.equal(ticks[0].reason, "schedule");
   const end = ticks[0].finishedAt;
@@ -201,39 +211,13 @@ test("the scheduler uses the idle interval with no browser and the active one wi
   await settings.change({ intervalMinutes: 5 });
   await flush();
   assert.equal((await runtime.status()).nextTickAt, end + 5 * 60_000, "a shorter interval moves the tick earlier");
-  assert.equal(timers.pending.length, 1, "one timer at a time");
 
   presence.set(0);
   await flush();
   assert.equal((await runtime.status()).nextTickAt, end + 60 * 60_000);
 
   await timers.advance(60 * 60_000);
-  assert.equal((await store.listTicks()).length, 2);
-});
-
-test("a settings read that fails while planning the next tick is logged and retried, not left unhandled", async (t) => {
-  const logged = t.mock.method(console, "error", () => {});
-  const { runtime, timers, presence, settings, store } = setup(t);
-  await runtime.ready;
-  await flush();
-  assert.equal((await runtime.status()).nextTickAt, T0 + FIRST_TICK_DELAY_MS);
-
-  // Postgres goes away for one read: the reschedule a new browser triggers fails.
-  const orchestrator = settings.orchestrator;
-  settings.orchestrator = async () => {
-    settings.orchestrator = orchestrator;
-    throw new Error("connect ECONNREFUSED 127.0.0.1:5433");
-  };
-  presence.set(1);
-  await flush();
-  assert.ok(logged.mock.calls.some((call) => /next Portal tick/.test(call.arguments[0]) && /ECONNREFUSED/.test(call.arguments[1]?.message)));
-  assert.equal((await runtime.status()).nextTickAt, null, "no plan while settings cannot be read");
-  assert.deepEqual(timers.pending.map((handle) => handle.at), [T0 + RESCHEDULE_RETRY_MS], "only the retry is pending");
-
-  await timers.advance(RESCHEDULE_RETRY_MS);
-  assert.equal((await runtime.status()).nextTickAt, T0 + FIRST_TICK_DELAY_MS, "the retry restored the plan");
-  await timers.advance(FIRST_TICK_DELAY_MS - RESCHEDULE_RETRY_MS);
-  assert.equal((await store.listTicks()).length, 1, "and the scheduled tick ran");
+  assert.equal((await runtime.listTicks()).length, 2);
 });
 
 test("a manual tick reschedules: the status pushed at its end already carries the next tick time", async (t) => {
@@ -244,7 +228,6 @@ test("a manual tick reschedules: the status pushed at its end already carries th
   const report = await runtime.runTick("manual");
   assert.equal(report.finishedAt, T0 + 5_000);
   assert.equal((await runtime.status()).nextTickAt, report.finishedAt + 60 * 60_000);
-  assert.equal(timers.pending.length, 1);
   await flush();
   const pushed = events.findLast((event) => event.type === "status");
   assert.equal(pushed.status.nextTickAt, report.finishedAt + 60 * 60_000);
@@ -299,7 +282,8 @@ test("chat caps the memory it puts in the system prompt", async (t) => {
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.ok(!system.includes("TAIL-MARKER"));
   assert.match(system, /\[truncated\]/);
-  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 2500);
+  // The slack covers the base prompt and each domain's guidance lines.
+  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 3500);
 });
 
 test("the history window sent to the model starts at a user message", async (t) => {
@@ -356,10 +340,10 @@ test("after a turn the stored thread is capped and older tool traffic is replace
   assert.equal(trimThread([]).changed, false);
 });
 
-test("a tick runs while a chat turn is answering; a tick that finds another tick running is skipped and retried a minute later", async (t) => {
+test("a tick runs while a chat turn is answering; a tick that finds another tick running is skipped", async (t) => {
   let releaseChat;
   let releaseTick;
-  const { runtime, timers } = setup(t, {
+  const { runtime } = setup(t, {
     sessions: [waitingSession()],
     doStream: () => new Promise((resolve) => { releaseChat = () => resolve(textStream("done")); }),
     doGenerate: () => new Promise((resolve) => { releaseTick = () => resolve(textStep("NO_UPDATE")); }),
@@ -371,11 +355,11 @@ test("a tick runs while a chat turn is answering; a tick that finds another tick
   // The chat turn holds the main thread only: the tick goes ahead and reaches the model.
   const first = runtime.runTick("manual");
   await flush();
+  assert.equal((await runtime.status()).busy, true);
+  assert.deepEqual((await runtime.status()).runs.map((run) => run.kind).sort(), ["chat", "tick"]);
   const second = await runtime.runTick("schedule");
   assert.equal(second.error, "busy");
   assert.equal(second.modelInvoked, false);
-  await flush();
-  assert.equal((await runtime.status()).nextTickAt, timers.now() + BUSY_RETRY_MS);
   releaseTick();
   const report = await first;
   assert.equal(report.error, null);
@@ -481,7 +465,7 @@ test("performAction runs start_session and send_prompt server-side and refuses b
   assert.deepEqual(await runtime.performAction(item.id, 0), { sessionId: "s3", promptError: "agent is busy" });
 });
 
-test("updateItem and updateWatch emit the full lists; dispose stops the scheduler", async (t) => {
+test("updateItem emits the full list; dispose stops the job worker", async (t) => {
   const { runtime, store, events, timers } = setup(t);
   await runtime.ready;
   await flush();
@@ -491,13 +475,9 @@ test("updateItem and updateWatch emit the full lists; dispose stops the schedule
   await flush();
   const itemsEvent = events.findLast((event) => event.type === "items");
   assert.equal(itemsEvent.items[0].status, "dismissed");
-  const watch = await store.createWatch({ intent: "x", notes: "" });
-  await runtime.updateWatch(watch.id, { status: "cancelled" });
-  await flush();
-  assert.equal(events.findLast((event) => event.type === "watches").watches[0].status, "cancelled");
 
-  assert.equal(timers.pending.length, 1);
+  assert.ok(timers.pending.length > 0, "the worker sleeps on a timer");
   await runtime.dispose();
   assert.equal(timers.pending.length, 0);
-  assert.equal((await runtime.status()).nextTickAt, null);
+  assert.ok(!events.some((event) => event.type === "watches"), "watches are gone");
 });
