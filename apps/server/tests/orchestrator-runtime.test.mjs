@@ -131,7 +131,7 @@ test("a tick with a change runs the model with the tick tool subset; its create_
   assert.match(JSON.stringify(userMessages[0]), /session_waiting:s1/);
   assert.equal(first.prompt.filter((message) => message.role === "system").length, 1);
   // Ticks only get the item, watch, memory, and read-only tools: schemas are re-sent on every step.
-  assert.deepEqual(first.tools.map((tool) => tool.name).sort(), [...TICK_TOOLS].sort());
+  assert.deepEqual(first.tools.map((tool) => tool.name).sort(), [...TICK_TOOLS, "resolve_pull", "resolve_repo"].sort());
   assert.ok(!first.tools.some((tool) => /run_command|delete_session|remove_project|send_prompt|create_session/.test(tool.name)));
 
   const items = await store.listItems();
@@ -299,7 +299,8 @@ test("chat caps the memory it puts in the system prompt", async (t) => {
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.ok(!system.includes("TAIL-MARKER"));
   assert.match(system, /\[truncated\]/);
-  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 2500);
+  // The base prompt, each domain's guidance, and an empty world's header ride along with the capped memory.
+  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 3500);
 });
 
 test("the history window sent to the model starts at a user message", async (t) => {

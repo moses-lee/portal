@@ -5,7 +5,7 @@
  * chat turns go on while a tick runs.
  */
 import { randomUUID } from "node:crypto";
-import { buildDigest, collectSnapshot } from "./digest.ts";
+import { buildDigest } from "./digest.ts";
 import type { OrchestratorHub } from "./hub.ts";
 import { tickPrompt } from "./prompt.ts";
 import type { ToolContext } from "./tools/index.ts";
@@ -35,7 +35,7 @@ export type TickOptions = {
 
 /** Fill `report` by running one tick. Throws on a model failure; the caller records it. */
 export async function performTick(hub: OrchestratorHub, report: TickReport, { intervalMs, self, signal, trimThread }: TickOptions): Promise<void> {
-  const { store, deps, timers } = hub;
+  const { store, timers } = hub;
   const { log } = report;
   const model = await hub.model("bookkeeping");
   if (!model) {
@@ -47,7 +47,11 @@ export async function performTick(hub: OrchestratorHub, report: TickReport, { in
   const previous = await store.readSnapshot();
   const now = timers.now();
   const before = new Map((await store.listItems()).map((item) => [item.id, item]));
-  const snapshot = await collectSnapshot({ deps, previous, now, log });
+  // One full world build serves the tick: its snapshot is what the digest diffs, and any source it
+  // could not read is reported in the tick's log.
+  const world = await hub.world.refresh("tick");
+  log.push(...world.errors);
+  const snapshot = world.snapshot;
   const digest = await buildDigest({ store, snapshot, prevSnapshot: previous, intervalMs, now });
   report.changes = digest.changes.length;
   for (const change of digest.changes) log.push(`${change.resolvesItemId ? "Cleared" : "Changed"}: ${change.summary} (${change.fingerprint})`);
