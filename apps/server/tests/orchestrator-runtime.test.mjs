@@ -299,7 +299,8 @@ test("chat caps the memory it puts in the system prompt", async (t) => {
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.ok(!system.includes("TAIL-MARKER"));
   assert.match(system, /\[truncated\]/);
-  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 2500);
+  // The rest is the base prompt and the domains' guidance; the memory itself stays within its cap.
+  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 4000);
 });
 
 test("the history window sent to the model starts at a user message", async (t) => {
@@ -451,7 +452,7 @@ test("cancel() aborts the running chat turn and releases busy", async (t) => {
   await (await fresh.chat(userMessage("again"))).text();
 });
 
-test("performAction runs start_session and send_prompt server-side and refuses browser actions", async (t) => {
+test("performAction runs start_session and send_prompt server-side once approved and refuses browser actions", async (t) => {
   const { runtime, store, state } = setup(t, { projects: [project()], sessions: [sessionMeta()] });
   const item = await store.createItem({
     list: "ideas", kind: "custom", title: "t", body: "", links: {}, fingerprint: "custom:x",
@@ -462,15 +463,22 @@ test("performAction runs start_session and send_prompt server-side and refuses b
       { type: "start_session", projectId: "nope", prompt: "x" },
     ],
   });
-  const started = await runtime.performAction(item.id, 0);
-  assert.deepEqual(started, { sessionId: "s2" });
+  // The agent wrote the prompt, so the click asks first; approving runs exactly that action.
+  const asked = await runtime.performAction(item.id, 0);
+  assert.deepEqual(Object.keys(asked), ["approvalId"]);
+  assert.deepEqual(state.created, []);
+  const approved = await runtime.hub.approvals.decide(asked.approvalId, { approve: true, scope: "always" });
+  assert.deepEqual(approved.result, { sessionId: "s2" });
   assert.deepEqual(state.created.map((session) => [session.projectId, session.agentId]), [["p1", "codex"]]);
   assert.deepEqual(state.prompts, [{ id: "s2", text: "Look into it" }]);
 
-  assert.deepEqual(await runtime.performAction(item.id, 1), {});
+  // send_prompt has no grant yet; approving it once sends the prompt.
+  const prompt = await runtime.performAction(item.id, 1);
+  await runtime.hub.approvals.decide(prompt.approvalId, { approve: true });
   assert.deepEqual(state.prompts.at(-1), { id: "s1", text: "Continue" });
 
   await assert.rejects(runtime.performAction(item.id, 2), (err) => err.status === 400);
+  // With the always grant for start_session the action runs at once and fails on the unknown project.
   await assert.rejects(runtime.performAction(item.id, 3), (err) => err.status === 404);
   await assert.rejects(runtime.performAction(item.id, 9), (err) => err.status === 404);
   await assert.rejects(runtime.performAction("missing", 0), (err) => err.status === 404);
