@@ -166,7 +166,7 @@ export function createIntents(core: JobsCore) {
     if (intent.scope.projectIds.length === 1) links.projectId = intent.scope.projectIds[0];
     const fingerprint = `intent_update:${intent.id}`;
     const existing = await hub.store.findItemByFingerprint(fingerprint);
-    const fields = { list: "needs_you" as const, title: short(title, 200), body: short(body, 2000), links, actions };
+    const fields = { title: short(title, 200), body: short(body, 2000), links, actions };
     const item = existing ? await hub.store.updateItem(existing.id, fields) : await hub.store.createItem({ ...fields, kind: "intent_update", fingerprint });
     hub.emit({ type: "items", items: await hub.store.listItems() });
     return item;

@@ -84,7 +84,7 @@ export function tickPrompt(digest: TickDigest): string {
     ...(digest.changes.length ? digest.changes.flatMap(changeLines) : ["- none"]),
     "",
     `Open items (${digest.openItems.length}):`,
-    ...(digest.openItems.length ? digest.openItems.map((item) => `- ${item.id} [${item.list}/${item.kind}] ${item.title} (${item.fingerprint})`) : ["- none"]),
+    ...(digest.openItems.length ? digest.openItems.map((item) => `- ${item.id} [${item.kind}] ${item.title} (${item.fingerprint})`) : ["- none"]),
     "",
     "Do this with the item tools:",
     "1. For every change marked RESOLVES: resolve_item that id.",

@@ -81,8 +81,8 @@ test("an intent check fires the intent: a Needs-you item with its links, a note 
 
   const [item] = await h.store.listItems();
   assert.deepEqual(
-    { list: item.list, kind: item.kind, title: item.title, fingerprint: item.fingerprint, links: item.links },
-    { list: "needs_you", kind: "intent_update", title: "acme/app#42 merged", fingerprint: `intent_update:${intent.id}`, links: { intentId: intent.id, threadId: "main", pull } },
+    { kind: item.kind, title: item.title, fingerprint: item.fingerprint, links: item.links },
+    { kind: "intent_update", title: "acme/app#42 merged", fingerprint: `intent_update:${intent.id}`, links: { intentId: intent.id, threadId: "main", pull } },
   );
   assert.deepEqual(item.actions, [{ type: "open_url", url: pull.url, label: "Open PR" }]);
   const [note] = await h.runtime.history();

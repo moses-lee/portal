@@ -61,8 +61,8 @@ test("a full build maps projects to repos (worktrees under their repo, main chec
       { id: "j3", kind: "helper", title: "Paused", status: "paused", nextRunAt: null },
     ],
   });
-  const open = await store.createItem({ list: "needs_you", kind: "custom", title: "Open one", body: "", links: {}, actions: [], fingerprint: "a" });
-  const done = await store.createItem({ list: "needs_you", kind: "custom", title: "Done", body: "", links: {}, actions: [], fingerprint: "b" });
+  const open = await store.createItem({ kind: "custom", title: "Open one", body: "", links: {}, actions: [], fingerprint: "a" });
+  const done = await store.createItem({ kind: "custom", title: "Done", body: "", links: {}, actions: [], fingerprint: "b" });
   await store.updateItem(done.id, { status: "resolved" });
 
   const world = await buildWorld({ hub, previous: null, mode: "full" });

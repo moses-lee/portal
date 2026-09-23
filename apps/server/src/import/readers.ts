@@ -10,7 +10,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { StoredEvent } from "@portal/contracts/types";
 import { capMemory, isItem, isOrchestratorMessage, isTickReport, isTickSnapshot } from "../orchestrator/store.ts";
-import type { Item, OrchestratorMessage, TickReport, TickSnapshot, Watch } from "../orchestrator/types.ts";
+import type { LegacyItem, LegacyWatch } from "../orchestrator/jobs/legacy.ts";
+import type { OrchestratorMessage, TickReport, TickSnapshot } from "../orchestrator/types.ts";
 import { SettingsError, parseSettingsFile, parseSettingsPatch } from "../lib/settings-store.ts";
 import type { Project, RemovedProject } from "../lib/types.ts";
 import { dropLegacyWorktreeNames, legacyProjectsFile, parseLegacyProjectsFile } from "../projects/legacy.ts";
@@ -23,7 +24,7 @@ export const MAX_TICK_REPORTS = 50;
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
 /** An old `watches.json` record (watches became intents). */
-export function isWatch(value: unknown): value is Watch {
+export function isWatch(value: unknown): value is LegacyWatch {
   const links = isRecord(value) ? value.links : null;
   return isRecord(value) && typeof value.id === "string" && typeof value.intent === "string" && typeof value.notes === "string"
     && ["active", "done", "cancelled"].includes(value.status as string) && isRecord(links)
@@ -267,8 +268,8 @@ export type LegacyOrchestrator = {
   /** Thread order. */
   messages: OrchestratorMessage[];
   /** Oldest first (ascending createdAt), so inserting in order numbers them the way new records would be. */
-  items: Item[];
-  watches: Watch[];
+  items: LegacyItem[];
+  watches: LegacyWatch[];
   /** The newest MAX_TICK_REPORTS, oldest first. */
   ticks: TickReport[];
   snapshot: TickSnapshot | null;
@@ -318,8 +319,8 @@ export async function readLegacyOrchestrator(home: string): Promise<LegacyOrches
   // unreadable; an optional one (snooze, last check) is cleared.
   const safeEpoch = (value: number) => Number.isSafeInteger(Math.round(value));
   const epoch = (value: number | null) => (value === null || !safeEpoch(value) ? null : Math.round(value));
-  const isImportableItem = (value: unknown): value is Item => isItem(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
-  const isImportableWatch = (value: unknown): value is Watch => isWatch(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
+  const isImportableItem = (value: unknown): value is LegacyItem => isItem(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
+  const isImportableWatch = (value: unknown): value is LegacyWatch => isWatch(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
   const isImportableTick = (value: unknown): value is TickReport => isTickReport(value) && safeEpoch(value.startedAt) && safeEpoch(value.finishedAt);
   const items = list("items.json", isImportableItem)
     .map((item) => ({ ...item, createdAt: Math.round(item.createdAt), updatedAt: Math.round(item.updatedAt), snoozedUntil: epoch(item.snoozedUntil) }));

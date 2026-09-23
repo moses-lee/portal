@@ -24,7 +24,7 @@ const SNAPSHOT = "snapshot";
 const MEMORY = "memory";
 
 const itemColumns = (item: Item) => ({
-  list: item.list, status: item.status, fingerprint: item.fingerprint,
+  status: item.status, fingerprint: item.fingerprint,
   createdAt: item.createdAt, updatedAt: item.updatedAt, snoozedUntil: item.snoozedUntil, body: item as unknown as Body,
 });
 

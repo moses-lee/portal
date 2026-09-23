@@ -9,8 +9,6 @@ import type { AttentionSearch, OrchestratorDeps } from "./deps.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "./github-attention.ts";
 import type { DigestChange, Item, ItemKind, ItemLinks, OrchestratorStore, PullAttention, TickDigest, TickSnapshot } from "./types.ts";
 
-/** How much of memory.md a prompt carries. */
-export const MEMORY_PROMPT_BYTES = 4096;
 /** A dirty worktree is only worth mentioning once no session has touched it for this long. */
 export const DIRTY_IDLE_MS = 24 * 60 * 60 * 1000;
 /** Pull requests untouched for this long are left out: a 2022 conflict is not news. */
@@ -32,14 +30,6 @@ const authoredReasonText: Record<string, string> = {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/** Cut `text` to `max` UTF-8 bytes, marking the cut so the model knows the rest exists. */
-export function truncateBytes(text: string, max: number): string {
-  if (Buffer.byteLength(text, "utf8") <= max) return text;
-  const note = "\n[truncated]";
-  const head = Buffer.from(text, "utf8").subarray(0, max - Buffer.byteLength(note, "utf8")).toString("utf8").replace(/�+$/, "");
-  return head + note;
 }
 
 async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -297,22 +287,48 @@ function subjectPresent(snapshot: TickSnapshot, kind: string, key: string): bool
   }
 }
 
+/** What the diff decided about dismissed items, beside the changes it reports. */
+export type DismissalOutcome = {
+  /** Dismissed items whose condition cleared: the dismissal has done its job and they can be resolved. */
+  released: string[];
+  /** Fingerprints of changes left out because the user dismissed their item. */
+  suppressed: string[];
+};
+
 /**
  * What changed between two snapshots, as lines the model turns into items. Pure. With `prev`
  * null (the first tick) only conditions that hold now are reported, never transitions such as
- * "finished". `items` are the open and snoozed items: they supply `existingItemId`, and a
- * condition that cleared names the item it resolves.
+ * "finished". `items` are the open and snoozed items, and the dismissed ones: live items supply
+ * `existingItemId` and a condition that cleared names the item it resolves; a dismissed item keeps
+ * its condition quiet until it clears (then it is `released` into `dismissals`), so a dismissal
+ * sticks instead of coming back as a new item on the next change.
  */
-export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, items: Item[]): DigestChange[] {
-  const byFingerprint = new Map(items.map((item) => [item.fingerprint, item]));
+export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, items: Item[], dismissals?: DismissalOutcome): DigestChange[] {
+  const live = items.filter((item) => item.status === "open" || item.status === "snoozed");
+  const byFingerprint = new Map(live.map((item) => [item.fingerprint, item]));
+  const dismissedByFingerprint = new Map(items.filter((item) => item.status === "dismissed").map((item) => [item.fingerprint, item]));
   const changes: DigestChange[] = [];
   const resolving = new Set<string>();
+  const released = new Set<string>();
   const report = (kind: ItemKind, fingerprint: string, summary: string, links: ItemLinks, detail?: string) => {
-    changes.push({ kind, summary, ...(detail ? { detail } : {}), links, fingerprint, existingItemId: byFingerprint.get(fingerprint)?.id ?? null });
+    const existing = byFingerprint.get(fingerprint);
+    if (!existing && dismissedByFingerprint.has(fingerprint)) {
+      dismissals?.suppressed.push(fingerprint);
+      return;
+    }
+    changes.push({ kind, summary, ...(detail ? { detail } : {}), links, fingerprint, existingItemId: existing?.id ?? null });
+  };
+  /** A dismissed item whose condition went away: released, so the condition may speak up again when it returns. */
+  const release = (fingerprint: string) => {
+    const dismissed = dismissedByFingerprint.get(fingerprint);
+    if (!dismissed || released.has(dismissed.id)) return;
+    released.add(dismissed.id);
+    dismissals?.released.push(dismissed.id);
   };
   const condition = (kind: ItemKind, key: string, summary: string, links: ItemLinks) => report(kind, fingerprintOf(kind, key), summary, links);
   /** Only worth a line when an item exists for the condition that went away. */
   const clearedFingerprint = (fingerprint: string, summary: string, links: ItemLinks) => {
+    release(fingerprint);
     const item = byFingerprint.get(fingerprint);
     if (!item || resolving.has(item.id)) return;
     resolving.add(item.id);
@@ -328,6 +344,11 @@ export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, ite
     // Finished only counts while the user has not come back to the session (a prompt moves lastActiveAt)
     // and while the agent is attached: a session read as idle because Portal restarted did not finish anything.
     if (before?.activity === "working" && session.activity === "idle" && session.link === "live" && session.lastActiveAt <= before.lastActiveAt) {
+      condition("session_finished", id, `Session ${name} finished its turn`, links);
+    }
+    // A session too short for any tick to see it working: new since the last snapshot, prompted since
+    // then (it has a title), and now idle with its agent attached, so its turn ran and ended in between.
+    if (prev && !before && session.activity === "idle" && session.link === "live" && session.title !== null && session.lastActiveAt > prev.at) {
       condition("session_finished", id, `Session ${name} finished its turn`, links);
     }
     if (session.activity === "waiting" && before?.activity !== "waiting") condition("session_waiting", id, `Session ${name} is waiting for your permission`, links);
@@ -418,10 +439,10 @@ export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, ite
   }
 
   // An item whose subject is gone from both snapshots (it vanished while the item was snoozed, or
-  // before this process saw it) would otherwise stay open forever.
+  // before this process saw it) would otherwise stay open (or dismissed) forever.
   if (prev) {
     for (const item of items) {
-      if (resolving.has(item.id) || item.createdAt >= prev.at) continue;
+      if (resolving.has(item.id) || released.has(item.id) || item.createdAt >= prev.at) continue;
       const colon = item.fingerprint.indexOf(":");
       if (colon <= 0) continue;
       const kind = item.fingerprint.slice(0, colon);
@@ -443,8 +464,6 @@ export type BuildDigestOptions = {
   store: OrchestratorStore;
   snapshot: TickSnapshot;
   prevSnapshot: TickSnapshot | null;
-  /** The current tick interval. Unused since due watches became intents; kept so callers need not change. */
-  intervalMs?: number;
   now: number;
   /** Flip expired snoozes back to open in the store (a tick); false only looks (get_tick_digest). */
   wakeSnoozed?: boolean;
@@ -457,19 +476,22 @@ export type BuildDigestOptions = {
 export async function buildDigest({ store, snapshot, prevSnapshot, now, wakeSnoozed = true }: BuildDigestOptions): Promise<TickDigest> {
   const open: Item[] = [];
   const snoozed: Item[] = [];
-  for (const item of await store.listItems()) {
+  const items = await store.listItems();
+  for (const item of items) {
     if (item.status === "open") open.push(item);
     else if (item.status !== "snoozed") continue;
     else if (item.snoozedUntil !== null && item.snoozedUntil <= now) {
       open.push(wakeSnoozed ? await store.updateItem(item.id, { status: "open", snoozedUntil: null }) : item);
     } else snoozed.push(item);
   }
-  const changes = diffSnapshots(prevSnapshot, snapshot, [...open, ...snoozed]);
+  const dismissed = items.filter((item) => item.status === "dismissed");
+  const dismissals: DismissalOutcome = { released: [], suppressed: [] };
+  const changes = diffSnapshots(prevSnapshot, snapshot, [...open, ...snoozed, ...dismissed], dismissals);
   return {
     at: now,
     since: prevSnapshot?.at ?? null,
     changes,
-    openItems: open.map(({ id, list, kind, title, fingerprint }) => ({ id, list, kind, title, fingerprint })),
-    memory: truncateBytes(await store.readMemory(), MEMORY_PROMPT_BYTES),
+    openItems: open.map(({ id, kind, title, fingerprint }) => ({ id, kind, title, fingerprint })),
+    ...dismissals,
   };
 }

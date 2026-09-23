@@ -54,7 +54,7 @@ const userMessage = (text, id = "u1") => ({ id, role: "user", parts: [{ type: "t
 const waitingSession = () => sessionMeta({ awaitingPermission: true });
 
 const itemInput = {
-  list: "needs_you", kind: "session_waiting", title: "Session needs your approval", body: "The agent asked to run a command.",
+  kind: "session_waiting", title: "Session needs your approval", body: "The agent asked to run a command.",
   links: { sessionId: "s1", projectId: "p1" }, actions: [{ type: "open_session", sessionId: "s1", label: "Open" }], fingerprint: "session_waiting:s1",
 };
 
@@ -157,7 +157,7 @@ test("a tick with a change runs the model with the tick tool subset; its create_
   assert.equal(typeof messages[0].metadata.at, "number");
   assert.ok(events.some((event) => event.type === "messages"));
   assert.ok(events.some((event) => event.type === "items" && event.items.length === 1));
-  assert.equal((await runtime.status()).openItems.needs_you, 1);
+  assert.equal((await runtime.status()).counts.needsYou, 1);
 
   // The next tick sees the same condition with an open item and nothing new: no model call.
   const quiet = await runtime.runTick("schedule");
@@ -436,7 +436,7 @@ test("cancel() aborts the running chat turn and releases busy", async (t) => {
 test("performAction runs start_session and send_prompt server-side once approved and refuses browser actions", async (t) => {
   const { runtime, store, state } = setup(t, { projects: [project()], sessions: [sessionMeta()] });
   const item = await store.createItem({
-    list: "ideas", kind: "custom", title: "t", body: "", links: {}, fingerprint: "custom:x",
+    kind: "custom", title: "t", body: "", links: {}, fingerprint: "custom:x",
     actions: [
       { type: "start_session", projectId: "p1", prompt: "Look into it", agentId: "codex" },
       { type: "send_prompt", sessionId: "s1", prompt: "Continue" },
@@ -474,7 +474,7 @@ test("updateItem emits the full list; dispose stops the job worker", async (t) =
   const { runtime, store, events, timers } = setup(t);
   await runtime.ready;
   await flush();
-  const item = await store.createItem({ list: "ideas", kind: "custom", title: "t", body: "", links: {}, actions: [], fingerprint: "custom:x" });
+  const item = await store.createItem({ kind: "custom", title: "t", body: "", links: {}, actions: [], fingerprint: "custom:x" });
   const updated = await runtime.updateItem(item.id, { status: "dismissed" });
   assert.equal(updated.status, "dismissed");
   await flush();

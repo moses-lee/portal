@@ -1,15 +1,12 @@
 import { z } from "zod";
 import { httpError } from "../ops.ts";
-import type { Item, ItemKind } from "../types.ts";
+import { itemKinds } from "../store.ts";
+import type { Item } from "../types.ts";
 import { type ToolContext, capped, define } from "./context.ts";
 
-const id = z.string().min(1);
+export { itemKinds };
 
-export const itemKinds = [
-  "session_finished", "session_waiting", "session_offline", "pr_checks_failing", "pr_changes_requested", "pr_conflicts",
-  "pr_review_requested", "pr_merged", "pr_closed", "worktree_merged", "worktree_dirty", "folder_missing", "watch_update", "intent_update",
-  "approval_needed", "custom",
-] as const satisfies readonly ItemKind[];
+const id = z.string().min(1);
 
 export const pullRefSchema = z.object({ repo: z.string().min(1), number: z.number().int().positive(), url: z.string().min(1) });
 
@@ -17,7 +14,9 @@ const linksSchema = z.object({
   projectId: z.string().optional(),
   sessionId: z.string().optional(),
   pull: pullRefSchema.optional(),
-  watchId: z.string().optional(),
+  intentId: z.string().optional(),
+  jobId: z.string().optional(),
+  threadId: z.string().optional(),
 });
 
 const label = z.string().optional();
@@ -33,11 +32,10 @@ const actionSchema = z.discriminatedUnion("type", [
 /** "<kind>:<key>": a digest kind or the per-PR "pr" prefix, then a key without whitespace. */
 const FINGERPRINT = /^[a-z_]+:\S+$/;
 
-const listSchema = z.enum(["needs_you", "ideas"]);
 const kindSchema = z.enum(itemKinds);
 
 function itemRow(item: Item) {
-  return { id: item.id, list: item.list, kind: item.kind, title: item.title, status: item.status, fingerprint: item.fingerprint, updatedAt: item.updatedAt };
+  return { id: item.id, kind: item.kind, title: item.title, status: item.status, fingerprint: item.fingerprint, updatedAt: item.updatedAt };
 }
 
 export function itemTools({ store, touched, now }: ToolContext) {
@@ -48,26 +46,29 @@ export function itemTools({ store, touched, now }: ToolContext) {
   }
   return {
     create_item: define(
-      "Create an action item for the user. fingerprint is the digest's, verbatim (\"<kind>:<key>\", e.g. pr:owner/name#7); when an open item already carries it, that item is updated instead of duplicated.",
+      "Create a Needs-you item: something that needs the user's decision or action. fingerprint is the digest's, verbatim (\"<kind>:<key>\", e.g. pr:owner/name#7); when an open item already carries it, that item is updated instead of duplicated, and while the user has dismissed an item with it nothing is created.",
       z.object({
-        list: listSchema, kind: kindSchema, title: z.string().min(1).max(200), body: z.string().max(2000),
+        kind: kindSchema, title: z.string().min(1).max(200), body: z.string().max(2000),
         links: linksSchema.optional(), actions: z.array(actionSchema).max(4).optional(), fingerprint: z.string().min(3),
       }),
-      async ({ list, kind, title, body, links = {}, actions = [], fingerprint }) => {
+      async ({ kind, title, body, links = {}, actions = [], fingerprint }) => {
         if (!FINGERPRINT.test(fingerprint)) throw httpError('fingerprint must look like "<kind>:<key>" without spaces; copy it from the digest.', 400);
         const existing = await store.findItemByFingerprint(fingerprint);
         if (existing) {
-          const row = await change(existing.id, { list, title, body, links, actions });
+          const row = await change(existing.id, { kind, title, body, links, actions });
           return { ...row, updated: true, note: "An item with this fingerprint already existed; it was updated instead of creating a duplicate." };
         }
-        const item = await store.createItem({ list, kind, title, body, links, actions, fingerprint });
+        // A dismissal holds until the condition clears (the tick then releases it): the user said not to show this again.
+        const dismissed = (await store.listItems()).find((item) => item.fingerprint === fingerprint && item.status === "dismissed");
+        if (dismissed) return { suppressed: true, dismissedItemId: dismissed.id, note: "The user dismissed this; nothing was created. Do not mention it again while the condition lasts." };
+        const item = await store.createItem({ kind, title, body, links, actions, fingerprint });
         touched.add(item.id);
         return { ...itemRow(item), created: true };
       },
     ),
     update_item: define(
-      "Change an item's title, body, list, links, or actions.",
-      z.object({ id, title: z.string().min(1).max(200).optional(), body: z.string().max(2000).optional(), list: listSchema.optional(), links: linksSchema.optional(), actions: z.array(actionSchema).max(4).optional() }),
+      "Change an item's kind, title, body, links, or actions (the kind follows its condition, e.g. conflicts that became failing checks).",
+      z.object({ id, kind: kindSchema.optional(), title: z.string().min(1).max(200).optional(), body: z.string().max(2000).optional(), links: linksSchema.optional(), actions: z.array(actionSchema).max(4).optional() }),
       async ({ id, ...patch }) => change(id, Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined))),
     ),
     resolve_item: define("Mark an item resolved: its condition no longer holds.", z.object({ id }), ({ id }) => change(id, { status: "resolved", snoozedUntil: null })),
@@ -76,7 +77,7 @@ export function itemTools({ store, touched, now }: ToolContext) {
       z.object({ id, minutes: z.number().int().min(1).max(7 * 24 * 60) }),
       ({ id, minutes }) => change(id, { status: "snoozed", snoozedUntil: now() + minutes * 60_000 }),
     ),
-    dismiss_item: define("Dismiss an item the user does not want to see again.", z.object({ id }), ({ id }) => change(id, { status: "dismissed", snoozedUntil: null })),
+    dismiss_item: define("Dismiss an item the user does not want to see again; it stays dismissed until its condition clears.", z.object({ id }), ({ id }) => change(id, { status: "dismissed", snoozedUntil: null })),
     list_items: define(
       "Items by status (default open), newest first.",
       z.object({ status: z.enum(["open", "snoozed", "resolved", "dismissed"]).optional() }),

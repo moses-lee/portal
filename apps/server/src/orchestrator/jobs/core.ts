@@ -20,7 +20,7 @@ export const JOBS_CHANNEL = "portal_jobs";
 /** The seeded tick job. */
 export const TICK_JOB_ID = "tick";
 
-export type TickRunner = (report: TickReport, ctx: { intervalMs: number; signal: AbortSignal }) => Promise<void>;
+export type TickRunner = (report: TickReport, ctx: { signal: AbortSignal }) => Promise<void>;
 
 export type JobsCore = {
   hub: OrchestratorHub;

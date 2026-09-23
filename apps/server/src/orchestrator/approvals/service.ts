@@ -190,7 +190,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
       if (await hub.store.findItemByFingerprint(fingerprintOf(approval))) return;
       const body = `A background job is paused until you decide.\n\n${approval.summary}`;
       await hub.store.createItem({
-        list: "needs_you", kind: "approval_needed", title: `Approve: ${approval.title}`.slice(0, 200),
+        kind: "approval_needed", title: `Approve: ${approval.title}`.slice(0, 200),
         body: body.length > 2000 ? `${body.slice(0, 1999)}…` : body,
         links: {
           approvalId: approval.id, ...(approval.jobId ? { jobId: approval.jobId } : {}),

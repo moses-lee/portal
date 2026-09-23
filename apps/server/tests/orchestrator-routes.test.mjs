@@ -45,7 +45,7 @@ async function setup(t, { key = "sk-test", sessions = [], doStream } = {}) {
 const inject = (app, method, url, payload, headers = {}) => app.inject({ method, url, payload, headers });
 
 const itemInput = {
-  list: "needs_you", kind: "session_waiting", title: "Session needs your approval", body: "The agent asked to run a command.",
+  kind: "session_waiting", title: "Session needs your approval", body: "The agent asked to run a command.",
   links: { sessionId: "s1", projectId: "p1" },
   actions: [{ type: "open_session", sessionId: "s1", label: "Open" }, { type: "send_prompt", sessionId: "s1", prompt: "Continue" }],
   fingerprint: "session_waiting:s1",
@@ -59,7 +59,7 @@ test("status, messages, ticks, and items answer their JSON shapes; watches and t
   assert.equal(status.json().status.ready, true);
   assert.equal(status.json().status.busy, false);
   assert.equal(status.json().status.provider, "anthropic");
-  assert.deepEqual(status.json().status.openItems, { needs_you: 0, ideas: 0 });
+  assert.equal(status.json().status.counts.needsYou, 0);
 
   assert.deepEqual((await inject(app, "GET", "/api/portal/messages")).json(), { messages: [] });
   assert.deepEqual((await inject(app, "GET", "/api/portal/ticks")).json(), { ticks: [] });
@@ -79,7 +79,7 @@ test("items: PATCH validates, 404s unknown ids, and persists; actions run server
   const item = await store.createItem(itemInput);
 
   assert.deepEqual((await inject(app, "GET", "/api/portal/items")).json(), { items: [item] });
-  assert.equal((await inject(app, "GET", "/api/portal")).json().status.openItems.needs_you, 1);
+  assert.equal((await inject(app, "GET", "/api/portal")).json().status.counts.needsYou, 1);
 
   const snoozed = await inject(app, "PATCH", `/api/portal/items/${item.id}`, { status: "snoozed", snoozedUntil: T0 + 60_000, fingerprint: "ignored" });
   assert.equal(snoozed.statusCode, 200);

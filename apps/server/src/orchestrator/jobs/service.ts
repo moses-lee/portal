@@ -77,7 +77,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   const self = () => options.self?.() ?? fallbackSelf;
   const core = createCore({
     hub, store, runs, self, trimThread,
-    tick: options.tick ?? ((report, { intervalMs, signal }) => performTick(hub, report, { intervalMs, self: self(), signal, trimThread })),
+    tick: options.tick ?? ((report, { signal }) => performTick(hub, report, { self: self(), signal, trimThread })),
   });
   const intents = createIntents(core);
   const helpers = createHelpers(core);

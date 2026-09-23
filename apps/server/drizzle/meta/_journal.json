@@ -36,6 +36,13 @@
       "when": 1790148238960,
       "tag": "0004_drop_watches_and_ticks",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790150822549,
+      "tag": "0005_items_without_lists",
+      "breakpoints": true
     }
   ]
 }

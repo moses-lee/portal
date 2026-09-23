@@ -231,7 +231,7 @@ export default function PortalThread({
     () =>
       isMain
         ? items
-            .filter((item) => item.list === "needs_you" && isVisibleItem(item))
+            .filter((item) => isVisibleItem(item))
             .sort((a, b) => b.updatedAt - a.updatedAt)
         : [],
     [items, isMain],

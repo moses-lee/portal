@@ -91,7 +91,6 @@ const baseStatus = {
   presence: 1,
   lastTick: null,
   nextTickAt: null,
-  openItems: { needs_you: 0, ideas: 0 },
   busyThreads: [],
   runs: [],
   nextJob: { id: "tick", title: "Check for changes", at: now + 6 * min },

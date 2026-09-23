@@ -8,7 +8,7 @@ import type { TickReport } from "@portal/contracts/orchestrator";
 import type { OrchestratorSettings } from "../types.ts";
 import { TICK_JOB_ID, type JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
-import { currentInterval, describeSchedule, replanned, sameSchedule } from "./schedule.ts";
+import { describeSchedule, replanned, sameSchedule } from "./schedule.ts";
 
 /** The first tick after the process starts: the rest of the server gets a minute to settle. */
 export const FIRST_TICK_DELAY_MS = 60_000;
@@ -74,9 +74,8 @@ export function skippedReport(trigger: RunTrigger, at: number, reason: string): 
 export async function runTickJob(core: JobsCore, { job, run, trigger, signal }: KindContext): Promise<KindResult> {
   const { hub } = core;
   const report = emptyReport(run.id, trigger, run.startedAt);
-  const intervalMs = job.schedule.type === "every" ? currentInterval(job.schedule, core.present()) : 10 * 60_000;
   try {
-    await core.tick(report, { intervalMs, signal });
+    await core.tick(report, { signal });
   } catch (err) {
     report.error = err instanceof Error ? err.message : String(err);
     report.log.push(`Failed: ${report.error}`);

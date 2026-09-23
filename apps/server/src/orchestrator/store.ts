@@ -6,7 +6,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type {
-  Item, ItemAction, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickReport,
+  Item, ItemAction, ItemKind, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickReport,
   TickSnapshot,
 } from "./types.ts";
 import { MAIN_THREAD_ID, emptyScope } from "./types.ts";
@@ -26,7 +26,13 @@ export const MAX_MEMORY_BYTES = 32 * 1024;
 
 const TRUNCATION_NOTE = "\n\n[Portal truncated this file: memory is capped at 32 KiB.]";
 
-const itemLists = new Set(["needs_you", "ideas"]);
+/** Every item kind; a patch may move an item to another kind as its condition changes. */
+export const itemKinds = [
+  "session_finished", "session_waiting", "session_offline", "pr_checks_failing", "pr_changes_requested", "pr_conflicts",
+  "pr_review_requested", "pr_merged", "pr_closed", "worktree_merged", "worktree_dirty", "folder_missing", "watch_update", "intent_update",
+  "approval_needed", "custom",
+] as const satisfies readonly ItemKind[];
+const itemKindSet = new Set<string>(itemKinds);
 const itemStatuses = new Set(["open", "snoozed", "resolved", "dismissed"]);
 
 /**
@@ -73,7 +79,7 @@ export function isOrchestratorMessage(value: unknown): value is OrchestratorMess
 }
 
 export function isItem(value: unknown): value is Item {
-  return isRecord(value) && typeof value.id === "string" && typeof value.list === "string" && typeof value.kind === "string"
+  return isRecord(value) && typeof value.id === "string" && typeof value.kind === "string"
     && typeof value.title === "string" && typeof value.body === "string" && isRecord(value.links) && Array.isArray(value.actions)
     && typeof value.fingerprint === "string" && itemStatuses.has(value.status as string)
     && typeof value.createdAt === "number" && typeof value.updatedAt === "number" && isNullableNumber(value.snoozedUntil);
@@ -101,7 +107,8 @@ function isPullRef(value: unknown): value is PullRef {
 
 function isItemLinks(value: unknown): value is ItemLinks {
   return isRecord(value) && isOptionalString(value.projectId) && isOptionalString(value.sessionId)
-    && isOptionalString(value.watchId) && isOptionalString(value.intentId) && (value.pull === undefined || isPullRef(value.pull));
+    && isOptionalString(value.intentId) && isOptionalString(value.jobId) && isOptionalString(value.threadId) && isOptionalString(value.approvalId)
+    && (value.pull === undefined || isPullRef(value.pull));
 }
 
 /** The string fields each action type needs; `label` (and `agentId` for start_session) are optional extras. */
@@ -141,10 +148,10 @@ function pickPatch<T extends object>(
 /** Reduce unknown input (a request body, a tool argument) to a valid `ItemPatch`, or throw a 400 `OrchestratorStoreError`. */
 export function parseItemPatch(input: unknown): ItemPatch {
   return pickPatch<ItemPatch>("item", input, {
-    list: { check: (v) => isString(v) && itemLists.has(v), expected: `one of ${oneOf(itemLists)}` },
+    kind: { check: (v) => isString(v) && itemKindSet.has(v), expected: `one of ${oneOf(itemKindSet)}` },
     title: { check: isString, expected: "a string" },
     body: { check: isString, expected: "a string" },
-    links: { check: isItemLinks, expected: "an object of projectId, sessionId, watchId (strings) and pull ({ repo, number, url })" },
+    links: { check: isItemLinks, expected: "an object of projectId, sessionId, intentId, jobId, threadId, approvalId (strings) and pull ({ repo, number, url })" },
     actions: { check: (v) => Array.isArray(v) && v.every(isItemAction), expected: `an array of actions of type ${Object.keys(actionFields).join(", ")} with their string fields` },
     status: { check: (v) => isString(v) && itemStatuses.has(v), expected: `one of ${oneOf(itemStatuses)}` },
     snoozedUntil: { check: isNullableEpoch, expected: "an integer (epoch ms) or null" },

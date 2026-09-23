@@ -204,7 +204,7 @@ test("job: the call returns pending at once, raises a Needs-you item, and approv
   assert.equal(approval.expiresAt, T0 + EXPIRY_MS.job);
   assert.equal(await hub.approvals.hasPendingFor("r1"), true);
   const [item] = await store.listItems();
-  assert.deepEqual([item.list, item.kind, item.status], ["needs_you", "approval_needed", "open"]);
+  assert.deepEqual([item.kind, item.status], ["approval_needed", "open"]);
   assert.deepEqual(item.links, { approvalId: approval.id, jobId: "j1" });
   assert.equal(item.title, "Approve: Remove worktree feat-x of app");
   assert.match(item.body, /background job is paused/);
@@ -261,7 +261,7 @@ test("expiry also applies on read, before any timer fires", async (t) => {
 test("guardAction: remove_worktree always asks; start_session and send_prompt ask unless an always grant covers them", async (t) => {
   const { runtime, hub, store, state } = setup(t);
   const item = await store.createItem({
-    list: "needs_you", kind: "worktree_merged", title: "feat-x was merged", body: "", links: { projectId: "p2" }, fingerprint: "worktree_merged:p2",
+    kind: "worktree_merged", title: "feat-x was merged", body: "", links: { projectId: "p2" }, fingerprint: "worktree_merged:p2",
     actions: [
       { type: "remove_worktree", projectId: "p2", label: "Remove" },
       { type: "start_session", projectId: "p1", prompt: "Clean up\n\nthe branch" },

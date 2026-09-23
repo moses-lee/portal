@@ -222,11 +222,9 @@ export default function PortalItemCard({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase">
-            {item.list === "needs_you" && (
-              <span className="rounded-full bg-amber-300/15 px-1.5 leading-4 text-amber-200">
-                Needs you
-              </span>
-            )}
+            <span className="rounded-full bg-amber-300/15 px-1.5 leading-4 text-amber-200">
+              Needs you
+            </span>
             <span className="text-muted-foreground">{kindLabels[item.kind]}</span>
             {statusLabel && <span className="text-muted-foreground">· {statusLabel}</span>}
           </div>

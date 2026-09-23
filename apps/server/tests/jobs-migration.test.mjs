@@ -56,7 +56,10 @@ test("the data migration turns watches into intents with check jobs, relinks ite
     id, list: "needs_you", kind: "custom", title: `Item ${id}`, body: "", links: {}, actions: [], fingerprint: `custom:${id}`, status: "open",
     createdAt: 10, updatedAt: 10, snoozedUntil: null, ...extra,
   });
-  const items = [item("i1", { kind: "watch_update", links: { watchId: "w1", sessionId: "s1" } }), item("i2", { links: { projectId: "p1" } }), item("i3", { kind: "watch_update" })];
+  const items = [
+    item("i1", { kind: "watch_update", links: { watchId: "w1", sessionId: "s1" } }), item("i2", { links: { projectId: "p1" } }), item("i3", { kind: "watch_update" }),
+    item("i4", { list: "ideas" }), item("i5", { list: "ideas", status: "dismissed" }),
+  ];
   for (const body of items) {
     await sql`insert into orchestrator_items (id, list, status, fingerprint, created_at, updated_at, snoozed_until, body) values (${body.id}, ${body.list}, ${body.status}, ${body.fingerprint}, ${body.createdAt}, ${body.updatedAt}, ${null}, ${JSON.stringify(body)}::jsonb)`;
   }
@@ -97,9 +100,13 @@ test("the data migration turns watches into intents with check jobs, relinks ite
 
   const orchestrator = createPgOrchestratorStore({ db });
   const stored = Object.fromEntries((await orchestrator.listItems()).map((entry) => [entry.id, entry]));
-  assert.deepEqual(stored.i1, { ...items[0], kind: "intent_update", links: { sessionId: "s1", intentId: "w1" } });
-  assert.deepEqual(stored.i2, items[1], "untouched");
+  // Items lose their list (0005): Needs-you is the only list, so an open idea is resolved.
+  const withoutList = ({ list, ...rest }) => rest;
+  assert.deepEqual(stored.i1, { ...withoutList(items[0]), kind: "intent_update", links: { sessionId: "s1", intentId: "w1" } });
+  assert.deepEqual(stored.i2, withoutList(items[1]));
   assert.equal(stored.i3.kind, "intent_update");
+  assert.deepEqual([stored.i4.status, "list" in stored.i4], ["resolved", false]);
+  assert.equal(stored.i5.status, "dismissed", "a dismissal is kept");
 
   const runs = await jobs.listRuns({ jobId: "tick" });
   assert.deepEqual(runs.map((run) => [run.id, run.status, run.trigger]), [["t3", "failed", "schedule"], ["t2", "succeeded", "manual"], ["t1", "succeeded", "schedule"]]);

@@ -166,7 +166,8 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
   }
 }
 
-export type GeneratedTurn = { run: JobRun | null; text: string; usage: RunUsage | null; steps: number };
+/** `capped`: the loop stopped at its step cap while the model still wanted to call tools. */
+export type GeneratedTurn = { run: JobRun | null; text: string; usage: RunUsage | null; steps: number; capped: boolean };
 
 /**
  * Run a prepared turn to the end on `prompt` and record its outcome. Failures are recorded and
@@ -187,7 +188,7 @@ export async function generateTurn(prepared: PreparedTurn, { prompt, signal, max
     const usage = runUsage(result.totalUsage ?? result.usage);
     const text = result.text.trim();
     const run = await prepared.finish({ status: "succeeded", usage, summary: summarize ? summarize(text) : null });
-    return { run, text, usage, steps: result.steps.length };
+    return { run, text, usage, steps: result.steps.length, capped: result.finishReason === "tool-calls" };
   } catch (err) {
     await prepared.finish({ status: signal?.aborted ? "cancelled" : "failed", error: errorMessage(err) });
     throw err;

@@ -328,7 +328,6 @@ export const portalStatus: OrchestratorStatus = {
   presence: 1,
   lastTick: null,
   nextTickAt: now + 7 * 60_000,
-  openItems: { needs_you: 1, ideas: 0 },
   busyThreads: [],
   runs: [],
   nextJob: { id: "tick", title: "Check for changes", at: now + 7 * 60_000 },
@@ -339,7 +338,6 @@ export const portalStatus: OrchestratorStatus = {
 /** A failing-checks item on PR #42 with one action of each browser-side kind. */
 export const portalItem: Item = {
   id: "i1",
-  list: "needs_you",
   kind: "pr_checks_failing",
   title: "Checks are failing on example/portal#42",
   body: "**Unit tests** failed on the latest push. The other check passed.",

@@ -25,8 +25,6 @@ export function itemDelta(before: Map<string, Item>, after: Item[]) {
 }
 
 export type TickOptions = {
-  /** The tick's interval right now (presence-aware). */
-  intervalMs: number;
   self: ToolContext["self"];
   signal: AbortSignal;
   /** Keeps the stored thread bounded after a note was posted. */
@@ -34,7 +32,7 @@ export type TickOptions = {
 };
 
 /** Fill `report` by running one tick. Throws on a model failure; the caller records it. */
-export async function performTick(hub: OrchestratorHub, report: TickReport, { intervalMs, self, signal, trimThread }: TickOptions): Promise<void> {
+export async function performTick(hub: OrchestratorHub, report: TickReport, { self, signal, trimThread }: TickOptions): Promise<void> {
   const { store, timers } = hub;
   const { log } = report;
   const model = await hub.model("bookkeeping");
@@ -52,9 +50,16 @@ export async function performTick(hub: OrchestratorHub, report: TickReport, { in
   const world = await hub.world.refresh("tick");
   log.push(...world.errors);
   const snapshot = world.snapshot;
-  const digest = await buildDigest({ store, snapshot, prevSnapshot: previous, intervalMs, now });
+  const digest = await buildDigest({ store, snapshot, prevSnapshot: previous, now });
   report.changes = digest.changes.length;
   for (const change of digest.changes) log.push(`${change.resolvesItemId ? "Cleared" : "Changed"}: ${change.summary} (${change.fingerprint})`);
+  for (const fingerprint of digest.suppressed) log.push(`Left out, dismissed by the user: ${fingerprint}`);
+  // A dismissal lasts while its condition does; once it cleared, the item is settled without the model.
+  for (const id of digest.released) {
+    await store.updateItem(id, { status: "resolved", snoozedUntil: null });
+    log.push(`Released dismissed item ${id}: its condition cleared.`);
+  }
+  let keepSnapshot = false;
 
   if (digest.changes.length > 0) {
     const touched = new Set<string>();
@@ -73,6 +78,14 @@ export async function performTick(hub: OrchestratorHub, report: TickReport, { in
       summarize: (text) => (text && text !== "NO_UPDATE" ? text.slice(0, 200) : `${digest.changes.length} change(s), nothing to report`),
     });
     report.usage = { inputTokens: result.usage?.inputTokens ?? 0, outputTokens: result.usage?.outputTokens ?? 0 };
+    if (result.capped) {
+      report.capped = true;
+      const again = (await self.lastTick())?.capped === true;
+      keepSnapshot = !again;
+      log.push(again
+        ? "The model hit its step cap again; moving on so the same changes do not loop."
+        : "The model hit its step cap; the snapshot is kept so the next tick offers these changes again.");
+    }
     if (result.text && result.text !== "NO_UPDATE") {
       await store.appendMessages([{
         id: randomUUID(), role: "assistant", parts: [{ type: "text", text: result.text }],
@@ -87,7 +100,7 @@ export async function performTick(hub: OrchestratorHub, report: TickReport, { in
   } else {
     log.push("Nothing changed; the model was not invoked.");
   }
-  await store.writeSnapshot(snapshot);
+  if (!keepSnapshot) await store.writeSnapshot(snapshot);
 
   // What happened to items, read back from the store (snoozes waking up count too).
   const delta = itemDelta(before, await store.listItems());

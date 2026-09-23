@@ -18,7 +18,6 @@ function message(id, role = "user", text = id) {
 
 function itemInput(overrides = {}) {
   return {
-    list: "needs_you",
     kind: "pr_checks_failing",
     title: "Checks failing on #42",
     body: "CI is red.",
@@ -93,7 +92,7 @@ function behaviour(label, { open, reopen }) {
     const store = await open(t);
     const before = Date.now();
     const first = await store.createItem(itemInput({ fingerprint: "a" }));
-    const second = await store.createItem(itemInput({ fingerprint: "b", list: "ideas" }));
+    const second = await store.createItem(itemInput({ fingerprint: "b" }));
     assert.match(first.id, /^[A-Za-z0-9_-]{8}$/);
     assert.equal(first.status, "open");
     assert.equal(first.snoozedUntil, null);
@@ -116,9 +115,8 @@ function behaviour(label, { open, reopen }) {
   test(`${label}: updateItem patches, bumps updatedAt, and validates snoozing`, async (t) => {
     const store = await open(t);
     const item = await store.createItem(itemInput());
-    const renamed = await store.updateItem(item.id, { title: "New title", list: "ideas" });
+    const renamed = await store.updateItem(item.id, { title: "New title" });
     assert.equal(renamed.title, "New title");
-    assert.equal(renamed.list, "ideas");
     assert.equal(renamed.id, item.id);
     assert.equal(renamed.createdAt, item.createdAt);
     assert.ok(renamed.updatedAt > item.updatedAt, "updatedAt advances");
@@ -148,18 +146,21 @@ function behaviour(label, { open, reopen }) {
     const item = await store.createItem(itemInput());
 
     // Keys outside ItemPatch are ignored: identity and bookkeeping fields cannot be rewritten through a patch.
-    const kept = await store.updateItem(item.id, { title: "T", fingerprint: 42, id: "other000", kind: "custom", createdAt: 1, bogus: true });
+    const kept = await store.updateItem(item.id, { title: "T", fingerprint: 42, id: "other000", list: "ideas", createdAt: 1, bogus: true });
     assert.equal(kept.title, "T");
     assert.equal(kept.fingerprint, item.fingerprint);
     assert.equal(kept.id, item.id);
-    assert.equal(kept.kind, item.kind);
+    assert.ok(!("list" in kept), "items have no list any more");
+    // The kind is patchable: an item follows its condition (conflicts that turned into failing checks).
+    assert.equal((await store.updateItem(item.id, { kind: "pr_conflicts" })).kind, "pr_conflicts");
+    Object.assign(kept, await store.updateItem(item.id, { kind: item.kind }));
     assert.equal(kept.createdAt, item.createdAt);
     assert.ok(!("bogus" in kept));
 
     // Wrong values are 400s that change nothing.
     for (const [patch, pattern] of [
       [{ status: "bogus" }, /"status" must be one of open, snoozed, resolved, dismissed/],
-      [{ list: "later" }, /"list" must be one of needs_you, ideas/],
+      [{ kind: "later" }, /"kind" must be one of/],
       [{ title: 5 }, /"title" must be a string/],
       [{ body: null }, /"body" must be a string/],
       [{ snoozedUntil: "tomorrow" }, /"snoozedUntil" must be an integer/],
@@ -180,7 +181,7 @@ function behaviour(label, { open, reopen }) {
 
     // Everything ItemPatch allows, at full depth, round-trips.
     const full = await store.updateItem(item.id, {
-      list: "ideas", title: "Full", body: "b",
+      title: "Full", body: "b",
       links: { projectId: "p1", sessionId: "s1", intentId: "i1", pull: { repo: "o/r", number: 1, url: "u" } },
       actions: [{ type: "start_session", projectId: "p1", prompt: "go", agentId: "claude", label: "Start" }, { type: "ask_portal", text: "hi" }, { type: "remove_worktree", projectId: "p1" }],
       status: "snoozed", snoozedUntil: 99,
@@ -189,7 +190,7 @@ function behaviour(label, { open, reopen }) {
     assert.deepEqual(await store.updateItem(item.id, {}), { ...full, updatedAt: (await store.getItem(item.id)).updatedAt }, "an empty patch only bumps updatedAt");
 
     // createItem is held to the same bar: a record the loader would drop is refused rather than written.
-    await rejectsWith(store.createItem(itemInput({ list: 5 })), 400, /would not be readable/);
+    await rejectsWith(store.createItem(itemInput({ kind: 5 })), 400, /would not be readable/);
     await rejectsWith(store.createItem(itemInput({ actions: "none" })), 400, /would not be readable/);
     assert.equal((await store.listItems()).length, 1);
   });

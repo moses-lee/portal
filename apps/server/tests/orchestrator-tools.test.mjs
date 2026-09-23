@@ -97,7 +97,7 @@ test("a failing tool returns { error } instead of throwing", async () => {
 test("create_item dedupes by fingerprint, accepts the digest's shapes, rejects others, and records touched ids", async () => {
   const { tools, store, touched } = setup();
   const input = {
-    list: "needs_you", kind: "pr_checks_failing", title: "Checks failing on acme/app#7", body: "CI is red.",
+    kind: "pr_checks_failing", title: "Checks failing on acme/app#7", body: "CI is red.",
     links: { pull: { repo: "acme/app", number: 7, url: "https://github.com/acme/app/pull/7" } },
     actions: [{ type: "open_url", url: "https://github.com/acme/app/pull/7", label: "Open PR" }],
     fingerprint: "pr:acme/app#7",
@@ -105,14 +105,14 @@ test("create_item dedupes by fingerprint, accepts the digest's shapes, rejects o
   const created = await run(tools.create_item, input);
   assert.equal(created.created, true);
   assert.equal(created.status, "open");
-  const again = await run(tools.create_item, { ...input, title: "Still failing", list: "ideas" });
+  const again = await run(tools.create_item, { ...input, title: "Still failing" });
   assert.equal(again.updated, true);
   assert.equal(again.id, created.id);
   assert.match(again.note, /already existed/);
   const items = await store.listItems();
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "Still failing");
-  assert.equal(items[0].list, "ideas");
+  assert.ok(!("list" in items[0]));
   assert.deepEqual([...touched], [created.id]);
 
   // The per-repo review form and the classic <kind>:<key> form are fine; anything else is not.
@@ -138,7 +138,7 @@ test("create_item dedupes by fingerprint, accepts the digest's shapes, rejects o
 
 test("snooze, dismiss, and list items", async () => {
   const { tools, store } = setup();
-  const item = await store.createItem({ list: "ideas", kind: "custom", title: "t", body: "", links: {}, actions: [], fingerprint: "custom:a" });
+  const item = await store.createItem({ kind: "custom", title: "t", body: "", links: {}, actions: [], fingerprint: "custom:a" });
   const snoozed = await run(tools.snooze_item, { id: item.id, minutes: 30 });
   assert.equal(snoozed.status, "snoozed");
   assert.equal((await store.getItem(item.id)).snoozedUntil, T0 + 30 * 60_000);

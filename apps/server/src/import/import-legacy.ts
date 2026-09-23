@@ -20,7 +20,7 @@ import {
   intents, jobRuns, jobs, orchestratorDocuments, orchestratorItems, orchestratorMessages, projects, removedProjects, sessionEvents, sessions,
   settings,
 } from "../db/schema.ts";
-import { intentFromWatch, itemWithIntentLinks, runFromTick } from "../orchestrator/jobs/legacy.ts";
+import { intentFromWatch, itemFromLegacy, runFromTick } from "../orchestrator/jobs/legacy.ts";
 import { intentColumns, jobColumns, runColumns } from "../orchestrator/jobs/pg-store.ts";
 import type { Item } from "../orchestrator/types.ts";
 import { createPgOrchestratorStore } from "../orchestrator/pg-store.ts";
@@ -306,9 +306,9 @@ async function writeOrchestrator(db: Db, legacy: LegacyOrchestrator, counts: Imp
   }
   // Items and intents keep their ids (the model and the UI address them by id), so they are inserted
   // as rows with the store's columns rather than created anew. Oldest first, so ordinals rise with createdAt.
-  for (const slice of chunks(legacy.items.map(itemWithIntentLinks))) {
+  for (const slice of chunks(legacy.items.map(itemFromLegacy))) {
     const rows = await db.insert(orchestratorItems).values(slice.map((item: Item) => ({
-      id: item.id, list: item.list, status: item.status, fingerprint: item.fingerprint,
+      id: item.id, status: item.status, fingerprint: item.fingerprint,
       createdAt: item.createdAt, updatedAt: item.updatedAt, snoozedUntil: item.snoozedUntil, body: item as unknown as Body,
     }))).onConflictDoNothing().returning({ id: orchestratorItems.id });
     counts.items += rows.length;

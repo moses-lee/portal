@@ -24,7 +24,7 @@ test("routes: list pending, decide (running the call), list and revoke grants; e
   // A card action the agent wrote asks first; the request is what the dialog lists.
   const { createPgOrchestratorStore } = await import("../src/orchestrator/pg-store.ts");
   const item = await createPgOrchestratorStore({ db: database.db }).createItem({
-    list: "needs_you", kind: "custom", title: "Nudge", body: "", links: { sessionId: "s1" }, fingerprint: "custom:nudge",
+    kind: "custom", title: "Nudge", body: "", links: { sessionId: "s1" }, fingerprint: "custom:nudge",
     actions: [{ type: "send_prompt", sessionId: "s1", prompt: "Carry on with the tests" }],
   });
   const clicked = (await inject("POST", `/api/portal/items/${item.id}/actions/0`)).json();

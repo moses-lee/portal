@@ -181,9 +181,10 @@ test("imports every domain and reads back through the real stores", async (t) =>
   assert.equal(messages[1].parts[0].text, "hithere");
   const items = await orchestrator.listItems();
   assert.deepEqual(items.map((i) => [i.id, i.title]), [["i2", "Item i2"], ["i1", "Item i1"]]);
-  assert.deepEqual(await orchestrator.getItem("i1"), item("i1", 10));
+  const { list: _list, ...imported } = item("i1", 10);
+  assert.deepEqual(await orchestrator.getItem("i1"), imported, "items lose their list");
   // Watches arrive as intents (same ids); the active one gets a check job, and items link intents now.
-  assert.deepEqual(await orchestrator.getItem("i2"), { ...item("i2", 20), kind: "intent_update", links: { intentId: "w2" } });
+  assert.deepEqual(await orchestrator.getItem("i2"), { ...imported, id: "i2", title: "Item i2", fingerprint: "fp-i2", createdAt: 20, updatedAt: 20, kind: "intent_update", links: { intentId: "w2" } });
   const jobsStore = createPgJobsStore({ db });
   const intents = await jobsStore.listIntents();
   assert.deepEqual(intents.map((i) => [i.id, i.status, i.text]), [["w2", "active", "watch w2"], ["w1", "done", "watch w1"]]);

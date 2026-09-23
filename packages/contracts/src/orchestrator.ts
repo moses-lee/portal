@@ -1,26 +1,29 @@
 /**
- * Wire types for "Talk to Portal", the orchestrator: a lightweight, model-agnostic assistant that
- * lives outside every project and session. It chats on demand and runs periodic ticks that turn
- * changes in sessions, pull requests, and worktrees into action items. The server owns the runtime
- * and its store; the browser (Portal page, settings dialog) reads these shapes over `/api/portal/**`.
+ * Wire types for "Talk to Portal", the orchestrator: a coordinator that lives outside every project
+ * and session. It chats in threads, runs background jobs (the tick among them) that turn changes in
+ * sessions, pull requests, and worktrees into Needs-you items, keeps curated memory, and asks before
+ * anything irreversible. The server owns the runtime and its stores; the browser reads these shapes
+ * over `/api/portal/**`. The other domains' shapes and routes are in activity.ts, jobs.ts, world.ts,
+ * memory.ts, and approvals.ts.
  *
  * Only erasable TypeScript here (types and plain values), so Node can load it without a build step.
  *
  * HTTP surface (all same-origin checked like the rest of Portal):
  *   GET    /api/portal                 { status }
- *   GET    /api/portal/messages        { messages }
- *   POST   /api/portal/messages        body { message: OrchestratorMessage } -> UI message stream
- *   POST   /api/portal/cancel          -> 204
- *   POST   /api/portal/tick            -> { report }
+ *   GET    /api/portal/threads         { threads }
+ *   GET    /api/portal/messages        { messages }   (the main thread)
+ *   POST   /api/portal/messages        body { message: OrchestratorMessage } -> UI message stream (main thread)
+ *   GET    /api/portal/threads/:id/messages          { messages }
+ *   POST   /api/portal/threads/:id/messages          body { message } -> UI message stream
+ *   POST   /api/portal/threads/:id/cancel            -> 204
+ *   POST   /api/portal/cancel          -> 204 (the main thread's turn)
+ *   POST   /api/portal/tick            -> { report }  (runs the tick job now)
+ *   GET    /api/portal/ticks           { ticks }      (the tick job's recent reports)
  *   GET    /api/portal/items           { items }
  *   PATCH  /api/portal/items/:id       body ItemPatch -> { item }
- *   POST   /api/portal/items/:id/actions/:index -> { sessionId? }
- *   GET    /api/portal/watches         { watches }
- *   PATCH  /api/portal/watches/:id     body WatchPatch -> { watch }
- *   GET    /api/portal/ticks           { ticks }
- *   GET    /api/portal/memory          { memory }
- *   PUT    /api/portal/memory          body { memory } -> { memory }
- *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `watches`
+ *   POST   /api/portal/items/:id/actions/:index -> { sessionId?, promptError?, approvalId? }
+ *   GET    /api/portal/activity        see activity.ts
+ *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`
  */
 import type { UIMessage } from "ai";
 import type { ActivityEntry } from "./activity.ts";
@@ -128,11 +131,9 @@ export type Thread = {
 };
 
 // ---------------------------------------------------------------------------------------------
-// Items and watches
+// Items
 // ---------------------------------------------------------------------------------------------
 
-/** "needs_you" blocks on the user; "ideas" are low-urgency suggestions. */
-export type ItemList = "needs_you" | "ideas";
 export type ItemStatus = "open" | "snoozed" | "resolved" | "dismissed";
 
 export type ItemKind =
@@ -148,6 +149,7 @@ export type ItemKind =
   | "worktree_merged"
   | "worktree_dirty"
   | "folder_missing"
+  /** Items from before intents replaced watches. */
   | "watch_update"
   /** An intent fired or needs the user. */
   | "intent_update"
@@ -167,7 +169,6 @@ export type ItemLinks = {
   projectId?: string;
   sessionId?: string;
   pull?: PullRef;
-  watchId?: string;
   intentId?: string;
   jobId?: string;
   threadId?: string;
@@ -186,7 +187,6 @@ export type ItemAction =
 
 export type Item = {
   id: string;
-  list: ItemList;
   kind: ItemKind;
   title: string;
   /** Short Markdown body; one to three sentences. */
@@ -202,25 +202,7 @@ export type Item = {
   snoozedUntil: number | null;
 };
 
-export type ItemPatch = Partial<Pick<Item, "list" | "title" | "body" | "links" | "actions" | "status" | "snoozedUntil">>;
-
-export type WatchStatus = "active" | "done" | "cancelled";
-
-/** A tracked intent the user gave ("review PRs 1, 2, 3 on the monorepo") that later ticks follow up on. */
-export type Watch = {
-  id: string;
-  /** What the user asked for, in their words. */
-  intent: string;
-  /** The orchestrator's plan and current understanding, Markdown. It rewrites this as things progress. */
-  notes: string;
-  status: WatchStatus;
-  links: { sessionIds: string[]; projectIds: string[]; pulls: PullRef[] };
-  createdAt: number;
-  updatedAt: number;
-  lastCheckedAt: number | null;
-};
-
-export type WatchPatch = Partial<Pick<Watch, "intent" | "notes" | "status" | "links" | "lastCheckedAt">>;
+export type ItemPatch = Partial<Pick<Item, "kind" | "title" | "body" | "links" | "actions" | "status" | "snoozedUntil">>;
 
 // ---------------------------------------------------------------------------------------------
 // Conversation
@@ -308,9 +290,11 @@ export type TickDigest = {
   since: number | null;
   changes: DigestChange[];
   /** Open and snoozed-but-expired items, briefly. */
-  openItems: Pick<Item, "id" | "list" | "kind" | "title" | "fingerprint">[];
-  /** The user's memory file, verbatim (capped). */
-  memory: string;
+  openItems: Pick<Item, "id" | "kind" | "title" | "fingerprint">[];
+  /** Dismissed items whose condition cleared; the tick resolves them without the model. */
+  released: string[];
+  /** Fingerprints left out of `changes` because the user dismissed their item. */
+  suppressed: string[];
 };
 
 export type TickReport = {
@@ -328,6 +312,12 @@ export type TickReport = {
   log: string[];
   error: string | null;
   usage: { inputTokens: number; outputTokens: number } | null;
+  /**
+   * The model stopped at its step cap before it was done. The snapshot is then kept, so the next
+   * tick offers the same changes again (items already made are matched by fingerprint); a second
+   * capped tick in a row advances it anyway rather than loop.
+   */
+  capped?: boolean;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -347,7 +337,6 @@ export type OrchestratorStatus = {
   presence: number;
   lastTick: TickReport | null;
   nextTickAt: number | null;
-  openItems: { needs_you: number; ideas: number };
   /** Threads with a chat turn running; each thread has its own lock, and jobs never take one. */
   busyThreads: string[];
   /** Runs in progress right now (chat turns and background jobs), oldest first. */
@@ -377,5 +366,4 @@ export type OrchestratorEvent =
   /** The world state was rebuilt. */
   | { type: "world"; at: number }
   | { type: "items"; items: Item[] }
-  | { type: "watches"; watches: Watch[] }
   | { type: "tick"; report: TickReport };

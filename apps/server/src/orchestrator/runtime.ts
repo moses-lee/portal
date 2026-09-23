@@ -170,7 +170,7 @@ export function createOrchestratorRuntime({
   } as OrchestratorHub;
   hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
   hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, {
-    tick: (report, { intervalMs, signal }) => performTick(hub, report, { intervalMs, self, signal, trimThread: trimStoredThread }),
+    tick: (report, { signal }) => performTick(hub, report, { self, signal, trimThread: trimStoredThread }),
     self: () => self,
     trimThread: trimStoredThread,
   })))(hub);
@@ -190,11 +190,6 @@ export function createOrchestratorRuntime({
     return { settings, apiKey: await settingsStore.apiKey(settings.provider) };
   }
 
-  /** The interval that applies now: attended Portals tick more often. */
-  function intervalMs(settings: OrchestratorSettings): number {
-    return (presence.count() > 0 ? settings.intervalMinutes : settings.idleIntervalMinutes) * 60_000;
-  }
-
   // The jobs service replans the tick (and every presence-aware job) itself; the page needs the new status.
   const unsubscribePresence = presence.subscribe(() => { void emitStatus(); });
   const unsubscribeSettings = settingsStore.subscribe(() => { void emitStatus(); });
@@ -204,11 +199,10 @@ export function createOrchestratorRuntime({
 
   /** The digest as get_tick_digest reports it: a look, not a tick, so snoozes are left alone. */
   async function digestNow() {
-    const { settings } = await settingsAndKey();
     const previous = await store.readSnapshot();
     const now = timers.now();
     const snapshot = await collectSnapshot({ deps, previous, now, log: [] });
-    return buildDigest({ store, snapshot, prevSnapshot: previous, intervalMs: intervalMs(settings), now, wakeSnoozed: false });
+    return buildDigest({ store, snapshot, prevSnapshot: previous, now, wakeSnoozed: false });
   }
 
   const self: ToolContext["self"] = {
@@ -256,7 +250,7 @@ export function createOrchestratorRuntime({
       store.listItems(), hub.jobs.nextDue(), hub.jobs.tickJob(), hub.memory.inboxCount(), hub.approvals.pending(),
       hub.jobs.listIntents({ status: ["active"] }),
     ]);
-    const open = (list: Item["list"]) => items.filter((item) => item.status === "open" && item.list === list).length;
+    const needsYou = items.filter((item) => item.status === "open").length;
     const running = hub.jobs.running();
     const runs = running.map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
     const nextJob = nextDue?.nextRunAt != null ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt } : null;
@@ -264,9 +258,8 @@ export function createOrchestratorRuntime({
       ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0 || running.some((run) => run.kind === "tick"),
       intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes, presence: presence.count(),
       lastTick: hub.jobs.lastTick(), nextTickAt: tick?.status === "active" ? tick.nextRunAt : null,
-      openItems: { needs_you: open("needs_you"), ideas: open("ideas") },
       busyThreads: [...chatTurns.keys()], runs, nextJob,
-      counts: { needsYou: open("needs_you"), inbox, approvals: approvals.length, intents: intents.length },
+      counts: { needsYou, inbox, approvals: approvals.length, intents: intents.length },
       line: statusLine(runs, nextJob, !!apiKey),
     };
   }

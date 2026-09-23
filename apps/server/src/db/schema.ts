@@ -114,7 +114,6 @@ export const orchestratorItems = pgTable(
   {
     id: text("id").primaryKey(),
     ordinal: bigserial("ordinal", { mode: "number" }).notNull(),
-    list: text("list").notNull(),
     status: text("status").notNull(),
     fingerprint: text("fingerprint").notNull(),
     createdAt: epochMs("created_at").notNull(),
