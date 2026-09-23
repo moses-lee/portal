@@ -126,25 +126,6 @@ export const orchestratorItems = pgTable(
   (table) => [index("orchestrator_items_fingerprint_idx").on(table.fingerprint)],
 );
 
-export const orchestratorWatches = pgTable("orchestrator_watches", {
-  id: text("id").primaryKey(),
-  ordinal: bigserial("ordinal", { mode: "number" }).notNull(),
-  status: text("status").notNull(),
-  createdAt: epochMs("created_at").notNull(),
-  updatedAt: epochMs("updated_at").notNull(),
-  lastCheckedAt: epochMs("last_checked_at"),
-  body: jsonb("body").$type<Record<string, unknown>>().notNull(),
-});
-
-/** Tick reports, newest last; the store keeps at most MAX_TICK_REPORTS. */
-export const orchestratorTicks = pgTable("orchestrator_ticks", {
-  ordinal: bigserial("ordinal", { mode: "number" }).primaryKey(),
-  id: text("id").notNull(),
-  startedAt: epochMs("started_at").notNull(),
-  finishedAt: epochMs("finished_at").notNull(),
-  body: jsonb("body").$type<Record<string, unknown>>().notNull(),
-});
-
 /** Single-value documents: `snapshot` (the last tick's pre-scan) and `memory` (the Markdown notes, as `{ text }`). */
 export const orchestratorDocuments = pgTable("orchestrator_documents", {
   key: text("key").primaryKey(),

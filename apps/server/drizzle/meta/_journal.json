@@ -22,6 +22,20 @@
       "when": 1790145521726,
       "tag": "0002_orchestrator_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790148209762,
+      "tag": "0003_watches_to_intents",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790148238960,
+      "tag": "0004_drop_watches_and_ticks",
+      "breakpoints": true
     }
   ]
 }
