@@ -32,8 +32,10 @@ import type {
 import { MAIN_THREAD_ID } from "./types.ts";
 import { createWorldService } from "./world/service.ts";
 
-/** Messages of the thread a chat turn sends to the model. */
+/** Messages of the thread a chat turn sends to the model, at most. */
 export const HISTORY_WINDOW = 40;
+/** Rough tokens of history a chat turn sends; older messages beyond it are left out. */
+export const HISTORY_BUDGET_TOKENS = 12_000;
 /** Messages the stored thread keeps; older ones are dropped. */
 export const MAX_THREAD_MESSAGES = 200;
 /** What a tool part's input and output become once the message left the history window. */
@@ -124,11 +126,32 @@ export function trimThread(messages: OrchestratorMessage[]): { messages: Orchest
   return { messages: result, changed };
 }
 
-/** The thread window a chat turn sends: the last `HISTORY_WINDOW` messages, starting at a user message. */
-export function historyWindow(messages: OrchestratorMessage[]): OrchestratorMessage[] {
+/**
+ * A message's rough size as the model will see it. Tool traffic before the newest message is pruned
+ * from the request, so only text counts there; the newest message counts whole.
+ */
+function messageTokens(message: OrchestratorMessage, newest: boolean): number {
+  const chars = newest ? JSON.stringify(message.parts).length : message.parts.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : 0), 0);
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * The thread window a chat turn sends: the newest messages, at most `HISTORY_WINDOW` and about
+ * `HISTORY_BUDGET_TOKENS`, starting at a user message. The newest message is always kept.
+ */
+export function historyWindow(messages: OrchestratorMessage[], budgetTokens = HISTORY_BUDGET_TOKENS): OrchestratorMessage[] {
   const recent = messages.slice(-HISTORY_WINDOW);
-  const firstUser = recent.findIndex((message) => message.role === "user");
-  return firstUser > 0 ? recent.slice(firstUser) : recent;
+  let start = recent.length;
+  let used = 0;
+  while (start > 0) {
+    const cost = messageTokens(recent[start - 1], start === recent.length);
+    if (start < recent.length && used + cost > budgetTokens) break;
+    used += cost;
+    start--;
+  }
+  const kept = recent.slice(start);
+  const firstUser = kept.findIndex((message) => message.role === "user");
+  return firstUser > 0 ? kept.slice(firstUser) : kept;
 }
 
 export function createOrchestratorRuntime({
@@ -302,7 +325,9 @@ export function createOrchestratorRuntime({
         reasoning: "all",
         toolCalls: "before-last-message",
       });
-      const agent = createOrchestratorAgent({ model: turn.model.model, tools: turn.tools, system: turn.system, providerOptions: turn.model.providerOptions });
+      const agent = createOrchestratorAgent({
+        model: turn.model.model, tools: turn.tools, system: turn.system, providerOptions: turn.model.providerOptions, loader: turn.loader,
+      });
       const result = await agent.stream({ messages: modelMessages, abortSignal: controller.signal, timeout: CALL_TIMEOUT_MS });
       let settled = false;
       return result.toUIMessageStreamResponse<OrchestratorMessage>({

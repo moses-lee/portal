@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { FIRST_TICK_DELAY_MS } from "../src/orchestrator/jobs/tick-job.ts";
-import { HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread } from "../src/orchestrator/runtime.ts";
+import { HISTORY_BUDGET_TOKENS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread } from "../src/orchestrator/runtime.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { TICK_TOOLS } from "../src/orchestrator/tools/index.ts";
+import { TOOL_GROUPS } from "../src/orchestrator/tools/groups.ts";
+import { providerOptionsFor } from "../src/orchestrator/model.ts";
 import { T0, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const usage = {
@@ -268,7 +270,7 @@ test("chat persists the user message at once and the assistant message, with its
   const call = model.doStreamCalls[0];
   assert.match(JSON.stringify(call.prompt), /Hi there/);
   assert.match(JSON.stringify(call.prompt.find((message) => message.role === "system")), /You are Portal: the user's coordinator/);
-  assert.ok(call.tools.length > TICK_TOOLS.length, "chat gets every tool");
+  assert.ok(call.tools.length > TICK_TOOLS.length, "chat gets more than the tick");
   assert.ok(call.tools.some((tool) => tool.name === "run_command"));
 });
 
@@ -485,4 +487,75 @@ test("updateItem emits the full list; dispose stops the job worker", async (t) =
   await runtime.dispose();
   assert.equal(timers.pending.length, 0);
   assert.ok(!events.some((event) => event.type === "watches"), "watches are gone");
+});
+
+/** A scripted stream step that calls one tool. */
+function toolStream(toolName, input, toolCallId = "call-1") {
+  return {
+    stream: convertArrayToReadableStream([
+      { type: "stream-start", warnings: [] },
+      { type: "tool-call", toolCallId, toolName, input: JSON.stringify(input) },
+      { type: "finish", finishReason: finish("tool-calls"), usage },
+    ]),
+  };
+}
+
+test("a chat turn starts with the common tools and loads a group with use_tools for the rest of the turn", async (t) => {
+  const steps = [toolStream("use_tools", { groups: ["items", "memory"] }), toolStream("dismiss_item", { id: "nope" }, "call-2"), textStream("done")];
+  const { runtime, model } = setup(t, { doStream: async () => steps.shift() });
+  await (await runtime.chat(userMessage("dismiss that item"))).text();
+  await flush();
+  const offered = model.doStreamCalls.map((call) => new Set(call.tools.map((tool) => tool.name)));
+  assert.equal(offered.length, 3);
+  const [first, second, third] = offered;
+  assert.ok(first.has("use_tools") && first.has("resolve_pull") && first.has("setup_pr_reviews"));
+  for (const group of Object.values(TOOL_GROUPS)) for (const name of group.tools) assert.ok(!first.has(name), `${name} is not offered up front`);
+  for (const name of [...TOOL_GROUPS.items.tools, ...TOOL_GROUPS.memory.tools]) assert.ok(second.has(name) && third.has(name), `${name} stays loaded`);
+  assert.ok(!second.has("delete_session"), "groups not asked for stay out");
+  const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
+  assert.match(system, /use_tools\(\{ groups \}\)/);
+  assert.match(system, /- items: change Needs-you items \(create_item, /);
+  const [assistant] = (await runtime.history()).filter((message) => message.role === "assistant");
+  const dismiss = assistant.parts.find((part) => part.type === "tool-dismiss_item");
+  assert.match(JSON.stringify(dismiss.output), /Unknown item/, "the loaded tool ran");
+});
+
+test("background turns name their tools and get no loader", async (t) => {
+  const { runtime, model } = setup(t, { doGenerate: async () => textStep("NO_UPDATE"), sessions: [waitingSession()] });
+  await runtime.runTick("manual");
+  const names = model.doGenerateCalls[0].tools.map((tool) => tool.name);
+  assert.ok(!names.includes("use_tools"));
+  assert.doesNotMatch(model.doGenerateCalls[0].prompt.find((message) => message.role === "system").content, /use_tools/);
+});
+
+test("the history window stops at its token budget but always keeps the newest message", () => {
+  const big = (i, role) => ({ id: `b${i}`, role, parts: [{ type: "text", text: "x".repeat(HISTORY_BUDGET_TOKENS) }] });
+  const messages = [big(0, "user"), big(1, "assistant"), big(2, "user"), big(3, "assistant"), big(4, "user")];
+  assert.deepEqual(historyWindow(messages).map((message) => message.id), ["b2", "b3", "b4"]);
+  const huge = { id: "h", role: "user", parts: [{ type: "text", text: "y".repeat(HISTORY_BUDGET_TOKENS * 8) }] };
+  assert.deepEqual(historyWindow([...messages, huge]).map((message) => message.id), ["h"]);
+  // Tool traffic before the newest message is pruned from the request, so it does not count.
+  const withTools = Array.from({ length: 10 }, (_, i) => storedMessage(i));
+  for (const message of withTools.slice(0, -1)) for (const part of message.parts) if (part.output) part.output = { blob: "z".repeat(HISTORY_BUDGET_TOKENS * 4) };
+  assert.equal(historyWindow(withTools).length, 10);
+});
+
+test("Anthropic turns ask for automatic prompt caching; OpenAI keeps its options", () => {
+  assert.deepEqual(providerOptionsFor("anthropic"), { anthropic: { cacheControl: { type: "ephemeral" } } });
+  assert.deepEqual(providerOptionsFor("openai"), { openai: { reasoningEffort: "low", store: false } });
+});
+
+test("calling a tool whose group is not loaded loads the group instead of failing the turn", async (t) => {
+  const steps = [toolStream("dismiss_item", { id: "nope" }), toolStream("dismiss_item", { id: "nope" }, "call-2"), textStream("done")];
+  const { runtime, model } = setup(t, { doStream: async () => steps.shift() });
+  const body = await (await runtime.chat(userMessage("dismiss it"))).text();
+  await flush();
+  assert.doesNotMatch(body, /unavailable tool/);
+  assert.equal(model.doStreamCalls.length, 3);
+  assert.ok(model.doStreamCalls[1].tools.some((tool) => tool.name === "dismiss_item"));
+  const [assistant] = (await runtime.history()).filter((message) => message.role === "assistant");
+  const loaded = assistant.parts.find((part) => part.type === "tool-use_tools");
+  assert.deepEqual(loaded.input, { groups: ["items"], forTool: "dismiss_item" });
+  assert.match(loaded.output.note, /call dismiss_item again/);
+  assert.match(JSON.stringify(assistant.parts.find((part) => part.type === "tool-dismiss_item").output), /Unknown item/);
 });

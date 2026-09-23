@@ -23,8 +23,12 @@ export function buildLanguageModel(settings: OrchestratorSettings, apiKey: strin
 }
 
 /**
- * Provider options for a lightweight assistant: OpenAI reasoning models run at low effort (the
- * provider drops the option with a warning on models without reasoning).
+ * Provider options per provider. Anthropic turns on automatic prompt caching: the breakpoint moves
+ * to the last cacheable block of each request, so every step of a tool loop (and the next turn in
+ * the thread) reads the system prompt, the tools, and the history before it from the cache.
+ *
+ * OpenAI reasoning models run at low effort (the provider drops the option with a warning on
+ * models without reasoning); OpenAI caches long prefixes on its own.
  *
  * `store: false` matters for history. With server-side storage the Responses API replays earlier
  * assistant messages as references to stored items, and a message item must travel with the
@@ -32,6 +36,7 @@ export function buildLanguageModel(settings: OrchestratorSettings, apiKey: strin
  * conversation failed with "provided without its required 'reasoning' item". Unstored, the SDK
  * sends plain content and the thread on disk stays the only copy.
  */
-export function providerOptionsFor(provider: OrchestratorProvider): ProviderOptions | undefined {
-  return provider === "openai" ? { openai: { reasoningEffort: "low", store: false } } : undefined;
+export function providerOptionsFor(provider: OrchestratorProvider): ProviderOptions {
+  if (provider === "anthropic") return { anthropic: { cacheControl: { type: "ephemeral" } } };
+  return { openai: { reasoningEffort: "low", store: false } };
 }

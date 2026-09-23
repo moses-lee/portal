@@ -14,6 +14,7 @@ import { systemPrompt } from "./prompt.ts";
 import { normalizeScope } from "./store.ts";
 import { type ToolContext, createTools } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
+import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
 import { threadTools } from "./tools/threads.ts";
 import type { ModelRole, Scope } from "./types.ts";
 import type { WorldState } from "@portal/contracts/world";
@@ -47,6 +48,8 @@ export type PreparedTurn = {
   model: ResolvedModel;
   tools: ToolSet;
   system: string;
+  /** A chat turn's tool loader (the turn loads tool groups as it goes); null when every tool is offered from the start. */
+  loader: ToolLoader | null;
   /** Record the run's end; safe to call once. */
   finish(outcome: RunOutcome): Promise<JobRun | null>;
 };
@@ -169,6 +172,10 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: options.touched, interactive: options.interactive,
       now: () => hub.timers.now(), self: options.self, hub, turn,
     };
+    let tools = turnTools(hub, ctx, options.toolNames);
+    // A chat turn starts with the common tools and loads the rest by group; background turns name their tools.
+    const loader = options.interactive && !options.toolNames ? createToolLoader(tools) : null;
+    if (loader) tools = { ...tools, ...loader.tool };
     const [login, world] = await Promise.all([hub.deps.github.login().catch(() => null), hub.world.current().catch(() => null)]);
     // Memory is kept per repo as much as per project or session, so retrieval gets the repos behind them too.
     const memory = await hub.memory.promptContext({ scope: world ? widenScope(scope, world) : scope, query: options.query, threadId: options.threadId });
@@ -176,8 +183,9 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved,
       world: world ? hub.world.render(world, { scope }) : "",
       thread: thread && thread.kind === "side" ? { title: thread.title } : null,
+      toolGroups: loader ? toolGroupsGuidance(new Set(Object.keys(tools))) : "",
     });
-    return { run, turn, model, tools: turnTools(hub, ctx, options.toolNames), system, finish };
+    return { run, turn, model, tools, system, loader, finish };
   } catch (err) {
     await finish({ status: "failed", error: errorMessage(err) });
     throw err;
@@ -200,6 +208,7 @@ export async function generateTurn(prepared: PreparedTurn, { prompt, signal, max
 }): Promise<GeneratedTurn> {
   const agent = createOrchestratorAgent({
     model: prepared.model.model, tools: prepared.tools, system: prepared.system, providerOptions: prepared.model.providerOptions, maxSteps,
+    loader: prepared.loader,
   });
   try {
     const result = await agent.generate({ prompt, abortSignal: signal, timeout: CALL_TIMEOUT_MS });
