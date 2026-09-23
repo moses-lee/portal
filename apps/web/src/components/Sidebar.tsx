@@ -24,6 +24,7 @@ import {
 import AgentLogo from "./AgentLogo";
 import IconButton from "./IconButton";
 import PortalMark from "./PortalMark";
+import PortalNavBadge from "./portal/PortalNavBadge";
 import { RenameField, RemoveConfirm } from "./ProjectActions";
 import RemovedProjects from "./RemovedProjects";
 import { useMediaQuery } from "./useMediaQuery";
@@ -447,6 +448,7 @@ function SidebarContent(props: SidebarProps) {
         >
           <Sparkles className="size-4" />
           Talk to Portal
+          <PortalNavBadge />
         </Button>
         <Button
           variant="ghost"

@@ -1,10 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
-import { portalItem, portalStatus, setupPortal } from "./fixtures";
-import type { OrchestratorEvent, OrchestratorMessage } from "../../src/lib/orchestrator/types";
-
-/** Pushes one orchestrator event through the page's open `/api/portal/stream`. */
-const emitPortal = (page: Page, event: OrchestratorEvent) =>
-  page.evaluate((event) => window.__portalEmit("/api/portal/stream", event, "message"), event);
+import { expect, test } from "@playwright/test";
+import { emitPortal, portalItem, portalStatus, setupPortal } from "./fixtures";
+import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
 declare global {
   interface Window {
@@ -23,8 +19,11 @@ test("the sidebar's Talk to Portal button opens /portal and is marked current", 
   await expect(page).toHaveURL(/\/portal$/);
   await expect(button).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
-  // The fixture times the check seven minutes out at setup; a slow run may have shaved one off.
-  await expect(page.getByText(/^gpt-5-mini · next check in [67] min$/)).toBeVisible();
+  // The status line: the server's words, then the next job counted down in the browser (the
+  // fixture times it seven minutes out at setup; a slow run may have shaved one off).
+  const line = page.getByTestId("portal-status-line");
+  await expect(line).toContainText("Idle · next: Check for changes");
+  await expect(line).toContainText(/· in [67] min/);
   // The GitHub inspector belongs to sessions; Talk to Portal has none.
   await expect(page.getByRole("button", { name: "Open GitHub inspector" })).toHaveCount(0);
   await page.getByRole("button", { name: "New conversation", exact: true }).first().click();
@@ -35,9 +34,11 @@ test("the sidebar's Talk to Portal button opens /portal and is marked current", 
 test("without an API key the page asks for one and Add API key opens settings", async ({
   page,
 }) => {
-  await setupPortal(page, { portal: { status: { ready: false }, items: [] } });
+  await setupPortal(page, {
+    portal: { status: { ready: false, line: "Add an API key in Settings to start Portal." }, items: [] },
+  });
   await page.goto("/portal");
-  await expect(page.getByText("Paused: add an API key")).toBeVisible();
+  await expect(page.getByTestId("portal-status-line")).toHaveText("Add an API key in Settings to start Portal.");
   await expect(
     page.getByText("Talk to Portal needs an API key for OpenAI."),
   ).toBeVisible();
@@ -158,23 +159,43 @@ test("a refused send keeps the text in the composer and shows the server's reaso
   await expect(input).toHaveValue("");
 });
 
-test("while a check is running, the composer waits and Ask Portal hands its text to the composer", async ({
+test("background work never blocks the composer; only this thread's own turn does", async ({
   page,
 }) => {
-  await setupPortal(page, { portal: { status: { busy: true } } });
+  const fixture = await setupPortal(page, {
+    portal: {
+      status: {
+        busy: true,
+        line: "Checking for changes…",
+        runs: [{ id: "r1", kind: "tick", jobId: "tick", threadId: null, startedAt: Date.now() - 5000, summary: "Checking for changes" }],
+      },
+    },
+  });
   await page.goto("/portal");
-  await expect(page.getByText("Checking…")).toBeVisible();
-  await expect(page.getByText(/Portal is running a check/)).toBeVisible();
+  await expect(page.getByTestId("portal-status-line")).toContainText("Checking for changes…");
+  const input = page.getByRole("textbox", { name: "Message Portal" });
+  // A job is running, and the user can still talk.
+  await input.fill("Anything new?");
+  await input.press("Enter");
+  await expect(page.getByText("Portal reply to: Anything new?")).toBeVisible();
+
+  // A turn in this thread started elsewhere (another tab): the composer offers Stop, and a card's
+  // Ask Portal hands its text to the composer instead of sending.
+  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
+  await expect(page.getByText(/Portal is answering in this thread/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
   await page
     .getByRole("article", { name: portalItem.title })
     .getByRole("button", { name: "Ask Portal" })
     .click();
-  const input = page.getByRole("textbox", { name: "Message Portal" });
   await expect(input).toHaveValue("Set up a fix for example/portal#42");
   await expect(input).toBeFocused();
+  await page.getByRole("button", { name: "Stop agent" }).click();
+  await expect
+    .poll(() => fixture.requests.filter((r) => r.path === "/api/portal/threads/main/cancel" && r.method === "POST").length)
+    .toBe(1);
 
-  // The check finishing (a `status` event) frees the composer; the draft is still there to send.
+  // The turn ending (a `status` event) frees the composer; the draft is still there to send.
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: false } });
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(input).toHaveValue("Set up a fix for example/portal#42");

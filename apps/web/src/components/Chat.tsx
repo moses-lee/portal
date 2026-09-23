@@ -15,6 +15,8 @@ import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import TerminalPage from "./TerminalPage";
 import PortalPage from "./PortalPage";
+import ApprovalsDialog from "./portal/ApprovalsDialog";
+import { PortalLiveProvider } from "./portal/PortalLive";
 import AddProjectDialog from "./AddProjectDialog";
 import SettingsDialog from "./SettingsDialog";
 import { usePins } from "./usePins";
@@ -678,6 +680,7 @@ export default function Chat() {
     setShowSidebar(false);
   };
   return (
+    <PortalLiveProvider>
     <div className="portal-shell">
       <Sidebar
         projects={orderedProjects}
@@ -730,6 +733,8 @@ export default function Chat() {
       />
       {portalOpen ? (
         <PortalPage
+          pathname={pathname ?? "/portal"}
+          onNavigate={pushPath}
           onOpenSidebar={toggleSidebar}
           onOpenSession={selectSession}
         />
@@ -794,6 +799,13 @@ export default function Chat() {
           onGitAction={startGitAction}
         />
       )}
+      <ApprovalsDialog
+        onNavigate={(path) => {
+          pushPath(path);
+          setShowSidebar(false);
+        }}
+      />
     </div>
+    </PortalLiveProvider>
   );
 }
