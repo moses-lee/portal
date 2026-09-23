@@ -45,7 +45,9 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  defaultModels,
   orchestratorProviders,
+  type ModelRole,
   type OrchestratorProvider,
 } from "@/lib/orchestrator/types";
 import {
@@ -86,7 +88,7 @@ const sectionMeta: Record<
   orchestrator: {
     label: "Talk to Portal",
     description:
-      "The assistant that keeps an eye on your sessions and pull requests. Choose the model it runs on, how often it checks in, and the API key it uses. Keys never leave this machine.",
+      "The assistant that keeps an eye on your sessions and pull requests. Choose the models it runs on, how often it checks in, and the API keys it uses. Keys never leave this machine.",
     icon: Bot,
   },
   scripts: {
@@ -115,14 +117,16 @@ const providerLabels: Record<OrchestratorProvider, string> = {
 
 /** Talk to Portal fields that are typed into and saved when the user leaves them. */
 type OrchestratorTextField =
-  "model" | "intervalMinutes" | "idleIntervalMinutes";
+  "model" | "bookkeepingModel" | "intervalMinutes" | "idleIntervalMinutes";
 const orchestratorTextFields: readonly OrchestratorTextField[] = [
   "model",
+  "bookkeepingModel",
   "intervalMinutes",
   "idleIntervalMinutes",
 ];
 const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
-  model: "Model",
+  model: "Chat model",
+  bookkeepingModel: "Bookkeeping model",
   intervalMinutes: "Check every … minutes while Portal is open",
   idleIntervalMinutes: "Check every … minutes while no browser is connected",
 };
@@ -143,6 +147,7 @@ const scriptTextKey = (
 type FieldKey =
   | GitActionKind
   | "provider"
+  | "bookkeepingProvider"
   | OrchestratorTextField
   | `apiKey.${OrchestratorProvider}`
   | `script.${ScriptKind}.${keyof ScriptSettings}`;
@@ -367,7 +372,7 @@ export default function SettingsDialog({
     if (!settings) return;
     const trimmed = value.trim();
     let patch: SettingsPatch["orchestrator"];
-    if (field === "model") {
+    if (field === "model" || field === "bookkeepingModel") {
       if (!trimmed) {
         setStatusFor(field, { kind: "error", message: "Enter a model id." });
         return;
@@ -379,11 +384,16 @@ export default function SettingsDialog({
         });
         return;
       }
-      if (trimmed === settings.orchestrator.model) {
+      const current =
+        field === "model"
+          ? settings.orchestrator.model
+          : settings.orchestrator.bookkeeping.model;
+      if (trimmed === current) {
         clearOrchestratorDraft(field);
         return;
       }
-      patch = { model: trimmed };
+      patch =
+        field === "model" ? { model: trimmed } : { bookkeeping: { model: trimmed } };
     } else {
       const max = orchestratorLimits[field];
       const minutes = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
@@ -408,13 +418,31 @@ export default function SettingsDialog({
     if (ok) clearOrchestratorDraft(field);
   };
 
-  const saveProvider = (provider: OrchestratorProvider) => {
-    if (!settings || provider === settings.orchestrator.provider) return;
-    void run(
-      "provider",
-      () => update({ orchestrator: { provider } }),
+  /**
+   * Changes a role's provider. The server resets that role's model to the provider's default
+   * unless a model comes with the change, so a model the user has typed (and not yet saved) is
+   * sent along and kept; otherwise the default takes over.
+   */
+  const saveProvider = async (role: ModelRole, provider: OrchestratorProvider) => {
+    if (!settings) return;
+    const chat = role === "chat";
+    const current = chat
+      ? settings.orchestrator.provider
+      : settings.orchestrator.bookkeeping.provider;
+    if (provider === current) return;
+    const modelField: OrchestratorTextField = chat ? "model" : "bookkeepingModel";
+    const typed = orchestratorDrafts[modelField]?.trim();
+    const model =
+      typed && typed.length <= orchestratorLimits.modelLength ? typed : undefined;
+    const patch: SettingsPatch["orchestrator"] = chat
+      ? { provider, ...(model ? { model } : {}) }
+      : { bookkeeping: { provider, ...(model ? { model } : {}) } };
+    const ok = await run(
+      chat ? "provider" : "bookkeepingProvider",
+      () => update({ orchestrator: patch }),
       "Could not save the provider.",
     );
+    if (ok) clearOrchestratorDraft(modelField);
   };
 
   /** Stores (or, with "", clears) the key for `provider`. Resolves true on success so the field can reset. */
@@ -577,31 +605,61 @@ export default function SettingsDialog({
           <SectionHeading id="settings-orchestrator" section="orchestrator" />
           {settings && (
             <>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <ProviderField
-                  value={settings.orchestrator.provider}
-                  saving={!!saving.provider}
-                  status={status.provider ?? null}
-                  onChange={saveProvider}
-                />
-                <OrchestratorTextInput
-                  field="model"
-                  value={
-                    orchestratorDrafts.model ?? settings.orchestrator.model
-                  }
-                  dirty={orchestratorDrafts.model !== undefined}
-                  saving={!!saving.model}
-                  status={status.model ?? null}
-                  onChange={(value) =>
-                    setOrchestratorDrafts((prev) => ({ ...prev, model: value }))
-                  }
-                  onBlur={() => {
-                    const draft = orchestratorDrafts.model;
-                    if (draft !== undefined)
-                      void saveOrchestratorField("model", draft);
-                  }}
-                />
-              </div>
+              {(["chat", "bookkeeping"] as const).map((role) => {
+                const chat = role === "chat";
+                const modelField: OrchestratorTextField = chat
+                  ? "model"
+                  : "bookkeepingModel";
+                const providerKey = chat ? "provider" : "bookkeepingProvider";
+                const choice = chat
+                  ? {
+                      provider: settings.orchestrator.provider,
+                      model: settings.orchestrator.model,
+                    }
+                  : settings.orchestrator.bookkeeping;
+                return (
+                  <div key={role} className="space-y-3 rounded-xl border border-border/60 p-4">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium">
+                        {chat ? "Chat and curation" : "Bookkeeping"}
+                      </p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {chat
+                          ? "Talks with you, runs helper turns, and curates memory. A frontier model works best."
+                          : "Turns what changed between checks into items. A fast, inexpensive model is enough."}
+                      </p>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <ProviderField
+                        label={chat ? "Chat provider" : "Bookkeeping provider"}
+                        value={choice.provider}
+                        saving={!!saving[providerKey]}
+                        status={status[providerKey] ?? null}
+                        onChange={(provider) => void saveProvider(role, provider)}
+                      />
+                      <OrchestratorTextInput
+                        field={modelField}
+                        value={orchestratorDrafts[modelField] ?? choice.model}
+                        placeholder={defaultModels[choice.provider][role]}
+                        dirty={orchestratorDrafts[modelField] !== undefined}
+                        saving={!!saving[modelField]}
+                        status={status[modelField] ?? null}
+                        onChange={(value) =>
+                          setOrchestratorDrafts((prev) => ({
+                            ...prev,
+                            [modelField]: value,
+                          }))
+                        }
+                        onBlur={() => {
+                          const draft = orchestratorDrafts[modelField];
+                          if (draft !== undefined)
+                            void saveOrchestratorField(modelField, draft);
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
               {(["intervalMinutes", "idleIntervalMinutes"] as const).map(
                 (field) => (
                   <OrchestratorTextInput
@@ -1102,11 +1160,13 @@ function PromptField({
 }
 
 function ProviderField({
+  label,
   value,
   saving,
   status,
   onChange,
 }: {
+  label: string;
   value: OrchestratorProvider;
   saving: boolean;
   status: FieldStatus | null;
@@ -1118,7 +1178,7 @@ function ProviderField({
     <div className="space-y-2">
       <div className="flex h-6 items-center">
         <label htmlFor={id} className="text-xs font-medium">
-          Provider
+          {label}
         </label>
       </div>
       <Select
@@ -1150,6 +1210,7 @@ function ProviderField({
 function OrchestratorTextInput({
   field,
   value,
+  placeholder,
   dirty,
   saving,
   status,
@@ -1158,6 +1219,8 @@ function OrchestratorTextInput({
 }: {
   field: OrchestratorTextField;
   value: string;
+  /** Shown while the field is empty; numeric fields default to their stored default. */
+  placeholder?: string;
   dirty: boolean;
   saving: boolean;
   status: FieldStatus | null;
@@ -1166,7 +1229,7 @@ function OrchestratorTextInput({
 }) {
   const id = useId();
   const statusId = `${id}-status`;
-  const numeric = field !== "model";
+  const numeric = field === "intervalMinutes" || field === "idleIntervalMinutes";
   return (
     <div className="space-y-2">
       <div className="flex h-6 items-center">
@@ -1179,7 +1242,7 @@ function OrchestratorTextInput({
         type={numeric ? "number" : "text"}
         inputMode={numeric ? "numeric" : undefined}
         min={numeric ? 1 : undefined}
-        max={numeric ? orchestratorLimits[field] : undefined}
+        max={numeric ? orchestratorLimits[field as "intervalMinutes"] : undefined}
         step={numeric ? 1 : undefined}
         maxLength={numeric ? undefined : orchestratorLimits.modelLength}
         autoComplete="off"
@@ -1191,9 +1254,10 @@ function OrchestratorTextInput({
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
         placeholder={
-          numeric
-            ? String(defaultSettings.orchestrator[field])
-            : defaultSettings.orchestrator.model
+          placeholder ??
+          (numeric
+            ? String(defaultSettings.orchestrator[field as "intervalMinutes"])
+            : undefined)
         }
         className="text-xs md:text-xs"
       />
