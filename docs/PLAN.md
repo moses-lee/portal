@@ -2,8 +2,8 @@
 
 Status as of 2026-09-23. This is the working plan for turning Portal from a chat UI with a
 timer-driven assistant into a coordinator that knows the user's world, runs its own background
-work, and keeps an auditable memory. Phase 1 (the server split) is merged and live; phase 2 (the
-orchestrator core) is built on `feat/orchestrator-v2` (§1.5); phase 3 is next.
+work, and keeps an auditable memory. Phases 1 and 2 are merged into `main` (§1.2, §1.5). The live
+instance still runs phase 1 code until it is restarted (§1.6). Phase 3 is next (§1.8).
 
 Companion research (outside the repo, in the author's notes): Muse product/architecture,
 Muse agent design, Muse memory deep-dive, Instinct memory, agent-memory survey, the original
@@ -93,7 +93,7 @@ renames `settings.json` (it holds plain-text keys). Stop the old instances first
 stack with a scratch `PORTAL_HOME` to try it. `pnpm --filter @portal/server run import --dry-run`
 previews the import.
 
-### 1.5 What phase 2 delivered (branch `feat/orchestrator-v2`)
+### 1.5 What phase 2 delivered (merged into `main`)
 
 Built by the integrator plus five parallel agents (jobs, world, memory, approvals, web) under
 `docs/phase-2-brief.md`, then merged, fixed, and checked live.
@@ -125,8 +125,79 @@ Built by the integrator plus five parallel agents (jobs, world, memory, approval
   question and started a review; chat answered in 5 s during a tick; a delete raised the approval
   dialog and a denial was respected; a remembered preference showed in the memory browser with its
   quote. The migrations ran cleanly on the real data.
-- **Before cut-over.** The live database stores only an OpenAI key; the new defaults are Anthropic,
-  so add an Anthropic key in Settings (or pick OpenAI models for both roles) after merging.
+
+### 1.6 Switching the live instance to phase 2
+
+The live server (`node src/index.ts` on 3100, no watch) and web (`next start` on 3000) keep running
+the phase 1 code they loaded. To switch: stop both by port, `pnpm install`, `pnpm prod` from the
+repo root. The first boot applies migrations 0002–0005 to the live database (verified on a clone:
+watches become intents, open ideas are resolved, tick reports become runs). The live database
+stores only an OpenAI key and the new defaults are Anthropic (`claude-opus-5-5` for chat,
+`claude-haiku-4-5` for bookkeeping), so add an Anthropic key in Settings, or choose OpenAI models
+for both roles; until then the page asks for a key.
+
+### 1.7 Known gaps after phase 2
+
+None blocks use; each is a candidate for phase 3 or later.
+
+- **Prompt weight.** A chat turn sends about 70k input tokens: every domain's tool schemas plus 40
+  messages of history. Tool sets are not trimmed per turn.
+- **Approvals.**
+  - Approving a card action holds the `decide` request open until the replayed call finishes,
+    which can take minutes for a worktree removal with scripts.
+  - The shell classifier cannot see repo-local git config: `core.fsmonitor`, `core.pager`, or an
+    alias can run code even during a read-only `git status`.
+  - Only the classic tools are gated and replayable. Gating a jobs, world, or memory tool needs an
+    entry in `approvals/policy.ts` and in the replay rebuild.
+  - An expired job approval resolves its Needs-you item but does not resume the job. A recurring
+    job whose run ends `awaiting_approval` keeps its schedule and may hit the same approval again
+    (identical pending requests are reused, not duplicated).
+- **Jobs and runs.**
+  - `POST /api/portal/runs/:id/cancel` answers 409 for chat runs: the runtime owns chat abort
+    controllers.
+  - An inline helper (`run_helper` with `wait`) is not aborted when its chat turn is cancelled,
+    because `define()` does not pass the abort signal through.
+  - The `consolidate` job kind exists but does nothing.
+  - Without a key the tick still runs on schedule and records a run saying nothing was checked.
+- **Memory.**
+  - Entity summaries are never generated, and nothing acts on `reviewBy`.
+  - There is no route to create an entity on its own; entities come with their first record.
+  - Retrieval scans every entity on each turn. That is fine at the current size.
+- **World.**
+  - `resolve_pull` only searches repos Portal has checked out.
+  - Ids in the rendered world are 8-character prefixes, but classic tools need full ids, so the
+    model may spend one resolve call first.
+  - World rebuilds write no activity entry.
+  - `get_tick_digest` still calls `collectSnapshot` itself, a second GitHub query beside the world
+    build.
+- **Web.**
+  - The Portal event stream is open on every page, so any open tab counts as present and the
+    shorter tick interval applies.
+  - "Decide later" on an approval lasts until a full page reload.
+  - Upcoming fetches active and paused jobs in two requests.
+- **Types.** The hub's memory and approvals interfaces are narrower than the services; their routes
+  narrow them with runtime guards.
+
+### 1.8 What's next
+
+Phase 3 (§5). Phase 2 already covers much of its first three flows: "review PR N" resolves, starts
+sessions with a prompt written from memory, and a goal reports when they finish; "monitor PR N"
+is a goal with an agent-chosen cadence; "remember that ..." stores a user-stated record. What is
+left:
+
+1. **Review flow finish.** When the review sessions finish, a helper summarizes their transcripts
+   into a Needs-you item with the findings and links, and the prompt is built from the author's
+   review style and the code-review task type when memory has them.
+2. **Monitor flow.** Notify only on state changes; explicit cancel; tested end to end.
+3. **Consolidator.** Implement the `consolidate` job kind per §5 step 4, with its diff and digest
+   visible in the UI.
+4. **Live proof** of the three flows on real projects, plus the gaps in §1.7 that phase 3 touches
+   (prompt weight first).
+
+Undecided, to ask the user before building: when the consolidator runs (proposed: nightly around
+03:00 local time plus whenever the inbox passes about ten items); where its digest goes (a side
+thread per run, or one line in the main thread); which PR events the monitor reports (proposed:
+merged, closed, checks failing, changes requested, conflicts; new review comments are optional).
 
 ---
 
@@ -255,7 +326,7 @@ with pgvector on port 5433.
 8. Importer from `~/.portal`; `server.mjs` and `instrumentation.ts` removed.
 9. Playwright starts server plus web; README rewritten; `packages/shared`; launchd template.
 
-### Phase 2: orchestrator v2 core
+### Phase 2: orchestrator v2 core (done; see §1.5 and §1.7)
 
 Goal: the coordinator never blocks, knows the world, remembers with provenance, and asks before
 doing anything irreversible. Behaviour visibly changes for the user in this phase.
@@ -334,9 +405,7 @@ data with its diff visible in the UI; the activity log explains every action the
 
 Settled during phase 2: the live Portal was cut over before phase 2; side threads are opened by the
 agent only and retrieve memory for their own scope (plus CORE.md); no notifications outside the
-Portal UI for now.
+Portal UI for now. Phase 3's own open points are listed in §1.8.
 
-- Chat turns carry about 70k input tokens (tool schemas for every domain plus 40 messages of
-  history). Cost is not a constraint, but trimming tool sets per turn may matter for latency.
 - Embeddings: not needed for phase 2 (scoped retrieval plus full-text search); pgvector is
   installed if phase 3 wants semantic search over the journal.
