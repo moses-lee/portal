@@ -139,3 +139,19 @@ test("only the turns that should see them get the job tools", async (t) => {
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "intent_check", origin: "job", interactive: false })), {}, "a check without an intent gets nothing");
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "helper", origin: "job", interactive: false })), {});
 });
+
+test("stopping the chat turn stops the inline helper it waits for", async (t) => {
+  const h = await started(jobsHarness(t, {
+    doGenerate: ({ abortSignal }) => new Promise((_, reject) => abortSignal.addEventListener("abort", () => reject(new Error("aborted")))),
+  }));
+  const parent = await chatRun(h);
+  const tools = h.jobs.tools(toolContext(h, { runId: parent.id }));
+  const chat = new AbortController();
+  const pending = tools.run_helper.execute({ prompt: "Dig into it.", wait: true }, { toolCallId: "c1", messages: [], abortSignal: chat.signal });
+  await flush();
+  const [helper] = h.jobs.running().filter((run) => run.kind === "helper");
+  assert.ok(helper, "the helper is running");
+  chat.abort();
+  assert.match((await pending).error, /aborted/);
+  assert.equal((await h.jobs.getRun(helper.id)).status, "cancelled");
+});

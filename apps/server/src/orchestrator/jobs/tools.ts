@@ -254,9 +254,10 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         maxSteps: z.number().int().min(1).max(24).optional(),
         wait: z.boolean().optional(),
       }),
-      async ({ prompt, role, tools, maxSteps, wait }) => {
+      async ({ prompt, role, tools, maxSteps, wait }, options) => {
         if (wait && turn.origin === "chat") {
-          const { runId, text } = await helpers.runInline(ctx, { prompt, role, tools, maxSteps });
+          // Stopping the chat turn stops the helper it is waiting for.
+          const { runId, text } = await helpers.runInline(ctx, { prompt, role, tools, maxSteps }, options?.abortSignal);
           return { runId, text };
         }
         const job = await helpers.schedule({ prompt, role, tools, maxSteps }, { ctx, chain: true });

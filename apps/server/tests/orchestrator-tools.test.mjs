@@ -16,7 +16,7 @@ const options = { toolCallId: "call", messages: [] };
 
 const digest = { at: T0, since: null, changes: [], openItems: [], memory: "secret notes" };
 
-function setup({ interactive = true, settings = fakeSettings(), ...overrides } = {}) {
+function setup({ interactive = true, settings = fakeSettings(), memory = [], ...overrides } = {}) {
   const store = createMemoryOrchestratorStore();
   const { deps, state } = fakeDeps(overrides);
   const touched = new Set();
@@ -28,6 +28,11 @@ function setup({ interactive = true, settings = fakeSettings(), ...overrides } =
         intents.push({ input, how });
         return { intent: { id: `i${intents.length}`, ...input }, job: { id: `j${intents.length}` } };
       },
+    },
+    // `memory` seeds entities as { type, key, records }; recordsFor answers the ones asked for that exist.
+    memory: {
+      recordsFor: async (wanted) => wanted.flatMap(({ type, key }) => memory.filter((entry) => entry.type === type && entry.key === key.toLowerCase())
+        .map((entry) => ({ entity: { id: `e-${entry.key}`, type: entry.type, key: entry.key }, records: entry.records }))),
     },
   };
   const ctx = {
@@ -339,7 +344,10 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
     originUrl: async (dir) => (dir === "/repo" ? "git@github.com:acme/app.git" : null),
   });
   const result = await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [1, 2, 3, 4] });
-  assert.deepEqual(result.sessions, [{ pr: 1, sessionId: "s1", projectId: "p2" }, { pr: 2, sessionId: "s2", projectId: "p3" }]);
+  assert.deepEqual(result.sessions, [
+    { pr: 1, url: "https://github.com/acme/app/pull/1", sessionId: "s1", projectId: "p2", title: "PR 1", author: "Moses-Lee" },
+    { pr: 2, url: "https://github.com/acme/app/pull/2", sessionId: "s2", projectId: "p3", title: "PR 2", author: "someone" },
+  ]);
   assert.equal(result.errors.length, 2);
   assert.match(result.errors[0], /PR #3: .*fork/);
   assert.match(result.errors[1], /PR #4: PR #4 not found/);
@@ -357,7 +365,9 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
   assert.match(input.trigger, /s1, s2/);
   assert.match(input.action, /findings/);
   assert.equal(input.fireBudget, 1);
-  assert.deepEqual(input.check, { type: "every", everyMs: 5 * 60_000 });
+  assert.deepEqual(input.check, { type: "every", everyMs: 2 * 60_000 });
+  // The check needs no model: the review watch lists each PR's session.
+  assert.deepEqual(input.checkPayload.review, { repo: "acme/app", sessions: result.sessions });
   assert.deepEqual(input.scope.sessionIds, ["s1", "s2"]);
   assert.deepEqual(input.scope.projectIds, ["p1", "p2", "p3"]);
   assert.deepEqual(input.scope.pulls.map((pull) => pull.number), [1, 2]);
@@ -376,6 +386,36 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
   assert.match(partial.errors[0], /PR #2: the session started but the prompt failed: agent not ready/);
   assert.equal((await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [] })).invalidInput, true);
   assert.equal((await run(tools.setup_pr_reviews, { repo: "not a repo", numbers: [1] })).invalidInput, true);
+});
+
+test("setup_pr_reviews asks for a brief written from memory when memory has review guidance for someone else's PR", async () => {
+  const record = (id, key, type, body) => ({ id, key, type, body });
+  const { tools, state, intents } = setup({
+    projects: [project()],
+    memory: [
+      { type: "person", key: "someone", records: [record("m1", "review-style", "procedure", "Check the migrations first."), record("m2", "timezone", "fact", "Lives in Berlin.")] },
+      { type: "task_type", key: "code-review", records: [record("m3", "format", "preference", "Blocking issues first, then nits.")] },
+      { type: "repo", key: "acme/app", records: [record("m4", "tests", "convention", "Every change has a test."), record("m5", "owner", "fact", "Owned by infra.")] },
+    ],
+    getPull: async (repoRoot, number) => ({ number, title: `PR ${number}`, branch: `feat/${number}`, state: "open", updatedAt: T0, fork: false, author: number === 1 ? "moses-lee" : "Someone" }),
+    ensureWorktree: async ({ branch }) => ({ path: `/wt/${branch}`, created: true }),
+    originUrl: async (dir) => (dir === "/repo" ? "git@github.com:acme/app.git" : null),
+  });
+  const refused = await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [2] });
+  assert.match(refused.error, /Memory has guidance/);
+  for (const id of ["m1", "m3", "m4"]) assert.match(refused.error, new RegExp(`- ${id} \\(`));
+  for (const id of ["m2", "m5"]) assert.doesNotMatch(refused.error, new RegExp(`- ${id} `), `${id} is not about reviewing`);
+  assert.deepEqual(state.created, [], "nothing started");
+
+  // The user's own PR needs no brief from memory.
+  assert.equal((await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [1] })).sessions.length, 1);
+
+  const done = await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [2], prompt: "Start with the migrations; blocking issues first.", memoryIds: ["m1", "m3", "not an id"] });
+  assert.equal(done.sessions.length, 1);
+  assert.equal(state.prompts.at(-1).text, "Start with the migrations; blocking issues first.\n\nPR #2: https://github.com/acme/app/pull/2");
+  const { input } = intents.at(-1);
+  assert.deepEqual(input.checkPayload.review.memoryIds, ["m1", "m3"]);
+  assert.match(input.notes, /Brief written from memory: m1, m3/);
 });
 
 test("get_settings masks keys and returns the prompts", async () => {

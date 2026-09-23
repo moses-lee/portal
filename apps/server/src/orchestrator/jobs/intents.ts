@@ -16,6 +16,7 @@ import { MAIN_THREAD_ID } from "../types.ts";
 import type { JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
 import { intentCheckPrompt } from "./prompt.ts";
+import { checkReview, reviewWatchOf } from "./review-watch.ts";
 import { describeSchedule, nextRunAt, replanned } from "./schedule.ts";
 import type { IntentChanges } from "./store.ts";
 
@@ -63,7 +64,8 @@ export function createIntents(core: JobsCore) {
     if (input.expiresAt != null && input.expiresAt <= now) throw httpError("expiresAt is in the past.", 400);
     const intent = await store.createIntent({ ...input, threadId: input.threadId ?? how.threadId ?? null });
     const job = await core.scheduleJob({
-      kind: "intent_check", title: checkTitle(intent.text), schedule: input.check, payload: { intentId: intent.id, ...(input.role ? { role: input.role } : {}) },
+      kind: "intent_check", title: checkTitle(intent.text), schedule: input.check,
+      payload: { ...input.checkPayload, intentId: intent.id, ...(input.role ? { role: input.role } : {}) },
       intentId: intent.id, threadId: intent.threadId, createdBy: how.actor === "user" ? "user" : how.actor === "system" ? "system" : "agent",
       nextRunAt: input.checkNow ? now : nextRunAt(input.check, { now, lastRunAt: null, present: core.present() }),
     }, how.actor, { runId: how.runId });
@@ -125,8 +127,9 @@ export function createIntents(core: JobsCore) {
     const intent = await store.updateIntent(id, { status: "active", expiresAt, ...budget });
     const [last] = await store.listJobs({ intentId: id, kind: ["intent_check"] });
     const schedule: JobSchedule = last?.schedule.type === "every" || last?.schedule.type === "cron" ? last.schedule : { type: "every", everyMs: DEFAULT_CHECK_MS };
+    // The new check job carries the old one's payload: its role and any watch it keeps.
     await core.scheduleJob({
-      kind: "intent_check", title: checkTitle(intent.text), schedule, payload: { intentId: id, ...(last?.payload.role ? { role: last.payload.role } : {}) },
+      kind: "intent_check", title: checkTitle(intent.text), schedule, payload: { ...last?.payload, intentId: id },
       intentId: id, threadId: intent.threadId, createdBy: how.actor === "user" ? "user" : "agent", nextRunAt: nextRunAt(schedule, { now, lastRunAt: null, present: core.present() }),
     }, how.actor, { runId: how.runId });
     void hub.activity.log({ actor: how.actor, kind: "intent.updated", summary: `Re-activated the intent "${short(intent.text)}"`, refs: intentRefs(intent, how.runId), detail: { status: "active" } });
@@ -215,6 +218,9 @@ export function createIntents(core: JobsCore) {
       await close(intent.id, "expired", { actor: "system", runId: run.id });
       return { summary: "The intent expired.", jobStatus: "done" };
     }
+    // A watch the server can evaluate itself needs no model turn.
+    const review = reviewWatchOf(job.payload);
+    if (review) return checkReview({ core, fire }, { job, run, trigger, signal }, intent, review);
     const touched = new Set<string>();
     const threadId = intent.threadId ?? MAIN_THREAD_ID;
     const prepared = await prepareTurn(hub, {

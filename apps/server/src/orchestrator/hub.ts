@@ -11,7 +11,7 @@
 import type { LanguageModel, Tool } from "ai";
 import type { Approval } from "@portal/contracts/approvals";
 import type { Intent, IntentPatch, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus, RunTrigger, RunUsage } from "@portal/contracts/jobs";
-import type { CoreDocument } from "@portal/contracts/memory";
+import type { CoreDocument, MemoryEntity, MemoryRecord } from "@portal/contracts/memory";
 import type { WorldState } from "@portal/contracts/world";
 import type { Sql } from "postgres";
 import type { Db } from "../db/client.ts";
@@ -78,6 +78,11 @@ export type IntentInput = Pick<Intent, "text" | "trigger" | "action"> & Partial<
   checkNow?: boolean;
   /** The model that checks it (default bookkeeping). */
   role?: ModelRole;
+  /**
+   * Extra fields for the check job's payload. A `review` or `pull` watch there makes the check
+   * deterministic (see `jobs/review-watch.ts` and `jobs/pull-watch.ts`) instead of a model turn.
+   */
+  checkPayload?: Record<string, unknown>;
 };
 
 export interface JobsService {
@@ -151,6 +156,8 @@ export interface MemoryService {
   promptContext(input: { scope: Scope; query: string; threadId: string | null }): Promise<MemoryPromptContext>;
   /** Proposed records waiting for the user. */
   inboxCount(): Promise<number>;
+  /** The active records of each named entity that exists (type and key as written; keys are normalized), entities in the order given. */
+  recordsFor(entities: { type: MemoryEntity["type"]; key: string }[]): Promise<{ entity: MemoryEntity; records: MemoryRecord[] }[]>;
   /** remember, propose_memory, search_memory, explain_memory, forget, ... */
   tools(ctx: DomainToolContext): ToolSet;
 }

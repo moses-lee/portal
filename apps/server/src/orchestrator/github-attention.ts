@@ -413,3 +413,65 @@ export function attentionReasons(pull: PullAttention): ItemKind[] {
   if (pull.roles.includes("reviewer") && !pull.draft) reasons.push("pr_review_requested");
   return reasons;
 }
+
+// ---------------------------------------------------------------------------------------------
+// One pull request
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * One PR's state as a monitor compares it between checks: the attention fields plus what moves
+ * without changing them (new commits, new reviews and comments, the latest review).
+ */
+export type PullStatus = Omit<PullAttention, "roles" | "localProjectId" | "worktreeProjectId"> & {
+  headSha: string | null;
+  /** Reviews submitted, of any state. */
+  reviews: number;
+  /** Conversation comments plus review-thread comments. */
+  comments: number;
+  lastReview: { author: string; state: string; at: number } | null;
+};
+
+/** The PR fields plus the counts; `number` is inlined because gh's `-f` passes strings and the field wants an Int. */
+export const pullStatusQuery = (number: number) => `query($owner:String!,$name:String!){
+  repository(owner:$owner,name:$name){ pullRequest(number:${number}){
+    number title url isDraft state mergeable reviewDecision baseRefName headRefName headRefOid updatedAt
+    author { login } repository { nameWithOwner }
+    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    comments { totalCount }
+    reviewThreads(first: 100) { nodes { comments { totalCount } } }
+    reviews(last: 1) { totalCount nodes { state submittedAt author { login } } }
+  } }
+}`;
+
+export function toPullStatus(raw: unknown): PullStatus | null {
+  const attention = toAttention(raw, "author");
+  const p = asRecord(raw);
+  if (!attention || !p) return null;
+  const { roles: _roles, localProjectId: _local, worktreeProjectId: _worktree, ...base } = attention;
+  const threads = asRecord(p.reviewThreads)?.nodes;
+  const threadComments = Array.isArray(threads) ? threads.reduce<number>((sum, node) => sum + Number(asRecord(asRecord(node)?.comments)?.totalCount ?? 0), 0) : 0;
+  const reviews = asRecord(p.reviews);
+  const last = Array.isArray(reviews?.nodes) ? asRecord(reviews.nodes.at(-1)) : null;
+  const at = typeof last?.submittedAt === "string" ? Date.parse(last.submittedAt) : NaN;
+  return {
+    ...base,
+    headSha: typeof p.headRefOid === "string" ? p.headRefOid : null,
+    reviews: Number(reviews?.totalCount ?? 0),
+    comments: Number(asRecord(p.comments)?.totalCount ?? 0) + threadComments,
+    lastReview: last ? { author: String(asRecord(last.author)?.login ?? ""), state: String(last.state ?? "").toLowerCase(), at: Number.isFinite(at) ? at : 0 } : null,
+  };
+}
+
+/** One PR's status through a single GraphQL call; throws with gh's reason when it cannot answer. */
+export async function readPullStatus(repo: string, number: number, { gh = defaultGh, cwd = os.homedir(), retryDelayMs = RETRY_DELAY }: {
+  gh?: GhRunner;
+  cwd?: string;
+  retryDelayMs?: number;
+} = {}): Promise<PullStatus> {
+  const [owner, name] = repo.split("/");
+  if (!owner || !name || !Number.isSafeInteger(number) || number <= 0) throw new WorktreeError(`Not a pull request: ${repo}#${number}`, 400);
+  const outcome = await runGraphql(gh, cwd, pullStatusQuery(number), { owner, name }, retryDelayMs);
+  const status = toPullStatus(asRecord(asRecord(outcome.data?.repository)?.pullRequest));
+  if (!status) throw new WorktreeError(outcome.error ?? outcome.warning ?? `${repo}#${number} was not found`, outcome.error ? 409 : 404);
+  return status;
+}

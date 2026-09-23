@@ -29,7 +29,7 @@ const TRUNCATION_NOTE = "\n\n[Portal truncated this file: memory is capped at 32
 /** Every item kind; a patch may move an item to another kind as its condition changes. */
 export const itemKinds = [
   "session_finished", "session_waiting", "session_offline", "pr_checks_failing", "pr_changes_requested", "pr_conflicts",
-  "pr_review_requested", "pr_merged", "pr_closed", "worktree_merged", "worktree_dirty", "folder_missing", "watch_update", "intent_update",
+  "pr_review_requested", "pr_merged", "pr_closed", "worktree_merged", "worktree_dirty", "folder_missing", "watch_update", "intent_update", "review_findings",
   "approval_needed", "custom",
 ] as const satisfies readonly ItemKind[];
 const itemKindSet = new Set<string>(itemKinds);

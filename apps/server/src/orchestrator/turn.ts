@@ -31,6 +31,8 @@ export type TurnOptions = {
   interactive: boolean;
   /** When given, only these tools (classic and domain) are offered. */
   toolNames?: readonly string[];
+  /** Tools only this turn has (a summarizer's report tool), offered beside the rest and logged like them. */
+  extraTools?: ToolSet;
   /** What the turn is about; defaults to the thread's scope. */
   scope?: Scope;
   /** The text memory retrieval searches with (the user's message, the helper's instruction). */
@@ -127,7 +129,7 @@ function withActivity(hub: OrchestratorHub, turn: TurnInfo, tools: ToolSet): Too
 }
 
 /** The turn's tools: classic plus domain, redacted, cut to `toolNames`, gated, and logged. */
-function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: readonly string[] | undefined): ToolSet {
+function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: readonly string[] | undefined, extra: ToolSet = {}): ToolSet {
   // An explicit list decides on its own; otherwise each tool family offers what suits the turn
   // (a background turn gets the tick subset of the classic tools and the domains' background tools).
   const offered: DomainToolContext = toolNames ? { ...ctx, interactive: true } : ctx;
@@ -138,7 +140,7 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
     const allowed = new Set(toolNames);
     tools = Object.fromEntries(Object.entries(tools).filter(([name]) => allowed.has(name)));
   }
-  return withActivity(hub, ctx.turn, hub.approvals.gate(tools, ctx));
+  return withActivity(hub, ctx.turn, { ...hub.approvals.gate(tools, ctx), ...extra });
 }
 
 /**
@@ -172,7 +174,7 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: options.touched, interactive: options.interactive,
       now: () => hub.timers.now(), self: options.self, hub, turn,
     };
-    let tools = turnTools(hub, ctx, options.toolNames);
+    let tools = turnTools(hub, ctx, options.toolNames, options.extraTools);
     // A chat turn starts with the common tools and loads the rest by group; background turns name their tools.
     const loader = options.interactive && !options.toolNames ? createToolLoader(tools) : null;
     if (loader) tools = { ...tools, ...loader.tool };

@@ -119,6 +119,7 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
         return { pulls: state.pulls, error: null };
       },
       pullState: async () => null,
+      pullStatus: async (repo, number) => { throw new Error(`no status for ${repo}#${number}`); },
       cloneRepo: reject("cloneRepo"),
       ...github,
     },

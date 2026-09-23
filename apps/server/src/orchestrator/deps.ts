@@ -23,7 +23,7 @@ import type {
   SessionMeta, SessionState, WorktreeMeta,
 } from "../lib/types.ts";
 import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../lib/worktrees.ts";
-import { cloneRepo, getGithubLogin, readOriginUrl, searchAttentionPulls } from "./github-attention.ts";
+import { type PullStatus, cloneRepo, getGithubLogin, readOriginUrl, readPullStatus, searchAttentionPulls } from "./github-attention.ts";
 import type { PullAttention } from "./types.ts";
 import { readWorktreeState, type WorktreeState } from "./worktree-state.ts";
 
@@ -101,6 +101,8 @@ export type OrchestratorDeps = {
     searchAttentionPulls(opts?: { updatedSince?: number }): Promise<AttentionSearch>;
     /** The current state of one PR by URL, or null when gh cannot answer. */
     pullState(url: string): Promise<PullState | null>;
+    /** One PR's full status (checks, reviews, mergeability, counts); throws when gh cannot answer. */
+    pullStatus(repo: string, number: number): Promise<PullStatus>;
     /** Clones `owner/name` under Portal's repos directory and returns the checkout path. */
     cloneRepo(repo: string): Promise<string>;
   };
@@ -228,6 +230,7 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       login: () => getGithubLogin(),
       searchAttentionPulls: (opts) => searchAttentionPulls(opts),
       pullState: readPullState,
+      pullStatus: (repo, number) => readPullStatus(repo, number),
       cloneRepo: (repo) => cloneRepo({ repo }),
     },
     fs: {

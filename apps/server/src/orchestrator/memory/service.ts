@@ -364,6 +364,16 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
     ready: Promise.resolve(),
     promptContext,
     inboxCount: () => store.countRecords({ status: ["proposed"] }),
+    async recordsFor(wanted) {
+      const found: { entity: MemoryEntity; records: MemoryRecord[] }[] = [];
+      for (const { type, key } of wanted) {
+        const entity = await service.findEntity(type, key);
+        if (entity && !found.some((entry) => entry.entity.id === entity.id)) {
+          found.push({ entity, records: await store.listRecords({ status: ["active"], entityIds: [entity.id], limit: 100 }) });
+        }
+      }
+      return found;
+    },
     tools: (ctx: DomainToolContext): ToolSet => memoryTools(ctx, service),
     remember: (input, who) => state(input, who, "supersede"),
     create: (input, who) => state(input, who, "reject"),

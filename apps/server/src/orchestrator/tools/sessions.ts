@@ -10,7 +10,7 @@ import { DEFAULT_LIMIT, type ToolContext, capped, define } from "./context.ts";
 const sessionId = z.string().min(1);
 
 /** Events read per session when rendering a transcript or searching it. */
-const EVENT_WINDOW = 300;
+export const EVENT_WINDOW = 300;
 /** Sessions scanned by a transcript search; beyond the most recent ones, titles have to do. */
 const SEARCH_TRANSCRIPTS = 20;
 export const TRANSCRIPT_CAP = 6 * 1024;

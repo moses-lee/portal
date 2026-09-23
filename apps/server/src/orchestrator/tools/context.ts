@@ -50,19 +50,23 @@ export function capped<T>(rows: T[], limit = DEFAULT_LIMIT): { rows: T[]; trunca
   return { rows: rows.slice(0, limit), truncated: rows.length > limit };
 }
 
+/** What the SDK hands a tool's `execute` beside its input (the call id, the abort signal of the turn). */
+export type ToolCallOptions = Parameters<NonNullable<Tool["execute"]>>[1];
+
 /**
  * A tool whose `run` may throw: the error becomes the tool's output. `inputSchema` is a zod object
- * schema. The cast stands in for `tool()`: its overloads hinge on conditional types over the output
- * that TypeScript cannot resolve for a generic `O`, while the shape here is exactly a function tool.
+ * schema; `run` also gets the SDK's call options, whose `abortSignal` ends with the turn. The cast
+ * stands in for `tool()`: its overloads hinge on conditional types over the output that TypeScript
+ * cannot resolve for a generic `O`, while the shape here is exactly a function tool.
  *
  * `strict: false` is deliberate. OpenAI treats a function tool without the flag as strict, and a
  * strict schema makes every property required: the model then invents values for optional
  * parameters (seen live: a PR number passed beside a branch name, on every retry).
  */
-export function define<I, O>(description: string, inputSchema: FlexibleSchema<I>, run: (input: I) => Promise<O>): Tool<I, O | ToolFailure> {
-  const execute = async (input: I): Promise<O | ToolFailure> => {
+export function define<I, O>(description: string, inputSchema: FlexibleSchema<I>, run: (input: I, options?: ToolCallOptions) => Promise<O>): Tool<I, O | ToolFailure> {
+  const execute = async (input: I, options?: ToolCallOptions): Promise<O | ToolFailure> => {
     try {
-      return await run(input);
+      return await run(input, options);
     } catch (err) {
       return { error: errorMessage(err) };
     }

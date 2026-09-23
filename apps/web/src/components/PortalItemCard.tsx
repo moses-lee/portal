@@ -43,6 +43,7 @@ export const kindLabels: Record<ItemKind, string> = {
   folder_missing: "Folder missing",
   watch_update: "Follow-up",
   intent_update: "Goal update",
+  review_findings: "Review findings",
   approval_needed: "Needs approval",
   custom: "Note",
 };

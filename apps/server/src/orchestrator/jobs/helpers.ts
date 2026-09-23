@@ -49,8 +49,8 @@ export function createHelpers(core: JobsCore) {
     return depth;
   }
 
-  /** Run a helper inside a chat turn and answer its text. */
-  async function runInline(ctx: DomainToolContext, request: HelperRequest): Promise<{ runId: string | null; text: string }> {
+  /** Run a helper inside a chat turn and answer its text; `signal` (the chat turn's) stops it too. */
+  async function runInline(ctx: DomainToolContext, request: HelperRequest, signal?: AbortSignal): Promise<{ runId: string | null; text: string }> {
     await childDepth(ctx.turn.runId);
     const prepared = await prepareTurn(hub, {
       kind: "helper", role: request.role ?? "chat", trigger: "agent", threadId: ctx.turn.threadId, parentRunId: ctx.turn.runId,
@@ -60,12 +60,16 @@ export function createHelpers(core: JobsCore) {
     if (!prepared) throw httpError("No API key is stored for the helper's model.", 409);
     const controller = new AbortController();
     inline.set(prepared.run.id, controller);
+    const stop = () => controller.abort(signal?.reason);
+    if (signal?.aborted) stop();
+    else signal?.addEventListener("abort", stop, { once: true });
     try {
       const result = await generateTurn(prepared, {
         prompt: helperPrompt(request), signal: controller.signal, maxSteps: clampSteps(request.maxSteps), summarize: (text) => cut(text, 200) || null,
       });
       return { runId: prepared.run.id, text: cut(result.text, MAX_HELPER_TEXT) };
     } finally {
+      signal?.removeEventListener("abort", stop);
       inline.delete(prepared.run.id);
     }
   }

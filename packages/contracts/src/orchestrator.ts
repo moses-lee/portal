@@ -153,6 +153,8 @@ export type ItemKind =
   | "watch_update"
   /** An intent fired or needs the user. */
   | "intent_update"
+  /** A review session finished; the item carries its findings. */
+  | "review_findings"
   /** A background job is paused on an approval; the item links to it. */
   | "approval_needed"
   | "custom";
