@@ -41,13 +41,13 @@ export function deferred() {
  * service. The default tick is a fake that reports nothing changed without touching the world.
  */
 export function jobsHarness(t, {
-  key = "sk-test", doGenerate, presence = 0, settings = {}, sessions, projects, events: sessionEvents, github, jobs = {}, approvals, store: jobsStore,
+  key = "sk-test", doGenerate, presence = 0, settings = {}, sessions, projects, events: sessionEvents, github, pulls, jobs = {}, approvals, store: jobsStore,
 } = {}) {
   const store = createMemoryOrchestratorStore();
   const settingsStore = fakeSettings({ key, ...settings });
   const timers = fakeTimers();
   const presenceSource = fakePresence(presence);
-  const { deps, state } = fakeDeps({ sessions, projects, events: sessionEvents, github });
+  const { deps, state } = fakeDeps({ sessions, projects, events: sessionEvents, github, pulls });
   const model = new MockLanguageModelV3({ doGenerate });
   const events = [];
   const ticks = [];

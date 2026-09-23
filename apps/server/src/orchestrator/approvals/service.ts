@@ -242,6 +242,11 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
     return approval;
   }
 
+  /** Hand the decision to the job that asked; its failure is logged, never the decision's. */
+  async function resume(jobId: string, outcome: "approved" | "denied" | "expired") {
+    await hub.jobs.resumeAfterApproval(jobId, outcome).catch((err: unknown) => console.error("Could not resume the job after its approval:", err));
+  }
+
   async function expireDue(): Promise<Approval[]> {
     const expired = await store.expire(now());
     if (expired.length === 0) return expired;
@@ -250,6 +255,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
       void hub.activity.log({ actor: "system", kind: "approval.expired", summary: `Approval expired unanswered: ${approval.title}`, refs: refsOf(approval) });
       await resolveNeedsYou(approval);
       await postNote(approval, `**Expired:** ${approval.title}. Nobody answered in time, so it did not run.`);
+      if (approval.jobId) await resume(approval.jobId, "expired");
     }
     await emitPending();
     return expired;
@@ -339,9 +345,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
       await postNote(final, note);
     }
     await resolveNeedsYou(final);
-    if (approve && final.jobId) {
-      await hub.jobs.runNow(final.jobId, "approval").catch((err: unknown) => console.error("Could not resume the job after an approval:", err));
-    }
+    if (final.jobId) await resume(final.jobId, approve ? "approved" : "denied");
     return final;
   }
 

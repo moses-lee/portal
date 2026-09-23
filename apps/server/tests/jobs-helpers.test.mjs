@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MAX_HELPER_DEPTH } from "../src/orchestrator/jobs/helpers.ts";
-import { T0, call, flush, jobsHarness, started, textStep, toolContext } from "./fixtures/jobs-harness.mjs";
+import { T0, call, flush, jobsHarness, started, textStep, toolContext, toolStep } from "./fixtures/jobs-harness.mjs";
+import { sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const MIN = 60_000;
 
@@ -133,7 +134,8 @@ test("only the turns that should see them get the job tools", async (t) => {
   const h = await started(jobsHarness(t));
   const chat = Object.keys(h.jobs.tools(toolContext(h))).sort();
   assert.deepEqual(chat, [
-    "cancel_intent", "cancel_job", "create_intent", "get_schedule", "list_intents", "list_jobs", "list_runs", "run_helper", "schedule_job", "update_intent", "update_job",
+    "cancel_intent", "cancel_job", "create_intent", "get_schedule", "list_intents", "list_jobs", "list_runs", "monitor_pull", "run_helper", "schedule_job", "update_intent",
+    "update_job",
   ]);
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "tick", origin: "job", interactive: false })), {}, "the tick pays for no job schemas");
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "intent_check", origin: "job", interactive: false })), {}, "a check without an intent gets nothing");
@@ -154,4 +156,31 @@ test("stopping the chat turn stops the inline helper it waits for", async (t) =>
   chat.abort();
   assert.match((await pending).error, /aborted/);
   assert.equal((await h.jobs.getRun(helper.id)).status, "cancelled");
+});
+
+test("a recurring job waiting on an approval is unscheduled until the decision; declined, it goes back to its schedule, and a once-only job ends", async (t) => {
+  const h = await started(jobsHarness(t, {
+    sessions: [sessionMeta({ id: "s1" })],
+    doGenerate: async ({ prompt }) => (JSON.stringify(prompt).includes("tool-result") ? textStep("Asked for approval.") : toolStep("delete_session", { sessionId: "s1" })),
+  }));
+  const tools = h.jobs.tools(toolContext(h));
+  const recurring = await call(tools, "schedule_job", { title: "Tidy", prompt: "Delete the stale session.", schedule: { everyMinutes: 30 }, tools: ["delete_session"] });
+  await h.jobs.runNow(recurring.id, "manual");
+  await flush();
+  const [run] = await h.jobs.listRuns({ jobId: recurring.id });
+  assert.equal(run.status, "awaiting_approval");
+  assert.equal((await h.jobs.getJob(recurring.id)).nextRunAt, null, "no run asks the same thing again meanwhile");
+  const [approval] = await h.hub.approvals.pending();
+  await h.hub.approvals.decide(approval.id, { approve: false });
+  await flush();
+  assert.equal((await h.jobs.getJob(recurring.id)).nextRunAt, h.timers.now() + 30 * MIN);
+  assert.ok((await h.hub.activity.list({ kind: "job.resumed" }))[0].summary.includes("declined"));
+
+  const once = await call(tools, "schedule_job", { title: "Tidy once", prompt: "Delete the stale session.", schedule: { inMinutes: 0 }, tools: ["delete_session"] });
+  await h.jobs.runNow(once.id, "manual");
+  await flush();
+  const [pendingOnce] = await h.hub.approvals.pending();
+  await h.hub.approvals.decide(pendingOnce.id, { approve: false });
+  await flush();
+  assert.equal((await h.jobs.getJob(once.id)).status, "done");
 });

@@ -12,12 +12,15 @@ import { capped, define } from "../tools/context.ts";
 import { pullRefSchema } from "../tools/items.ts";
 import { TICK_JOB_ID, type JobsCore } from "./core.ts";
 import type { createHelpers } from "./helpers.ts";
+import { resolvePull } from "../world/resolve.ts";
 import { DEFAULT_CHECK_MS, type IntentsPart } from "./intents.ts";
+import { DEFAULT_MONITOR_CHECK_MS, DEFAULT_PULL_EVENTS, type PullEvent, pullEvents, pullWatchOf } from "./pull-watch.ts";
 import { MIN_EVERY_MS, describeSchedule, parseSchedule } from "./schedule.ts";
 
 type Helpers = ReturnType<typeof createHelpers>;
 
 const iso = (at: number | null) => (at === null ? null : new Date(at).toISOString());
+const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const NOTES_PREVIEW = 200;
 
 const scopeSchema = z.object({
@@ -136,7 +139,61 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
     tz: z.string().optional(),
   };
 
+  /** The active monitor of a PR (its intent and check job), when one exists. */
+  async function monitorOf(repo: string | null, number: number): Promise<{ intent: Intent; job: Job } | null> {
+    for (const job of await store.listJobs({ kind: ["intent_check"], status: ["active", "paused"] })) {
+      const watch = pullWatchOf(job.payload);
+      if (!watch || watch.number !== number || (repo && watch.repo.toLowerCase() !== repo.toLowerCase()) || !job.intentId) continue;
+      const intent = await store.getIntent(job.intentId);
+      if (intent?.status === "active") return { intent, job };
+    }
+    return null;
+  }
+
   return {
+    monitor_pull: define(
+      "Watch one pull request and tell the user only when its state changes: merged, closed, checks failing or passing again, changes requested, approved, merge conflicts (new reviews and comments only with comments: true). It ends by itself when the PR merges or closes; cancel_intent with pull stops it. Asking again for a PR already watched updates that monitor. repo may be owner/name (any repo on GitHub) or a loose name.",
+      z.object({
+        number: z.number().int().positive(),
+        repo: z.string().optional(),
+        text: z.string().max(2000).optional().describe("What the user asked, in their words."),
+        events: z.array(z.enum(pullEvents)).min(1).optional().describe("Which changes to report (default all but comments)."),
+        comments: z.boolean().optional().describe("Also report new reviews and comments."),
+        expiresInDays: z.number().min(1).max(90).optional().describe("Stop watching after this many days (default: until it merges or closes)."),
+        ...cadence,
+      }),
+      async (input) => {
+        let target: { repo: string; number: number; url: string; title: string };
+        if (input.repo && REPO_PATTERN.test(input.repo.trim())) {
+          const status = await hub.deps.github.pullStatus(input.repo.trim(), input.number);
+          target = { repo: status.repo, number: status.number, url: status.url, title: status.title };
+        } else {
+          const world = (await hub.world.current()) ?? (await hub.world.refresh("monitor_pull"));
+          const found = await resolvePull(world, hub.deps, { number: input.number, repo: input.repo });
+          if (!found.match) return { candidates: found.candidates, reason: found.reason };
+          target = { repo: found.match.repo, number: found.match.number, url: found.match.url, title: found.match.title };
+        }
+        const name = `${target.repo}#${target.number}`;
+        const chosen: PullEvent[] = [...new Set([...(input.events ?? DEFAULT_PULL_EVENTS), ...(input.comments ? ["comments" as const] : [])])];
+        const trigger = `${name} changes: ${chosen.join(", ").replaceAll("_", " ")}`;
+        const check = checkSchedule(input);
+        const existing = await monitorOf(target.repo, target.number);
+        if (existing) {
+          const watch = pullWatchOf(existing.job.payload)!;
+          await store.updateJob(existing.job.id, { payload: { ...existing.job.payload, pull: { ...watch, events: chosen } } });
+          const intent = await intents.update(existing.intent.id, { trigger, ...(input.text ? { text: input.text } : {}) }, { ...how, ...(check ? { check } : {}) });
+          return { ...intentRow(intent), updated: true, pull: target, events: chosen };
+        }
+        const { intent, job } = await intents.create({
+          text: input.text ?? `Monitor ${name} until it merges`, trigger, action: "Tell the user what changed; stop once it is merged or closed.",
+          scope: { pulls: [{ repo: target.repo, number: target.number, url: target.url }], repos: [target.repo] }, fireBudget: null, cooldownMs: 0,
+          expiresAt: input.expiresInDays ? now() + Math.round(input.expiresInDays * 86_400_000) : null, threadId: turn.threadId,
+          check: check ?? { type: "every", everyMs: DEFAULT_MONITOR_CHECK_MS }, checkNow: true,
+          checkPayload: { pull: { repo: target.repo, number: target.number, url: target.url, events: chosen, last: null } },
+        }, how);
+        return { ...intentRow(intent), checkJob: jobRow(job), pull: target, events: chosen };
+      },
+    ),
     create_intent: define(
       "Track a standing request of the user (\"tell me when #42 merges\"): text in the user's words, a precise trigger, the action when it fires, and how often to check. A check job evaluates the trigger; firing puts a Needs-you item in front of the user.",
       z.object({
@@ -187,9 +244,13 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     cancel_intent: define(
-      "Cancel an intent the user no longer wants (or that can never fire); its check job stops too.",
-      z.object({ id: z.string().min(1), reason: z.string().max(500).optional() }),
-      async ({ id, reason }) => intentRow(await intents.close(id, "cancelled", { ...how, reason }), true),
+      "Cancel an intent the user no longer wants (or that can never fire); its check job stops too. Give its id, or pull (and repo) to stop the monitor of that PR.",
+      z.object({ id: z.string().min(1).optional(), pull: z.number().int().positive().optional(), repo: z.string().optional(), reason: z.string().max(500).optional() }),
+      async ({ id, pull, repo, reason }) => {
+        const target = id ?? (pull ? (await monitorOf(repo && REPO_PATTERN.test(repo) ? repo : null, pull))?.intent.id : undefined);
+        if (!target) throw httpError(pull ? `No active monitor watches PR #${pull}.` : "Give the intent's id or a PR number.", pull ? 404 : 400);
+        return intentRow(await intents.close(target, "cancelled", { ...how, reason }), true);
+      },
     ),
     list_intents: define(
       "Intents by status (default active), newest first.",

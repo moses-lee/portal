@@ -83,6 +83,18 @@ test("a PR in the world resolves at once to its repo, checkout, and worktree, wi
   assert.deepEqual(calls, []);
 });
 
+test("one of the user's PRs in a repo Portal does not have resolves from the world too", async () => {
+  const { git, calls } = fakeGit({});
+  const outside = attentionPull({ repo: "other/tool", number: 812, roles: ["reviewer"] });
+  const result = await resolvePull(world({ pulls: [...world().pulls, outside] }), { git }, { number: 812 });
+  assert.equal(result.source, "world");
+  assert.equal(result.match.repo, "other/tool");
+  assert.equal(result.match.projectId, null);
+  assert.deepEqual(calls, []);
+  // Naming a Portal repo still narrows to Portal repos.
+  assert.equal((await resolvePull(world({ pulls: [outside] }), { git }, { number: 812, repo: "web" })).match, null);
+});
+
 test("the same number open in two repos gives both as candidates; a repo hint picks one", async () => {
   const { git } = fakeGit({});
   const both = await resolvePull(world(), { git }, { number: 50 });

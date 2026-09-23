@@ -16,6 +16,7 @@ import { MAIN_THREAD_ID } from "../types.ts";
 import type { JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
 import { intentCheckPrompt } from "./prompt.ts";
+import { checkPull, pullWatchOf } from "./pull-watch.ts";
 import { checkReview, reviewWatchOf } from "./review-watch.ts";
 import { describeSchedule, nextRunAt, replanned } from "./schedule.ts";
 import type { IntentChanges } from "./store.ts";
@@ -221,6 +222,8 @@ export function createIntents(core: JobsCore) {
     // A watch the server can evaluate itself needs no model turn.
     const review = reviewWatchOf(job.payload);
     if (review) return checkReview({ core, fire }, { job, run, trigger, signal }, intent, review);
+    const pull = pullWatchOf(job.payload);
+    if (pull) return checkPull({ core, fire, close }, { job, run, trigger, signal }, intent, pull);
     const touched = new Set<string>();
     const threadId = intent.threadId ?? MAIN_THREAD_ID;
     const prepared = await prepareTurn(hub, {

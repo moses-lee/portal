@@ -11,7 +11,7 @@ import { T0, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, s
 
 const worktree = project({ id: "p2", name: "feat-x", path: "/nonexistent/wt/feat-x", worktree: { parentId: "p1", branch: "feat-x" } });
 
-/** A runtime over fakes whose job service records `runNow`; no key, so no tick is ever planned. */
+/** A runtime over fakes whose job service records how approvals resume jobs; no key, so no tick is ever planned. */
 function setup(t, { approvals: approvalStore = createMemoryApprovalStore(), store = createMemoryOrchestratorStore(), timers = fakeTimers(), exec } = {}) {
   const { deps, state } = fakeDeps({
     sessions: [sessionMeta(), sessionMeta({ id: "s2", title: "Other" })],
@@ -24,8 +24,8 @@ function setup(t, { approvals: approvalStore = createMemoryApprovalStore(), stor
   const runtime = createOrchestratorRuntime({
     store, settingsStore: fakeSettings({ key: null }), deps, timers, presence: fakePresence(),
     domains: {
-      // No worker: these tests drive the clock and count timers, and only need runNow recorded.
-      jobs: (hub) => ({ ...createJobsService(hub), start: () => {}, runNow: async (jobId, trigger) => { resumed.push([jobId, trigger]); return null; } }),
+      // No worker: these tests drive the clock and count timers, and only need the resumptions recorded.
+      jobs: (hub) => ({ ...createJobsService(hub), start: () => {}, resumeAfterApproval: async (jobId, outcome) => { resumed.push([jobId, outcome === "approved" ? "approval" : outcome]); } }),
       approvals: (hub) => createApprovalsService(hub, { store: approvalStore }),
     },
   });
@@ -221,7 +221,7 @@ test("job: the call returns pending at once, raises a Needs-you item, and approv
   assert.deepEqual(await activity(), ["approval.requested", "approval.decided", "approval.executed"]);
 });
 
-test("job: declining resolves the item, notes the thread, and does not resume the job", async (t) => {
+test("job: declining resolves the item, notes the thread, and tells the job it was declined", async (t) => {
   const { hub, store, resumed, state } = setup(t);
   const side = await store.createThread({ title: "Review #7" });
   const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1", threadId: side.id });
@@ -229,12 +229,12 @@ test("job: declining resolves the item, notes the thread, and does not resume th
   await hub.approvals.decide(output.approvalId, { approve: false });
   assert.equal(state.sessions.length, 2);
   assert.equal((await store.listItems())[0].status, "resolved");
-  assert.deepEqual(resumed, []);
+  assert.deepEqual(resumed, [["j1", "denied"]]);
   assert.match((await store.readMessages(side.id))[0].parts[0].text, /^\*\*Declined:\*\* Delete session Fix the login bug\. It did not run\.$/);
 });
 
-test("expiry: an unanswered request expires on its timer, resolves its item, and can never run", async (t) => {
-  const { hub, store, timers, state, activity } = setup(t);
+test("expiry: an unanswered request expires on its timer, resolves its item, tells its job, and can never run", async (t) => {
+  const { hub, store, timers, state, activity, resumed } = setup(t);
   const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1", threadId: "main" });
   const output = await call(tools.delete_session, { sessionId: "s1" });
   await timers.advance(EXPIRY_MS.job - 1);
@@ -243,6 +243,7 @@ test("expiry: an unanswered request expires on its timer, resolves its item, and
   assert.equal((await hub.approvals.get(output.approvalId)).status, "expired");
   assert.equal((await store.listItems())[0].status, "resolved");
   assert.match((await store.readMessages("main"))[0].parts[0].text, /^\*\*Expired:\*\*/);
+  assert.deepEqual(resumed, [["j1", "expired"]]);
   await assert.rejects(hub.approvals.decide(output.approvalId, { approve: true }), (err) => err.status === 409 && /expired/.test(err.message));
   assert.equal(state.sessions.length, 2);
   assert.ok((await activity()).includes("approval.expired"));

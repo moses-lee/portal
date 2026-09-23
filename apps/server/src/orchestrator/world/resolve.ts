@@ -199,9 +199,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * A PR by number: first among the world's PRs (the user authored it or was asked to review it),
- * then by asking GitHub for that number in every repo Portal has checked out. `repo` narrows the
- * search to repos matching it (resolved like `resolve_repo`).
+ * A PR by number: first among the world's PRs (the user authored it or was asked to review it, in
+ * any repo on GitHub), then by asking GitHub for that number in every repo Portal has checked out.
+ * `repo` narrows the search to repos matching it (resolved like `resolve_repo`).
  */
 export async function resolvePull(
   world: WorldState, deps: Pick<OrchestratorDeps, "git">, { number, repo }: { number: number; repo?: string },
@@ -222,7 +222,9 @@ export async function resolvePull(
     }
   }
   const allowed = new Set(repos.map(lower));
-  const inWorld = world.pulls.filter((p) => p.number === number && (outside ? lower(p.repo) === lower(outside) : allowed.has(lower(p.repo))));
+  // The world's PRs are the user's across all of GitHub: without a repo named, any of them may match.
+  const narrowed = !!repo?.trim();
+  const inWorld = world.pulls.filter((p) => p.number === number && (outside ? lower(p.repo) === lower(outside) : !narrowed || allowed.has(lower(p.repo))));
   if (inWorld.length === 1) return { match: fromAttention(inWorld[0]), source: "world" };
   if (inWorld.length > 1) {
     return { match: null, candidates: inWorld.map(fromAttention), reason: `PR #${number} is open in ${inWorld.length} of your repos; ask the user which one.`, source: "world" };

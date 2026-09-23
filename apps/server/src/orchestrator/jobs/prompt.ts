@@ -5,7 +5,8 @@
 import type { HelperPayload, Intent } from "@portal/contracts/jobs";
 
 export const guidance = `Background work is yours to schedule, at the cadence you judge right:
-- "Tell me when X" or "keep an eye on Y": create_intent (the user's words, a precise trigger, the action, a check cadence that fits: minutes for a PR under review, hours for slow things). Its checks fire it; do not poll by hand.
+- "Monitor PR N" or "tell me when N merges": monitor_pull (no model runs its checks; it reports state changes only and ends when the PR merges or closes). "Stop monitoring N": cancel_intent with pull.
+- Any other "tell me when X" or "keep an eye on Y": create_intent (the user's words, a precise trigger, the action, a check cadence that fits: minutes for a PR under review, hours for slow things). Its checks fire it; do not poll by hand.
 - Later or recurring work that is not a condition: schedule_job. A side task now: run_helper (wait: true when you need the answer in this turn).
 - Change the tick's cadence (update_job "tick") only when asked. Cancel intents and jobs once they are no longer needed.`;
 

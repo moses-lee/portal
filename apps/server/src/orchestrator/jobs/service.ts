@@ -179,14 +179,16 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
         actor: "system", kind: "job.failed", summary: `"${latest.title}" failed ${failures} times in a row and was stopped`,
         refs: jobRefs(latest, run.id), detail: { error: run.error },
       });
+    } else if (run.status === "awaiting_approval") {
+      // Unscheduled until the user decides (see resumeAfterApproval), so a recurring job does not ask the same thing again meanwhile.
+      changes.nextRunAt = null;
     } else if (latest.schedule.type === "at") {
       // A once-only job that could not run (no key yet) tries again later instead of being done.
       if (failed || result.skipped) changes.nextRunAt = end + backoff(Math.max(1, failures));
       else if (run.status === "cancelled") {
         if (cancelledByUser) changes.status = "cancelled";
         else changes.nextRunAt = end;
-      } else if (run.status === "awaiting_approval") changes.nextRunAt = null;
-      else changes.status = "done";
+      } else changes.status = "done";
     } else {
       let next = nextRunAt(latest.schedule, { now: end, lastRunAt: end, present: core.present() });
       if (failed && next !== null) next = Math.max(next, end + backoff(failures));
@@ -229,6 +231,31 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     }
     void hub.activity.log({ actor: trigger === "agent" ? "agent" : trigger === "approval" ? "system" : "user", kind: "job.run", summary: `Ran "${job.title}" now`, refs: jobRefs(job) });
     return worker.launch(job, trigger).started;
+  }
+
+  /**
+   * An approval a job waited for was decided. Approved: the job runs again now (the approved call
+   * already ran; the run carries on from there). Denied or expired: a recurring job goes back to its
+   * schedule and a once-only job ends, since running it again would only ask again.
+   */
+  async function resumeAfterApproval(jobId: string, outcome: "approved" | "denied" | "expired"): Promise<void> {
+    await ready;
+    if (outcome === "approved") {
+      await runNow(jobId, "approval");
+      return;
+    }
+    const job = await store.getJob(jobId);
+    if (!job || job.status !== "active" || job.nextRunAt !== null || worker.isRunning(jobId)) return;
+    const why = outcome === "denied" ? "the approval it asked for was declined" : "the approval it asked for expired";
+    if (job.schedule.type === "at") {
+      await store.updateJob(jobId, { status: "done" });
+      void hub.activity.log({ actor: "system", kind: "job.done", summary: `"${job.title}" ended: ${why}`, refs: jobRefs(job) });
+    } else {
+      await store.updateJob(jobId, { nextRunAt: nextRunAt(job.schedule, { now: now(), lastRunAt: job.lastRunAt ?? now(), present: core.present() }) });
+      void hub.activity.log({ actor: "system", kind: "job.resumed", summary: `"${job.title}" is back on its schedule: ${why}`, refs: jobRefs(job) });
+    }
+    core.emitJobs();
+    core.notify();
   }
 
   async function runTick(reason: TickReason): Promise<TickReport> {
@@ -288,6 +315,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     running: () => runs.running(),
     nextDue: () => store.nextDue(),
     runNow,
+    resumeAfterApproval,
     listIntents: (filter) => store.listIntents(filter),
     tools: (ctx) => jobTools(core, intents, helpers, ctx),
 

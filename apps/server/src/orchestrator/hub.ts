@@ -102,6 +102,8 @@ export interface JobsService {
    * resuming the job that asked for it). Null when the job does not exist or is not active.
    */
   runNow(jobId: string, trigger: RunTrigger): Promise<JobRun | null>;
+  /** A job's approval was decided or expired: run it again, put it back on its schedule, or end it. */
+  resumeAfterApproval(jobId: string, outcome: "approved" | "denied" | "expired"): Promise<void>;
   listIntents(filter?: { status?: Intent["status"][] }): Promise<Intent[]>;
   /** The job tools (schedule_job, cancel_job, create_intent, cancel_intent, run_helper, ...). */
   tools(ctx: DomainToolContext): ToolSet;
