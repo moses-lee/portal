@@ -1,12 +1,13 @@
 /**
  * Browser routes: `/` is the start page, `/sessions/<id>` opens one session, `/terminal` is the
- * standalone terminal page (shells that belong to no session), and `/portal` is Talk to Portal
- * (the orchestrator's one thread).
+ * standalone terminal page (shells that belong to no session), and `/portal/**` is Talk to Portal:
+ * `/portal` the main thread, `/portal/threads/<id>` one of the agent's side threads, and
+ * `/portal/goals`, `/portal/activity`, `/portal/memory[/<entityId>]`, `/portal/system` its views.
  */
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const TERMINAL_PATH = /^\/terminal\/?$/;
-const PORTAL_PATH = /^\/portal\/?$/;
+const PORTAL_PATH = /^\/portal(?:\/.*)?$/;
 
 export function sessionIdFromPath(pathname: string): string | null {
   const match = SESSION_PATH.exec(pathname);
@@ -34,6 +35,51 @@ export function isPortalPath(pathname: string): boolean {
   return PORTAL_PATH.test(pathname);
 }
 
-export function portalPath(): string {
-  return "/portal";
+export type PortalView = "chat" | "goals" | "activity" | "memory" | "system";
+export const portalViews: readonly PortalView[] = ["chat", "goals", "activity", "memory", "system"];
+
+/** Where a Talk to Portal path points; unknown sub-paths land on the main thread. */
+export type PortalLocation =
+  | { view: "chat"; threadId: string }
+  | { view: "memory"; entityId: string | null }
+  | { view: "goals" | "activity" | "system" };
+
+function decodeSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+}
+
+export function portalLocation(pathname: string): PortalLocation {
+  const segments = pathname.replace(/^\/portal\/?/, "").split("/").filter(Boolean);
+  const [head, second] = segments;
+  if (head === "threads" && second && segments.length === 2) {
+    const id = decodeSegment(second);
+    if (id) return { view: "chat", threadId: id };
+  }
+  if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
+  if ((head === "goals" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
+  return { view: "chat", threadId: "main" };
+}
+
+/** The path for a view, a thread (the main thread is plain `/portal`), or a memory entity. */
+export function portalPath(to: PortalLocation | PortalView = "chat"): string {
+  const location: PortalLocation =
+    typeof to === "string"
+      ? to === "chat"
+        ? { view: "chat", threadId: "main" }
+        : to === "memory"
+          ? { view: "memory", entityId: null }
+          : { view: to }
+      : to;
+  switch (location.view) {
+    case "chat":
+      return location.threadId === "main" ? "/portal" : `/portal/threads/${encodeURIComponent(location.threadId)}`;
+    case "memory":
+      return location.entityId ? `/portal/memory/${encodeURIComponent(location.entityId)}` : "/portal/memory";
+    default:
+      return `/portal/${location.view}`;
+  }
 }
