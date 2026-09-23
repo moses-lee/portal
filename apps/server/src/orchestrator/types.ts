@@ -99,8 +99,6 @@ export interface OrchestratorRuntime {
   listWatches(): Promise<Watch[]>;
   updateWatch(id: string, patch: WatchPatch): Promise<Watch>;
   listTicks(): Promise<TickReport[]>;
-  readMemory(): Promise<string>;
-  writeMemory(text: string): Promise<void>;
 
   // Browser presence (which interval applies) comes from the presence counter in the context, which
   // every SSE route opens/closes; the runtime subscribes to it rather than being told.
