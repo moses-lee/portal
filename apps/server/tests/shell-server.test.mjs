@@ -8,8 +8,8 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { io } from "socket.io-client";
-import { attachTerminalServer } from "../src/lib/shell-server.ts";
-import { createTerminalRegistry } from "../src/lib/terminals-registry.ts";
+import { attachTerminalServer } from "../src/terminals/socket.ts";
+import { createTerminalRegistry } from "../src/terminals/registry.ts";
 
 const native = { skip: !["darwin", "linux"].includes(process.platform) };
 async function until(predicate) {

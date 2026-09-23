@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createAcpRuntime } from "../src/lib/acp-runtime.ts";
-import { createFileSessionStore } from "../src/lib/file-session-store.ts";
+import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/store.ts";
+import { temporaryDatabase } from "./helpers/db.mjs";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/fake-acp-agent.mjs", import.meta.url));
 
@@ -61,7 +62,8 @@ function setup(t, options = {}) {
     const runtime = createAcpRuntime(definitions, {
       initializeTimeoutMs: options.initializeTimeoutMs ?? 2_000,
       agentCallTimeoutMs: options.agentCallTimeoutMs,
-      store: options.store,
+      // A factory gives each runtime its own store instance, as each server process would have.
+      store: typeof options.store === "function" ? options.store() : options.store,
       recentEvents: options.recentEvents,
       ...extra,
     });
@@ -432,15 +434,26 @@ function restart(t, ctx, modes = {}) {
   return ctx.spawnRuntime();
 }
 
-function persistentSetup(t, options = {}) {
-  const storeDir = mkdtempSync(path.join(os.tmpdir(), "portal-acp-store-"));
-  t.after(() => rmSync(storeDir, { recursive: true, force: true }));
-  const store = createFileSessionStore({ dir: storeDir, chunkSize: 256 });
-  return { ...setup(t, { ...options, store }), store, storeDir };
+/**
+ * Runtimes over one shared database, each with its own Postgres store (a restart builds a new one).
+ * `store` is a separate instance for assertions. The database is dropped only after every runtime
+ * has been disposed, so shutdown writes do not race the teardown.
+ */
+async function persistentSetup(t, options = {}) {
+  const teardown = [];
+  const handle = await temporaryDatabase({ after: (fn) => teardown.push(fn) });
+  const ctx = setup(t, { ...options, store: () => createPgSessionStore({ db: handle.db }) });
+  t.after(async () => {
+    for (const fn of teardown) await fn();
+  });
+  const store = createPgSessionStore({ db: handle.db });
+  /** Rows in the event log table for one session, read straight from the database. */
+  const loggedEvents = async (id) => (await handle.sql`select count(*)::int as n from session_events where session_id = ${id}`)[0].n;
+  return { ...ctx, store, loggedEvents };
 }
 
 test("events and metadata are written through to the store and paged from it", async (t) => {
-  const { runtime, cwd, store, storeDir } = persistentSetup(t, { recentEvents: 3 });
+  const { runtime, cwd, store, loggedEvents } = await persistentSetup(t, { recentEvents: 3 });
   await runtime.ready;
   const session = await runtime.createSession(cwd, "claude", "proj-1");
   assert.deepEqual(session.link, { status: "live" });
@@ -471,12 +484,12 @@ test("events and metadata are written through to the store and paged from it", a
   assert.equal(record.projectId, "proj-1");
   assert.equal(record.title, "Summarize this repo");
   assert.equal(record.state.commands.length, 2);
-  assert.equal(readFileSync(path.join(storeDir, "logs", `${session.id}.jsonl`), "utf8").trim().split("\n").length, 6);
+  assert.equal(await loggedEvents(session.id), 6);
   assert.deepEqual(runtime.listSessions().map(({ id, title, link }) => ({ id, title, link })), [{ id: session.id, title: "Summarize this repo", link: { status: "live" } }]);
 });
 
 test("persisted sessions come back offline after a restart, resume on demand, and keep appending", async (t) => {
-  const first = persistentSetup(t);
+  const first = await persistentSetup(t);
   const { runtime, cwd } = first;
   const session = await runtime.createSession(cwd, "claude", "proj-1");
   const idle = await runtime.createSession(cwd, "codex");
@@ -539,7 +552,7 @@ test("persisted sessions come back offline after a restart, resume on demand, an
 });
 
 test("sending a prompt reattaches an offline session first, and load replays are not logged twice", async (t) => {
-  const first = persistentSetup(t);
+  const first = await persistentSetup(t);
   const { runtime, cwd } = first;
   const session = await runtime.createSession(cwd, "claude");
   await runtime.sendPrompt(session.id, "hello");
@@ -563,7 +576,7 @@ test("sending a prompt reattaches an offline session first, and load replays are
 });
 
 test("agents that cannot resume leave persisted sessions offline without launching a process twice", async (t) => {
-  const first = persistentSetup(t);
+  const first = await persistentSetup(t);
   const { runtime, cwd } = first;
   const session = await runtime.createSession(cwd, "claude");
   await runtime.dispose();
@@ -594,7 +607,7 @@ test("agents that cannot resume leave persisted sessions offline without launchi
 });
 
 test("a never-prompted session whose agent lost it gets a fresh agent session on reconnect", async (t) => {
-  const first = persistentSetup(t);
+  const first = await persistentSetup(t);
   const { runtime, cwd, store } = first;
   // The fixture's ids restart at "session-1" with its process, so persist this session as
   // "session-2" to make the replacement id visibly different from the one that was lost.
@@ -637,7 +650,7 @@ test("a never-prompted session whose agent lost it gets a fresh agent session on
 });
 
 test("a session with history whose agent lost it reports a clear error instead of the raw id", async (t) => {
-  const first = persistentSetup(t);
+  const first = await persistentSetup(t);
   const { runtime, cwd, store } = first;
   const session = await runtime.createSession(cwd, "claude");
   await runtime.sendPrompt(session.id, "hello");
@@ -672,7 +685,7 @@ test("a session with history whose agent lost it reports a clear error instead o
 });
 
 test("a crashed agent leaves its sessions offline and a later prompt reconnects them", async (t) => {
-  const { runtime, cwd, setModes, starts, messages } = persistentSetup(t);
+  const { runtime, cwd, setModes, starts, messages } = await persistentSetup(t);
   setModes({ claude: "resume" });
   const session = await runtime.createSession(cwd, "claude");
   const links = [];
@@ -693,7 +706,7 @@ test("a crashed agent leaves its sessions offline and a later prompt reconnects 
 });
 
 test("deleting a session closes it on the agent, notifies viewers, and removes its log", async (t) => {
-  const { runtime, cwd, store, storeDir, setModes, messages } = persistentSetup(t);
+  const { runtime, cwd, store, loggedEvents, setModes, messages } = await persistentSetup(t);
   setModes({ claude: "resume" });
   const session = await runtime.createSession(cwd, "claude");
   const other = await runtime.createSession(cwd, "claude");
@@ -707,7 +720,7 @@ test("deleting a session closes it on the agent, notifies viewers, and removes i
   assert.equal(runtime.getSession(session.id), undefined);
   assert.deepEqual(runtime.listSessions().map(({ id }) => id), [other.id]);
   assert.deepEqual((await store.listSessions()).map(({ id }) => id), [other.id]);
-  assert.equal(existsSync(path.join(storeDir, "logs", `${session.id}.jsonl`)), false);
+  assert.equal(await loggedEvents(session.id), 0);
   assert.equal(session.pendingPermissions.size, 0);
   await until(() => messages("claude", "session/close").length === 1, "session/close");
   assert.deepEqual(messages("claude", "session/close")[0].message.params, { sessionId: "session-1" });
@@ -755,7 +768,7 @@ test("only a turn that was really cut off is closed on restart", async (t) => {
 });
 
 test("deleting a session while it reconnects does not bring it back", async (t) => {
-  const first = persistentSetup(t);
+  const first = await persistentSetup(t);
   const { runtime, cwd, store } = first;
   const session = await runtime.createSession(cwd, "claude");
   await runtime.dispose();
@@ -858,4 +871,52 @@ test("agent processes do not inherit the dev server's Next variables", async (t)
   const { runtime, starts } = setup(t);
   await runtime.createSession(process.cwd(), "claude");
   assert.deepEqual(starts("claude").map((entry) => entry.env), [{ NODE_ENV: null, TURBOPACK: null, PORTAL_KEEP: "yes" }]);
+});
+
+test("subscribe delivers one session's events, state, link, and close until unsubscribed", async (t) => {
+  const { runtime, cwd } = setup(t);
+  assert.throws(() => runtime.subscribe("nope", {}), /no such session/i);
+  const session = await runtime.createSession(cwd, "claude");
+  const other = await runtime.createSession(cwd, "codex");
+  const seen = { events: [], states: 0, links: [], closed: 0 };
+  const unsubscribe = runtime.subscribe(session.id, {
+    onEvent: (seq, event) => seen.events.push([seq, event.type]),
+    onState: () => seen.states++,
+    onLink: (link) => seen.links.push(link.status),
+    onClose: () => seen.closed++,
+  });
+  // A second viewer with only some callbacks is fine, and unsubscribing it leaves the first intact.
+  const partial = [];
+  runtime.subscribe(session.id, { onEvent: (seq) => partial.push(seq) })();
+
+  await runtime.sendPrompt(session.id, "hello");
+  await answerPermission(runtime, session, "once");
+  await until(() => !session.busy, "turn");
+  assert.deepEqual(seen.events.map(([, type]) => type), ["user", "turn_start", "update", "permission_request", "permission_response", "turn_end"]);
+  assert.deepEqual(seen.events.map(([seq]) => seq), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(partial, []);
+  await runtime.setMode(session.id, "plan");
+  assert.ok(seen.states >= 1);
+
+  // Events on another session never reach this subscriber.
+  await runtime.sendPrompt(other.id, "elsewhere");
+  await answerPermission(runtime, other, "once");
+  await until(() => !other.busy, "other turn");
+  assert.equal(seen.events.length, 6);
+
+  await runtime.deleteSession(session.id);
+  assert.equal(seen.closed, 1);
+  assert.equal(seen.links.at(-1), "offline");
+  unsubscribe();
+  unsubscribe();
+
+  // After unsubscribing nothing more arrives.
+  const again = await runtime.createSession(cwd, "claude");
+  const late = [];
+  const stop = runtime.subscribe(again.id, { onEvent: (seq) => late.push(seq) });
+  stop();
+  await runtime.sendPrompt(again.id, "quiet");
+  await answerPermission(runtime, again, "once");
+  await until(() => !again.busy, "quiet turn");
+  assert.deepEqual(late, []);
 });

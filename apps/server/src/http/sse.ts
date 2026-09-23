@@ -50,6 +50,9 @@ export function openEventStream(req: FastifyRequest, reply: FastifyReply): Event
   ping.unref?.();
   req.raw.once("close", close);
   if (req.raw.destroyed) close();
+  // The Next.js proxy holds the response headers until the first byte, so EventSource `open` would
+  // otherwise wait for the first real event.
+  write(": open\n\n");
 
   return {
     get closed() { return closed; },

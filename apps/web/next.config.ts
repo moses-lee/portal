@@ -14,9 +14,6 @@ const nextConfig: NextConfig = {
     "@agentclientprotocol/claude-agent-acp",
     "@agentclientprotocol/codex-acp",
     "@agentclientprotocol/sdk",
-    "node-pty",
-    "@xterm/headless",
-    "@xterm/addon-serialize",
   ],
 };
 

@@ -7,9 +7,11 @@
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
     "./git-info": "./src/git-info.ts",
-    "./shell-types": "./src/shell-types.ts"
+    "./shell-types": "./src/shell-types.ts",
+    "./orchestrator": "./src/orchestrator.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^1.5.0"
+    "@agentclientprotocol/sdk": "^1.5.0",
+    "ai": "^7.0.107"
   }
 }

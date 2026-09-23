@@ -6,7 +6,7 @@
  */
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-export function crossOriginError(req: FastifyRequest): string | null {
+export function crossOriginError(req: Pick<FastifyRequest, "headers">): string | null {
   if (req.headers["sec-fetch-site"] === "cross-site") return "Cross-site requests are not allowed.";
   const origin = req.headers.origin;
   if (!origin) return null;

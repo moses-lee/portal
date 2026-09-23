@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { AgentInfo } from "./types.ts";
 
@@ -8,9 +9,14 @@ export type AgentDefinition = AgentInfo & {
   authHint: string;
 };
 
+const require = createRequire(import.meta.url);
+
+/**
+ * The adapters are dependencies of this package, so resolve them from here rather than from the
+ * working directory (which is the repo root under `pnpm --filter`, where they are not hoisted).
+ */
 function packageEntry(packageName: string): string {
-  // Plain paths keep Turbopack from rewriting subprocess entry points.
-  return path.join(process.cwd(), "node_modules", "@agentclientprotocol", packageName, "dist", "index.js");
+  return path.join(path.dirname(require.resolve(`@agentclientprotocol/${packageName}/package.json`)), "dist", "index.js");
 }
 
 export const agents: readonly AgentDefinition[] = [

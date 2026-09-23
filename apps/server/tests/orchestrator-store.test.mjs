@@ -1,34 +1,18 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { orchestratorDocuments, orchestratorItems, orchestratorMessages, orchestratorTicks, orchestratorWatches } from "../src/db/schema.ts";
 import {
   MAX_MEMORY_BYTES,
   MAX_TICK_REPORTS,
   OrchestratorStoreError,
   capMemory,
   createMemoryOrchestratorStore,
-  createOrchestratorStore,
-  defaultOrchestratorDir,
   newId,
   parseItemPatch,
   parseWatchPatch,
 } from "../src/lib/orchestrator/store.ts";
-
-const FILES = ["conversation.json", "items.json", "watches.json", "snapshot.json", "ticks.json", "memory.md"];
-
-function setup(t) {
-  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-orchestrator-")));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  // The store's directory (like a fresh PORTAL_HOME) does not exist yet.
-  const dir = path.join(root, "portal-home", "orchestrator");
-  return { root, dir, open: () => createOrchestratorStore({ dir }) };
-}
-
-function readJson(file) {
-  return JSON.parse(readFileSync(file, "utf8"));
-}
+import { createPgOrchestratorStore } from "../src/orchestrator/pg-store.ts";
+import { temporaryDatabase } from "./helpers/db.mjs";
 
 function message(id, role = "user", text = id) {
   return { id, role, parts: [{ type: "text", text }], metadata: { at: 1 } };
@@ -78,18 +62,18 @@ async function rejectsWith(promise, status, pattern) {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * `open(t)` returns a fresh store; `reopen(t)` returns a second store over the same data when the
- * implementation persists (null for the in-memory one), so round trips can be checked from disk.
+ * `open(t)` resolves to a fresh store; `reopen(t)` to a second store over the same data when the
+ * implementation persists (null for the in-memory one), so round trips are checked from the database.
  */
 function behaviour(label, { open, reopen }) {
   const roundTrip = async (t, store, check) => {
     await check(store);
-    const again = reopen?.(t);
+    const again = await reopen?.(t);
     if (again) await check(again);
   };
 
   test(`${label}: starts empty`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     await store.ready;
     assert.deepEqual(await store.readMessages(), []);
     assert.deepEqual(await store.listItems(), []);
@@ -103,7 +87,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: messages append, replace, and round-trip`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     await store.appendMessages([message("m1"), message("m2", "assistant")]);
     await store.appendMessages([message("m3")]);
     await roundTrip(t, store, async (s) => {
@@ -118,7 +102,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: createItem fills defaults and items list newest-first`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     const before = Date.now();
     const first = await store.createItem(itemInput({ fingerprint: "a" }));
     const second = await store.createItem(itemInput({ fingerprint: "b", list: "ideas" }));
@@ -142,7 +126,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: updateItem patches, bumps updatedAt, and validates snoozing`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     const item = await store.createItem(itemInput());
     const renamed = await store.updateItem(item.id, { title: "New title", list: "ideas" });
     assert.equal(renamed.title, "New title");
@@ -172,7 +156,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: updateItem and updateWatch keep only valid patch fields, so what is stored always loads`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     const item = await store.createItem(itemInput());
 
     // Keys outside ItemPatch are ignored: identity and bookkeeping fields cannot be rewritten through a patch.
@@ -247,7 +231,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: findItemByFingerprint sees open and snoozed items only`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     const fp = "pr_checks_failing:o/r#1";
     const item = await store.createItem(itemInput({ fingerprint: fp }));
     assert.deepEqual(await store.findItemByFingerprint(fp), item);
@@ -268,7 +252,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: createWatch fills defaults; updateWatch patches and 404s`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     const watch = await store.createWatch({ intent: "Review PRs 1-3", notes: "Plan: ..." });
     assert.match(watch.id, /^[A-Za-z0-9_-]{8}$/);
     assert.deepEqual(watch, {
@@ -292,7 +276,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: snapshot round-trips`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     await store.writeSnapshot(snapshot(1000));
     await roundTrip(t, store, async (s) => assert.deepEqual(await s.readSnapshot(), snapshot(1000)));
     await store.writeSnapshot(snapshot(2000));
@@ -300,7 +284,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: ticks append newest-last and keep only the latest ${MAX_TICK_REPORTS}`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     await store.appendTick(tick("t1"));
     await store.appendTick(tick("t2", { modelInvoked: true, error: "boom" }));
     await roundTrip(t, store, async (s) => {
@@ -316,7 +300,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: memory round-trips and is capped at 32 KiB without throwing`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     await store.writeMemory("# Notes\n\n- prefers pnpm\n");
     await roundTrip(t, store, async (s) => assert.equal(await s.readMemory(), "# Notes\n\n- prefers pnpm\n"));
 
@@ -337,7 +321,7 @@ function behaviour(label, { open, reopen }) {
   });
 
   test(`${label}: concurrent creates and updates are all kept`, async (t) => {
-    const store = open(t);
+    const store = await open(t);
     const created = await Promise.all(Array.from({ length: 10 }, (_, i) => store.createItem(itemInput({ fingerprint: `fp${i}` }))));
     assert.equal(new Set(created.map((i) => i.id)).size, 10, "ids are unique");
     await Promise.all(created.map((item, i) => store.updateItem(item.id, { title: `T${i}` })));
@@ -352,37 +336,72 @@ function behaviour(label, { open, reopen }) {
   });
 }
 
-behaviour("memory store", { open: () => createMemoryOrchestratorStore(), reopen: null });
+behaviour("memory store", { open: async () => createMemoryOrchestratorStore(), reopen: null });
 
-// Each file-store test records its directory so `reopen` can read the same files back from disk.
-const fileDirs = new WeakMap();
-behaviour("file store", {
-  open(t) {
-    const { dir, open } = setup(t);
-    fileDirs.set(t, dir);
-    return open();
+// Each Postgres test records its database so `reopen` can build a second store over the same rows.
+const databases = new WeakMap();
+behaviour("postgres store", {
+  async open(t) {
+    const handle = await temporaryDatabase(t);
+    databases.set(t, handle);
+    return createPgOrchestratorStore({ db: handle.db });
   },
-  reopen(t) {
-    const dir = fileDirs.get(t);
-    assert.ok(dir, "reopen() called before open()");
-    return createOrchestratorStore({ dir });
+  async reopen(t) {
+    const handle = databases.get(t);
+    assert.ok(handle, "reopen() called before open()");
+    return createPgOrchestratorStore({ db: handle.db });
   },
 });
 
 // ---------------------------------------------------------------------------------------------
-// File-store specifics
+// Postgres specifics
 // ---------------------------------------------------------------------------------------------
 
-test("defaultOrchestratorDir honours PORTAL_HOME", () => {
-  const previous = process.env.PORTAL_HOME;
-  try {
-    delete process.env.PORTAL_HOME;
-    assert.equal(defaultOrchestratorDir(), path.join(os.homedir(), ".portal", "orchestrator"));
-    process.env.PORTAL_HOME = "/custom/portal";
-    assert.equal(defaultOrchestratorDir(), path.join("/custom/portal", "orchestrator"));
-  } finally {
-    if (previous === undefined) delete process.env.PORTAL_HOME; else process.env.PORTAL_HOME = previous;
-  }
+test("postgres store: one row per record; memory and snapshot are documents; ticks are trimmed in the table", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const store = createPgOrchestratorStore({ db });
+  await store.appendMessages([message("m1"), message("m2", "assistant")]);
+  const item = await store.createItem(itemInput());
+  await store.updateItem(item.id, { title: "Renamed" });
+  const watch = await store.createWatch({ intent: "i", notes: "n" });
+  await store.writeMemory("# Notes");
+  await store.writeSnapshot(snapshot());
+  for (let i = 1; i <= MAX_TICK_REPORTS + 3; i++) await store.appendTick(tick(`t${i}`));
+
+  assert.deepEqual((await db.select().from(orchestratorMessages)).map((row) => row.id), ["m1", "m2"]);
+  const [itemRow] = await db.select().from(orchestratorItems);
+  assert.equal(itemRow.id, item.id);
+  assert.equal(itemRow.fingerprint, item.fingerprint);
+  assert.equal(itemRow.body.title, "Renamed", "an update rewrites the row, not a new one");
+  assert.equal(itemRow.updatedAt, itemRow.body.updatedAt);
+  assert.deepEqual((await db.select().from(orchestratorWatches)).map((row) => row.id), [watch.id]);
+  const documents = Object.fromEntries((await db.select().from(orchestratorDocuments)).map((row) => [row.key, row.body]));
+  assert.deepEqual(documents, { memory: { text: "# Notes" }, snapshot: snapshot() });
+  const tickRows = await db.select().from(orchestratorTicks);
+  assert.equal(tickRows.length, MAX_TICK_REPORTS);
+  assert.deepEqual(new Set(tickRows.map((row) => row.id)).has("t3"), false);
+});
+
+test("postgres store: writeMessages replaces the thread in one transaction", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const store = createPgOrchestratorStore({ db });
+  await store.appendMessages([message("m1"), message("m2")]);
+  // Postgres rejects NUL in jsonb text, so the insert fails after the delete ran; the delete must roll back.
+  await assert.rejects(store.writeMessages([message("bad", "user", "nul \u0000 here")]));
+  assert.deepEqual((await store.readMessages()).map((m) => m.id), ["m1", "m2"]);
+  // The queue survives the failure.
+  await store.appendMessages([message("m3")]);
+  assert.deepEqual((await store.readMessages()).map((m) => m.id), ["m1", "m2", "m3"]);
+});
+
+test("postgres store: items created in the same millisecond still list newest-first", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const store = createPgOrchestratorStore({ db });
+  const created = [];
+  for (let i = 0; i < 5; i++) created.push(await store.createItem(itemInput({ fingerprint: `fp${i}` })));
+  assert.deepEqual((await store.listItems()).map((item) => item.id), created.map((item) => item.id).reverse());
+  const other = createPgOrchestratorStore({ db });
+  assert.deepEqual((await other.findItemByFingerprint("fp4")).id, created[4].id);
 });
 
 test("parseItemPatch and parseWatchPatch validate request bodies without a store", () => {
@@ -419,135 +438,4 @@ test("capMemory keeps short text, truncates long text on a character boundary", 
   assert.ok(Buffer.byteLength(capped) <= MAX_MEMORY_BYTES);
   assert.ok(!capped.includes("�"), "no torn character");
   assert.ok(capped.endsWith("32 KiB.]"));
-});
-
-test("reading never creates the directory; the first write does, with private modes and no temp files", async (t) => {
-  const { dir, open } = setup(t);
-  const store = open();
-  await store.ready;
-  assert.deepEqual(await store.listItems(), []);
-  assert.ok(!existsSync(dir), "reading does not create the directory");
-
-  await store.createItem(itemInput());
-  assert.ok(existsSync(dir));
-  assert.equal(statSync(dir).mode & 0o077, 0, "directory is private to the user");
-  assert.deepEqual(readdirSync(dir), ["items.json"], "only the file that changed exists, and no temp files");
-  assert.equal(statSync(path.join(dir, "items.json")).mode & 0o077, 0, "file is private to the user");
-
-  await store.writeMemory("hi");
-  await store.writeSnapshot(snapshot());
-  await store.appendTick(tick("t1"));
-  await store.createWatch({ intent: "i", notes: "n" });
-  await store.appendMessages([message("m")]);
-  assert.deepEqual(readdirSync(dir).sort(), [...FILES].sort());
-  for (const name of FILES) assert.equal(statSync(path.join(dir, name)).mode & 0o077, 0, `${name} is private`);
-  assert.equal(readFileSync(path.join(dir, "memory.md"), "utf8"), "hi", "memory is plain text");
-  assert.ok(Array.isArray(readJson(path.join(dir, "items.json"))));
-  assert.ok(readFileSync(path.join(dir, "items.json"), "utf8").endsWith("\n"), "JSON files end with a newline");
-});
-
-test("a corrupt file is treated as empty, warns, and is backed up on the first write to it", async (t) => {
-  const { dir, open } = setup(t);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, "items.json"), "{ not json");
-  writeFileSync(path.join(dir, "watches.json"), JSON.stringify({ not: "an array" }));
-  writeFileSync(path.join(dir, "snapshot.json"), JSON.stringify({ at: "not a number" }));
-  writeFileSync(path.join(dir, "memory.md"), "kept");
-  const warn = t.mock.method(console, "warn", () => {});
-  const store = open();
-  await store.ready;
-  assert.deepEqual(await store.listItems(), []);
-  assert.deepEqual(await store.listWatches(), []);
-  assert.equal(await store.readSnapshot(), null);
-  assert.equal(await store.readMemory(), "kept", "other files are unaffected");
-  assert.equal(warn.mock.callCount(), 3);
-  assert.equal(readFileSync(path.join(dir, "items.json"), "utf8"), "{ not json", "nothing is written until a change");
-
-  const item = await store.createItem(itemInput());
-  const names = readdirSync(dir).sort();
-  const backup = names.find((name) => name.startsWith("items.json.corrupt-"));
-  assert.ok(backup, `expected an items.json.corrupt- backup in ${names}`);
-  assert.equal(readFileSync(path.join(dir, backup), "utf8"), "{ not json");
-  assert.deepEqual(readJson(path.join(dir, "items.json")), [item]);
-  assert.ok(!names.some((name) => name.startsWith("watches.json.corrupt-")), "untouched corrupt files stay put");
-  assert.ok(!names.some((name) => name.includes(".tmp-")), "no temp files");
-
-  // A second write to the same file does not create another backup.
-  await store.updateItem(item.id, { title: "again" });
-  assert.equal(readdirSync(dir).filter((name) => name.startsWith("items.json.corrupt-")).length, 1);
-
-  // The backed-up state reloads cleanly.
-  const again = open();
-  assert.deepEqual((await again.listItems()).map((i) => i.title), ["again"]);
-  assert.equal(warn.mock.callCount(), 5, "watches and snapshot still warn on reload");
-});
-
-test("a file that exists but cannot be read is never written over", { skip: process.getuid?.() === 0 && "root can read anything" }, async (t) => {
-  const { dir, open } = setup(t);
-  mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, "items.json");
-  const original = JSON.stringify([{ ...itemInput(), id: "keep0000", status: "open", snoozedUntil: null, createdAt: 1, updatedAt: 1 }]);
-  writeFileSync(file, original);
-  writeFileSync(path.join(dir, "memory.md"), "notes");
-  chmodSync(file, 0o000);
-  // Make the file removable again should an assertion fail before the chmod below (setup's rmSync hook runs first).
-  t.after(() => { if (existsSync(file)) chmodSync(file, 0o600); });
-
-  const store = open();
-  await assert.rejects(store.ready, { code: "EACCES" });
-  // The first commit and every later one reject; the second used to run against the empty default and overwrite the file.
-  await assert.rejects(store.createItem(itemInput({ fingerprint: "new" })), { code: "EACCES" });
-  await assert.rejects(store.createItem(itemInput({ fingerprint: "new" })), { code: "EACCES" });
-  await assert.rejects(store.updateItem("keep0000", { title: "x" }), { code: "EACCES" });
-  await assert.rejects(store.writeMemory("changed"), "no file is written while the store could not load");
-  await assert.rejects(store.listItems(), "reads report the failure too");
-
-  chmodSync(file, 0o600);
-  assert.equal(readFileSync(file, "utf8"), original, "the unreadable file is untouched");
-  assert.equal(readFileSync(path.join(dir, "memory.md"), "utf8"), "notes");
-  assert.deepEqual(readdirSync(dir).sort(), ["items.json", "memory.md"], "no temp or backup files");
-  // Readable again, a fresh store loads what was there all along.
-  assert.deepEqual((await open().listItems()).map((item) => item.id), ["keep0000"]);
-});
-
-test("a null snapshot file is a valid empty snapshot, not a corrupt one", async (t) => {
-  const { dir, open } = setup(t);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, "snapshot.json"), "null\n");
-  const warn = t.mock.method(console, "warn", () => {});
-  const store = open();
-  assert.equal(await store.readSnapshot(), null);
-  assert.equal(warn.mock.callCount(), 0);
-  await store.writeSnapshot(snapshot());
-  assert.ok(!readdirSync(dir).some((name) => name.includes(".corrupt-")));
-});
-
-test("hand-edited lists drop unreadable records and sort items newest-first", async (t) => {
-  const { dir, open } = setup(t);
-  mkdirSync(dir, { recursive: true });
-  const older = { ...itemInput({ fingerprint: "old" }), id: "old00000", status: "open", snoozedUntil: null, createdAt: 100, updatedAt: 100 };
-  const newer = { ...itemInput({ fingerprint: "new" }), id: "new00000", status: "resolved", snoozedUntil: null, createdAt: 200, updatedAt: 250 };
-  writeFileSync(path.join(dir, "items.json"), JSON.stringify([older, { id: "bad" }, newer, "junk", { ...older, id: "weird", status: "unknown" }]));
-  writeFileSync(path.join(dir, "conversation.json"), JSON.stringify([message("ok"), { id: "no-parts", role: "user" }, { role: "user", parts: [] }, 7, null]));
-  writeFileSync(path.join(dir, "ticks.json"), JSON.stringify([tick("t1"), { id: "missing fields" }, tick("t2")]));
-  const warn = t.mock.method(console, "warn", () => {});
-  const store = open();
-  assert.deepEqual(await store.listItems(), [newer, older]);
-  assert.deepEqual(await store.readMessages(), [message("ok")]);
-  assert.deepEqual(await store.listTicks(), [tick("t1"), tick("t2")]);
-  assert.equal(warn.mock.callCount(), 3, "one warning per file with dropped records");
-  assert.ok(!readdirSync(dir).some((name) => name.includes(".corrupt-")), "a partly readable list is not a corrupt file");
-
-  // The next write persists only the readable records.
-  await store.updateItem("old00000", { title: "edited" });
-  assert.deepEqual(readJson(path.join(dir, "items.json")).map((i) => i.id), ["new00000", "old00000"]);
-});
-
-test("an over-long ticks.json is trimmed to the newest reports on load", async (t) => {
-  const { dir, open } = setup(t);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, "ticks.json"), JSON.stringify(Array.from({ length: MAX_TICK_REPORTS + 10 }, (_, i) => tick(`t${i}`))));
-  const ticks = await open().listTicks();
-  assert.equal(ticks.length, MAX_TICK_REPORTS);
-  assert.equal(ticks[0].id, "t10");
 });

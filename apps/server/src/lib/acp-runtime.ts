@@ -111,6 +111,18 @@ function turnOpen(tail: readonly PortalEvent[]): boolean | null {
   return null;
 }
 
+/** Callbacks for one viewer of a session; see `subscribe`. */
+export type SessionSubscriber = {
+  /** Each new log event with its seq. */
+  onEvent?: (seq: number, event: PortalEvent) => void;
+  /** The replacement agent-side state after every change. */
+  onState?: (state: SessionState) => void;
+  /** The replacement link on every connection change, and after a title change. */
+  onLink?: (link: SessionLink) => void;
+  /** Once, when the session is deleted. */
+  onClose?: () => void;
+};
+
 export type AcpRuntimeOptions = {
   initializeTimeoutMs?: number;
   /** How long a delete waits for the agent to acknowledge cancel/close before moving on. */
@@ -715,6 +727,24 @@ export function createAcpRuntime(
     return session.events.slice(offset).map((event, i) => ({ ...event, seq: from + i, ts: session.eventTimes[offset + i] }));
   }
 
+  /**
+   * Follow one session's live events and metadata changes. Throws for an unknown session; the
+   * returned function detaches every callback and is safe to call more than once.
+   */
+  function subscribe(id: string, { onEvent, onState, onLink, onClose }: SessionSubscriber): () => void {
+    const session = requireSession(id);
+    if (onEvent) session.listeners.add(onEvent);
+    if (onState) session.stateListeners.add(onState);
+    if (onLink) session.linkListeners.add(onLink);
+    if (onClose) session.closeListeners.add(onClose);
+    return () => {
+      if (onEvent) session.listeners.delete(onEvent);
+      if (onState) session.stateListeners.delete(onState);
+      if (onLink) session.linkListeners.delete(onLink);
+      if (onClose) session.closeListeners.delete(onClose);
+    };
+  }
+
   /** Resolve to `fallback` if `promise` takes longer than `ms`; errors are swallowed too. */
   function settleWithin<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
     return new Promise((resolve) => {
@@ -761,7 +791,7 @@ export function createAcpRuntime(
 
   return {
     ready, listSessions, getSession, createSession, attach, sendPrompt, cancel,
-    respondPermission, setConfigOption, setMode, readEvents, eventsSince, deleteSession, onSessionsChange, dispose,
+    respondPermission, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
   };
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -143,27 +143,22 @@ test("a missing cwd is reported as a failure rather than an exception", async (t
   await assert.rejects(runScript("preWorktreeDelete", settings(), { cwd: path.join(root, "gone") }), ScriptError);
 });
 
-test("runConfiguredScript reads the script from PORTAL_HOME's settings file", async (t) => {
-  const root = tempDir(t);
-  const home = path.join(root, "home");
-  mkdirSync(home);
-  writeFileSync(path.join(home, "settings.json"), JSON.stringify({
-    version: 1,
-    scripts: { preWorktreeDelete: { command: "echo configured > ran.txt", timeoutSeconds: 30 } },
-  }));
-  const previous = process.env.PORTAL_HOME;
-  process.env.PORTAL_HOME = home;
-  // settings-storage.ts memoizes the store on globalThis; start from a clean slate and leave one behind.
-  delete globalThis.__portalSettings;
-  t.after(() => {
-    if (previous === undefined) delete process.env.PORTAL_HOME; else process.env.PORTAL_HOME = previous;
-    delete globalThis.__portalSettings;
-  });
-  const cwd = path.join(root, "worktree");
-  mkdirSync(cwd);
-  const outcome = await runConfiguredScript("preWorktreeDelete", { cwd });
+test("runConfiguredScript runs the script the settings source holds for the kind", async (t) => {
+  const cwd = tempDir(t);
+  let reads = 0;
+  const source = {
+    read: async () => {
+      reads++;
+      return { scripts: { preWorktreeDelete: settings({ command: "echo configured > ran.txt", timeoutSeconds: 30 }) } };
+    },
+  };
+  const outcome = await runConfiguredScript("preWorktreeDelete", { cwd }, source);
+  assert.equal(reads, 1);
   assert.equal(outcome.ran, true);
   assert.equal(outcome.ok, true);
-  const { readFileSync } = await import("node:fs");
   assert.equal(readFileSync(path.join(cwd, "ran.txt"), "utf8").trim(), "configured");
+
+  // A script that is off in the settings runs nothing.
+  const off = { read: async () => ({ scripts: { preWorktreeDelete: settings({ command: "" }) } }) };
+  assert.deepEqual(await runConfiguredScript("preWorktreeDelete", { cwd }, off), { ran: false });
 });

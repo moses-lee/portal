@@ -30,7 +30,7 @@ export interface AppContext {
 
 /**
  * The live context, for the few legacy modules that still reach for process-wide singletons
- * (see `src/lib/acp.ts`, `src/lib/projects.ts`, ...). New code takes the context as a parameter.
+ * (the deprecated `runConfiguredScript` overload). New code takes the context as a parameter.
  */
 let current: AppContext | null = null;
 const waiters: ((ctx: AppContext) => void)[] = [];

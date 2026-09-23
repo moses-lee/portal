@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import xterm from "@xterm/headless";
-import { createShellRuntime } from "../src/lib/shell-runtime.ts";
-import { checkSameOrigin, parseShellCommand } from "../src/lib/shell-http.ts";
+import { crossOriginError } from "../src/http/origin.ts";
+import { createShellRuntime } from "../src/terminals/shell-runtime.ts";
+import { parseShellCommand } from "../src/terminals/commands.ts";
 
 const native = { skip: !["darwin", "linux"].includes(process.platform) };
 async function until(predicate, description) {
@@ -127,13 +128,15 @@ test("scrollback stays bounded while large output is parsed and replayed", nativ
 });
 
 test("shell commands reject cross-origin requests, oversized input and invalid geometry", async () => {
-  const request = (body, headers = {}) => new Request("http://localhost:3000/api/shell", {
-    method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
-  });
-  assert.equal(checkSameOrigin(request({}, { origin: "http://evil.example" })).status, 403);
-  assert.equal(checkSameOrigin(request({}, { "sec-fetch-site": "cross-site" })).status, 403);
-  assert.equal(checkSameOrigin(request({}, { origin: "http://localhost:3000" })), null);
-  assert.equal(checkSameOrigin(new Request("http://100.1.2.3:3000/api/shell", { headers: { origin: "http://100.1.2.3:3000" } })), null);
+  const request = (headers) => ({ headers: { host: "localhost:3000", ...headers } });
+  assert.match(crossOriginError(request({ origin: "http://evil.example" })), /Cross-origin/);
+  assert.match(crossOriginError(request({ "sec-fetch-site": "cross-site" })), /Cross-site/);
+  assert.equal(crossOriginError(request({ origin: "http://localhost:3000" })), null);
+  assert.equal(crossOriginError({ headers: { host: "100.1.2.3:3000", origin: "http://100.1.2.3:3000" } }), null);
+  // Behind the Next.js rewrite `Host` is the server's own address; the browser's host is forwarded.
+  const proxied = (origin) => ({ headers: { host: "127.0.0.1:3100", "x-forwarded-host": "mini:3000", origin } });
+  assert.equal(crossOriginError(proxied("http://mini:3000")), null);
+  assert.match(crossOriginError(proxied("http://127.0.0.1:3100")), /Cross-origin/);
   assert.deepEqual(parseShellCommand({ action: "input", id: "abc", data: "\u0003" }), { action: "input", id: "abc", data: "\u0003" });
   for (const command of [
     null, [], { action: "input", data: "hi" }, { action: "input", id: "abc", data: "a".repeat(17000) },
@@ -170,9 +173,20 @@ test("directory polling runs only while subscribed; refresh() still answers on d
   const output = [];
   const unsubscribe = runtime.subscribe((event) => { if (event.type === "output") output.push(event.data); }, true);
   await until(() => output.join("").includes("PORTAL_TEST>"), "shell prompt");
+  // Without a subscriber there is no output to watch, so the shell drops a marker file once `cd` ran.
+  let step = 0;
+  async function cdUnwatched(directory) {
+    const marker = path.join(cwd, `.moved-${++step}`);
+    runtime.write(runtime.getState().id, `cd ${directory} && touch '${marker}'\r`);
+    await until(() => existsSync(marker), `cd ${directory}`);
+    // Several poll intervals (40 ms), so a poller that failed to stop would have caught up by now.
+    await delay(250);
+  }
   unsubscribe();
-  runtime.write(runtime.getState().id, "cd sub\r");
-  await delay(250);
+  // A check started while subscribed may still be in flight (lsof is slow under load) and would see
+  // the new directory; let it settle so the assertion below only measures polling.
+  await runtime.refresh();
+  await cdUnwatched("sub");
   assert.equal(runtime.getState().cwd, cwd, "no poll without subscribers");
   assert.equal((await runtime.refresh()).cwd, target);
   assert.equal(runtime.getState().cwd, target);
@@ -180,8 +194,8 @@ test("directory polling runs only while subscribed; refresh() still answers on d
   runtime.write(runtime.getState().id, "cd ..\r");
   await until(() => runtime.getState().cwd === cwd, "poll while subscribed");
   detach();
-  runtime.write(runtime.getState().id, "cd sub\r");
-  await delay(250);
+  await runtime.refresh();
+  await cdUnwatched("sub");
   assert.equal(runtime.getState().cwd, cwd, "poll stops after the last unsubscribe");
   assert.equal((await runtime.refresh()).cwd, target);
 });

@@ -53,7 +53,7 @@ export function mountShell(element: HTMLDivElement, { terminalId, canFocus = () 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let rendering = Promise.resolve();
   // `forceNew`: socket.io-client shares one Manager per URL otherwise, and every tab would reuse the first tab's auth.
-  const socket = io({ path: "/api/shell/socket", transports: ["websocket"], forceNew: true, auth: { terminalId, output: true } });
+  const socket = io({ path: "/api/shell/socket", addTrailingSlash: false, transports: ["websocket"], forceNew: true, auth: { terminalId, output: true } });
 
   function focus() {
     if (!disposed && canFocus()) terminal.focus();

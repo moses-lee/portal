@@ -1,17 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { orchestratorProviders } from "./orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "./orchestrator/types.ts";
-import {
-  applySettingsPatch,
-  gitActionKinds,
-  isOrchestratorProvider,
-  mergeSettings,
-  orchestratorLimits,
-  settingsOverrides,
-} from "./settings.ts";
+import { gitActionKinds, isOrchestratorProvider, orchestratorLimits } from "./settings.ts";
 import type { GitActionKind, Settings, SettingsPatch } from "./settings.ts";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "./scripts.ts";
 import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "./scripts.ts";
@@ -26,6 +17,10 @@ export class SettingsError extends Error {
   }
 }
 
+/**
+ * The settings file the web app kept. The server stores settings in Postgres; this path remains for
+ * the one-time importer and for the orchestrator's guard that refuses to read it (it holds keys).
+ */
 export function defaultSettingsFile() {
   return path.join(process.env.PORTAL_HOME || path.join(os.homedir(), ".portal"), "settings.json");
 }
@@ -258,17 +253,8 @@ function parseGitActionsFile(given: unknown): SettingsFile["gitActions"] {
   return { prompts: kept };
 }
 
-/**
- * The overrides in a settings file, or null only when the file is not a JSON object at all. Every
- * section and field is read on its own and dropped when it does not fit, including an unexpected
- * `version`: a "corrupt" verdict makes the next `save()` move the file aside and write fresh
- * overrides, which would silently lose the API keys, so the file is only given up on when there is
- * nothing in it to carry over.
- */
-export function parseSettingsFile(text: string): FileOverrides | null {
-  let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { return null; }
-  if (!isPlainObject(parsed)) return null;
+/** Every section of a parsed settings document, each read on its own and dropped when it does not fit. */
+function parseOverridesObject(parsed: Record<string, unknown>): FileOverrides {
   const overrides: FileOverrides = {};
   const gitActions = parseGitActionsFile(parsed.gitActions);
   if (gitActions) overrides.gitActions = gitActions;
@@ -279,139 +265,49 @@ export function parseSettingsFile(text: string): FileOverrides | null {
   return overrides;
 }
 
+/**
+ * The overrides in a settings file, or null only when the file is not a JSON object at all. Every
+ * section and field is read on its own and dropped when it does not fit, including an unexpected
+ * `version`, so a file from a newer Portal still yields its API keys. The importer that moves
+ * `settings.json` into Postgres reads it with this.
+ */
+export function parseSettingsFile(text: string): FileOverrides | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!isPlainObject(parsed)) return null;
+  return parseOverridesObject(parsed);
+}
+
+/**
+ * Stored overrides (the `settings` row's jsonb) read as leniently as the file was: a bad field
+ * falls back to its default instead of failing every read. API keys never belong here, so any
+ * found are dropped.
+ */
+export function parseStoredOverrides(value: unknown): SettingsPatch {
+  if (!isPlainObject(value)) return {};
+  const overrides = parseOverridesObject(value);
+  if (overrides.orchestrator?.apiKeys) {
+    const { apiKeys: _dropped, ...rest } = overrides.orchestrator;
+    if (Object.keys(rest).length > 0) overrides.orchestrator = rest;
+    else delete overrides.orchestrator;
+  }
+  return overrides;
+}
+
 export type SettingsStore = {
-  /** Merged settings (defaults + overrides on disk) in the wire form: API keys masked to booleans. A missing file means defaults. */
+  /** Settles once the store can serve calls (the server key is loaded); every method waits for it anyway. */
+  ready: Promise<void>;
+  /** Merged settings (defaults + stored overrides) in the wire form: API keys masked to booleans. Nothing stored means defaults. */
   read(): Promise<Settings>;
   /** The merged orchestrator section of `read()`. */
   orchestrator(): Promise<OrchestratorSettings>;
   /** The stored API key for `provider`, or null when none is. For server code only; never send it to the browser. */
   apiKey(provider: OrchestratorProvider): Promise<string | null>;
   /**
-   * Validate `patch` (unknown input from the network), apply on top of the current overrides, write only
-   * the overrides that differ from defaults (atomic tmp+rename, mkdir -p the parent), return the merged result.
+   * Validate `patch` (unknown input from the network), apply it on top of the current overrides,
+   * store only the overrides that differ from defaults plus the key changes, and return the merged result.
    */
   patch(patch: unknown): Promise<Settings>;
   /** Called with the merged settings after every successful `patch`. Returns the unsubscribe function. */
   subscribe(listener: (settings: Settings) => void): () => void;
 };
-
-/**
- * Persisted user settings. Only the values that differ from the defaults are kept on disk, so a
- * change to a default reaches every user who has not customised that field. The file is read on
- * every call (it is tiny, and may be edited by hand) and rewritten atomically on every change.
- */
-export function createSettingsStore({ file }: { file: string }): SettingsStore {
-  /** The file could not be parsed on the last read; it is backed up rather than overwritten on the next change. */
-  let corrupt = false;
-  let warned = false;
-  const listeners = new Set<(settings: Settings) => void>();
-
-  async function loadOverrides(): Promise<FileOverrides> {
-    let text: string;
-    try {
-      text = await readFile(file, "utf8");
-    } catch (err) {
-      if ((err as { code?: string }).code === "ENOENT") return {};
-      throw err;
-    }
-    const loaded = parseSettingsFile(text);
-    if (loaded) {
-      corrupt = false;
-      return loaded;
-    }
-    corrupt = true;
-    if (!warned) {
-      warned = true;
-      console.warn(`Ignoring unreadable settings file ${file}; using defaults. It will be backed up on the next change.`);
-    }
-    return {};
-  }
-
-  async function save(overrides: FileOverrides) {
-    // The file holds API keys, so a freshly created PORTAL_HOME is private like the orchestrator's directory.
-    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    if (corrupt) {
-      // Keep the unreadable file for the user instead of silently overwriting it.
-      await rename(file, `${file}.bad-${Date.now()}`).catch(() => {});
-      corrupt = false;
-      warned = false;
-    }
-    const tmp = `${file}.tmp-${randomUUID().slice(0, 8)}`;
-    const body: SettingsFile = { version: 1, ...overrides };
-    try {
-      await writeFile(tmp, JSON.stringify(body, null, 2) + "\n", { mode: 0o600 });
-      await rename(tmp, file);
-    } catch (err) {
-      await unlink(tmp).catch(() => {});
-      throw err;
-    }
-  }
-
-  // One chain for every change so concurrent patches never interleave their read-modify-write.
-  let queue: Promise<unknown> = Promise.resolve();
-  function mutate<T>(fn: () => Promise<T>): Promise<T> {
-    const run = queue.then(fn);
-    queue = run.catch(() => {});
-    return run;
-  }
-
-  async function read(): Promise<Settings> {
-    return mergeSettings(await loadOverrides());
-  }
-
-  async function orchestrator(): Promise<OrchestratorSettings> {
-    return (await read()).orchestrator;
-  }
-
-  async function apiKey(provider: OrchestratorProvider): Promise<string | null> {
-    if (!isOrchestratorProvider(provider)) return null;
-    return (await loadOverrides()).orchestrator?.apiKeys?.[provider] ?? null;
-  }
-
-  /**
-   * The keys to write: the stored ones with the patch's changes applied. Keys live outside the
-   * wire form, so they are carried over here rather than through settingsOverrides().
-   */
-  function nextApiKeys(stored: FileOverrides, patch: SettingsPatch): Partial<Record<OrchestratorProvider, string>> {
-    const keys = { ...stored.orchestrator?.apiKeys };
-    for (const provider of orchestratorProviders) {
-      const value = patch.orchestrator?.apiKeys?.[provider];
-      if (value === undefined) continue;
-      if (value) keys[provider] = value;
-      else delete keys[provider];
-    }
-    return keys;
-  }
-
-  async function patch(input: unknown): Promise<Settings> {
-    // Validate before queueing so a bad request never waits behind a write.
-    const parsed = parseSettingsPatch(input);
-    const next = await mutate(async () => {
-      const stored = await loadOverrides();
-      const merged = applySettingsPatch(mergeSettings(stored), parsed);
-      const overrides: FileOverrides = settingsOverrides(merged);
-      const apiKeys = nextApiKeys(stored, parsed);
-      if (Object.keys(apiKeys).length > 0) overrides.orchestrator = { ...overrides.orchestrator, apiKeys };
-      await save(overrides);
-      return merged;
-    });
-    for (const listener of listeners) {
-      try {
-        listener(next);
-      } catch (err) {
-        // A listener's bug must not fail the caller's request or starve the other listeners.
-        console.error("Settings listener failed:", err);
-      }
-    }
-    return next;
-  }
-
-  function subscribe(listener: (settings: Settings) => void): () => void {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  }
-
-  return { read, orchestrator, apiKey, patch, subscribe };
-}

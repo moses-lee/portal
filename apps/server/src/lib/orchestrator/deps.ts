@@ -1,12 +1,8 @@
 /**
  * The slice of Portal the orchestrator acts through, as one injectable object. Tools and the tick
  * only ever reach Portal via this surface, so tests run them against fakes and the live wiring
- * below is the only place that touches the real modules.
- *
- * `acp.ts`, `agents.ts`, `projects.ts`, and `settings-storage.ts` can only be loaded inside Next
- * (`server-only`, extension-less imports, disk reads at import time), while `runtime.ts` is also
- * imported by Node tests. The live deps therefore import those four lazily, on first use; the
- * pure helper modules are imported directly.
+ * below (over the server's sessions, projects, and settings services) is the only place that
+ * touches the real ones.
  */
 import { open } from "node:fs/promises";
 import os from "node:os";
@@ -18,8 +14,10 @@ import { fetchRepo, pullFastForward, readGithubSummary } from "../github-summary
 import { runConfiguredScript } from "../script-runner.ts";
 import type { ScriptOutcome, ScriptRunOptions } from "../script-runner.ts";
 import type { ScriptKind } from "../scripts.ts";
-import { summarizeProject } from "../projects-store.ts";
-import type { SettingsStore } from "../settings-store.ts";
+import { toMeta } from "../acp-runtime.ts";
+import { defaultAgentId, listAgents } from "../agents.ts";
+import type { AppContext } from "../../context.ts";
+import { summarizeProject } from "../../projects/store.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
   SessionMeta, SessionState, WorktreeMeta,
@@ -116,7 +114,7 @@ export type OrchestratorDeps = {
 };
 
 /** What the runtime needs from the settings store. */
-export type OrchestratorSettingsStore = Pick<SettingsStore, "read" | "orchestrator" | "apiKey" | "subscribe">;
+export type OrchestratorSettingsStore = Pick<AppContext["settings"], "read" | "orchestrator" | "apiKey" | "subscribe">;
 
 // ---------------------------------------------------------------------------------------------
 // Process helpers, shared by the live deps and the tool tests
@@ -149,39 +147,27 @@ async function readPullState(url: string): Promise<PullState | null> {
 // Live wiring
 // ---------------------------------------------------------------------------------------------
 
-/** Memoize an async loader; a failed load is retried on the next call rather than cached. */
-function lazy<T>(load: () => Promise<T>): () => Promise<T> {
-  let loading: Promise<T> | null = null;
-  return () => (loading ??= load().catch((err: unknown) => {
-    loading = null;
-    throw err;
-  }));
-}
+/** The server services the live deps act through. Read at call time, so the order services are built in does not matter. */
+export type OrchestratorServices = Pick<AppContext, "sessions" | "projects" | "settings">;
 
-export function liveDeps(): OrchestratorDeps {
-  const acp = lazy(async () => {
-    const loaded = await import("../acp.ts");
-    await loaded.ready;
-    return loaded;
-  });
-  const agents = lazy(() => import("../agents.ts"));
-  const projects = lazy(async () => {
-    const { projects } = await import("../projects.ts");
-    await projects.ready;
-    return projects;
-  });
+export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
+  /** The ACP runtime once it has loaded its sessions, as the old module-level `ready` promise gave it. */
+  const acp = async () => {
+    await ctx.sessions.ready;
+    return ctx.sessions;
+  };
+  const projects = async () => {
+    await ctx.projects.ready;
+    return ctx.projects;
+  };
   return {
     sessions: {
       list: async () => (await acp()).listSessions(),
       get: async (id) => {
-        const runtime = await acp();
-        const session = runtime.getSession(id);
-        return session ? runtime.toMeta(session) : null;
+        const session = (await acp()).getSession(id);
+        return session ? toMeta(session) : null;
       },
-      create: async (cwd, agentId, projectId) => {
-        const runtime = await acp();
-        return runtime.toMeta(await runtime.createSession(cwd, agentId, projectId));
-      },
+      create: async (cwd, agentId, projectId) => toMeta(await (await acp()).createSession(cwd, agentId, projectId)),
       prompt: async (id, text) => (await acp()).sendPrompt(id, text),
       cancel: async (id) => (await acp()).cancel(id),
       respondPermission: async (id, requestId, optionId) => {
@@ -194,8 +180,8 @@ export function liveDeps(): OrchestratorDeps {
       remove: async (id) => (await acp()).deleteSession(id),
     },
     agents: {
-      list: async () => (await agents()).listAgents(),
-      defaultId: async () => (await agents()).defaultAgentId,
+      list: async () => listAgents(),
+      defaultId: async () => defaultAgentId,
     },
     projects: {
       list: async () => (await projects()).list(),
@@ -238,28 +224,17 @@ export function liveDeps(): OrchestratorDeps {
     },
     scripts: {
       // A tool call has five minutes (agent.ts CALL_TIMEOUT_MS); a script must leave time for git after it.
-      run: (kind, opts) => runConfiguredScript(kind, { ...opts, maxTimeoutSeconds: ORCHESTRATOR_SCRIPT_TIMEOUT_SECONDS }),
+      run: (kind, opts) => runConfiguredScript(kind, { ...opts, maxTimeoutSeconds: ORCHESTRATOR_SCRIPT_TIMEOUT_SECONDS }, ctx.settings),
     },
   };
 }
 
-/** The process-wide settings store, loaded on first use (see the module comment). */
-export function liveSettingsStore(): OrchestratorSettingsStore {
-  const store = lazy(async () => (await import("../settings-storage.ts")).getSettingsStore());
+/** The settings service as the runtime sees it, looked up on every call. */
+export function liveSettingsStore(ctx: Pick<AppContext, "settings">): OrchestratorSettingsStore {
   return {
-    read: async () => (await store()).read(),
-    orchestrator: async () => (await store()).orchestrator(),
-    apiKey: async (provider) => (await store()).apiKey(provider),
-    subscribe(listener) {
-      let unsubscribe: (() => void) | null = null;
-      let cancelled = false;
-      store().then((settings) => {
-        if (!cancelled) unsubscribe = settings.subscribe(listener);
-      }).catch(() => {});
-      return () => {
-        cancelled = true;
-        unsubscribe?.();
-      };
-    },
+    read: () => ctx.settings.read(),
+    orchestrator: () => ctx.settings.orchestrator(),
+    apiKey: (provider) => ctx.settings.apiKey(provider),
+    subscribe: (listener) => ctx.settings.subscribe(listener),
   };
 }

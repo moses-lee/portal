@@ -11,11 +11,11 @@ import { type Db, connect } from "./db/client.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { errorMessage, errorStatus } from "./http/errors.ts";
 import { presence } from "./lib/presence.ts";
-import { createOrchestratorService } from "./orchestrator/service.ts";
+import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
 import { createProjectsService } from "./projects/service.ts";
 import { registerProjectRoutes } from "./projects/routes.ts";
-import { createSessionsService } from "./sessions/service.ts";
+import { type SessionsOptions, createSessionsService } from "./sessions/service.ts";
 import { registerSessionRoutes } from "./sessions/routes.ts";
 import { createSettingsService } from "./settings/service.ts";
 import { registerSettingsRoutes } from "./settings/routes.ts";
@@ -27,11 +27,13 @@ export interface AppOptions {
   /** An open database (tests pass a throwaway one). When omitted the app connects and migrates itself. */
   database?: { db: Db; sql: AppContext["sql"]; close?: () => Promise<void> };
   logger?: boolean;
-  /** Skip the orchestrator (its scheduler and model calls) — for tests of the other routes. */
-  orchestrator?: boolean;
+  /** Skip the orchestrator (its scheduler and model calls) — for tests of the other routes. An object swaps in fakes (model, deps, timers). */
+  orchestrator?: boolean | OrchestratorOptions;
+  /** Sessions overrides (tests swap in a fake ACP agent). */
+  sessions?: SessionsOptions;
 }
 
-export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true }: AppOptions = {}): Promise<FastifyInstance> {
+export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions }: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger });
   await app.register(compress, { global: true, threshold: 1024, encodings: ["gzip"] });
 
@@ -43,12 +45,12 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   }
 
   const ctx = { config, db: database.db, sql: database.sql, log: app.log, presence } as AppContext;
-  ctx.sessions = createSessionsService(ctx);
+  ctx.sessions = createSessionsService(ctx, sessions);
   ctx.projects = createProjectsService(ctx);
   ctx.settings = createSettingsService(ctx);
   ctx.terminals = createTerminalsService(ctx);
   setContext(ctx);
-  if (orchestrator) ctx.orchestrator = createOrchestratorService(ctx);
+  if (orchestrator) ctx.orchestrator = createOrchestratorService(ctx, typeof orchestrator === "object" ? orchestrator : {});
 
   app.setErrorHandler((err, _req, reply) => {
     const status = errorStatus(err) ?? (err as { statusCode?: number }).statusCode ?? 500;

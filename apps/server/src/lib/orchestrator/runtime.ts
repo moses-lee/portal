@@ -1,20 +1,19 @@
 /**
  * The orchestrator runtime: one shared chat thread, periodic ticks that turn changes into items,
  * and the events the page follows. `createOrchestratorRuntime` works over whatever store, settings,
- * deps, clock, and model it is given (tests pass fakes); `getOrchestrator` wires the live Portal
- * and keeps a single instance across dev HMR on `globalThis`, which `server.mjs` disposes on exit.
+ * deps, clock, and model it is given (tests pass fakes); `createOrchestratorService` in
+ * `src/orchestrator/service.ts` wires the live server into it at boot.
  */
 import { randomUUID } from "node:crypto";
 import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
 import { presence as livePresence } from "../presence.ts";
 import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
-import { type OrchestratorDeps, type OrchestratorSettingsStore, liveDeps, liveSettingsStore } from "./deps.ts";
+import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import { MEMORY_PROMPT_BYTES, buildDigest, collectSnapshot, truncateBytes } from "./digest.ts";
 import { buildLanguageModel, providerOptionsFor } from "./model.ts";
 import { httpError, removeProject, startSession } from "./ops.ts";
 import { systemPrompt, tickPrompt } from "./prompt.ts";
 import { type SchedulerTimers, createScheduler, realTimers } from "./scheduler.ts";
-import { getOrchestratorStore } from "./storage.ts";
 import { newId } from "./store.ts";
 import { type ToolContext, createTools } from "./tools/index.ts";
 import type {
@@ -117,7 +116,7 @@ export function createOrchestratorRuntime({
   const startedAt = timers.now();
   let busy: "chat" | "tick" | null = null;
   let current: AbortController | null = null;
-  /** The newest report, from disk at start and then from this process. */
+  /** The newest report, from the store at start and then from this process. */
   let lastReport: TickReport | null = null;
   /** When the last tick of this process finished; the schedule counts from here. */
   let lastTickEnd: number | null = null;
@@ -442,17 +441,4 @@ export function createOrchestratorRuntime({
       current?.abort();
     },
   };
-}
-
-// Keep one runtime (its scheduler and in-flight turn) alive across Next.js dev HMR; server.mjs
-// disposes it through this same global on shutdown.
-const globalOrchestrator = globalThis as unknown as { __portalOrchestrator?: OrchestratorRuntime };
-
-/** The process-wide orchestrator, started (with its scheduler) on first use. */
-export function getOrchestrator(): OrchestratorRuntime {
-  return (globalOrchestrator.__portalOrchestrator ??= createOrchestratorRuntime({
-    store: getOrchestratorStore(),
-    settingsStore: liveSettingsStore(),
-    deps: liveDeps(),
-  }));
 }

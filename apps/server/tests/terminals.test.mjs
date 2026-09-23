@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { createTerminalRegistry, info } from "../src/lib/terminals-registry.ts";
+import { createTerminalRegistry, info } from "../src/terminals/registry.ts";
 
 const native = { skip: !["darwin", "linux"].includes(process.platform) };
 async function until(predicate, description) {

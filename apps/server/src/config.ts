@@ -2,6 +2,9 @@
  * Server configuration from the environment. Everything has a development default so `pnpm dev`
  * works with no setup beyond `pnpm db:up`.
  */
+import os from "node:os";
+import path from "node:path";
+
 export interface ServerConfig {
   /** Port the HTTP API listens on. Next.js proxies `/api/*` here. */
   port: number;
@@ -9,6 +12,8 @@ export interface ServerConfig {
   host: string;
   /** Postgres connection string. */
   databaseUrl: string;
+  /** Portal's private directory (`server.key`, the legacy JSON stores). */
+  portalHome: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -20,5 +25,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     port,
     host: env.PORTAL_SERVER_HOST ?? "127.0.0.1",
     databaseUrl: env.DATABASE_URL ?? "postgres://portal:portal@127.0.0.1:5433/portal",
+    portalHome: env.PORTAL_HOME || path.join(os.homedir(), ".portal"),
   };
 }

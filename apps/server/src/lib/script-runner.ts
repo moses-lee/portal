@@ -1,13 +1,13 @@
 /**
  * Runs the user's scripts (see scripts.ts) where an action happens. `runScript` takes the script's
- * settings explicitly so tests and callers with their own store can use it; `runConfiguredScript`
- * reads them from Portal's settings store.
+ * settings explicitly; `runConfiguredScript` reads them from a settings source (the settings service).
  */
+import { context } from "../context.ts";
 import { childEnv } from "./child-env.ts";
 import { execCommand } from "./exec-command.ts";
 import type { ExecResult } from "./exec-command.ts";
 import { isScriptEnabled, scriptDefinitions } from "./scripts.ts";
-import type { ScriptKind, ScriptSettings } from "./scripts.ts";
+import type { ScriptKind, ScriptSettings, ScriptsSettings } from "./scripts.ts";
 import type { Project, WorktreeMeta } from "./types.ts";
 
 export type ScriptRunOptions = {
@@ -107,11 +107,14 @@ export async function runScript(kind: ScriptKind, settings: ScriptSettings, opts
   return outcome;
 }
 
-/** `runScript` with the settings currently stored for `kind`. */
-export async function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions): Promise<ScriptOutcome> {
-  // Loaded on first use so importing this module (the orchestrator deps do, in tests too) does not
-  // create the process-wide settings store as a side effect.
-  const { getSettingsStore } = await import("./settings-storage.ts");
-  const settings = (await getSettingsStore().read()).scripts[kind];
-  return runScript(kind, settings, opts);
+/** Where `runConfiguredScript` reads the scripts' settings from; the settings service fits. */
+export type ScriptSettingsSource = { read(): Promise<{ scripts: ScriptsSettings }> };
+
+/** `runScript` with the settings `settings` currently holds for `kind`. */
+export function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions, settings: ScriptSettingsSource): Promise<ScriptOutcome>;
+/** @deprecated Pass the settings source; this reads the live server context's settings service. */
+export function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions): Promise<ScriptOutcome>;
+export async function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions, settings?: ScriptSettingsSource): Promise<ScriptOutcome> {
+  const source = settings ?? context().settings;
+  return runScript(kind, (await source.read()).scripts[kind], opts);
 }
