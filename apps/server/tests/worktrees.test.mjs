@@ -266,7 +266,7 @@ test("listPulls maps gh output and sorts by update time", async () => {
     ],
     pullsError: null,
   });
-  assert.deepEqual(calls, [{ args: ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,title,headRefName,updatedAt,isCrossRepository,state"], cwd: "/repo" }]);
+  assert.deepEqual(calls, [{ args: ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,title,headRefName,baseRefName,author,updatedAt,isCrossRepository,state"], cwd: "/repo" }]);
 });
 
 test("listPulls explains why gh could not answer", async () => {
@@ -290,7 +290,11 @@ test("getPull returns any state, 404 when missing, and 409 when gh is unavailabl
   assert.deepEqual(await getPull("/repo", 12, gh), {
     number: 12, title: "Add thing", branch: "feat/thing", state: "merged", updatedAt: Date.parse(openPr.updatedAt), fork: false,
   });
-  assert.deepEqual(calls[0].args, ["pr", "view", "12", "--json", "number,title,headRefName,updatedAt,isCrossRepository,state"]);
+  assert.deepEqual(calls[0].args, ["pr", "view", "12", "--json", "number,title,headRefName,baseRefName,author,updatedAt,isCrossRepository,state"]);
+  // The author and base branch come along when gh reports them.
+  const full = fakeGh(() => ({ stdout: JSON.stringify({ ...openPr, author: { login: "someone" }, baseRefName: "main" }), stderr: "" }));
+  const pull = await getPull("/repo", 12, full.gh);
+  assert.deepEqual([pull.author, pull.baseBranch], ["someone", "main"]);
 
   const missing = fakeGh(() => { throw ghError("GraphQL: Could not resolve to a PullRequest with the number of 999."); });
   await rejectsWith(getPull("/repo", 999, missing.gh), 404, (err) => assert.equal(err.message, "PR #999 not found."));

@@ -16,6 +16,7 @@ import { type ToolContext, createTools } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
 import { threadTools } from "./tools/threads.ts";
 import type { ModelRole, Scope } from "./types.ts";
+import type { WorldState } from "@portal/contracts/world";
 
 export type TurnOptions = {
   kind: RunKind;
@@ -75,6 +76,25 @@ function loggedInput(input: unknown): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * `scope` plus what the world knows is behind it: a session's project, and the repo of every
+ * project and pull request named. Only additions; nothing named is dropped.
+ */
+export function widenScope(scope: Scope, world: WorldState): Scope {
+  const projects = new Set(scope.projectIds);
+  for (const id of scope.sessionIds) {
+    const session = world.sessions.find((entry) => entry.id === id);
+    if (session?.projectId) projects.add(session.projectId);
+  }
+  const repos = new Set(scope.repos);
+  for (const id of projects) {
+    const repo = world.projects.find((project) => project.id === id)?.repo;
+    if (repo) repos.add(repo);
+  }
+  for (const pull of scope.pulls) repos.add(pull.repo);
+  return normalizeScope({ ...scope, projectIds: [...projects], repos: [...repos] });
 }
 
 /** Every tool with an activity entry per call: which tool, its input, and whether it failed. */
@@ -149,11 +169,9 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: options.touched, interactive: options.interactive,
       now: () => hub.timers.now(), self: options.self, hub, turn,
     };
-    const [login, memory, world] = await Promise.all([
-      hub.deps.github.login().catch(() => null),
-      hub.memory.promptContext({ scope, query: options.query, threadId: options.threadId }),
-      hub.world.current().catch(() => null),
-    ]);
+    const [login, world] = await Promise.all([hub.deps.github.login().catch(() => null), hub.world.current().catch(() => null)]);
+    // Memory is kept per repo as much as per project or session, so retrieval gets the repos behind them too.
+    const memory = await hub.memory.promptContext({ scope: world ? widenScope(scope, world) : scope, query: options.query, threadId: options.threadId });
     const system = systemPrompt({
       login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved,
       world: world ? hub.world.render(world, { scope }) : "",

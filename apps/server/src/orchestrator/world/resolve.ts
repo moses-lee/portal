@@ -247,8 +247,8 @@ export async function resolvePull(
       const pull = await withTimeout((async () => deps.git.getPull(await deps.git.repoRootOf(target.checkout!.path), number))(), timeoutMs);
       const worktree = target.members.find((p) => p.worktree && p.worktree.branch === pull.branch && !p.missing);
       return {
-        repo: target.repo, number, url: `https://github.com/${target.repo}/pull/${number}`, title: pull.title, author: "", state: pull.state,
-        headBranch: pull.branch, baseBranch: "", projectId: target.main?.id ?? target.checkout.id, worktreeProjectId: worktree?.id ?? null,
+        repo: target.repo, number, url: `https://github.com/${target.repo}/pull/${number}`, title: pull.title, author: pull.author ?? "", state: pull.state,
+        headBranch: pull.branch, baseBranch: pull.baseBranch ?? "", projectId: target.main?.id ?? target.checkout.id, worktreeProjectId: worktree?.id ?? null,
       };
     } catch (err) {
       if (errorStatus(err) !== 404) failed.push(`${target.repo}: ${errorMessage(err)}`);

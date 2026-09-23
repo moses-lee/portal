@@ -267,7 +267,7 @@ test("chat persists the user message at once and the assistant message, with its
   // The model saw the system prompt, every tool, and the user's text, not a tick digest.
   const call = model.doStreamCalls[0];
   assert.match(JSON.stringify(call.prompt), /Hi there/);
-  assert.match(JSON.stringify(call.prompt.find((message) => message.role === "system")), /Portal's assistant/);
+  assert.match(JSON.stringify(call.prompt.find((message) => message.role === "system")), /You are Portal: the user's coordinator/);
   assert.ok(call.tools.length > TICK_TOOLS.length, "chat gets every tool");
   assert.ok(call.tools.some((tool) => tool.name === "run_command"));
 });

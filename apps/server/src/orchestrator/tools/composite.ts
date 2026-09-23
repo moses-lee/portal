@@ -6,6 +6,25 @@ import type { PullRef } from "../types.ts";
 import { type ToolContext, define, errorMessage } from "./context.ts";
 
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * The brief for reviewing someone else's PR when the orchestrator wrote none. The stored "review"
+ * prompt is for the user's own PRs (it triages the comments they received), which is the wrong job
+ * for a reviewer.
+ */
+export const REVIEWER_PROMPT = [
+  "Review this pull request as a code reviewer. You are on its branch in a worktree.",
+  "Read the PR description, then the whole diff against its base branch (git fetch, then git diff origin/<base>...HEAD), and the surrounding code wherever the diff depends on it.",
+  "Report findings grouped as blocking, should fix, and nits, each with file:line and why it matters; then say briefly what you checked and what looks good.",
+  "Do not change files, push, or comment on GitHub: this is a read-only review for the user.",
+].join(" ");
+
+/** Which brief a PR's review session gets: the orchestrator's own, the user's triage prompt for their own PR, or the reviewer's brief. */
+export function reviewPromptFor({ given, author, login, stored }: { given?: string; author?: string; login: string | null; stored: string }): string {
+  if (given?.trim()) return given.trim();
+  if (author && login && author.toLowerCase() === login.toLowerCase()) return stored.trim();
+  return REVIEWER_PROMPT;
+}
 /** How often the intent setup_pr_reviews creates checks whether the review sessions finished. */
 export const REVIEW_CHECK_MS = 5 * 60_000;
 
@@ -26,7 +45,7 @@ export function compositeTools(ctx: ToolContext) {
 
   return {
     setup_pr_reviews: define(
-      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send the review prompt (the stored one unless prompt is given). Creates one intent that reports the findings when the sessions finish. Use this instead of doing the steps by hand.",
+      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send a review prompt. Creates one intent that reports the findings when the sessions finish. Use this instead of doing the steps by hand. Write prompt yourself from what memory says about reviewing (the author's review style, the code-review task type, the repo's conventions), interpreted for these PRs rather than pasted; without one, the user's own PRs get their stored triage prompt and everyone else's get a reviewer's brief.",
       z.object({
         repo: z.string().regex(REPO_PATTERN, "Expected owner/name.").optional(),
         projectId: z.string().optional(),
@@ -39,7 +58,7 @@ export function compositeTools(ctx: ToolContext) {
         const origin = await repoOf(deps, project);
         if (!origin) throw httpError(`${project.name} has no GitHub origin.`, 409);
         const repoRoot = await deps.git.repoRootOf(project.path);
-        const reviewPrompt = (prompt ?? (await settings.read()).gitActions.prompts.review).trim();
+        const [stored, login] = await Promise.all([settings.read().then((read) => read.gitActions.prompts.review), deps.github.login().catch(() => null)]);
         const sessions: { pr: number; sessionId: string; projectId: string; promptError?: string }[] = [];
         const pulls: PullRef[] = [];
         const errors: string[] = [];
@@ -49,6 +68,7 @@ export function compositeTools(ctx: ToolContext) {
             if (pull.fork) throw httpError(`comes from a fork; Portal cannot check it out.`, 409);
             const { project: target } = await worktreeProject(deps, { from: project, branch: pull.branch });
             const url = `${origin.url}/pull/${number}`;
+            const reviewPrompt = reviewPromptFor({ given: prompt, author: pull.author, login, stored });
             const { sessionId, promptError } = await startSession(deps, { projectId: target.id, agentId, prompt: `${reviewPrompt}\n\nPR #${number}: ${url}` });
             sessions.push({ pr: number, sessionId, projectId: target.id, ...(promptError ? { promptError } : {}) });
             if (promptError) errors.push(`PR #${number}: the session started but the prompt failed: ${promptError}`);

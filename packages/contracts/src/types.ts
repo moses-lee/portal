@@ -81,6 +81,10 @@ export type PullInfo = {
   updatedAt: number;
   /** True for cross-repository (fork) PRs, which Portal cannot check out. */
   fork: boolean;
+  /** The author's GitHub login, when gh reported it. */
+  author?: string;
+  /** The branch the PR merges into, when gh reported it. */
+  baseBranch?: string;
 };
 
 /** Response of `GET /api/projects/<id>/branches`. */

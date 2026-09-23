@@ -7,14 +7,13 @@
  * previous build, so a chat turn never waits on the network. A source that fails keeps its
  * previous slice and adds a line to `errors`. Never throws.
  */
-import type { Job } from "@portal/contracts/jobs";
 import type { WorldProject, WorldRepo, WorldSession, WorldState, WorldTerminal } from "@portal/contracts/world";
 import { githubRepoUrl } from "../../lib/github-summary.ts";
 import type { Project, ProjectSummary, SessionMeta } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
 import { collectSnapshot, snapshotActivity } from "../digest.ts";
 import { type LocalProject, attachLocalProjects, pullKey } from "../github-attention.ts";
-import type { JobsService, OrchestratorHub } from "../hub.ts";
+import type { OrchestratorHub } from "../hub.ts";
 import type { PullAttention, TickSnapshot } from "../types.ts";
 
 /** How long a repository's default branch is trusted before it is read again. */
@@ -35,12 +34,6 @@ export type WorldCache = {
 export function createWorldCache(): WorldCache {
   return { origins: new Map(), repoRoots: new Map(), defaultBranches: new Map() };
 }
-
-/** What the jobs service may offer beyond the hub interface (the jobs domain lands in parallel). */
-type JobsExtras = {
-  listJobs?: (filter?: { status?: Job["status"][] }) => Promise<Job[]>;
-  list?: (filter?: { status?: Job["status"][] }) => Promise<Job[]>;
-};
 
 export type WorldBuildInput = {
   hub: Pick<OrchestratorHub, "deps" | "store" | "jobs" | "timers">;
@@ -263,10 +256,7 @@ export async function buildWorld({ hub, previous, mode, cache = createWorldCache
 
   let jobs = previous?.jobs ?? [];
   try {
-    const extras = hub.jobs as JobsService & JobsExtras;
-    const list = extras.listJobs ?? extras.list;
-    const found = list ? await list.call(extras, { status: ["active"] }) : [];
-    jobs = found
+    jobs = (await hub.jobs.listJobs({ status: ["active"] }))
       .filter((job) => job.status === "active")
       .map((job) => ({ id: job.id, kind: job.kind, title: job.title, nextRunAt: job.nextRunAt }))
       .sort((a, b) => (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity) || a.id.localeCompare(b.id));

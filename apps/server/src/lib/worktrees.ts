@@ -171,7 +171,7 @@ export async function listBranches(repoRoot: string): Promise<{ defaultBranch: s
   return { defaultBranch, branches };
 }
 
-const PULL_FIELDS = "number,title,headRefName,updatedAt,isCrossRepository,state";
+const PULL_FIELDS = "number,title,headRefName,baseRefName,author,updatedAt,isCrossRepository,state";
 
 /** Short reason a gh call could not answer, e.g. "gh is not installed" or "gh is not logged in". */
 export function ghFailureReason(err: unknown): string {
@@ -198,6 +198,7 @@ function toPull(raw: unknown): PullInfo | null {
   if (!p || typeof p !== "object" || typeof p.number !== "number" || typeof p.headRefName !== "string") return null;
   const state = String(p.state ?? "open").toLowerCase();
   const updatedAt = typeof p.updatedAt === "string" ? Date.parse(p.updatedAt) : NaN;
+  const author = p.author && typeof p.author === "object" ? (p.author as { login?: unknown }).login : undefined;
   return {
     number: p.number,
     title: typeof p.title === "string" ? p.title : "",
@@ -205,6 +206,8 @@ function toPull(raw: unknown): PullInfo | null {
     state: state === "merged" ? "merged" : state === "closed" ? "closed" : "open",
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
     fork: p.isCrossRepository === true,
+    ...(typeof author === "string" && author ? { author } : {}),
+    ...(typeof p.baseRefName === "string" && p.baseRefName ? { baseBranch: p.baseRefName } : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 /**
  * Talk to Portal: the orchestrator runtime over the Postgres stores and the server's own services.
- * Creating it starts the scheduler and the job worker, so background work runs from boot whether
+ * Creating it starts the job worker (the tick among its jobs), so background work runs from boot whether
  * or not a browser ever opens the page.
  */
 import type { AppContext } from "../context.ts";

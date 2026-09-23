@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { REVIEWER_PROMPT } from "../src/orchestrator/tools/composite.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -325,7 +326,8 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
     projects: [project()],
     getPull: async (repoRoot, number) => {
       if (!pulls[number]) throw Object.assign(new Error(`PR #${number} not found.`), { status: 404 });
-      return { number, title: `PR ${number}`, branch: pulls[number], state: "open", updatedAt: T0, fork: number === 3 };
+      // PR 1 is the user's own; PR 2 is someone else's.
+      return { number, title: `PR ${number}`, branch: pulls[number], state: "open", updatedAt: T0, fork: number === 3, author: number === 1 ? "Moses-Lee" : "someone" };
     },
     ensureWorktree: async ({ branch }) => ({ path: `/wt/${branch}`, created: true }),
     originUrl: async (dir) => (dir === "/repo" ? "git@github.com:acme/app.git" : null),
@@ -340,7 +342,9 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
     ["/wt/feat/two", { parentId: "p1", branch: "feat/two" }],
   ]);
   assert.equal(state.prompts[0].id, "s1");
+  // The user's own PR gets their stored triage prompt; someone else's gets the reviewer's brief.
   assert.equal(state.prompts[0].text, "Review this PR.\n\nPR #1: https://github.com/acme/app/pull/1");
+  assert.equal(state.prompts[1].text, `${REVIEWER_PROMPT}\n\nPR #2: https://github.com/acme/app/pull/2`);
   assert.equal(result.intentId, "i1");
   const [{ input, how }] = intents;
   assert.match(input.text, /^Review PRs 1, 2 on acme\/app; tell me the findings when the review sessions finish/);

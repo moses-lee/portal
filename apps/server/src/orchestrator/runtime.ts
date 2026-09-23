@@ -75,6 +75,9 @@ function messageText(message: OrchestratorMessage): string {
   return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
+/** Events after which the status (line and counts) is pushed again, coalesced into one push. */
+const statusSources = new Set<OrchestratorEvent["type"]>(["run", "jobs", "intents", "items", "memory", "approvals"]);
+
 /** Item statuses a user change moves to, as activity kinds. */
 const itemChangeKind: Record<string, string> = { resolved: "item.resolved", dismissed: "item.dismissed" };
 
@@ -139,8 +142,8 @@ export function createOrchestratorRuntime({
   let statusQueued = false;
 
   function emit(event: OrchestratorEvent) {
-    // A run starting or ending, or a job rescheduled, changes the status line.
-    if ((event.type === "run" || event.type === "jobs") && !statusQueued) {
+    // Runs, jobs, intents, items, memory (the inbox), and approvals all feed the status line and its counts.
+    if (statusSources.has(event.type) && !statusQueued) {
       statusQueued = true;
       queueMicrotask(() => {
         statusQueued = false;
