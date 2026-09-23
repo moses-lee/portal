@@ -153,6 +153,10 @@ test("reviewWatchOf keeps only well-formed sessions, and findingsItem caps the b
   const many = Array.from({ length: 30 }, (_, i) => ({ severity: "should_fix", title: `Finding ${i}`, detail: "x".repeat(500) }));
   const item = findingsItem({ pr: 1, verdict: "comment", summary: "Lots.", findings: many }, reviewSessions[0], "acme/app");
   assert.ok(item.body.length <= 4000);
+  assert.match(item.body, /\n- … \d+ more findings in the review session$/, "whole findings only, and the rest counted");
+  assert.doesNotMatch(item.body, /x…/);
+  const withFooter = findingsItem({ pr: 1, verdict: "comment", summary: "Lots.", findings: many }, reviewSessions[0], "acme/app", ["m1"]);
+  assert.match(withFooter.body, /more findings in the review session\n\n_Brief written from memory: m1_$/);
   assert.equal(item.fingerprint, "review_findings:acme/app#1:s1");
 });
 

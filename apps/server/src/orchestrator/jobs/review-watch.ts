@@ -108,6 +108,21 @@ function counts(findings: ReviewFinding[]): string {
   return parts.join(", ");
 }
 
+/** `lines` then `footer` within `max` characters: whole lines only, with a note of how many findings were left out. */
+function fitLines(lines: string[], footer: string[], max: number): string {
+  const whole = [...lines, ...footer].join("\n");
+  if (whole.length <= max) return whole;
+  const kept: string[] = [];
+  let used = footer.join("\n").length + 80;
+  for (const line of lines) {
+    if (used + line.length + 1 > max) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  const left = lines.slice(kept.length).filter((line) => line.startsWith("- ")).length;
+  return [...kept, `- … ${left} more finding${left === 1 ? "" : "s"} in the review session`, ...footer].join("\n").slice(0, max);
+}
+
 /** The item for one PR's review: a title with the verdict and counts, and the findings grouped by severity. */
 export function findingsItem(report: ReviewReport, session: ReviewSession, repo: string, memoryIds: string[] = []) {
   const tally = counts(report.findings);
@@ -121,13 +136,13 @@ export function findingsItem(report: ReviewReport, session: ReviewSession, repo:
       lines.push(`- ${finding.title}${finding.where ? ` (\`${finding.where}\`)` : ""}${finding.detail ? `: ${finding.detail}` : ""}`);
     }
   }
-  if (memoryIds.length) lines.push("", `_Brief written from memory: ${memoryIds.join(", ")}_`);
+  const footer = memoryIds.length ? ["", `_Brief written from memory: ${memoryIds.join(", ")}_`] : [];
   const actions: ItemAction[] = [
     { type: "open_url", url: session.url, label: "Open PR" },
     { type: "open_session", sessionId: session.sessionId, label: "Open review" },
   ];
   return {
-    kind: "review_findings" as const, title: short(title, 200), body: short(lines.join("\n"), MAX_FINDINGS_BODY), actions,
+    kind: "review_findings" as const, title: short(title, 200), body: fitLines(lines, footer, MAX_FINDINGS_BODY), actions,
     fingerprint: `review_findings:${repo}#${session.pr}:${session.sessionId}`,
   };
 }
