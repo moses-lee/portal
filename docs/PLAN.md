@@ -2,8 +2,9 @@
 
 Status as of 2026-09-23. This is the working plan for turning Portal from a chat UI with a
 timer-driven assistant into a coordinator that knows the user's world, runs its own background
-work, and keeps an auditable memory. Phases 1 and 2 are merged into `main` (§1.2, §1.5). The live
-instance still runs phase 1 code until it is restarted (§1.6). Phase 3 is next (§1.8).
+work, and keeps an auditable memory. Phases 1 and 2 are merged into `main` (§1.2, §1.5); phase 3
+is on branch `feat/phase-3`, waiting for review before it merges (§1.8). The live instance still
+runs phase 1 code until it is restarted (§1.6). What comes after is in §1.9.
 
 Companion research (outside the repo, in the author's notes): Muse product/architecture,
 Muse agent design, Muse memory deep-dive, Instinct memory, agent-memory survey, the original
@@ -136,12 +137,27 @@ stores only an OpenAI key and the new defaults are Anthropic (`claude-opus-5-5` 
 `claude-haiku-4-5` for bookkeeping), so add an Anthropic key in Settings, or choose OpenAI models
 for both roles; until then the page asks for a key.
 
-### 1.7 Known gaps after phase 2
+### 1.7 Known gaps
 
-None blocks use; each is a candidate for phase 3 or later.
+After phase 3; none blocks use. Phase 3 closed these phase 2 gaps: prompt weight, the inline helper
+that ignored a cancelled chat turn, the `consolidate` stub, entity summaries and `reviewBy`, the
+expired or declined job approval that left its job stuck, the recurring job that asked for the
+same approval again, and `resolve_pull` finding only repos Portal has checked out (the user's own
+PRs now resolve anywhere).
 
-- **Prompt weight.** A chat turn sends about 70k input tokens: every domain's tool schemas plus 40
-  messages of history. Tool sets are not trimmed per turn.
+- **Review sessions stop on permission prompts.** Claude Code asks before each `gh` or shell
+  command, so an unattended review waits for the user (live: both sessions stopped on their first
+  command). The goal now raises the `session_waiting` item at once. Starting review sessions in a
+  mode that allows read-only commands would remove the wait; that is a permissions decision for
+  the user.
+- **Consolidator.**
+  - The 25% guard counts rejected proposals as removals, so with a small memory a pass that
+    rejects a few noisy proposals is refused whole.
+  - The job always follows Settings: a reschedule from Goals is overwritten on the next settings
+    change. Goals' runs list does not link to the curation run page.
+- **Monitors.** A check job that fails five times (GitHub down) is marked failed and the intent
+  stays active without a check. The world gains PRs only on a full refresh (the tick), so a bare
+  number that is not in the attention list falls back to asking each Portal repo.
 - **Approvals.**
   - Approving a card action holds the `decide` request open until the replayed call finishes,
     which can take minutes for a worktree removal with scripts.
@@ -149,55 +165,63 @@ None blocks use; each is a candidate for phase 3 or later.
     alias can run code even during a read-only `git status`.
   - Only the classic tools are gated and replayable. Gating a jobs, world, or memory tool needs an
     entry in `approvals/policy.ts` and in the replay rebuild.
-  - An expired job approval resolves its Needs-you item but does not resume the job. A recurring
-    job whose run ends `awaiting_approval` keeps its schedule and may hit the same approval again
-    (identical pending requests are reused, not duplicated).
-- **Jobs and runs.**
-  - `POST /api/portal/runs/:id/cancel` answers 409 for chat runs: the runtime owns chat abort
-    controllers.
-  - An inline helper (`run_helper` with `wait`) is not aborted when its chat turn is cancelled,
-    because `define()` does not pass the abort signal through.
-  - The `consolidate` job kind exists but does nothing.
-  - Without a key the tick still runs on schedule and records a run saying nothing was checked.
-- **Memory.**
-  - Entity summaries are never generated, and nothing acts on `reviewBy`.
-  - There is no route to create an entity on its own; entities come with their first record.
-  - Retrieval scans every entity on each turn. That is fine at the current size.
-- **World.**
-  - `resolve_pull` only searches repos Portal has checked out.
-  - Ids in the rendered world are 8-character prefixes, but classic tools need full ids, so the
-    model may spend one resolve call first.
-  - World rebuilds write no activity entry.
-  - `get_tick_digest` still calls `collectSnapshot` itself, a second GitHub query beside the world
-    build.
-- **Web.**
-  - The Portal event stream is open on every page, so any open tab counts as present and the
-    shorter tick interval applies.
-  - "Decide later" on an approval lasts until a full page reload.
-  - Upcoming fetches active and paused jobs in two requests.
-- **Types.** The hub's memory and approvals interfaces are narrower than the services; their routes
-  narrow them with runtime guards.
+- **Jobs and runs.** `POST /api/portal/runs/:id/cancel` answers 409 for chat runs. Without a key
+  the tick still runs on schedule and records a run saying nothing was checked.
+- **Memory.** There is no route to create an entity on its own. Retrieval scans every entity on
+  each turn, which is fine at the current size.
+- **World.** Ids in the rendered world are 8-character prefixes, but classic tools need full ids.
+  World rebuilds write no activity entry. `get_tick_digest` still calls `collectSnapshot` itself.
+- **Web.** Any open tab counts as present. "Decide later" on an approval lasts until a reload.
+  Upcoming fetches active and paused jobs in two requests.
+- **Types.** The hub's memory and approvals interfaces are narrower than the services.
 
-### 1.8 What's next
+### 1.8 What phase 3 delivered (branch `feat/phase-3`)
 
-Phase 3 (§5). Phase 2 already covers much of its first three flows: "review PR N" resolves, starts
-sessions with a prompt written from memory, and a goal reports when they finish; "monitor PR N"
-is a goal with an agent-chosen cadence; "remember that ..." stores a user-stated record. What is
-left:
+- **Prompt weight.** A chat turn starts with the 28 tools most turns use (about 5k tokens of
+  schemas instead of 11k for all 69) and loads the rest by group with `use_tools`; a call to a
+  tool whose group is not loaded becomes a `use_tools` call instead of failing the turn. History is
+  cut at about 12k tokens as well as 40 messages. Anthropic turns use automatic prompt caching.
+  Live, on the same clone and questions: 49.1k → 31.6k input tokens for a two-step answer (14.3k of
+  them cached), 94.6k (three steps) → 41.3k (two steps, 14.5k cached).
+- **Review flow.** `setup_pr_reviews` refuses to start a review of someone else's PR without a
+  brief when memory has review guidance (the author's records, the `code-review` task type, the
+  repo's conventions) and hands the guidance back; the model writes the brief and passes the
+  records' ids. The goal's check needs no model: every two minutes it reads each session (a turn
+  that ended, or one that failed, stalled, or was deleted) and raises the `session_waiting` item
+  when a review waits for a permission. When all have ended, a summarizer on the chat model reports
+  each PR through `report_review`, and each PR gets a `review_findings` Needs-you item (verdict,
+  findings by severity with file:line, links to the PR and the session, the memory records used).
+- **Monitor flow.** `monitor_pull` creates a goal whose checks call GitHub once (a per-PR GraphQL
+  status) and compare it with the previous check. It reports only merged, closed, checks failing
+  or passing again, changes requested, approved, and conflicts (new reviews and comments when
+  asked), keeps one item updated in place, and ends itself when the PR merges or closes. Asking
+  again updates it; `cancel_intent` takes a PR number. No model runs these checks.
+- **Consolidator.** The `consolidate` job runs nightly (03:00 local) and when the inbox reaches ten
+  proposals (at most hourly), all three configurable in Settings, plus Run now in Memory. A
+  chat-model turn proposes a plan; the server applies it: promotions keep their authority and
+  never replace the user's own claims, observed records past `reviewBy` expire, the user's own go
+  on one re-confirm item, entity summaries are written, and a plan removing more than 25% is
+  refused whole. The digest and diff are on the run's page in Memory → Curation; one line goes to
+  the main thread.
+- **Also.** Tools receive the SDK's call options (abort signal), so stopping a chat turn stops an
+  inline helper; job approvals resume, reschedule, or end the job on every outcome.
+- **Verified.** Server 572, web 61, shared 37 tests; Playwright 74. Live on a scratch instance
+  over a clone of the real database, with real Anthropic calls: "review PRs 2499 and 2496" wrote
+  a CI-focused brief from two remembered preferences in one call, both sessions reviewed
+  read-only, and two findings items arrived (#2499 needs changes with two blocking findings,
+  #2496 looks good with five should-fix items). "Monitor PR 2572 until it merges" set its baseline
+  from GitHub. The assistant proposed nine observations from real sessions; the consolidator
+  left all nine in the inbox (single-source, as the rules require), rewrote one summary, and its
+  digest showed in the UI. The activity log listed every step. The review worktrees and branches
+  it created in the monorepo were removed afterwards.
 
-1. **Review flow finish.** When the review sessions finish, a helper summarizes their transcripts
-   into a Needs-you item with the findings and links, and the prompt is built from the author's
-   review style and the code-review task type when memory has them.
-2. **Monitor flow.** Notify only on state changes; explicit cancel; tested end to end.
-3. **Consolidator.** Implement the `consolidate` job kind per §5 step 4, with its diff and digest
-   visible in the UI.
-4. **Live proof** of the three flows on real projects, plus the gaps in §1.7 that phase 3 touches
-   (prompt weight first).
+### 1.9 What's next
 
-Undecided, to ask the user before building: when the consolidator runs (proposed: nightly around
-03:00 local time plus whenever the inbox passes about ten items); where its digest goes (a side
-thread per run, or one line in the main thread); which PR events the monitor reports (proposed:
-merged, closed, checks failing, changes requested, conflicts; new review comments are optional).
+1. Review and merge `feat/phase-3`. No new migrations: phase 3 keeps its watch state in job
+   payloads. Switching the live instance is still the §1.6 restart (it applies 0002–0005).
+2. Decide how review sessions handle permission prompts (§1.7).
+3. Soften the consolidator guard to count only removals of active records, with a floor.
+4. The remaining §1.7 gaps, then bearer-token auth for external clients (§6).
 
 ---
 
@@ -360,7 +384,7 @@ Exit: "review PR 2367" resolves to the monorepo without a question; the user can
 runs; a destructive tool call shows an approval card; the memory browser shows every record with
 its source; all of it under test.
 
-### Phase 3: flows and reflection
+### Phase 3: flows and reflection (done on `feat/phase-3`; see §1.8)
 
 Goal: the three flows the user asked for, end to end, plus the background hygiene that keeps the
 memory trustworthy.
@@ -405,7 +429,11 @@ data with its diff visible in the UI; the activity log explains every action the
 
 Settled during phase 2: the live Portal was cut over before phase 2; side threads are opened by the
 agent only and retrieve memory for their own scope (plus CORE.md); no notifications outside the
-Portal UI for now. Phase 3's own open points are listed in §1.8.
+Portal UI for now. Settled for phase 3: the consolidator runs nightly around 03:00 and when the
+inbox reaches about ten items (at most hourly), all configurable in Settings; its digest is one
+line in the main thread with the full digest and diff on the run's page; monitors report merged,
+closed, checks failing and recovering, changes requested, approved, and conflicts, with new
+comments opt-in per monitor.
 
 - Embeddings: not needed for phase 2 (scoped retrieval plus full-text search); pgvector is
   installed if phase 3 wants semantic search over the journal.
