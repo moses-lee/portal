@@ -51,7 +51,7 @@ const itemInput = {
   fingerprint: "session_waiting:s1",
 };
 
-test("status, messages, ticks, items, watches, and memory answer their JSON shapes", async (t) => {
+test("status, messages, ticks, items, and watches answer their JSON shapes", async (t) => {
   const { app } = await setup(t);
   const status = await inject(app, "GET", "/api/portal");
   assert.equal(status.statusCode, 200);
@@ -65,15 +65,8 @@ test("status, messages, ticks, items, watches, and memory answer their JSON shap
   assert.deepEqual((await inject(app, "GET", "/api/portal/ticks")).json(), { ticks: [] });
   assert.deepEqual((await inject(app, "GET", "/api/portal/items")).json(), { items: [] });
   assert.deepEqual((await inject(app, "GET", "/api/portal/watches")).json(), { watches: [] });
-  assert.deepEqual((await inject(app, "GET", "/api/portal/memory")).json(), { memory: "" });
-
-  const put = await inject(app, "PUT", "/api/portal/memory", { memory: "# Notes\n- prefers pnpm" });
-  assert.equal(put.statusCode, 200);
-  assert.deepEqual(put.json(), { memory: "# Notes\n- prefers pnpm" });
-  assert.deepEqual((await inject(app, "GET", "/api/portal/memory")).json(), { memory: "# Notes\n- prefers pnpm" });
-  // The answer is what was stored, so an over-long text comes back capped.
-  const capped = (await inject(app, "PUT", "/api/portal/memory", { memory: "x".repeat(40_000) })).json().memory;
-  assert.ok(Buffer.byteLength(capped) <= 32 * 1024 && /truncated/.test(capped));
+  // The legacy memory document is gone from the API; curated memory lives under /api/portal/memory/**.
+  assert.equal((await inject(app, "GET", "/api/portal/memory")).statusCode, 404);
 
   assert.equal((await inject(app, "POST", "/api/portal/cancel")).statusCode, 204);
 });
@@ -130,10 +123,8 @@ test("items and watches: PATCH validates, 404s unknown ids, and persists; action
   assert.equal((await inject(app, "PATCH", "/api/portal/watches/nope0000", { notes: "x" })).statusCode, 404);
 });
 
-test("body validation: memory needs a string, messages need a user text part, and bad JSON is a 400", async (t) => {
+test("body validation: messages need a user text part, and bad JSON is a 400", async (t) => {
   const { app } = await setup(t);
-  assert.deepEqual((await inject(app, "PUT", "/api/portal/memory", { memory: 5 })).json(), { error: "Expected { memory: string }." });
-  assert.equal((await inject(app, "PUT", "/api/portal/memory", "null", { "content-type": "application/json" })).statusCode, 400);
   const bad = await inject(app, "POST", "/api/portal/messages", "{ nope", { "content-type": "application/json" });
   assert.equal(bad.statusCode, 400);
   assert.equal(typeof bad.json().error, "string");
@@ -149,7 +140,7 @@ test("cross-origin requests are refused with 403 on every route", async (t) => {
   const headers = { origin: "https://evil.example", host: "portal.local" };
   for (const [method, url] of [
     ["GET", "/api/portal"], ["GET", "/api/portal/items"], ["PATCH", "/api/portal/items/x"], ["POST", "/api/portal/items/x/actions/0"],
-    ["PATCH", "/api/portal/watches/x"], ["PUT", "/api/portal/memory"], ["POST", "/api/portal/messages"], ["POST", "/api/portal/tick"],
+    ["PATCH", "/api/portal/watches/x"], ["POST", "/api/portal/messages"], ["POST", "/api/portal/tick"],
     ["POST", "/api/portal/cancel"], ["GET", "/api/portal/stream"],
   ]) {
     const response = await inject(app, method, url, method === "GET" ? undefined : {}, headers);

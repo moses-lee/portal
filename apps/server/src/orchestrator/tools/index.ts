@@ -31,11 +31,10 @@ function allTools(ctx: ToolContext) {
 
 export type OrchestratorTools = ReturnType<typeof allTools>;
 
-/** The tools a tick may call: items, watches, memory, and read-only looks at sessions and PRs. */
+/** The tools a tick may call: items, watches, and read-only looks at sessions and PRs (memory tools come from the memory domain). */
 export const TICK_TOOLS = [
   "list_items", "create_item", "update_item", "resolve_item", "snooze_item", "dismiss_item",
   "create_watch", "update_watch", "list_watches", "close_watch",
-  "read_memory", "append_memory",
   "list_sessions", "get_session", "read_transcript", "get_pull", "get_github_status",
 ] as const satisfies readonly (keyof OrchestratorTools)[];
 

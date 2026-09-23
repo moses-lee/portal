@@ -225,24 +225,6 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return { watch: await runtime.updateWatch(req.params.id, parseWatchPatch(body)) };
   });
 
-  /** `GET /api/portal/memory` — the orchestrator's memory `{ memory }`. */
-  app.get("/api/portal/memory", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    return { memory: await runtime.readMemory() };
-  });
-
-  /** `PUT /api/portal/memory` — body `{ memory }` replaces it -> `{ memory }` (as stored, so capped). */
-  app.put("/api/portal/memory", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    const body = readObject(req.body);
-    if (!body) return notAnObject(reply);
-    if (typeof body.memory !== "string") return reply.code(400).send({ error: "Expected { memory: string }." });
-    await runtime.writeMemory(body.memory);
-    return { memory: await runtime.readMemory() };
-  });
-
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
    * `items`, `watches`, `threads`, `approvals`, and `intents`, then forwards every runtime event as

@@ -469,8 +469,6 @@ export function createOrchestratorRuntime({
       return watch;
     },
     listTicks: () => store.listTicks(),
-    readMemory: () => store.readMemory(),
-    writeMemory: (text) => store.writeMemory(text),
     performAction,
     subscribe(listener) {
       listeners.add(listener);
