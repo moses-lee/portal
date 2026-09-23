@@ -33,11 +33,11 @@ const inject = (app, method, url, payload) => app.inject({ method, url, payload 
 test("jobs: listing by status, patching (pause, reschedule, cancel), run now, and their errors", async (t) => {
   const { app, jobs } = await setup(t);
   const listed = (await inject(app, "GET", "/api/portal/jobs")).json().jobs;
-  assert.deepEqual(listed.map((job) => [job.id, job.kind, job.status]), [["tick", "tick", "active"]]);
+  assert.deepEqual(listed.map((job) => [job.id, job.kind, job.status]), [["tick", "tick", "active"], ["consolidate", "consolidate", "active"]]);
   assert.equal(listed[0].nextRunAt, T0 + MIN);
 
   const { intent, job } = await jobs.createIntent({ text: "tell me when #7 merges", trigger: "acme/app#7 merged", action: "tell me", check: { type: "every", everyMs: 5 * MIN } }, { actor: "agent" });
-  assert.deepEqual((await inject(app, "GET", "/api/portal/jobs?status=active,paused")).json().jobs.map((entry) => entry.id), ["tick", job.id]);
+  assert.deepEqual((await inject(app, "GET", "/api/portal/jobs?status=active,paused")).json().jobs.map((entry) => entry.id), ["tick", job.id, "consolidate"]);
   assert.deepEqual((await inject(app, "GET", "/api/portal/jobs?status=done")).json(), { jobs: [] });
   assert.equal((await inject(app, "GET", "/api/portal/jobs?status=bogus")).statusCode, 400);
 

@@ -1,6 +1,7 @@
 /**
  * The memory tools. A chat turn gets all five; a background turn only proposes and searches (it
- * has no user to speak for, and every schema costs tokens on each step). `remember` and `forget`
+ * has no user to speak for, and every schema costs tokens on each step). A curation turn (the
+ * consolidator) also gets `submit_curation_plan`, the only way its decisions reach the server. `remember` and `forget`
  * speak for the user, so they need a `quote` that appears in the user's latest message of the
  * turn's thread, read from the store: text the model saw in a PR, a transcript, or a tool's output
  * can never become a user-stated claim or retract one.
@@ -12,6 +13,7 @@ import { define } from "../tools/context.ts";
 import { pullRefSchema } from "../tools/items.ts";
 import type { OrchestratorMessage } from "../types.ts";
 import { entityLabel } from "./core.ts";
+import { curationPlanSchema } from "./curation.ts";
 import type { Actor, CuratedMemoryService } from "./service.ts";
 
 const entitySchema = z.object({
@@ -116,6 +118,21 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
       },
     ),
   };
+  if (turn.kind === "consolidate") {
+    tools.submit_curation_plan = define(
+      "Submit this curation pass's plan: a decision per inbox record you have a view on, the entity summaries, and an optional note. Portal validates it and applies what the rules allow when the pass ends; the answer says what it would ignore or refuse. Calling again replaces the plan.",
+      curationPlanSchema,
+      async (plan) => {
+        const resolved = await memory.submitCurationPlan(turn.runId, plan);
+        return {
+          accepted: { promote: resolved.promote.length, supersede: resolved.promote.filter((entry) => entry.replaces).length, reject: resolved.reject.length, summaries: resolved.summaries.length },
+          left: resolved.left.length, expire: resolved.expire.length, reconfirm: resolved.reconfirm.length,
+          ...(resolved.issues.length ? { issues: resolved.issues.slice(0, MAX_ROWS) } : {}),
+          ...(resolved.refused ? { refused: `${resolved.refused} Remove less, or leave more for the user.` } : {}),
+        };
+      },
+    );
+  }
   if (turn.origin !== "chat") return tools;
 
   return {

@@ -111,6 +111,27 @@ test("the inbox over HTTP: approve, reject, forget, with the inbox count on stat
   assert.ok(context.retrieved.includes(kept.id));
 });
 
+test("curate now over HTTP: the curation run as it starts, its result on the run, and 409 while the job is paused", async (t) => {
+  const { app } = await setup(t);
+  const started = await inject(app, "POST", "/api/portal/memory/consolidate");
+  assert.equal(started.statusCode, 200, started.body);
+  const { run } = started.json();
+  assert.deepEqual([run.kind, run.jobId, run.trigger], ["consolidate", "consolidate", "manual"]);
+  let done = run;
+  for (let i = 0; i < 50 && done.status === "running"; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    done = (await inject(app, "GET", `/api/portal/runs/${run.id}`)).json().run;
+  }
+  assert.equal(done.status, "succeeded", done.error ?? "");
+  assert.equal(done.result.line, "Memory curation changed nothing.");
+  assert.deepEqual((await inject(app, "GET", "/api/portal/runs?kind=consolidate")).json().runs.map((entry) => entry.id), [run.id]);
+
+  assert.equal((await inject(app, "PATCH", "/api/portal/jobs/consolidate", { status: "paused" })).statusCode, 200);
+  const paused = await inject(app, "POST", "/api/portal/memory/consolidate");
+  assert.equal(paused.statusCode, 409);
+  assert.match(paused.json().error, /paused/);
+});
+
 test("memory routes refuse cross-origin requests", async (t) => {
   const { app } = await setup(t);
   const headers = { origin: "https://evil.example", host: "portal.local" };
@@ -118,7 +139,7 @@ test("memory routes refuse cross-origin requests", async (t) => {
     ["GET", "/api/portal/memory/entities"], ["GET", "/api/portal/memory/entities/x"], ["GET", "/api/portal/memory/records"],
     ["POST", "/api/portal/memory/records"], ["PATCH", "/api/portal/memory/records/x"], ["POST", "/api/portal/memory/records/x/approve"],
     ["POST", "/api/portal/memory/records/x/reject"], ["POST", "/api/portal/memory/records/x/forget"], ["GET", "/api/portal/memory/revisions"],
-    ["GET", "/api/portal/memory/core"],
+    ["GET", "/api/portal/memory/core"], ["POST", "/api/portal/memory/consolidate"],
   ]) {
     const response = await inject(app, method, url, method === "GET" ? undefined : {}, headers);
     assert.equal(response.statusCode, 403, `${method} ${url}`);

@@ -74,6 +74,7 @@ const revisionLabels: Record<MemoryRevision["action"], string> = {
   forgotten: "Forgotten",
   restored: "Restored",
   imported: "Imported",
+  summarized: "Summary rewritten",
 };
 
 const recordPath = (id: string) => `/api/portal/memory/records/${encodeURIComponent(id)}`;

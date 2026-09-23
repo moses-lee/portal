@@ -95,8 +95,9 @@ test("schedule_job, update_job, cancel_job, list_jobs, list_runs, and get_schedu
   assert.match((await call(tools, "schedule_job", { title: "Bad", prompt: "p", schedule: { at: "tomorrow-ish" } })).error, /ISO 8601/);
   assert.equal((await call(tools, "schedule_job", { title: "Bad", prompt: "p", schedule: { everyMinutes: 0.5 } })).invalidInput, true);
 
+  // The seeded curation job's place depends on the machine's time zone; it has its own tests.
   const listed = await call(tools, "list_jobs", {});
-  assert.deepEqual(listed.jobs.map((job) => job.title), ["Check for changes", "Often", "Check back", "At noon", "Nightly digest"]);
+  assert.deepEqual(listed.jobs.filter((job) => job.id !== "consolidate").map((job) => job.title), ["Check for changes", "Often", "Check back", "At noon", "Nightly digest"]);
   assert.deepEqual((await call(tools, "list_jobs", { kind: "tick" })).jobs.map((job) => job.id), ["tick"]);
 
   const moved = await call(tools, "update_job", { id: later.id, schedule: { inMinutes: 10 }, title: "Check back soon" });

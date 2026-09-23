@@ -191,6 +191,19 @@ export function createPgMemoryStore({ db, now = Date.now }: { db: Db; now?: () =
       })).returning();
       return revisionFromRow(row);
     },
+    async setEntitySummary(entityId, summary, revision) {
+      const at = now();
+      await db.transaction(async (tx) => {
+        const [row] = await tx.update(memoryEntities).set({ summary: stripNul(summary), updatedAt: sql`greatest(${memoryEntities.updatedAt}, ${at})` })
+          .where(eq(memoryEntities.id, entityId)).returning({ id: memoryEntities.id });
+        if (!row) throw new OrchestratorStoreError(`Unknown memory entity "${entityId}".`, 404);
+        await tx.insert(memoryRevisions).values(stripNul({
+          recordId: null, entityId, at, actor: revision.actor, action: revision.action, before: null, after: null,
+          reason: revision.reason ?? null, runId: revision.runId ?? null,
+        }));
+      });
+      return (await store.getEntity(entityId))!;
+    },
     async listRevisions(filter = {}) {
       const where: SQL[] = [];
       if (filter.before !== undefined) where.push(lt(memoryRevisions.id, filter.before));

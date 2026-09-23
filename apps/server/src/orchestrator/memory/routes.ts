@@ -3,12 +3,14 @@
  * CORE.md), exactly as the header of `@portal/contracts/memory` lists it. Every route is
  * same-origin checked first. What the user adds or edits here is user-stated; an edit of a body
  * supersedes the record. A key already held by an active record answers 409 with `existing`.
+ * `POST /api/portal/memory/consolidate` runs the curation job now and answers its run.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { MemoryRecordInput, MemoryRecordPatch, RecordStatus, RecordType } from "@portal/contracts/memory";
 import { recordTypes } from "@portal/contracts/memory";
 import type { AppContext } from "../../context.ts";
 import { rejectCrossOrigin } from "../../http/origin.ts";
+import { CONSOLIDATE_JOB_ID } from "../jobs/consolidate-job.ts";
 import type { CuratedMemoryService } from "./service.ts";
 import { MemoryConflictError } from "./store.ts";
 
@@ -154,6 +156,15 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
         recordId: queryString(req.query.recordId), entityId: queryString(req.query.entityId), before: queryInt(req.query.before), limit: queryInt(req.query.limit),
       }),
     };
+  });
+
+  /** Curate now: the consolidate job's run as it starts (the run that is already going, when one is). */
+  app.post("/api/portal/memory/consolidate", async (req, reply) => {
+    const memory = await memoryFor(req, reply);
+    if (!memory) return reply;
+    const run = await ctx.orchestrator.hub.jobs.runNow(CONSOLIDATE_JOB_ID, "manual");
+    if (!run) return reply.code(409).send({ error: "Memory curation is paused; resume \"Curate memory\" under Goals first." });
+    return { run };
   });
 
   app.get("/api/portal/memory/core", async (req, reply) => {

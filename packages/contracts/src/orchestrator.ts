@@ -173,6 +173,8 @@ export type ItemKind =
   | "intent_update"
   /** A background job is paused on an approval; the item links to it. */
   | "approval_needed"
+  /** Claims the user stated or confirmed are past their review date; the item links to the Memory view. */
+  | "memory_reconfirm"
   | "custom";
 
 /** A GitHub pull request reference, independent of whether Portal has the repo locally. */

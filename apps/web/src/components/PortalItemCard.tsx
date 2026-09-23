@@ -44,6 +44,7 @@ export const kindLabels: Record<ItemKind, string> = {
   watch_update: "Follow-up",
   intent_update: "Goal update",
   approval_needed: "Needs approval",
+  memory_reconfirm: "Re-confirm memory",
   custom: "Note",
 };
 

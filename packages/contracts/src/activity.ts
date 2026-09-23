@@ -21,7 +21,8 @@ export type ActivityActor = "user" | "agent" | "system";
  * item.dismissed · item.action · job.scheduled · job.updated · job.cancelled · intent.created ·
  * intent.updated · intent.fired · intent.closed · thread.created · memory.remembered ·
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
- * memory.imported · approval.requested · approval.decided · approval.executed · world.refreshed
+ * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
+ * approval.requested · approval.decided · approval.executed · world.refreshed
  */
 export type ActivityKind = string;
 

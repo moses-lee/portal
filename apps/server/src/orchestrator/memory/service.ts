@@ -4,7 +4,9 @@
  * to the inbox (`propose`) and become active only on `approve`. A new claim for a key that already
  * has an active one supersedes it in the same transaction; nothing is overwritten or deleted, every
  * change writes a revision, an activity entry, and a `memory` event. `promptContext` gives each turn
- * CORE.md (cached until memory changes) and the records retrieved for its scope and text.
+ * CORE.md (cached until memory changes) and the records retrieved for its scope and text. The
+ * consolidator reads a `curationSnapshot`, its turn submits a plan (`submitCurationPlan`), and
+ * `applyCuration` writes the resolved plan in one commit with actor `consolidator`.
  */
 import type {
   Authority, CoreDocument, MemoryEntity, MemoryRecord, MemoryRecordInput, MemoryRecordPatch, MemoryRevision, RecordSource, RecordStatus, RecordType,
@@ -14,6 +16,7 @@ import type { MemoryPromptContext, MemoryService, OrchestratorHub, ToolSet, Doma
 import { OrchestratorStoreError } from "../store.ts";
 import { orchestratorProviders, type Scope } from "../types.ts";
 import { buildCore, entityLabel, rankRetrieved, renderRetrieved } from "./core.ts";
+import { type CurationPlan, type CurationSnapshot, type ResolvedPlan, planCounts, resolvePlan } from "./curation.ts";
 import { splitLegacyMemory } from "./import.ts";
 import { createPgMemoryStore } from "./pg-store.ts";
 import { type MemoryStore, type RecordChange, type SearchHit, createInMemoryMemoryStore, newRecordId } from "./store.ts";
@@ -48,6 +51,9 @@ export type Explanation = {
 
 export type ImportResult = { imported: number; skipped: number; alreadyDone: boolean };
 
+/** A resolved plan as written: the records after the commit, by id, and the entities whose summary changed. */
+export type CurationApplied = { written: Map<string, MemoryRecord>; entities: MemoryEntity[] };
+
 export interface CuratedMemoryService extends MemoryService {
   store: MemoryStore;
   remember(input: MemoryRecordInput, who: Actor): Promise<ChangeResult>;
@@ -64,6 +70,17 @@ export interface CuratedMemoryService extends MemoryService {
   /** The entity for a type and a key as the user or the model wrote it (normalized), or null. */
   findEntity(type: MemoryEntity["type"], key: string): Promise<MemoryEntity | null>;
   importLegacy(): Promise<ImportResult>;
+  /** The inbox, the active records, and the entities, as a curation pass reads them. */
+  curationSnapshot(): Promise<CurationSnapshot>;
+  /**
+   * A curation turn's plan, kept for its run until the job takes it; resolved against the current
+   * records so the model hears what the server would ignore or refuse.
+   */
+  submitCurationPlan(runId: string, plan: CurationPlan): Promise<ResolvedPlan>;
+  /** The plan the run's turn submitted last (and forget it); null when it submitted none. */
+  takeCurationPlan(runId: string): CurationPlan | null;
+  /** Write a resolved plan: record changes in one commit, then summaries, revisions by `consolidator`, activity, and one `memory` event. */
+  applyCuration(plan: ResolvedPlan, run: { runId: string }): Promise<CurationApplied>;
 }
 
 /** Same claim, ignoring case and spacing. */
@@ -78,6 +95,21 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
   const now = () => hub.timers.now();
   const store = options.store ?? (hub.db ? createPgMemoryStore({ db: hub.db, now }) : createInMemoryMemoryStore({ now }));
   let coreCache: CoreDocument | null = null;
+  const listeners = new Set<(recordIds: string[]) => void>();
+  /** Curation plans submitted by a run's turn, until the job takes them. */
+  const plans = new Map<string, CurationPlan>();
+
+  /** Tell the page and every subscriber (the consolidator's inbox trigger) that records changed. */
+  function announce(recordIds: string[]) {
+    hub.emit({ type: "memory", recordIds });
+    for (const listener of listeners) {
+      try {
+        listener(recordIds);
+      } catch (err) {
+        console.error("Memory listener failed:", err);
+      }
+    }
+  }
 
   async function knownSecrets(): Promise<string[]> {
     const keys = await Promise.all(orchestratorProviders.map((provider) => hub.settings.apiKey(provider).catch(() => null)));
@@ -100,7 +132,7 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
   /** After every change: drop the cached CORE.md, tell the page, and log what happened. */
   async function changed(records: MemoryRecord[], who: Actor, entries: { kind: string; summary: string; record: MemoryRecord; detail?: Record<string, unknown> }[]) {
     coreCache = null;
-    hub.emit({ type: "memory", recordIds: [...new Set(records.map((record) => record.id))] });
+    announce([...new Set(records.map((record) => record.id))]);
     for (const entry of entries) {
       await hub.activity.log({
         actor: who.actor, kind: entry.kind, summary: entry.summary,
@@ -351,12 +383,61 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
       reason: `Legacy memory text: ${written.length} claims proposed, ${skipped} skipped`, runId: null,
     });
     coreCache = null;
-    if (written.length) hub.emit({ type: "memory", recordIds: written.map((record) => record.id) });
+    if (written.length) announce(written.map((record) => record.id));
     await hub.activity.log({
       actor: "system", kind: "memory.imported", summary: `Imported ${written.length} claims from the old memory notes into the inbox${skipped ? ` (${skipped} skipped)` : ""}`,
       refs: { entityId: global.id }, detail: { imported: written.length, skipped },
     });
     return { imported: written.length, skipped, alreadyDone: false };
+  }
+
+  async function curationSnapshot(): Promise<CurationSnapshot> {
+    const [entities, inbox, active] = await Promise.all([
+      store.listEntities(), store.listRecords({ status: ["proposed"], limit: 1000 }), store.listRecords({ status: ["active"], limit: 1000 }),
+    ]);
+    return { now: now(), entities, inbox, active };
+  }
+
+  async function applyCuration(plan: ResolvedPlan, { runId }: { runId: string }): Promise<CurationApplied> {
+    const curator = (action: MemoryRevision["action"], reason: string | null) => ({ actor: "consolidator" as const, action, reason, runId });
+    const changes: RecordChange[] = [
+      ...plan.expire.map((record): RecordChange => ({ op: "update", id: record.id, from: ["active"], patch: { status: "expired" }, revision: curator("expired", "Past its review date") })),
+      ...plan.reject.map(({ record, reason }): RecordChange => ({ op: "update", id: record.id, from: ["proposed"], patch: { status: "rejected" }, revision: curator("rejected", reason) })),
+      // A replaced claim steps down before its successor takes the key.
+      ...plan.promote.flatMap(({ record, replaces, reason }): RecordChange[] => [
+        ...(replaces ? [{ op: "update" as const, id: replaces.id, from: ["active" as const], patch: { status: "superseded" as const, supersededBy: record.id }, revision: curator("superseded", `Replaced by ${record.id} in curation`) }] : []),
+        { op: "update", id: record.id, from: ["proposed"], patch: { status: "active", pinned: false, ...(replaces ? { supersedes: replaces.id } : {}) }, revision: curator("approved", reason) },
+      ]),
+    ];
+    const written = new Map((changes.length ? await store.commit(changes) : []).map((record) => [record.id, record]));
+    const entities: MemoryEntity[] = [];
+    for (const { entity, after } of plan.summaries) {
+      entities.push(await store.setEntitySummary(entity.id, after, curator("summarized", after ? "Rewritten by curation" : "Cleared: no active records left")));
+    }
+    coreCache = null;
+    const who = { actor: "system" as const, runId };
+    const log = (kind: string, summary: string, record: MemoryRecord, detail: Record<string, unknown> = {}) => hub.activity.log({
+      actor: who.actor, kind, summary, refs: { recordId: record.id, entityId: record.entityId, runId }, detail: { key: record.key, status: record.status, authority: record.authority, ...detail },
+    });
+    const labels = new Map((await store.listEntities()).map((entity) => [entity.id, entityLabel(entity)]));
+    const where = (record: MemoryRecord) => labels.get(record.entityId) ?? record.entityId;
+    for (const [id, record] of written) {
+      if (record.status === "expired") await log("memory.expired", `Expired for ${where(record)}: ${short(record.body)}`, record);
+      else if (record.status === "rejected") await log("memory.rejected", `Curation rejected for ${where(record)}: ${short(record.body)}`, record, { reason: plan.reject.find((entry) => entry.record.id === id)?.reason ?? null });
+      else if (record.status === "superseded") await log("memory.superseded", `Replaced "${short(record.body, 60)}" (${where(record)} · ${record.key})`, record, { supersededBy: record.supersededBy });
+      else if (record.status === "active") await log("memory.promoted", `Curation promoted for ${where(record)}: ${short(record.body)}`, record, { reason: plan.promote.find((entry) => entry.record.id === id)?.reason ?? null });
+    }
+    for (const entity of entities) {
+      await hub.activity.log({ actor: who.actor, kind: "memory.summarized", summary: `Rewrote the summary of ${entityLabel(entity)}`, refs: { entityId: entity.id, runId }, detail: { summary: entity.summary } });
+    }
+    const counts = planCounts(plan);
+    await hub.activity.log({
+      actor: who.actor, kind: "memory.consolidated",
+      summary: `Curated memory: ${counts.promoted} promoted, ${counts.superseded} replaced, ${counts.rejected} rejected, ${counts.expired} expired, ${counts.summarized} summaries`,
+      refs: { runId }, detail: { counts },
+    });
+    if (written.size || entities.length) announce([...written.keys()]);
+    return { written, entities };
   }
 
   const service: CuratedMemoryService = {
@@ -383,6 +464,23 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
       }
     },
     importLegacy,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    curationSnapshot,
+    async submitCurationPlan(runId, plan) {
+      plans.set(runId, plan);
+      return resolvePlan(await curationSnapshot(), plan);
+    },
+    takeCurationPlan(runId) {
+      const plan = plans.get(runId) ?? null;
+      plans.delete(runId);
+      return plan;
+    },
+    applyCuration,
   };
 
   // Import once the whole hub is built and the orchestrator store is up; a failure is reported, never fatal.

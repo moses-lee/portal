@@ -6,7 +6,7 @@
  * One firing of a job: the worker claims it (with a lease), a run starts, the kind's executor runs
  * (the tick, an intent check, a helper), the run finishes with whatever model and usage its turn
  * recorded, and the job is released with its next run time. Consecutive failures back off and, past
- * `MAX_FAILURES`, mark the job failed (never the tick).
+ * `MAX_FAILURES`, mark the job failed (never the tick or memory curation).
  */
 import type { ActivityActor } from "@portal/contracts/activity";
 import type { IntentPatch, Job, JobKind, JobRun, RunTrigger } from "@portal/contracts/jobs";
@@ -23,6 +23,7 @@ import { createPgJobsStore } from "./pg-store.ts";
 import { createRuns } from "./runs.ts";
 import { followsPresence, nextRunAt, replanned } from "./schedule.ts";
 import { type JobChanges, type JobFilter, type JobsStore, type RunFilter, createMemoryJobsStore } from "./store.ts";
+import { createConsolidation } from "./consolidate-job.ts";
 import { ensureTickJob, runTickJob, skippedReport, syncTickSchedule } from "./tick-job.ts";
 import { jobTools } from "./tools.ts";
 import { type Execution, type WorkerOptions, createWorker } from "./worker.ts";
@@ -81,11 +82,12 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   });
   const intents = createIntents(core);
   const helpers = createHelpers(core);
+  const consolidation = createConsolidation(core);
   const kinds: Record<JobKind, (ctx: KindContext) => Promise<KindResult>> = {
     tick: (ctx) => runTickJob(core, ctx),
     intent_check: intents.check,
     helper: helpers.run,
-    consolidate: async () => ({ summary: "Memory curation is not built yet; nothing was done." }),
+    consolidate: consolidation.run,
   };
   /** Job runs in progress in this process, by run id, so they can be cancelled. */
   const controllers = new Map<string, { controller: AbortController; byUser: boolean }>();
@@ -110,6 +112,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   // Never rejects: the runtime waits on it. Without the tick job the worker still runs the others.
   const ready = store.ready
     .then(() => ensureTickJob(core))
+    .then(() => consolidation.ensure())
     .then(async () => {
       // A run still marked running belongs to a process that is gone.
       for (const stale of await store.listRuns({ status: ["running"], limit: 200 })) {
@@ -173,7 +176,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
       // Paused, cancelled, or finished while it ran: that decision stands.
     } else if (result.jobStatus) {
       changes.status = result.jobStatus;
-    } else if (failed && latest.kind !== "tick" && failures >= MAX_FAILURES) {
+    } else if (failed && latest.kind !== "tick" && latest.kind !== "consolidate" && failures >= MAX_FAILURES) {
       changes.status = "failed";
       void hub.activity.log({
         actor: "system", kind: "job.failed", summary: `"${latest.title}" failed ${failures} times in a row and was stopped`,
@@ -187,6 +190,8 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
         else changes.nextRunAt = end;
       } else if (run.status === "awaiting_approval") changes.nextRunAt = null;
       else changes.status = "done";
+    } else if (result.nextRunAt !== undefined) {
+      changes.nextRunAt = result.nextRunAt;
     } else {
       let next = nextRunAt(latest.schedule, { now: end, lastRunAt: end, present: core.present() });
       if (failed && next !== null) next = Math.max(next, end + backoff(failures));
@@ -273,6 +278,8 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
       unsubscribers.push(
         hub.presence.subscribe(() => { void replanForPresence().catch((err: unknown) => console.error("Could not replan jobs for presence:", err)); }),
         hub.settings.subscribe(() => { void syncTickSchedule(core).catch((err: unknown) => console.error("Could not update the tick's schedule:", err)); }),
+        hub.settings.subscribe(() => { void consolidation.sync().catch((err: unknown) => console.error("Could not update memory curation's schedule:", err)); }),
+        hub.memory.subscribe(() => { void consolidation.inboxChanged().catch((err: unknown) => console.error("Could not check the memory inbox:", err)); }),
       );
       worker.start();
     },

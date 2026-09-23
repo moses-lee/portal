@@ -3,8 +3,14 @@
  * with a summary, and records that hold one claim each with its provenance. Records are never
  * overwritten: a change supersedes, a retraction archives with lineage, and every change writes a
  * revision. Observed or inferred claims arrive as `proposed` (the **inbox**) and become `active`
- * only when the user (or, in phase 3, the consolidator) approves them; claims the user states apply
- * at once. Among active records, `(entityId, key)` is unique, so a contradiction is detectable.
+ * only when the user (or the consolidator) approves them; claims the user states apply at once.
+ * Among active records, `(entityId, key)` is unique, so a contradiction is detectable.
+ *
+ * The **consolidator** is the `consolidate` job (nightly, when the inbox fills up, or "Run now"): a
+ * curation turn proposes a plan, the server validates and applies it (promote recurring inbox
+ * claims, reject duplicates and noise, supersede weaker contradicted claims, expire observed claims
+ * past `reviewBy`, rewrite entity summaries) and keeps a digest and the diff in the run's result
+ * (`ConsolidationResult`).
  *
  * `CORE.md` is generated from pinned directives plus one index line per entity and injected into
  * every turn, frozen for that turn; the rest is retrieved by scope (the repo, project, or session a
@@ -21,6 +27,8 @@
  *   POST   /api/portal/memory/records/:id/forget          body { reason? } -> { record }
  *   GET    /api/portal/memory/revisions?recordId=&entityId=&before=&limit=   { revisions }
  *   GET    /api/portal/memory/core                        CoreDocument
+ *   POST   /api/portal/memory/consolidate                 -> { run }  (curate now; 409 when the job is paused)
+ * Curation runs are job runs: `GET /api/portal/runs?kind=consolidate`, `GET /api/portal/runs/:id`.
  * Live: `{ type: "memory", recordIds }` after any change; the inbox count rides on `status`.
  */
 import type { PullRef, Scope } from "./orchestrator.ts";
@@ -111,8 +119,9 @@ export type MemoryRecordInput = {
 /** A user edit from the browser. Changing `body` supersedes the record with a new one. */
 export type MemoryRecordPatch = Partial<Pick<MemoryRecord, "body" | "pinned" | "reviewBy" | "type">> & { status?: "archived" };
 
+/** `summarized`: an entity's summary was rewritten (a revision with no record). */
 export type MemoryRevisionAction =
-  | "created" | "updated" | "approved" | "rejected" | "superseded" | "expired" | "archived" | "forgotten" | "restored" | "imported";
+  | "created" | "updated" | "approved" | "rejected" | "superseded" | "expired" | "archived" | "forgotten" | "restored" | "imported" | "summarized";
 
 export type MemoryRevision = {
   id: number;
@@ -128,3 +137,52 @@ export type MemoryRevision = {
 };
 
 export type CoreDocument = { text: string; generatedAt: number; tokens: number };
+
+// ---------------------------------------------------------------------------------------------
+// Curation (the consolidator)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What one curation pass did: promoted an inbox claim, replaced (superseded) a weaker active claim,
+ * rejected a duplicate or noise, expired an observed claim past its review date, left a proposal
+ * for the user, listed one of the user's own claims for re-confirming, or rewrote a summary.
+ */
+export type CurationAction = "promoted" | "superseded" | "rejected" | "expired" | "left" | "reconfirm" | "summarized";
+export const curationActions: readonly CurationAction[] = ["promoted", "superseded", "rejected", "expired", "left", "reconfirm", "summarized"];
+
+export type CurationChange = {
+  action: CurationAction;
+  entityId: string;
+  /** The entity as people read it: "repo acme/app". */
+  entity: string;
+  /** Null for a summary. */
+  recordId: string | null;
+  key: string | null;
+  /** Why: the curation model's reason or Portal's own rule. */
+  reason: string | null;
+  /** The record before the pass, and as written (null when nothing was written: left, re-confirm, a refused plan). */
+  before: MemoryRecord | null;
+  after: MemoryRecord | null;
+  /** A summary's text before and after. */
+  summary?: { before: string; after: string };
+  /** A superseded record's successor. */
+  replacedBy?: string;
+};
+
+/** A curation run's `result`. */
+export type ConsolidationResult = {
+  /** Short Markdown for people: what changed and what needs the user. */
+  digest: string;
+  /** The one line posted to the main thread. */
+  line: string;
+  counts: Record<CurationAction, number>;
+  changes: CurationChange[];
+  /** Why the whole plan was refused (nothing was applied; `changes` is what it proposed); null when applied. */
+  refused: string | null;
+  /** What the pass looked at. */
+  considered: { inbox: number; active: number; overdue: number; entities: number };
+  /** The curation model's note for the user, if it left one. */
+  note: string | null;
+  /** No API key was stored: nothing was looked at. */
+  skipped?: boolean;
+};

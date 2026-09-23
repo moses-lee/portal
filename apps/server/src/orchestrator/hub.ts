@@ -151,6 +151,8 @@ export interface MemoryService {
   promptContext(input: { scope: Scope; query: string; threadId: string | null }): Promise<MemoryPromptContext>;
   /** Proposed records waiting for the user. */
   inboxCount(): Promise<number>;
+  /** Called with the record ids after every change to memory; answers the unsubscribe function. */
+  subscribe(listener: (recordIds: string[]) => void): () => void;
   /** remember, propose_memory, search_memory, explain_memory, forget, ... */
   tools(ctx: DomainToolContext): ToolSet;
 }
