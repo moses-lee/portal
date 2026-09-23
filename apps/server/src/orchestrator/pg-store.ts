@@ -13,8 +13,8 @@ import { stripNul } from "../db/sanitize.ts";
 import { orchestratorDocuments, orchestratorItems, orchestratorMessages, orchestratorTicks, orchestratorWatches } from "../db/schema.ts";
 import {
   MAX_TICK_REPORTS, buildItem, buildWatch, capMemory, newId, parseItemPatch, parseWatchPatch, patchItem, patchWatch, unknownItem, unknownWatch,
-} from "../lib/orchestrator/store.ts";
-import type { Item, OrchestratorMessage, OrchestratorStore, TickReport, TickSnapshot, Watch } from "../lib/orchestrator/types.ts";
+} from "./store.ts";
+import type { Item, OrchestratorMessage, OrchestratorStore, TickReport, TickSnapshot, Watch } from "./types.ts";
 
 type Body = Record<string, unknown>;
 type Key = "messages" | "items" | "watches" | "ticks" | "snapshot" | "memory";

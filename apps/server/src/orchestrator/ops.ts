@@ -6,12 +6,12 @@
  */
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { errorStatus } from "../fs-paths.ts";
-import { displayPath } from "../git-info.ts";
-import { githubRepoUrl } from "../github-summary.ts";
-import { parentOf } from "../removed-projects.ts";
-import { preWorktreeDeleteRun } from "../script-runner.ts";
-import type { Project, RemovedProject, WorktreeMeta } from "../types.ts";
+import { errorStatus } from "../lib/fs-paths.ts";
+import { displayPath } from "../lib/git-info.ts";
+import { githubRepoUrl } from "../lib/github-summary.ts";
+import { parentOf } from "../lib/removed-projects.ts";
+import { preWorktreeDeleteRun } from "../lib/script-runner.ts";
+import type { Project, RemovedProject, WorktreeMeta } from "../lib/types.ts";
 import type { OrchestratorDeps } from "./deps.ts";
 
 export function httpError(message: string, status: number): Error & { status: number } {

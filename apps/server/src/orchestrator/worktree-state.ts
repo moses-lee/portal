@@ -3,7 +3,7 @@
  * the default branch and whether the tree has uncommitted changes. Local reads only; never fetches.
  */
 import { stat } from "node:fs/promises";
-import { gitMaybe } from "../worktrees.ts";
+import { gitMaybe } from "../lib/worktrees.ts";
 
 export type WorktreeState = {
   /** False when the worktree folder is gone; `merged` and `dirty` are then both false. */

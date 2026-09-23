@@ -7,7 +7,7 @@ import test from "node:test";
 import {
   ATTENTION_PAGE_QUERY, ATTENTION_QUERY, AUTHORED_SEARCH, MAX_SEARCH_PAGES, REVIEW_REQUESTED_SEARCH, attachLocalProjects, attentionReasons,
   cloneRepo, getGithubLogin, isTransientGhFailure, portalReposDir, pullKey, readOriginUrl, resetGithubAttentionCaches, searchAttentionPulls,
-} from "../src/lib/orchestrator/github-attention.ts";
+} from "../src/orchestrator/github-attention.ts";
 import { WorktreeError } from "../src/lib/worktrees.ts";
 
 // The module under test inherits process.env, so isolate it from the developer's git config too.

@@ -4,9 +4,9 @@
  * page.
  */
 import type { AppContext } from "../context.ts";
-import { liveDeps, liveSettingsStore } from "../lib/orchestrator/deps.ts";
-import { type OrchestratorRuntimeOptions, createOrchestratorRuntime } from "../lib/orchestrator/runtime.ts";
-import type { OrchestratorRuntime } from "../lib/orchestrator/types.ts";
+import { liveDeps, liveSettingsStore } from "./deps.ts";
+import { type OrchestratorRuntimeOptions, createOrchestratorRuntime } from "./runtime.ts";
+import type { OrchestratorRuntime } from "./types.ts";
 import { createPgOrchestratorStore } from "./pg-store.ts";
 
 export type OrchestratorService = OrchestratorRuntime;

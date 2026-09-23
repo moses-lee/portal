@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { execCommand, readFileCapped } from "../src/lib/orchestrator/deps.ts";
-import { createMemoryOrchestratorStore } from "../src/lib/orchestrator/store.ts";
-import { REDACTED } from "../src/lib/orchestrator/tools/context.ts";
-import { TICK_TOOLS, createTools } from "../src/lib/orchestrator/tools/index.ts";
-import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/lib/orchestrator/tools/shell.ts";
-import { TRANSCRIPT_CAP } from "../src/lib/orchestrator/tools/sessions.ts";
+import { execCommand, readFileCapped } from "../src/orchestrator/deps.ts";
+import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
+import { REDACTED } from "../src/orchestrator/tools/context.ts";
+import { TICK_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
+import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
+import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
 import { T0, fakeDeps, fakeSettings, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const options = { toolCallId: "call", messages: [] };

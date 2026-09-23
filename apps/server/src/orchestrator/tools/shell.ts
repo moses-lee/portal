@@ -1,9 +1,9 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { expandHome } from "../../fs-paths.ts";
-import { displayPath } from "../../git-info.ts";
-import { defaultSettingsFile, portalSecretFile } from "../../settings-store.ts";
+import { expandHome } from "../../lib/fs-paths.ts";
+import { displayPath } from "../../lib/git-info.ts";
+import { defaultSettingsFile, portalSecretFile } from "../../lib/settings-store.ts";
 import { httpError } from "../ops.ts";
 import { type ToolContext, define } from "./context.ts";
 

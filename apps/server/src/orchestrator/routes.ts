@@ -11,8 +11,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 import { openEventStream } from "../http/sse.ts";
-import { parseItemPatch, parseWatchPatch } from "../lib/orchestrator/store.ts";
-import type { OrchestratorEvent, OrchestratorMessage } from "../lib/orchestrator/types.ts";
+import { parseItemPatch, parseWatchPatch } from "./store.ts";
+import type { OrchestratorEvent, OrchestratorMessage } from "./types.ts";
 
 type IdParams = { Params: { id: string } };
 

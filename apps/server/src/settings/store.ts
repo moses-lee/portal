@@ -4,8 +4,8 @@
  * provider API keys. This module owns validation, merging, masking, write ordering and change
  * notification, so the Postgres and in-memory stores cannot drift apart.
  */
-import { orchestratorProviders } from "../lib/orchestrator/types.ts";
-import type { OrchestratorProvider, OrchestratorSettings } from "../lib/orchestrator/types.ts";
+import { orchestratorProviders } from "../orchestrator/types.ts";
+import type { OrchestratorProvider, OrchestratorSettings } from "../orchestrator/types.ts";
 import { applySettingsPatch, isOrchestratorProvider, mergeSettings, settingsOverrides } from "@portal/shared/settings";
 import type { Settings, SettingsPatch } from "@portal/shared/settings";
 import { parseSettingsPatch } from "../lib/settings-store.ts";

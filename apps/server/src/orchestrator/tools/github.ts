@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { displayPath } from "../../git-info.ts";
-import type { GithubSummary } from "../../types.ts";
+import { displayPath } from "../../lib/git-info.ts";
+import type { GithubSummary } from "../../lib/types.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "../github-attention.ts";
 import { requireProject } from "../ops.ts";
 import { type ToolContext, capped, define } from "./context.ts";

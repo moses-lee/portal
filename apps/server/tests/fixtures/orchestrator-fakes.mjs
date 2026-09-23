@@ -3,7 +3,7 @@
  * tests advance by hand, and a presence counter. Everything records what it was asked so tests
  * can assert on side effects (prompts sent, sessions created) without any Portal module loaded.
  */
-import { defaultOrchestratorSettings } from "../../src/lib/orchestrator/types.ts";
+import { defaultOrchestratorSettings } from "../../src/orchestrator/types.ts";
 
 export const T0 = 1_700_000_000_000;
 

@@ -8,8 +8,8 @@ import { mkdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { githubRepoUrl } from "../github-summary.ts";
-import { type GhRunner, WorktreeError, defaultGh, ghFailureReason, gitMaybe } from "../worktrees.ts";
+import { githubRepoUrl } from "../lib/github-summary.ts";
+import { type GhRunner, WorktreeError, defaultGh, ghFailureReason, gitMaybe } from "../lib/worktrees.ts";
 import type { ItemKind, PullAttention } from "./types.ts";
 
 const execFileAsync = promisify(execFile);

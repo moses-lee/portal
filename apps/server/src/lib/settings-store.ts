@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { orchestratorProviders } from "./orchestrator/types.ts";
-import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "./orchestrator/types.ts";
+import { orchestratorProviders } from "../orchestrator/types.ts";
+import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "../orchestrator/types.ts";
 import { gitActionKinds, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
 import type { GitActionKind, Settings, SettingsPatch } from "@portal/shared/settings";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";

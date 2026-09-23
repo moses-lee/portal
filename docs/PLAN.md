@@ -96,7 +96,7 @@ previews the import.
 
 ## 2. What the current orchestrator does, and why it is not enough
 
-The orchestrator (`apps/server/src/lib/orchestrator/`) is a Vercel AI SDK `ToolLoopAgent` (24 steps,
+The orchestrator (`apps/server/src/orchestrator/`) is a Vercel AI SDK `ToolLoopAgent` (24 steps,
 5-minute turns, gpt-5-mini by default) with one shared chat thread and a scheduler:
 
 - **Tick.** Every 10 minutes while a tab is open (60 while idle) a deterministic pre-scan collects

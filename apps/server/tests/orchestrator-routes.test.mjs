@@ -239,7 +239,7 @@ test("GET /api/portal/stream opens with status, items, watches, forwards events,
 });
 
 test("liveDeps and liveSettingsStore read the services from the context at call time", async () => {
-  const { liveDeps, liveSettingsStore } = await import("../src/lib/orchestrator/deps.ts");
+  const { liveDeps, liveSettingsStore } = await import("../src/orchestrator/deps.ts");
   const calls = [];
   const ctx = {};
   const deps = liveDeps(ctx);

@@ -10,7 +10,7 @@ import {
   newId,
   parseItemPatch,
   parseWatchPatch,
-} from "../src/lib/orchestrator/store.ts";
+} from "../src/orchestrator/store.ts";
 import { createPgOrchestratorStore } from "../src/orchestrator/pg-store.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
 

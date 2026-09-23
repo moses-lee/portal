@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { displayPath } from "../../git-info.ts";
-import type { Project } from "../../types.ts";
+import { displayPath } from "../../lib/git-info.ts";
+import type { Project } from "../../lib/types.ts";
 import { findProjectForRepo, httpError, removeProject, repoOf, requireProject, restoreProject, worktreeProject } from "../ops.ts";
 import { type ToolContext, capped, define } from "./context.ts";
 

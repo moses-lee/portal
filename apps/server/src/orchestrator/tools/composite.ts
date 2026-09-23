@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Project } from "../../types.ts";
+import type { Project } from "../../lib/types.ts";
 import { findProjectForRepo, httpError, repoOf, requireProject, startSession, worktreeProject } from "../ops.ts";
 import type { PullRef } from "../types.ts";
 import { type ToolContext, define, errorMessage } from "./context.ts";

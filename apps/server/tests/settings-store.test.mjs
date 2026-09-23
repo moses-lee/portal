@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { credentials, settings as settingsTable } from "../src/db/schema.ts";
-import { defaultOrchestratorSettings } from "../src/lib/orchestrator/types.ts";
+import { defaultOrchestratorSettings } from "../src/orchestrator/types.ts";
 import { defaultScriptSettings, defaultScripts, scriptLimits } from "@portal/shared/scripts";
 import { defaultSettings } from "@portal/shared/settings";
 import { SettingsError, defaultSettingsFile, parseSettingsFile, parseSettingsPatch, parseStoredOverrides } from "../src/lib/settings-store.ts";

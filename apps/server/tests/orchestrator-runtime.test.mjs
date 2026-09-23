@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
-import { MEMORY_PROMPT_BYTES } from "../src/lib/orchestrator/digest.ts";
+import { MEMORY_PROMPT_BYTES } from "../src/orchestrator/digest.ts";
 import {
   BUSY_RETRY_MS, FIRST_TICK_DELAY_MS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread,
-} from "../src/lib/orchestrator/runtime.ts";
-import { RESCHEDULE_RETRY_MS } from "../src/lib/orchestrator/scheduler.ts";
-import { createMemoryOrchestratorStore } from "../src/lib/orchestrator/store.ts";
-import { TICK_TOOLS } from "../src/lib/orchestrator/tools/index.ts";
+} from "../src/orchestrator/runtime.ts";
+import { RESCHEDULE_RETRY_MS } from "../src/orchestrator/scheduler.ts";
+import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
+import { TICK_TOOLS } from "../src/orchestrator/tools/index.ts";
 import { T0, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const usage = {

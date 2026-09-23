@@ -3,8 +3,8 @@ import test from "node:test";
 import {
   DIRTY_IDLE_MS, MEMORY_PROMPT_BYTES, REVIEW_LIST_ROWS, STALE_PULL_MS, buildDigest, collectSnapshot, diffSnapshots, resetDigestCaches,
   reviewDetail, snapshotActivity, truncateBytes,
-} from "../src/lib/orchestrator/digest.ts";
-import { createMemoryOrchestratorStore } from "../src/lib/orchestrator/store.ts";
+} from "../src/orchestrator/digest.ts";
+import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { T0, attentionPull, fakeDeps, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const DAY = 86_400_000;

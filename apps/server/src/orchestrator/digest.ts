@@ -4,7 +4,7 @@
  * costs nothing when nothing moved and every rule below is unit-testable.
  */
 import { agentActivity } from "@portal/shared/agent-activity";
-import type { Project, SessionMeta, WorktreeMeta } from "../types.ts";
+import type { Project, SessionMeta, WorktreeMeta } from "../lib/types.ts";
 import type { AttentionSearch, OrchestratorDeps } from "./deps.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "./github-attention.ts";
 import type { DigestChange, Item, ItemKind, ItemLinks, OrchestratorStore, PullAttention, TickDigest, TickSnapshot } from "./types.ts";

@@ -18,7 +18,7 @@ import {
   orchestratorDocuments, orchestratorItems, orchestratorMessages, orchestratorTicks, orchestratorWatches, projects, removedProjects,
   sessionEvents, sessions, settings,
 } from "../db/schema.ts";
-import type { Item, Watch } from "../lib/orchestrator/types.ts";
+import type { Item, Watch } from "../orchestrator/types.ts";
 import { createPgOrchestratorStore } from "../orchestrator/pg-store.ts";
 import { createPgProjectsBackend } from "../projects/pg-store.ts";
 import { loadServerKey } from "../settings/crypto.ts";

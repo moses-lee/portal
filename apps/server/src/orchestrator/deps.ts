@@ -6,22 +6,22 @@
  */
 import { open } from "node:fs/promises";
 import os from "node:os";
-import { execCommand } from "../exec-command.ts";
-import type { ExecResult } from "../exec-command.ts";
-import { listDirectories, resolveDirectory } from "../fs-paths.ts";
-import { type GitInfo, readGitInfo } from "../git-info.ts";
-import { fetchRepo, pullFastForward, readGithubSummary } from "../github-summary.ts";
-import { runConfiguredScript } from "../script-runner.ts";
-import type { ScriptOutcome, ScriptRunOptions } from "../script-runner.ts";
+import { execCommand } from "../lib/exec-command.ts";
+import type { ExecResult } from "../lib/exec-command.ts";
+import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
+import { type GitInfo, readGitInfo } from "../lib/git-info.ts";
+import { fetchRepo, pullFastForward, readGithubSummary } from "../lib/github-summary.ts";
+import { runConfiguredScript } from "../lib/script-runner.ts";
+import type { ScriptOutcome, ScriptRunOptions } from "../lib/script-runner.ts";
 import type { ScriptKind } from "@portal/shared/scripts";
-import { toMeta } from "../acp-runtime.ts";
-import type { AppContext } from "../../context.ts";
-import { summarizeProject } from "../../projects/store.ts";
+import { toMeta } from "../lib/acp-runtime.ts";
+import type { AppContext } from "../context.ts";
+import { summarizeProject } from "../projects/store.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
   SessionMeta, SessionState, WorktreeMeta,
-} from "../types.ts";
-import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../worktrees.ts";
+} from "../lib/types.ts";
+import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../lib/worktrees.ts";
 import { cloneRepo, getGithubLogin, readOriginUrl, searchAttentionPulls } from "./github-attention.ts";
 import type { PullAttention } from "./types.ts";
 import { readWorktreeState, type WorktreeState } from "./worktree-state.ts";

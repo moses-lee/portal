@@ -5,8 +5,8 @@
  * the importer or by hand is picked up without a restart.
  */
 import { eq, inArray } from "drizzle-orm";
-import { orchestratorProviders } from "../lib/orchestrator/types.ts";
-import type { OrchestratorProvider } from "../lib/orchestrator/types.ts";
+import { orchestratorProviders } from "../orchestrator/types.ts";
+import type { OrchestratorProvider } from "../orchestrator/types.ts";
 import type { SettingsPatch } from "@portal/shared/settings";
 import { isOrchestratorProvider } from "@portal/shared/settings";
 import { parseStoredOverrides } from "../lib/settings-store.ts";

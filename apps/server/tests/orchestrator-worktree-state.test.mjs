@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readWorktreeState } from "../src/lib/orchestrator/worktree-state.ts";
+import { readWorktreeState } from "../src/orchestrator/worktree-state.ts";
 
 // The module under test inherits process.env, so isolate it from the developer's git config too.
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";

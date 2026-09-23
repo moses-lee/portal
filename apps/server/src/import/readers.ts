@@ -11,8 +11,8 @@ import path from "node:path";
 import type { StoredEvent } from "@portal/contracts/types";
 import {
   MAX_TICK_REPORTS, capMemory, isItem, isOrchestratorMessage, isTickReport, isTickSnapshot, isWatch,
-} from "../lib/orchestrator/store.ts";
-import type { Item, OrchestratorMessage, TickReport, TickSnapshot, Watch } from "../lib/orchestrator/types.ts";
+} from "../orchestrator/store.ts";
+import type { Item, OrchestratorMessage, TickReport, TickSnapshot, Watch } from "../orchestrator/types.ts";
 import { SettingsError, parseSettingsFile, parseSettingsPatch } from "../lib/settings-store.ts";
 import type { Project, RemovedProject } from "../lib/types.ts";
 import { dropLegacyWorktreeNames, legacyProjectsFile, parseLegacyProjectsFile } from "../projects/legacy.ts";
