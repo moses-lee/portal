@@ -386,16 +386,9 @@ test("get_settings masks keys and returns the prompts", async () => {
   assert.ok(!JSON.stringify(settings).includes("sk-test"));
 });
 
-test("memory tools read, write, and append; get_tick_digest leaves memory out", async () => {
-  const { tools, store } = setup();
-  assert.deepEqual(await run(tools.read_memory, {}), { memory: "" });
-  await run(tools.append_memory, { line: "Prefers short answers." });
-  await run(tools.append_memory, { line: "Works in acme/app." });
-  assert.equal(await store.readMemory(), "Prefers short answers.\nWorks in acme/app.\n");
-  await run(tools.write_memory, { text: "Fresh." });
-  assert.deepEqual(await run(tools.read_memory, {}), { memory: "Fresh." });
-  assert.equal((await run(tools.append_memory, { line: "" })).invalidInput, true);
-
+test("the legacy memory-file tools are gone; get_tick_digest leaves memory out", async () => {
+  const { tools } = setup();
+  for (const name of ["read_memory", "write_memory", "append_memory"]) assert.equal(tools[name], undefined, name);
   const digestOut = await run(tools.get_tick_digest, {});
   assert.deepEqual(digestOut, { at: T0, since: null, changes: [], dueWatches: [], openItems: [] });
   assert.equal("memory" in digestOut, false);

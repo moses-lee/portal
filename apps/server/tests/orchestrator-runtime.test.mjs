@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
-import { MEMORY_PROMPT_BYTES } from "../src/orchestrator/digest.ts";
 import {
   BUSY_RETRY_MS, FIRST_TICK_DELAY_MS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread,
 } from "../src/orchestrator/runtime.ts";
@@ -130,8 +129,8 @@ test("a tick with a change runs the model with the tick tool subset; its create_
   assert.equal(userMessages.length, 1);
   assert.match(JSON.stringify(userMessages[0]), /session_waiting:s1/);
   assert.equal(first.prompt.filter((message) => message.role === "system").length, 1);
-  // Ticks only get the item, watch, memory, and read-only tools: schemas are re-sent on every step.
-  assert.deepEqual(first.tools.map((tool) => tool.name).sort(), [...TICK_TOOLS].sort());
+  // Ticks only get the item, watch, and read-only tools plus proposing and searching memory: schemas are re-sent on every step.
+  assert.deepEqual(first.tools.map((tool) => tool.name).sort(), [...TICK_TOOLS, "propose_memory", "search_memory"].sort());
   assert.ok(!first.tools.some((tool) => /run_command|delete_session|remove_project|send_prompt|create_session/.test(tool.name)));
 
   const items = await store.listItems();
@@ -290,16 +289,16 @@ test("chat persists the user message at once and the assistant message, with its
   assert.ok(call.tools.some((tool) => tool.name === "run_command"));
 });
 
-test("chat caps the memory it puts in the system prompt", async (t) => {
+test("chat puts curated memory in the system prompt, never the legacy memory text", async (t) => {
   const { runtime, store, model } = setup(t, { doStream: textStream("ok") });
-  await store.writeMemory(`${"m".repeat(MEMORY_PROMPT_BYTES + 500)} TAIL-MARKER`);
+  await runtime.ready;
+  await store.writeMemory("LEGACY-MARKER notes");
   const response = await runtime.chat(userMessage("hi"));
   await response.text();
   await flush();
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
-  assert.ok(!system.includes("TAIL-MARKER"));
-  assert.match(system, /\[truncated\]/);
-  assert.ok(Buffer.byteLength(system, "utf8") < MEMORY_PROMPT_BYTES + 2500);
+  assert.ok(!system.includes("LEGACY-MARKER"));
+  assert.match(system, /Memory:\n\(empty\)/);
 });
 
 test("the history window sent to the model starts at a user message", async (t) => {
