@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
+import { temporaryDatabase } from "./helpers/db.mjs";
 
-test("GET /api/health answers without a database", async () => {
-  const app = await buildApp();
+test("GET /api/health answers on a migrated database", async (t) => {
+  const database = await temporaryDatabase(t);
+  const app = await buildApp({ database, orchestrator: false });
   try {
     const response = await app.inject({ method: "GET", url: "/api/health" });
     assert.equal(response.statusCode, 200);
