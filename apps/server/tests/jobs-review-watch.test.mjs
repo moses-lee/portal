@@ -155,3 +155,27 @@ test("reviewWatchOf keeps only well-formed sessions, and findingsItem caps the b
   assert.ok(item.body.length <= 4000);
   assert.equal(item.fingerprint, "review_findings:acme/app#1:s1");
 });
+
+test("a review waiting for a permission raises the tick's waiting item at once and resolves it when the session moves on", async (t) => {
+  const sessions = [sessionMeta({ id: "s1", awaitingPermission: true, busy: true }), sessionMeta({ id: "s2", busy: true })];
+  const h = await started(jobsHarness(t, { sessions, events: { s1: [], s2: [] } }));
+  const { job } = await reviewGoal(h);
+  await h.timers.advance(POLL_MS);
+  await flush();
+  let [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_waiting");
+  assert.equal(item.fingerprint, "session_waiting:s1", "the tick's fingerprint, so the tick updates rather than duplicates it");
+  assert.equal(item.title, "The review of acme/app#1 is waiting for your permission");
+  assert.deepEqual(item.actions, [{ type: "open_session", sessionId: "s1", label: "Answer" }]);
+  assert.match((await h.jobs.listRuns({ jobId: job.id }))[0].summary, /1 waiting for a permission/);
+
+  // Another check while it still waits adds nothing.
+  await h.timers.advance(REVIEW_CHECK_MS);
+  await flush();
+  assert.equal((await h.store.listItems()).filter((entry) => entry.kind === "session_waiting").length, 1);
+
+  sessions[0].awaitingPermission = false;
+  await h.timers.advance(REVIEW_CHECK_MS);
+  await flush();
+  [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_waiting");
+  assert.equal(item.status, "resolved");
+});

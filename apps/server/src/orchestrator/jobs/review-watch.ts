@@ -156,12 +156,43 @@ export type ReviewCheckParts = {
   fire(id: string, what: { title: string; body: string; item?: boolean }, how: { actor: "system"; runId: string; touched?: Set<string> }): Promise<unknown>;
 };
 
+/**
+ * A review blocked on a permission prompt reaches the user at this check, not at the next tick
+ * (hourly while nobody has Portal open). The item is the tick's own `session_waiting` one, same
+ * fingerprint, so neither duplicates the other; a dismissed one stays dismissed, and it is resolved
+ * here once the session moves on.
+ */
+async function flagWaiting(core: JobsCore, intent: Intent, watch: ReviewWatch, progress: Map<string, SessionProgress>): Promise<void> {
+  const { hub } = core;
+  let changed = false;
+  const items = await hub.store.listItems();
+  for (const session of watch.sessions) {
+    const fingerprint = `session_waiting:${session.sessionId}`;
+    const live = items.find((item) => item.fingerprint === fingerprint && (item.status === "open" || item.status === "snoozed"));
+    if (progress.get(session.sessionId)?.state === "waiting") {
+      if (live || items.some((item) => item.fingerprint === fingerprint && item.status === "dismissed")) continue;
+      await hub.store.createItem({
+        kind: "session_waiting", title: `The review of ${watch.repo}#${session.pr} is waiting for your permission`,
+        body: "The review session asked to run a command. Answer it in the session; the review goes on from there.", fingerprint,
+        links: { sessionId: session.sessionId, projectId: session.projectId, pull: { repo: watch.repo, number: session.pr, url: session.url }, intentId: intent.id },
+        actions: [{ type: "open_session", sessionId: session.sessionId, label: "Answer" }],
+      });
+      changed = true;
+    } else if (live?.status === "open") {
+      await hub.store.updateItem(live.id, { status: "resolved" });
+      changed = true;
+    }
+  }
+  if (changed) hub.emit({ type: "items", items: await hub.store.listItems() });
+}
+
 /** One check of a review goal: wait while any session works, else summarize and report. */
 export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, trigger, signal }: KindContext, intent: Intent, watch: ReviewWatch): Promise<KindResult> {
   const { hub } = core;
   const progress = new Map<string, SessionProgress>();
   for (const session of watch.sessions) progress.set(session.sessionId, await sessionProgress(hub.deps, session.sessionId));
   await core.store.updateIntent(intent.id, { lastCheckedAt: hub.timers.now() });
+  await flagWaiting(core, intent, watch, progress);
   const open = watch.sessions.filter((session) => ["working", "waiting"].includes(progress.get(session.sessionId)!.state));
   if (open.length) {
     const waiting = open.filter((session) => progress.get(session.sessionId)!.state === "waiting").length;
