@@ -11,6 +11,7 @@ import type { Db } from "../db/client.ts";
 import { type ActivityStore, createMemoryActivityStore } from "./activity/store.ts";
 import { createActivityService } from "./activity/service.ts";
 import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
+import { isServerAction, runItemAction } from "./approvals/card-actions.ts";
 import { createApprovalsService } from "./approvals/service.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import { buildDigest, collectSnapshot } from "./digest.ts";
@@ -18,7 +19,7 @@ import type { ApprovalsService, JobsService, MemoryService, OrchestratorHub, Pre
 import { createJobsService } from "./jobs/service.ts";
 import { createMemoryService } from "./memory/service.ts";
 import { buildLanguageModel, providerOptionsFor, roleChoice } from "./model.ts";
-import { httpError, removeProject, startSession } from "./ops.ts";
+import { httpError } from "./ops.ts";
 import { type SchedulerTimers, createScheduler, realTimers } from "./scheduler.ts";
 import { newId } from "./store.ts";
 import { performTick } from "./tick.ts";
@@ -409,33 +410,15 @@ export function createOrchestratorRuntime({
     if (item.status !== "open" && item.status !== "snoozed") throw httpError(`This item is ${item.status}; its actions no longer run.`, 409);
     const action = item.actions[actionIndex];
     if (!action) throw httpError("The item has no such action.", 404);
-    if (action.type !== "start_session" && action.type !== "send_prompt" && action.type !== "remove_worktree") {
-      throw httpError(`The ${action.type} action runs in the browser.`, 400);
-    }
+    if (!isServerAction(action)) throw httpError(`The ${action.type} action runs in the browser.`, 400);
     const approval = await hub.approvals.guardAction(item, actionIndex, action);
     const refs = { itemId, ...(item.links.projectId ? { projectId: item.links.projectId } : {}), ...(item.links.sessionId ? { sessionId: item.links.sessionId } : {}) };
     if (approval) {
       void hub.activity.log({ actor: "user", kind: "item.action", summary: `Asked to run "${action.label ?? action.type}" on ${item.title}; waiting for approval`, refs: { ...refs, approvalId: approval.id } });
       return { approvalId: approval.id };
     }
-    let outcome: { sessionId?: string; promptError?: string } = {};
-    switch (action.type) {
-      case "start_session":
-        // The session exists even when its prompt failed; the caller gets both facts.
-        outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt });
-        break;
-      case "send_prompt":
-        await deps.sessions.prompt(action.sessionId, action.prompt);
-        break;
-      case "remove_worktree":
-        await removeProject(deps, { id: action.projectId, deleteWorktree: true });
-        break;
-    }
-    void hub.activity.log({
-      actor: "user", kind: "item.action", summary: `Ran "${action.label ?? action.type}" on ${item.title}`,
-      refs: { ...refs, ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}) }, detail: { action: action.type, ...(outcome.promptError ? { promptError: outcome.promptError } : {}) },
-    });
-    return outcome;
+    // The same code path an approved action replays through.
+    return runItemAction(hub, item, action);
   }
 
   async function updateItem(id: string, patch: ItemPatch) {

@@ -102,10 +102,14 @@ test("items and watches: PATCH validates, 404s unknown ids, and persists; action
   assert.equal(missing.statusCode, 404);
   assert.deepEqual(missing.json(), { error: 'Unknown item "nope0000".' });
 
-  // Actions: send_prompt runs here; open_* belongs to the browser; bad and missing indexes are refused.
-  const sent = await inject(app, "POST", `/api/portal/items/${item.id}/actions/1`);
-  assert.equal(sent.statusCode, 200);
-  assert.deepEqual(sent.json(), {});
+  // Actions: send_prompt runs here once approved (the agent wrote its text); open_* belongs to the browser; bad and missing indexes are refused.
+  const asked = await inject(app, "POST", `/api/portal/items/${item.id}/actions/1`);
+  assert.equal(asked.statusCode, 200);
+  assert.deepEqual(Object.keys(asked.json()), ["approvalId"]);
+  assert.deepEqual(state.prompts, []);
+  const approved = await inject(app, "POST", `/api/portal/approvals/${asked.json().approvalId}/decide`, { approve: true });
+  assert.equal(approved.statusCode, 200);
+  assert.equal(approved.json().approval.status, "approved");
   assert.deepEqual(state.prompts, [{ id: "s1", text: "Continue" }]);
   const browserOnly = await inject(app, "POST", `/api/portal/items/${item.id}/actions/0`);
   assert.equal(browserOnly.statusCode, 400);
