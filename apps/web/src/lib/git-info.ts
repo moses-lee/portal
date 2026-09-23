@@ -2,14 +2,8 @@ import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-export type GitInfo = {
-  /** Repository root (the working tree that contains the directory). */
-  root: string;
-  displayRoot: string;
-  /** Branch name, or an abbreviated commit hash when HEAD is detached. */
-  branch: string;
-  detached: boolean;
-} | null;
+import type { GitInfo } from "@portal/contracts/git-info";
+export type { GitInfo };
 
 export function displayPath(directory: string) {
   const home = os.homedir();

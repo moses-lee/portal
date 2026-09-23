@@ -7,7 +7,7 @@ import type {
   StopReason,
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
-import type { GitInfo } from "./git-info";
+import type { GitInfo } from "./git-info.ts";
 
 export type AgentInfo = { id: string; name: string };
 
