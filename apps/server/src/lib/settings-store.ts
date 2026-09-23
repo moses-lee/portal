@@ -2,7 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { orchestratorProviders } from "../orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "../orchestrator/types.ts";
-import { gitActionKinds, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
+import type { ConsolidationSettings } from "@portal/contracts/orchestrator";
+import { gitActionKinds, isClockTime, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
 import type { GitActionKind, Settings, SettingsPatch } from "@portal/shared/settings";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";
 import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "@portal/shared/scripts";
@@ -43,6 +44,7 @@ export function portalSecretFile(file: string, home = path.dirname(defaultSettin
 export const MAX_PROMPT_LENGTH = 4000;
 const { modelLength: MAX_MODEL_LENGTH, apiKeyLength: MAX_API_KEY_LENGTH } = orchestratorLimits;
 const { intervalMinutes: MAX_INTERVAL_MINUTES, idleIntervalMinutes: MAX_IDLE_INTERVAL_MINUTES } = orchestratorLimits;
+const { inboxThreshold: MAX_INBOX_THRESHOLD, minIntervalMinutes: MAX_CONSOLIDATION_INTERVAL } = orchestratorLimits;
 
 /**
  * What `settings.json` holds: the overrides that differ from the defaults, plus the real API keys
@@ -58,6 +60,7 @@ export type SettingsFile = {
     bookkeeping?: { provider?: OrchestratorProvider; model?: string };
     intervalMinutes?: number;
     idleIntervalMinutes?: number;
+    consolidation?: Partial<ConsolidationSettings>;
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
   };
   scripts?: ScriptsPatch;
@@ -97,6 +100,28 @@ function checkInterval(field: "intervalMinutes" | "idleIntervalMinutes", value: 
   }
   return { value: value as number };
 }
+
+/** One consolidation field: the nightly time as "HH:MM" or null, the inbox threshold as a count or null, the interval in minutes. */
+function checkConsolidationField(field: keyof ConsolidationSettings, value: unknown): Checked<string | number | null> {
+  switch (field) {
+    case "nightlyAt":
+      if (value === null || isClockTime(value)) return { value };
+      return { error: 'consolidation.nightlyAt must be a time as "HH:MM" (24-hour) or null to turn the nightly run off.' };
+    case "inboxThreshold":
+      if (value === null) return { value };
+      if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > MAX_INBOX_THRESHOLD) {
+        return { error: `consolidation.inboxThreshold must be a whole number between 1 and ${MAX_INBOX_THRESHOLD}, or null to turn it off.` };
+      }
+      return { value: value as number };
+    case "minIntervalMinutes":
+      if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > MAX_CONSOLIDATION_INTERVAL) {
+        return { error: `consolidation.minIntervalMinutes must be a whole number of minutes between 1 and ${MAX_CONSOLIDATION_INTERVAL}.` };
+      }
+      return { value: value as number };
+  }
+}
+
+const consolidationFields = ["nightlyAt", "inboxThreshold", "minIntervalMinutes"] as const;
 
 /** An API key from a PATCH: trimmed; "" means "clear". */
 function checkApiKey(provider: string, value: unknown): Checked<string> {
@@ -191,6 +216,15 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
   if (given.idleIntervalMinutes !== undefined) {
     patch.idleIntervalMinutes = required(checkInterval("idleIntervalMinutes", given.idleIntervalMinutes, MAX_IDLE_INTERVAL_MINUTES));
   }
+  if (given.consolidation !== undefined) {
+    if (!isPlainObject(given.consolidation)) throw new SettingsError("orchestrator.consolidation must be an object.", 400);
+    const consolidation: Partial<ConsolidationSettings> = {};
+    for (const field of consolidationFields) {
+      if (given.consolidation[field] === undefined) continue;
+      (consolidation as Record<string, unknown>)[field] = required(checkConsolidationField(field, given.consolidation[field]));
+    }
+    patch.consolidation = consolidation;
+  }
   if (given.apiKeys !== undefined) {
     if (!isPlainObject(given.apiKeys)) throw new SettingsError("orchestrator.apiKeys must be an object.", 400);
     const apiKeys: Partial<Record<OrchestratorProvider, string>> = {};
@@ -264,6 +298,15 @@ function parseOrchestratorFile(given: unknown): SettingsFile["orchestrator"] {
   if ("value" in interval) section.intervalMinutes = interval.value;
   const idle = checkInterval("idleIntervalMinutes", given.idleIntervalMinutes, MAX_IDLE_INTERVAL_MINUTES);
   if ("value" in idle) section.idleIntervalMinutes = idle.value;
+  if (isPlainObject(given.consolidation)) {
+    const consolidation: Partial<ConsolidationSettings> = {};
+    for (const field of consolidationFields) {
+      if (given.consolidation[field] === undefined) continue;
+      const checked = checkConsolidationField(field, given.consolidation[field]);
+      if ("value" in checked) (consolidation as Record<string, unknown>)[field] = checked.value;
+    }
+    if (Object.keys(consolidation).length > 0) section.consolidation = consolidation;
+  }
   if (isPlainObject(given.apiKeys)) {
     const apiKeys: Partial<Record<OrchestratorProvider, string>> = {};
     for (const provider of orchestratorProviders) {

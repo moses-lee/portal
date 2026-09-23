@@ -14,4 +14,6 @@ export type KindResult = {
   skipped?: boolean;
   /** The job ends with this run (its intent is gone or finished). */
   jobStatus?: Extract<JobStatus, "done" | "cancelled">;
+  /** A recurring job's next run as the kind decides it (null: not until something schedules it); the job stays active. */
+  nextRunAt?: number | null;
 };

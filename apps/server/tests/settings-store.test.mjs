@@ -157,6 +157,7 @@ for (const [name, make] of backends) {
       bookkeeping: orchestratorDefaults.bookkeeping,
       intervalMinutes: 5,
       idleIntervalMinutes: orchestratorDefaults.idleIntervalMinutes,
+      consolidation: orchestratorDefaults.consolidation,
       apiKeys: { openai: false, anthropic: true },
     });
     assert.deepEqual(result.gitActions, defaultSettings.gitActions, "the other section is untouched");
@@ -270,6 +271,27 @@ for (const [name, make] of backends) {
     assert.equal(result.orchestrator.intervalMinutes, 1440);
     assert.equal(result.orchestrator.idleIntervalMinutes, 1);
     assert.equal(await store.apiKey("openai"), "k".repeat(512));
+  });
+
+  test(`${name}: consolidation settings are checked field by field; null turns a trigger off`, async (t) => {
+    const { open, stored } = await make(t);
+    const store = open();
+    const off = await store.patch({ orchestrator: { consolidation: { nightlyAt: null, inboxThreshold: null, minIntervalMinutes: 90 } } });
+    assert.deepEqual(off.orchestrator.consolidation, { nightlyAt: null, inboxThreshold: null, minIntervalMinutes: 90 });
+    assert.deepEqual((await stored()).overrides, { orchestrator: { consolidation: { nightlyAt: null, inboxThreshold: null, minIntervalMinutes: 90 } } });
+    const on = await store.patch({ orchestrator: { consolidation: { nightlyAt: "04:15", inboxThreshold: 1000 } } });
+    assert.deepEqual(on.orchestrator.consolidation, { nightlyAt: "04:15", inboxThreshold: 1000, minIntervalMinutes: 90 });
+
+    for (const bad of ["4:15", "24:00", "", 415]) {
+      await rejects400(store.patch({ orchestrator: { consolidation: { nightlyAt: bad } } }), /nightlyAt must be a time as "HH:MM"/);
+    }
+    for (const bad of [0, 1001, 2.5, "10"]) {
+      await rejects400(store.patch({ orchestrator: { consolidation: { inboxThreshold: bad } } }), /inboxThreshold must be a whole number between 1 and 1000/);
+    }
+    for (const bad of [0, null, 1441]) {
+      await rejects400(store.patch({ orchestrator: { consolidation: { minIntervalMinutes: bad } } }), /minIntervalMinutes must be a whole number of minutes between 1 and 1440/);
+    }
+    await rejects400(store.patch({ orchestrator: { consolidation: "nightly" } }), /consolidation must be an object/);
   });
 
   test(`${name}: subscribe() fires after every successful patch with the merged settings, and not for rejected ones`, async (t) => {
@@ -462,7 +484,10 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
     body: {
       version: 2,
       gitActions: { prompts: { checks: "ok", deploy: "x", review: 5 } },
-      orchestrator: { provider: "google", model: " claude-x ", intervalMinutes: 0, idleIntervalMinutes: 30, apiKeys: { openai: "sk-in-the-row" } },
+      orchestrator: {
+        provider: "google", model: " claude-x ", intervalMinutes: 0, idleIntervalMinutes: 30, consolidation: { nightlyAt: "3am", inboxThreshold: null },
+        apiKeys: { openai: "sk-in-the-row" },
+      },
       scripts: { preWorktreeDelete: { command: " make clean ", abortOnFailure: "yes" } },
       theme: "dark",
     },
@@ -470,7 +495,9 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
   const store = open();
   const settings = await store.read();
   assert.deepEqual(settings.gitActions.prompts, { ...defaults, checks: "ok" });
-  assert.deepEqual(settings.orchestrator, { ...orchestratorDefaults, model: "claude-x", idleIntervalMinutes: 30 });
+  assert.deepEqual(settings.orchestrator, {
+    ...orchestratorDefaults, model: "claude-x", idleIntervalMinutes: 30, consolidation: { ...orchestratorDefaults.consolidation, inboxThreshold: null },
+  });
   assert.deepEqual(settings.scripts.preWorktreeDelete, { ...defaultScriptSettings, command: "make clean" });
   assert.equal(await store.apiKey("openai"), null, "a key in the overrides row is never used");
 
@@ -478,7 +505,7 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
   await store.patch({ orchestrator: { intervalMinutes: 15 } });
   assert.deepEqual((await stored()).overrides, {
     gitActions: { prompts: { checks: "ok" } },
-    orchestrator: { model: "claude-x", intervalMinutes: 15, idleIntervalMinutes: 30 },
+    orchestrator: { model: "claude-x", intervalMinutes: 15, idleIntervalMinutes: 30, consolidation: { inboxThreshold: null } },
     scripts: { preWorktreeDelete: { command: "make clean" } },
   });
 });

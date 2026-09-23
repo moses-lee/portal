@@ -49,8 +49,24 @@ export type OrchestratorSettings = {
   intervalMinutes: number;
   /** Tick interval while no browser is connected. */
   idleIntervalMinutes: number;
+  /** When the memory curation pass runs. */
+  consolidation: ConsolidationSettings;
   /** True when a key is stored for the provider. The key itself never leaves the server. */
   apiKeys: Record<OrchestratorProvider, boolean>;
+};
+
+/**
+ * When the consolidator (the memory curation job) runs: nightly at a local time, and whenever the
+ * inbox holds enough proposals, at most once per `minIntervalMinutes`. A null turns that trigger
+ * off; "Run now" in the Memory view always works.
+ */
+export type ConsolidationSettings = {
+  /** "HH:MM", 24-hour, in the server's time zone. */
+  nightlyAt: string | null;
+  /** Proposed records in the inbox that start a run. */
+  inboxThreshold: number | null;
+  /** Least time between the start of the last run and one the inbox starts. */
+  minIntervalMinutes: number;
 };
 
 /**
@@ -63,6 +79,7 @@ export type OrchestratorSettingsPatch = {
   bookkeeping?: Partial<ModelChoice>;
   intervalMinutes?: number;
   idleIntervalMinutes?: number;
+  consolidation?: Partial<ConsolidationSettings>;
   apiKeys?: Partial<Record<OrchestratorProvider, string>>;
 };
 
@@ -72,6 +89,7 @@ export const defaultOrchestratorSettings: OrchestratorSettings = {
   bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
   intervalMinutes: 10,
   idleIntervalMinutes: 60,
+  consolidation: { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 },
   apiKeys: { openai: false, anthropic: false },
 };
 
@@ -157,6 +175,8 @@ export type ItemKind =
   | "review_findings"
   /** A background job is paused on an approval; the item links to it. */
   | "approval_needed"
+  /** Claims the user stated or confirmed are past their review date; the item links to the Memory view. */
+  | "memory_reconfirm"
   | "custom";
 
 /** A GitHub pull request reference, independent of whether Portal has the repo locally. */

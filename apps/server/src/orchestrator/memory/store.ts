@@ -62,6 +62,8 @@ export interface MemoryStore {
   commit(changes: RecordChange[]): Promise<MemoryRecord[]>;
   /** A revision that belongs to no single record change (the import marker, an entity note). */
   appendRevision(input: RevisionInput): Promise<MemoryRevision>;
+  /** Replace an entity's summary and write a revision for it (no record), together; resolves with the entity as written. */
+  setEntitySummary(entityId: string, summary: string, revision: RevisionMeta): Promise<MemoryEntity>;
   /** Newest first; page with `before=<id>`. */
   listRevisions(filter?: RevisionFilter): Promise<MemoryRevision[]>;
 }
@@ -255,6 +257,18 @@ export function createInMemoryMemoryStore({ now = Date.now }: { now?: () => numb
       const revision: MemoryRevision = { ...copy(input), at: input.at ?? now(), id: revisions.length + 1 };
       revisions.push(revision);
       return copy(revision);
+    },
+    async setEntitySummary(entityId, summary, revision) {
+      const entity = entities.get(entityId);
+      if (!entity) throw new OrchestratorStoreError(`Unknown memory entity "${entityId}".`, 404);
+      const at = now();
+      entity.summary = summary;
+      entity.updatedAt = Math.max(at, entity.updatedAt);
+      revisions.push({
+        id: revisions.length + 1, recordId: null, entityId, at, actor: revision.actor, action: revision.action, before: null, after: null,
+        reason: revision.reason ?? null, runId: revision.runId ?? null,
+      });
+      return withCount(entity);
     },
     async listRevisions(filter = {}) {
       const limit = clamp(filter.limit, DEFAULT_REVISION_LIMIT, MAX_REVISION_LIMIT);

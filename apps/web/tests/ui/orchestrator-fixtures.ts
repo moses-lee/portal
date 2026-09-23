@@ -7,6 +7,7 @@ import type {
   ActivityEntry,
   Approval,
   ApprovalGrant,
+  ConsolidationResult,
   CoreDocument,
   Intent,
   Job,
@@ -333,6 +334,54 @@ export const memoryRevisions: MemoryRevision[] = [
     runId: null,
   },
 ];
+
+/** The seeded curation job, nightly at 03:00. */
+export const consolidateJob: Job = {
+  ...tickJob,
+  id: "consolidate",
+  kind: "consolidate",
+  title: "Curate memory",
+  schedule: { type: "cron", expr: "0 3 * * *", tz: "Europe/Berlin" },
+  nextRunAt: now + 5 * 60 * min,
+  lastRunId: "run-c1",
+};
+
+const curationResult: ConsolidationResult = {
+  digest: "Memory curation promoted 1, rewrote 1 summary; 1 left in the inbox.\n\n**Promoted**\n- repo example/portal · `ci-provider`: CI runs on GitHub Actions. (Seen in two PRs.)",
+  line: "Memory curation promoted 1, rewrote 1 summary; 1 left in the inbox.",
+  counts: { promoted: 1, superseded: 0, rejected: 0, expired: 0, left: 1, reconfirm: 0, summarized: 1 },
+  changes: [
+    {
+      action: "promoted", entityId: "e-repo", entity: "repo example/portal", recordId: "r-ci", key: "ci-provider", reason: "Seen in two PRs.",
+      before: { ...memoryRecords[3], status: "proposed" }, after: memoryRecords[3],
+    },
+    {
+      action: "left", entityId: "e-octo", entity: "person octocat", recordId: "r-prop", key: "merge-style", reason: "Only one session says so.",
+      before: memoryRecords[4], after: null,
+    },
+    {
+      action: "summarized", entityId: "e-repo", entity: "repo example/portal", recordId: null, key: null, reason: null, before: null, after: null,
+      summary: { before: "The Portal monorepo.", after: "The **Portal** monorepo; CI on GitHub Actions." },
+    },
+  ],
+  refused: null,
+  considered: { inbox: 2, active: 3, overdue: 0, entities: 3 },
+  note: null,
+};
+
+export const curationRun: JobRun = {
+  ...tickRun,
+  id: "run-c1",
+  jobId: "consolidate",
+  kind: "consolidate",
+  startedAt: now - 8 * 60 * min,
+  finishedAt: now - 8 * 60 * min + 41_000,
+  model: { provider: "anthropic", model: "claude-opus-5-5" },
+  usage: { inputTokens: 18_000, outputTokens: 900 },
+  log: ["Nightly run.", curationResult.line],
+  result: curationResult,
+  summary: curationResult.line,
+};
 
 export const coreDocument: CoreDocument = {
   text: "# Directives\n- Keep reviews short and list blockers first.\n\n# Entities\n- global: How the user likes to work\n- repo example/portal: The Portal monorepo",

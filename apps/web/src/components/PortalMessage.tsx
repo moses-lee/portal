@@ -6,6 +6,7 @@ import {
   Brain,
   ChevronDown,
   CircleAlert,
+  History,
   LoaderCircle,
   ShieldQuestion,
   Sparkles,
@@ -180,6 +181,8 @@ const PortalMessage = memo(function PortalMessage({
   }
   const tick = message.metadata?.tick;
   const at = message.metadata?.at;
+  const run = message.metadata?.run;
+  const curationRun = run?.kind === "consolidate" && handlers.onOpenCurationRun ? run.id : null;
   const cards = (message.metadata?.itemIds ?? [])
     .map((id) => items.get(id))
     .filter((item): item is Item => !!item);
@@ -206,6 +209,16 @@ const PortalMessage = memo(function PortalMessage({
           if (isToolUIPart(part)) return <ToolRow key={index} part={part} />;
           return null;
         })}
+        {curationRun && (
+          <button
+            type="button"
+            onClick={() => handlers.onOpenCurationRun?.(curationRun)}
+            className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+          >
+            <History className="size-3.5" />
+            Open the digest and changes
+          </button>
+        )}
         {cards.length > 0 && (
           <div className="mt-1 space-y-2.5">
             {cards.map((item) => (

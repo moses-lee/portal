@@ -939,8 +939,25 @@ function handleOrchestrator(
     }
   }
   if (path === "/api/portal/runs" && method === "GET") {
-    const index = before ? data.runs.findIndex((run) => run.id === before) + 1 : 0;
-    return ok({ runs: data.runs.slice(index, index + limit) });
+    const kind = params.get("kind");
+    const runs = data.runs.filter((run) => !kind || run.kind === kind);
+    const index = before ? runs.findIndex((run) => run.id === before) + 1 : 0;
+    return ok({ runs: runs.slice(index, index + limit) });
+  }
+  const oneRun = path.match(/^\/api\/portal\/runs\/([^/]+)$/);
+  if (oneRun && method === "GET") {
+    const run = data.runs.find((entry) => entry.id === decodeURIComponent(oneRun[1]));
+    return run ? ok({ run }) : missing("run");
+  }
+  if (path === "/api/portal/memory/consolidate" && method === "POST") {
+    const row = data.jobs.find((entry) => entry.id === "consolidate");
+    if (row?.status === "paused") return { body: { error: "Memory curation is paused." }, status: 409 };
+    const run: JobRun = {
+      id: "run-curate-now", jobId: "consolidate", kind: "consolidate", threadId: null, parentRunId: null, status: "running", trigger: "manual",
+      startedAt: Date.now(), finishedAt: null, model: null, usage: null, log: [], result: null, summary: null, error: null,
+    };
+    data.runs.unshift(run);
+    return ok({ run });
   }
   const runCancel = path.match(/^\/api\/portal\/runs\/([^/]+)\/cancel$/);
   if (runCancel && method === "POST") return { body: null, status: 204 };

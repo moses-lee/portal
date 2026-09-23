@@ -160,6 +160,8 @@ export interface MemoryService {
   inboxCount(): Promise<number>;
   /** The active records of each named entity that exists (type and key as written; keys are normalized), entities in the order given. */
   recordsFor(entities: { type: MemoryEntity["type"]; key: string }[]): Promise<{ entity: MemoryEntity; records: MemoryRecord[] }[]>;
+  /** Called with the record ids after every change to memory; answers the unsubscribe function. */
+  subscribe(listener: (recordIds: string[]) => void): () => void;
   /** remember, propose_memory, search_memory, explain_memory, forget, ... */
   tools(ctx: DomainToolContext): ToolSet;
 }

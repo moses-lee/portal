@@ -45,6 +45,12 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  consolidationFields,
+  consolidationInput,
+  parseConsolidationInput,
+  type ConsolidationField,
+} from "@/lib/orchestrator/curation";
+import {
   defaultModels,
   orchestratorProviders,
   type ModelRole,
@@ -117,19 +123,32 @@ const providerLabels: Record<OrchestratorProvider, string> = {
 
 /** Talk to Portal fields that are typed into and saved when the user leaves them. */
 type OrchestratorTextField =
-  "model" | "bookkeepingModel" | "intervalMinutes" | "idleIntervalMinutes";
+  | "model"
+  | "bookkeepingModel"
+  | "intervalMinutes"
+  | "idleIntervalMinutes"
+  | ConsolidationField;
 const orchestratorTextFields: readonly OrchestratorTextField[] = [
   "model",
   "bookkeepingModel",
   "intervalMinutes",
   "idleIntervalMinutes",
+  ...consolidationFields,
 ];
 const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
   model: "Chat model",
   bookkeepingModel: "Bookkeeping model",
   intervalMinutes: "Check every … minutes while Portal is open",
   idleIntervalMinutes: "Check every … minutes while no browser is connected",
+  nightlyAt: "Curate every night at",
+  inboxThreshold: "Also curate when the inbox holds … proposals",
+  minIntervalMinutes: "At most one inbox-started run every … minutes",
 };
+
+const isConsolidationField = (
+  field: OrchestratorTextField,
+): field is ConsolidationField =>
+  (consolidationFields as readonly string[]).includes(field);
 
 /** Script fields that are typed into and saved when the user leaves them; the toggle saves on its own. */
 type ScriptTextField = "command" | "timeoutSeconds";
@@ -372,7 +391,18 @@ export default function SettingsDialog({
     if (!settings) return;
     const trimmed = value.trim();
     let patch: SettingsPatch["orchestrator"];
-    if (field === "model" || field === "bookkeepingModel") {
+    if (isConsolidationField(field)) {
+      const parsed = parseConsolidationInput(field, trimmed);
+      if ("error" in parsed) {
+        setStatusFor(field, { kind: "error", message: parsed.error });
+        return;
+      }
+      if (parsed.value === settings.orchestrator.consolidation[field]) {
+        clearOrchestratorDraft(field);
+        return;
+      }
+      patch = { consolidation: { [field]: parsed.value } };
+    } else if (field === "model" || field === "bookkeepingModel") {
       if (!trimmed) {
         setStatusFor(field, { kind: "error", message: "Enter a model id." });
         return;
@@ -442,7 +472,14 @@ export default function SettingsDialog({
       () => update({ orchestrator: patch }),
       "Could not save the provider.",
     );
-    if (ok) clearOrchestratorDraft(modelField);
+    // Only the draft that went out with the change: a model typed while it saved stays unsaved.
+    if (ok)
+      setOrchestratorDrafts((prev) => {
+        if (!(modelField in prev) || prev[modelField]?.trim() !== typed) return prev;
+        const next = { ...prev };
+        delete next[modelField];
+        return next;
+      });
   };
 
   /** Stores (or, with "", clears) the key for `provider`. Resolves true on success so the field can reset. */
@@ -686,6 +723,43 @@ export default function SettingsDialog({
                   />
                 ),
               )}
+              <div className="space-y-3 rounded-xl border border-border/60 p-4">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium">Memory curation</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Promotes recurring observations, drops duplicates, expires stale claims, and
+                    rewrites entity summaries. Leave a trigger empty to turn it off; Run now in
+                    Memory always works. The time is the server&apos;s local time.
+                  </p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  {consolidationFields.map((field) => (
+                    <OrchestratorTextInput
+                      key={field}
+                      field={field}
+                      value={
+                        orchestratorDrafts[field] ??
+                        consolidationInput(settings.orchestrator.consolidation, field)
+                      }
+                      placeholder={field === "minIntervalMinutes" ? undefined : "Off"}
+                      dirty={orchestratorDrafts[field] !== undefined}
+                      saving={!!saving[field]}
+                      status={status[field] ?? null}
+                      onChange={(value) =>
+                        setOrchestratorDrafts((prev) => ({
+                          ...prev,
+                          [field]: value,
+                        }))
+                      }
+                      onBlur={() => {
+                        const draft = orchestratorDrafts[field];
+                        if (draft !== undefined)
+                          void saveOrchestratorField(field, draft);
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
               <div className="space-y-3">
                 <p className="text-xs font-medium">API keys</p>
                 {orchestratorProviders.map((provider) => (
@@ -1229,7 +1303,12 @@ function OrchestratorTextInput({
 }) {
   const id = useId();
   const statusId = `${id}-status`;
-  const numeric = field === "intervalMinutes" || field === "idleIntervalMinutes";
+  const numeric =
+    field === "intervalMinutes" ||
+    field === "idleIntervalMinutes" ||
+    field === "inboxThreshold" ||
+    field === "minIntervalMinutes";
+  const time = field === "nightlyAt";
   return (
     <div className="space-y-2">
       <div className="flex h-6 items-center">
@@ -1239,12 +1318,12 @@ function OrchestratorTextInput({
       </div>
       <Input
         id={id}
-        type={numeric ? "number" : "text"}
+        type={numeric ? "number" : time ? "time" : "text"}
         inputMode={numeric ? "numeric" : undefined}
         min={numeric ? 1 : undefined}
         max={numeric ? orchestratorLimits[field as "intervalMinutes"] : undefined}
         step={numeric ? 1 : undefined}
-        maxLength={numeric ? undefined : orchestratorLimits.modelLength}
+        maxLength={numeric || time ? undefined : orchestratorLimits.modelLength}
         autoComplete="off"
         spellCheck={false}
         value={value}
@@ -1255,9 +1334,11 @@ function OrchestratorTextInput({
         onBlur={onBlur}
         placeholder={
           placeholder ??
-          (numeric
-            ? String(defaultSettings.orchestrator[field as "intervalMinutes"])
-            : undefined)
+          (field === "intervalMinutes" || field === "idleIntervalMinutes"
+            ? String(defaultSettings.orchestrator[field])
+            : field === "minIntervalMinutes"
+              ? String(defaultSettings.orchestrator.consolidation[field])
+              : undefined)
         }
         className="text-xs md:text-xs"
       />

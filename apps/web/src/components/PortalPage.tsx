@@ -128,8 +128,14 @@ export default function PortalPage({
   };
 
   const handlers: Omit<ItemCardHandlers, "onAsk"> = useMemo(
-    () => ({ onOpenSession, onPatched: putItem, onReviewApproval: requestApproval }),
-    [onOpenSession, putItem, requestApproval],
+    () => ({
+      onOpenSession,
+      onPatched: putItem,
+      onReviewApproval: requestApproval,
+      onOpenMemory: () => go("memory"),
+      onOpenCurationRun: (runId: string) => go({ view: "memory", entityId: null, runId }),
+    }),
+    [onOpenSession, putItem, requestApproval, go],
   );
   /** An item opened from a link (Activity, Goals): its card in a dialog. */
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -155,6 +161,7 @@ export default function PortalPage({
       openSession: onOpenSession,
       openGoals: () => go("goals"),
       openEntity: (entityId: string) => go({ view: "memory", entityId }),
+      openCurationRun: (runId: string | null) => go({ view: "memory", entityId: null, runId }),
       openApproval: requestApproval,
     }),
     [go, onOpenSession, requestApproval],
@@ -252,7 +259,13 @@ export default function PortalPage({
       {view === "goals" && <GoalsView links={links} />}
       {view === "activity" && <ActivityView links={links} />}
       {view === "memory" && (
-        <MemoryView entityId={location.view === "memory" ? location.entityId : null} onSelectEntity={(id) => go({ view: "memory", entityId: id })} links={links} />
+        <MemoryView
+          entityId={location.view === "memory" ? location.entityId : null}
+          runId={location.view === "memory" ? location.runId : undefined}
+          onSelectEntity={(id) => go({ view: "memory", entityId: id })}
+          onSelectRun={links.openCurationRun}
+          links={links}
+        />
       )}
       {view === "system" && <SystemView links={links} />}
       <ResponsiveDialog
@@ -274,5 +287,7 @@ export type PortalLinks = {
   openSession: (sessionId: string) => void;
   openGoals: () => void;
   openEntity: (entityId: string) => void;
+  /** Memory curation: null lists the runs, an id opens one run's digest and diff. */
+  openCurationRun: (runId: string | null) => void;
   openApproval: (approvalId: string) => void;
 };

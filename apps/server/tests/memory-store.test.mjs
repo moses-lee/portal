@@ -145,6 +145,23 @@ function behaviour(label, open) {
     assert.deepEqual(page.map((revision) => revision.id), [all[2].id]);
     assert.deepEqual((await store.listRevisions({ action: "imported" })).map((revision) => revision.reason), ["marker"]);
   });
+
+  test(`${label}: an entity summary is replaced with a revision that names no record`, async (t) => {
+    const store = await open(t);
+    const entity = await store.ensureEntity({ type: "repo", key: "acme/app" });
+    await store.commit([{ op: "insert", record: record(entity.id), revision: meta("created") }]);
+    const updated = await store.setEntitySummary(entity.id, "Reviews start with the tests.\u0000", { actor: "consolidator", action: "summarized", reason: "Curation", runId: "r1" });
+    assert.equal(updated.summary.replace("\u0000", ""), "Reviews start with the tests.");
+    assert.equal(updated.activeRecords, 1);
+    assert.ok(updated.updatedAt >= entity.updatedAt);
+    assert.equal((await store.getEntity(entity.id)).summary, updated.summary);
+    const [revision] = await store.listRevisions({ action: "summarized" });
+    assert.deepEqual(
+      { recordId: revision.recordId, entityId: revision.entityId, actor: revision.actor, reason: revision.reason, runId: revision.runId, before: revision.before, after: revision.after },
+      { recordId: null, entityId: entity.id, actor: "consolidator", reason: "Curation", runId: "r1", before: null, after: null },
+    );
+    await assert.rejects(store.setEntitySummary("e-missing", "x", { actor: "consolidator", action: "summarized" }), (err) => err instanceof OrchestratorStoreError && err.status === 404);
+  });
 }
 
 behaviour("memory store", async () => createInMemoryMemoryStore({ now }));

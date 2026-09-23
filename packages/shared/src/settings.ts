@@ -1,5 +1,5 @@
 import { defaultModels, defaultOrchestratorSettings, orchestratorProviders } from "@portal/contracts/orchestrator";
-import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "@portal/contracts/orchestrator";
+import type { ConsolidationSettings, OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "@portal/contracts/orchestrator";
 import { defaultScripts, mergeScripts, scriptsOverrides } from "./scripts.ts";
 import type { ScriptsPatch, ScriptsSettings } from "./scripts.ts";
 
@@ -43,7 +43,17 @@ export const orchestratorLimits = {
   /** Tick interval bounds in minutes: up to a day while a browser is open, up to a week while none is. */
   intervalMinutes: 1440,
   idleIntervalMinutes: 10080,
+  /** Memory curation: an inbox of up to a thousand proposals, at most a day between inbox-started runs. */
+  inboxThreshold: 1000,
+  minIntervalMinutes: 1440,
 } as const;
+
+/** "HH:MM" on a 24-hour clock, as the nightly curation time is written. */
+export const CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function isClockTime(value: unknown): value is string {
+  return typeof value === "string" && CLOCK_TIME.test(value);
+}
 
 export const defaultSettings: Settings = {
   version: 1,
@@ -60,6 +70,18 @@ export const defaultSettings: Settings = {
 
 export function isOrchestratorProvider(value: unknown): value is OrchestratorProvider {
   return typeof value === "string" && (orchestratorProviders as readonly string[]).includes(value);
+}
+
+/** `base` consolidation settings with the well-formed fields of `given` laid on top (null turns a trigger off). */
+function mergeConsolidation(base: ConsolidationSettings, given: Partial<ConsolidationSettings> | undefined): ConsolidationSettings {
+  const next = { ...base };
+  if (!given || typeof given !== "object") return next;
+  if (given.nightlyAt === null || isClockTime(given.nightlyAt)) next.nightlyAt = given.nightlyAt;
+  if (given.inboxThreshold === null || (Number.isInteger(given.inboxThreshold) && (given.inboxThreshold as number) > 0)) {
+    next.inboxThreshold = given.inboxThreshold as number | null;
+  }
+  if (Number.isInteger(given.minIntervalMinutes) && (given.minIntervalMinutes as number) > 0) next.minIntervalMinutes = given.minIntervalMinutes as number;
+  return next;
 }
 
 /** `base` prompts with `given` laid on top; empty or whitespace-only strings (and non-strings) leave the base value. */
@@ -80,7 +102,7 @@ function mergePrompts(base: GitActionPrompts, given: Partial<Record<GitActionKin
  * else leaves it. Key strings become the wire form's booleans (non-blank means "a key is stored").
  */
 function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettingsPatch | undefined): OrchestratorSettings {
-  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, apiKeys: { ...base.apiKeys } };
+  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, consolidation: { ...base.consolidation }, apiKeys: { ...base.apiKeys } };
   if (!given) return next;
   // A provider change without a model takes that provider's default: a model id never outlives its provider.
   if (isOrchestratorProvider(given.provider) && given.provider !== base.provider) {
@@ -99,6 +121,7 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
   if (Number.isInteger(given.idleIntervalMinutes) && (given.idleIntervalMinutes as number) > 0) {
     next.idleIntervalMinutes = given.idleIntervalMinutes as number;
   }
+  next.consolidation = mergeConsolidation(base.consolidation, given.consolidation);
   if (given.apiKeys) {
     for (const provider of orchestratorProviders) {
       const value = given.apiKeys[provider];
@@ -147,6 +170,11 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   }
   if (given.intervalMinutes !== base.intervalMinutes) orchestrator.intervalMinutes = given.intervalMinutes;
   if (given.idleIntervalMinutes !== base.idleIntervalMinutes) orchestrator.idleIntervalMinutes = given.idleIntervalMinutes;
+  const consolidation: Partial<ConsolidationSettings> = {};
+  for (const field of ["nightlyAt", "inboxThreshold", "minIntervalMinutes"] as const) {
+    if (given.consolidation[field] !== base.consolidation[field]) (consolidation as Record<string, unknown>)[field] = given.consolidation[field];
+  }
+  if (Object.keys(consolidation).length > 0) orchestrator.consolidation = consolidation;
   if (Object.keys(orchestrator).length > 0) result.orchestrator = orchestrator;
 
   const scripts = scriptsOverrides(settings.scripts);
