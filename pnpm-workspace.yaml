@@ -6,3 +6,8 @@ ignoredBuiltDependencies:
   - unrs-resolver
 onlyBuiltDependencies:
   - node-pty
+# Libraries import types from 'react' but only apps/web depends on @types/react,
+# so hoist it where pnpm's store paths can resolve it (e.g. react-resizable-panels).
+publicHoistPattern:
+  - "@types/react"
+  - "@types/react-dom"
