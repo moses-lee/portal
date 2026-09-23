@@ -46,6 +46,9 @@ export type AttentionSearch = {
   total?: { authored: number; requested: number };
 };
 
+/** A terminal tab as the orchestrator sees it: where its shell is, and the session that owns it (null for standalone ones). */
+export type TerminalSummary = { id: string; cwd: string; title: string | null; sessionId: string | null };
+
 export type OrchestratorDeps = {
   sessions: {
     list(): Promise<SessionMeta[]>;
@@ -106,6 +109,10 @@ export type OrchestratorDeps = {
     readFile(file: string, maxBytes: number): Promise<{ text: string; bytes: number; truncated: boolean }>;
     exec(command: string, opts: { cwd: string; timeoutMs: number; maxBytes: number }): Promise<ExecResult>;
   };
+  terminals: {
+    /** Every open terminal tab with the directory its shell is in now. */
+    list(): Promise<TerminalSummary[]>;
+  };
   scripts: {
     /** Run the user's script for `kind` as configured in settings; see script-runner.ts. Throws when it fails and the script says to abort. */
     run(kind: ScriptKind, opts: ScriptRunOptions): Promise<ScriptOutcome>;
@@ -147,7 +154,7 @@ async function readPullState(url: string): Promise<PullState | null> {
 // ---------------------------------------------------------------------------------------------
 
 /** The server services the live deps act through. Read at call time, so the order services are built in does not matter. */
-export type OrchestratorServices = Pick<AppContext, "sessions" | "projects" | "settings">;
+export type OrchestratorServices = Pick<AppContext, "sessions" | "projects" | "settings" | "terminals">;
 
 export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
   /** The ACP runtime once it has loaded its sessions, as the old module-level `ready` promise gave it. */
@@ -221,6 +228,12 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       resolveDirectory: (input) => resolveDirectory(input),
       readFile: readFileCapped,
       exec: execCommand,
+    },
+    terminals: {
+      list: async () => ctx.terminals.list().map((entry) => {
+        const state = entry.runtime.getState();
+        return { id: entry.id, cwd: state.cwd, title: `${state.shell}${state.status === "running" ? "" : ` (${state.status})`}`, sessionId: entry.sessionId };
+      }),
     },
     scripts: {
       // A tool call has five minutes (agent.ts CALL_TIMEOUT_MS); a script must leave time for git after it.

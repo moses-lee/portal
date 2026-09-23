@@ -37,6 +37,11 @@ export function createTerminalRegistry({
     return entries.get(id);
   }
 
+  /** Every terminal, in creation order; read-only. */
+  function list(): TerminalEntry[] {
+    return [...entries.values()];
+  }
+
   function listBySession(sessionId: string): TerminalEntry[] {
     return [...entries.values()].filter((entry) => entry.sessionId === sessionId);
   }
@@ -73,5 +78,5 @@ export function createTerminalRegistry({
     closeListeners.clear();
   }
 
-  return { create, get, listBySession, listStandalone, close, closeSession, onClose, disposeAll };
+  return { create, get, list, listBySession, listStandalone, close, closeSession, onClose, disposeAll };
 }

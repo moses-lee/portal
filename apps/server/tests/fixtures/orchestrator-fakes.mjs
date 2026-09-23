@@ -39,11 +39,11 @@ const emptyState = () => ({ modes: null, configOptions: [], commands: [] });
 
 /**
  * Deps over mutable `state`; every method that would touch the machine is a stub that records or
- * throws. `pulls` seeds the attention search; `github` and `fs` override those groups; anything
- * else overrides `git`. Set `state.promptFailure` to make `sessions.prompt` throw that message.
+ * throws. `pulls` seeds the attention search; `terminals` seeds the terminal list; `github` and `fs`
+ * override those groups; anything else overrides `git`. Set `state.promptFailure` to make `sessions.prompt` throw that message.
  */
-export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = [], github = {}, fs = {}, scripts = {}, ...git } = {}) {
-  const state = { sessions, projects, events, pulls, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null };
+export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = [], terminals = [], github = {}, fs = {}, scripts = {}, ...git } = {}) {
+  const state = { sessions, projects, events, pulls, terminals, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null };
   const reject = (what) => async () => { throw new Error(`${what} is not available in this test.`); };
   const deps = {
     sessions: {
@@ -129,6 +129,7 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
       exec: reject("exec"),
       ...fs,
     },
+    terminals: { list: async () => state.terminals },
     scripts: {
       run: async (kind, opts) => {
         state.scripts.push({ kind, ...opts });
