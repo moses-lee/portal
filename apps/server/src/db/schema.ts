@@ -1,6 +1,7 @@
 /**
- * Database schema. Sessions and their append-only event logs are the first tables; every other
- * store (projects, settings, orchestrator) lands here as it moves into the server.
+ * Database schema for every domain: sessions and their append-only event logs, projects (and the
+ * removed ones), settings and sealed credentials, and the orchestrator's records. The migrations in
+ * `drizzle/` are generated from this file (`pnpm --filter @portal/server db:generate`).
  */
 import { bigint, bigserial, index, integer, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import type { SessionState, StoredEvent, WorktreeMeta } from "@portal/contracts/types";

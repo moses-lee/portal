@@ -174,7 +174,7 @@ function behaviour(label, { open, reopen }) {
       [{ list: "later" }, /"list" must be one of needs_you, ideas/],
       [{ title: 5 }, /"title" must be a string/],
       [{ body: null }, /"body" must be a string/],
-      [{ snoozedUntil: "tomorrow" }, /"snoozedUntil" must be a number/],
+      [{ snoozedUntil: "tomorrow" }, /"snoozedUntil" must be an integer/],
       [{ links: [] }, /"links" must be/],
       [{ links: { projectId: 3 } }, /"links" must be/],
       [{ links: { pull: { repo: "o/r" } } }, /"links" must be/],
@@ -211,7 +211,7 @@ function behaviour(label, { open, reopen }) {
       [{ status: "paused" }, /"status" must be one of active, done, cancelled/],
       [{ intent: 1 }, /"intent" must be a string/],
       [{ notes: [] }, /"notes" must be a string/],
-      [{ lastCheckedAt: "now" }, /"lastCheckedAt" must be a number/],
+      [{ lastCheckedAt: "now" }, /"lastCheckedAt" must be an integer/],
       [{ links: { sessionIds: "s1", projectIds: [], pulls: [] } }, /"links" must be/],
       [{ links: { sessionIds: [], projectIds: [1], pulls: [] } }, /"links" must be/],
       [{ links: { sessionIds: [], projectIds: [], pulls: [{ repo: "o/r" }] } }, /"links" must be/],
@@ -386,12 +386,38 @@ test("postgres store: writeMessages replaces the thread in one transaction", asy
   const { db } = await temporaryDatabase(t);
   const store = createPgOrchestratorStore({ db });
   await store.appendMessages([message("m1"), message("m2")]);
-  // Postgres rejects NUL in jsonb text, so the insert fails after the delete ran; the delete must roll back.
-  await assert.rejects(store.writeMessages([message("bad", "user", "nul \u0000 here")]));
+  // A message without an id breaks the NOT NULL column, so the insert fails after the delete ran; the delete must roll back.
+  await assert.rejects(store.writeMessages([message("ok"), { ...message("bad"), id: null }]));
   assert.deepEqual((await store.readMessages()).map((m) => m.id), ["m1", "m2"]);
   // The queue survives the failure.
   await store.appendMessages([message("m3")]);
   assert.deepEqual((await store.readMessages()).map((m) => m.id), ["m1", "m2", "m3"]);
+});
+
+test("postgres store: NUL characters are stripped from every record instead of failing the write", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const store = createPgOrchestratorStore({ db });
+  const nul = (text) => `${text}\u0000!`;
+  await store.appendMessages([message("m1", "assistant", nul("tool said"))]);
+  await store.writeMessages([message("m1", "assistant", nul("tool said")), message("m2", "user", nul("again"))]);
+  const item = await store.createItem(itemInput({ title: nul("Checks"), body: nul("CI") }));
+  assert.equal(item.title, "Checks!", "the caller gets the stored record back");
+  await store.updateItem(item.id, { body: nul("still red") });
+  const watch = await store.createWatch({ intent: nul("watch"), notes: "n" });
+  await store.updateWatch(watch.id, { notes: nul("checked") });
+  await store.appendTick(tick("t1", { log: [nul("ran cat")] }));
+  await store.writeSnapshot({ ...snapshot(), missingProjects: [nul("p9")] });
+  await store.writeMemory(nul("# Notes"));
+
+  const again = createPgOrchestratorStore({ db });
+  assert.deepEqual((await again.readMessages()).map((m) => m.parts[0].text), ["tool said!", "again!"]);
+  const [stored] = await again.listItems();
+  assert.deepEqual([stored.title, stored.body], ["Checks!", "still red!"]);
+  const [storedWatch] = await again.listWatches();
+  assert.deepEqual([storedWatch.intent, storedWatch.notes], ["watch!", "checked!"]);
+  assert.deepEqual((await again.listTicks())[0].log, ["ran cat!"]);
+  assert.deepEqual((await again.readSnapshot()).missingProjects, ["p9!"]);
+  assert.equal(await again.readMemory(), "# Notes!");
 });
 
 test("postgres store: items created in the same millisecond still list newest-first", async (t) => {
@@ -413,6 +439,11 @@ test("parseItemPatch and parseWatchPatch validate request bodies without a store
   assert.deepEqual(parseWatchPatch({ status: "done", lastCheckedAt: 5, other: 1 }), { status: "done", lastCheckedAt: 5 });
   assert.throws(() => parseWatchPatch([]), (err) => err instanceof OrchestratorStoreError && err.status === 400);
   assert.throws(() => parseWatchPatch({ links: null }), (err) => err instanceof OrchestratorStoreError && /"links"/.test(err.message));
+  // The time columns are bigint: a fractional or unsafe number is a 400 here, not a database error later.
+  for (const bad of [1.5, Number.MAX_SAFE_INTEGER + 2, Infinity, NaN]) {
+    assert.throws(() => parseItemPatch({ snoozedUntil: bad }), (err) => err instanceof OrchestratorStoreError && err.status === 400 && /"snoozedUntil"/.test(err.message));
+    assert.throws(() => parseWatchPatch({ lastCheckedAt: bad }), (err) => err instanceof OrchestratorStoreError && err.status === 400 && /"lastCheckedAt"/.test(err.message));
+  }
 });
 
 test("newId is 8 URL-safe characters and re-rolls collisions", () => {

@@ -2,7 +2,6 @@
  * Runs the user's scripts (see scripts.ts) where an action happens. `runScript` takes the script's
  * settings explicitly; `runConfiguredScript` reads them from a settings source (the settings service).
  */
-import { context } from "../context.ts";
 import { childEnv } from "./child-env.ts";
 import { execCommand } from "./exec-command.ts";
 import type { ExecResult } from "./exec-command.ts";
@@ -111,10 +110,6 @@ export async function runScript(kind: ScriptKind, settings: ScriptSettings, opts
 export type ScriptSettingsSource = { read(): Promise<{ scripts: ScriptsSettings }> };
 
 /** `runScript` with the settings `settings` currently holds for `kind`. */
-export function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions, settings: ScriptSettingsSource): Promise<ScriptOutcome>;
-/** @deprecated Pass the settings source; this reads the live server context's settings service. */
-export function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions): Promise<ScriptOutcome>;
-export async function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions, settings?: ScriptSettingsSource): Promise<ScriptOutcome> {
-  const source = settings ?? context().settings;
-  return runScript(kind, (await source.read()).scripts[kind], opts);
+export async function runConfiguredScript(kind: ScriptKind, opts: ScriptRunOptions, settings: ScriptSettingsSource): Promise<ScriptOutcome> {
+  return runScript(kind, (await settings.read()).scripts[kind], opts);
 }

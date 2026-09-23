@@ -4,9 +4,12 @@
  * whole record in `body` (so reads round-trip exactly what was written) next to the columns the
  * queries filter and sort on. Changes are serialized per kind of record, as the file store did, so
  * a read-modify-write (patching an item, trimming ticks) never interleaves with another of its kind.
+ * Records are stripped of U+0000 before they are written (Postgres cannot store it, and a command's
+ * output quoted in a message may carry it); the stripped record is what callers get back.
  */
 import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
+import { stripNul } from "../db/sanitize.ts";
 import { orchestratorDocuments, orchestratorItems, orchestratorMessages, orchestratorTicks, orchestratorWatches } from "../db/schema.ts";
 import {
   MAX_TICK_REPORTS, buildItem, buildWatch, capMemory, newId, parseItemPatch, parseWatchPatch, patchItem, patchWatch, unknownItem, unknownWatch,
@@ -66,7 +69,7 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       .onConflictDoUpdate({ target: orchestratorDocuments.key, set: { body, updatedAt } });
   }
 
-  const messageRows = (messages: OrchestratorMessage[]) => messages.map((message) => ({ id: message.id, body: message as unknown as Body }));
+  const messageRows = (messages: OrchestratorMessage[]) => stripNul(messages).map((message) => ({ id: message.id, body: message as unknown as Body }));
 
   return {
     ready: Promise.resolve(),
@@ -103,7 +106,7 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       return serialized("items", async () => {
         const at = Date.now();
         // Validated before the first insert, so a bad record fails without touching the table.
-        let item = buildItem(input, newId(), at);
+        let item = stripNul(buildItem(input, newId(), at));
         // An id collision (48 random bits) re-rolls instead of overwriting the other item.
         while ((await db.insert(orchestratorItems).values({ id: item.id, ...itemColumns(item) }).onConflictDoNothing().returning({ id: orchestratorItems.id })).length === 0) {
           item = { ...item, id: newId() };
@@ -117,7 +120,7 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       return serialized("items", async () => {
         const current = await readItem(id);
         if (!current) throw unknownItem(id);
-        const item = patchItem(current, allowed);
+        const item = stripNul(patchItem(current, allowed));
         await db.update(orchestratorItems).set(itemColumns(item)).where(eq(orchestratorItems.id, id));
         return item;
       });
@@ -131,7 +134,7 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
     createWatch(input) {
       return serialized("watches", async () => {
         const at = Date.now();
-        let watch = buildWatch(input, newId(), at);
+        let watch = stripNul(buildWatch(input, newId(), at));
         while ((await db.insert(orchestratorWatches).values({ id: watch.id, ...watchColumns(watch) }).onConflictDoNothing().returning({ id: orchestratorWatches.id })).length === 0) {
           watch = { ...watch, id: newId() };
         }
@@ -143,7 +146,7 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       return serialized("watches", async () => {
         const current = await readWatch(id);
         if (!current) throw unknownWatch(id);
-        const watch = patchWatch(current, allowed);
+        const watch = stripNul(patchWatch(current, allowed));
         await db.update(orchestratorWatches).set(watchColumns(watch)).where(eq(orchestratorWatches.id, id));
         return watch;
       });
@@ -153,14 +156,15 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       return (await readDocument(SNAPSHOT)) as TickSnapshot | null;
     },
     writeSnapshot(snapshot) {
-      return serialized("snapshot", () => writeDocument(SNAPSHOT, snapshot as unknown as Body));
+      return serialized("snapshot", () => writeDocument(SNAPSHOT, stripNul(snapshot) as unknown as Body));
     },
 
     async listTicks() {
       const rows = await db.select({ body: orchestratorTicks.body }).from(orchestratorTicks).orderBy(asc(orchestratorTicks.ordinal));
       return rows.map((row) => row.body as unknown as TickReport);
     },
-    appendTick(report) {
+    appendTick(raw) {
+      const report = stripNul(raw);
       return serialized("ticks", () => db.transaction(async (tx) => {
         await tx.insert(orchestratorTicks).values({ id: report.id, startedAt: report.startedAt, finishedAt: report.finishedAt, body: report as unknown as Body });
         // Keep the newest MAX_TICK_REPORTS: drop everything at or below the first ordinal past them.
@@ -175,7 +179,7 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       return typeof body?.text === "string" ? body.text : "";
     },
     writeMemory(text) {
-      return serialized("memory", () => writeDocument(MEMORY, { text: capMemory(text) }));
+      return serialized("memory", () => writeDocument(MEMORY, { text: capMemory(stripNul(text)) }));
     },
   };
 }

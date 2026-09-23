@@ -12,6 +12,7 @@ import { isOrchestratorProvider } from "@portal/shared/settings";
 import { parseStoredOverrides } from "../lib/settings-store.ts";
 import type { SettingsStore } from "../lib/settings-store.ts";
 import type { Db } from "../db/client.ts";
+import { stripNul } from "../db/sanitize.ts";
 import { credentials, settings } from "../db/schema.ts";
 import { type ServerKey, decryptSecret, encryptSecret } from "./crypto.ts";
 import { type ApiKeyChanges, type SettingsBackend, createSettingsStore } from "./store.ts";
@@ -91,8 +92,10 @@ export function createPgSettingsStore({ db, key, warn = console.warn }: PgSettin
       }
     },
 
-    async write(overrides: SettingsPatch, keys: ApiKeyChanges): Promise<void> {
+    async write(raw: SettingsPatch, keys: ApiKeyChanges): Promise<void> {
       const current = await serverKey();
+      // A pasted script command may carry a NUL, which jsonb rejects.
+      const overrides = stripNul(raw);
       const now = Date.now();
       await db.transaction(async (tx) => {
         await tx

@@ -488,6 +488,22 @@ test("events and metadata are written through to the store and paged from it", a
   assert.deepEqual(runtime.listSessions().map(({ id, title, link }) => ({ id, title, link })), [{ id: session.id, title: "Summarize this repo", link: { status: "live" } }]);
 });
 
+test("an event carrying a NUL character is saved without it rather than dropped", async (t) => {
+  const { runtime, cwd, store, loggedEvents } = await persistentSetup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "cat a.out \u0000 done");
+  await answerPermission(runtime, session, "once");
+  await until(() => !session.busy, "turn");
+  // Writes are chained behind the live events; wait for the last one to land.
+  for (let i = 0; i < 200 && (await loggedEvents(session.id)) < 6; i++) await delay(10);
+  // The live copy keeps the byte; only the database copy loses it.
+  const { events } = await store.readTail(session.id, { limit: 10 });
+  assert.deepEqual(events.map(({ type }) => type), ["user", "turn_start", "update", "permission_request", "permission_response", "turn_end"]);
+  assert.equal(events[0].text, "cat a.out  done");
+  assert.equal(events[2].update.content.text, "claude:cat a.out  done");
+  assert.equal(await loggedEvents(session.id), 6);
+});
+
 test("persisted sessions come back offline after a restart, resume on demand, and keep appending", async (t) => {
   const first = await persistentSetup(t);
   const { runtime, cwd } = first;

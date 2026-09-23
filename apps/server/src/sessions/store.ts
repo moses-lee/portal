@@ -65,7 +65,7 @@ function isSessionState(value: unknown): value is SessionState {
     && Array.isArray(s.configOptions) && Array.isArray(s.commands);
 }
 
-/** Session ids name files, so only plain identifiers are accepted from storage. */
+/** Session ids go into URLs, and named files in the old store, so only plain identifiers are accepted from storage. */
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /** Shape check for records read back from storage. */

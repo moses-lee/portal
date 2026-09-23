@@ -64,6 +64,11 @@ function isNullableNumber(value: unknown): value is number | null {
   return value === null || typeof value === "number";
 }
 
+/** For patches: the column is a bigint, so a fractional or out-of-range time is a 400, not a database error. */
+function isNullableEpoch(value: unknown): value is number | null {
+  return value === null || Number.isSafeInteger(value);
+}
+
 /** Minimal check: the fields the UI and the model need to address a message. Parts are trusted as written. */
 export function isOrchestratorMessage(value: unknown): value is OrchestratorMessage {
   return isRecord(value) && typeof value.id === "string" && typeof value.role === "string" && Array.isArray(value.parts);
@@ -158,7 +163,7 @@ export function parseItemPatch(input: unknown): ItemPatch {
     links: { check: isItemLinks, expected: "an object of projectId, sessionId, watchId (strings) and pull ({ repo, number, url })" },
     actions: { check: (v) => Array.isArray(v) && v.every(isItemAction), expected: `an array of actions of type ${Object.keys(actionFields).join(", ")} with their string fields` },
     status: { check: (v) => isString(v) && itemStatuses.has(v), expected: `one of ${oneOf(itemStatuses)}` },
-    snoozedUntil: { check: isNullableNumber, expected: "a number (epoch ms) or null" },
+    snoozedUntil: { check: isNullableEpoch, expected: "an integer (epoch ms) or null" },
   });
 }
 
@@ -169,7 +174,7 @@ export function parseWatchPatch(input: unknown): WatchPatch {
     notes: { check: isString, expected: "a string" },
     status: { check: (v) => isString(v) && watchStatuses.has(v), expected: `one of ${oneOf(watchStatuses)}` },
     links: { check: isWatchLinks, expected: "{ sessionIds: string[], projectIds: string[], pulls: { repo, number, url }[] }" },
-    lastCheckedAt: { check: isNullableNumber, expected: "a number (epoch ms) or null" },
+    lastCheckedAt: { check: isNullableEpoch, expected: "an integer (epoch ms) or null" },
   });
 }
 

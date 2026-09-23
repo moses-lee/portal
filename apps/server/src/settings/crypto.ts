@@ -4,6 +4,11 @@
  * reveal them. The payload format is base64 of `nonce (12) || ciphertext || tag (16)`; the
  * credential's name is bound in as additional authenticated data, so a row copied under another
  * name fails to open rather than handing one provider's key to another.
+ *
+ * Threat model: this protects copies of the database (dumps, backups, a volume handed to someone),
+ * not the running host. Anything that runs as the Portal user can read `server.key` and query
+ * Postgres, and that includes the orchestrator model's `run_command` tool; its `read_file` guard
+ * against the key and the settings files is a courtesy, not a boundary.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";

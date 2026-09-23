@@ -108,13 +108,15 @@ export async function databaseIsEmpty(db: Db): Promise<boolean> {
   return (s?.n ?? 0) === 0 && (p?.n ?? 0) === 0;
 }
 
+const plural = (n: number, word: string, words = `${word}s`) => `${n} ${n === 1 ? word : words}`;
+
 /** One line for logs and the CLI. */
 export function describeCounts(counts: ImportCounts): string {
   return [
-    `${counts.projects} projects (${counts.removedProjects} removed)`,
-    `${counts.sessions} sessions (${counts.events} events)`,
-    `${counts.settings} settings sections (${counts.apiKeys} API keys)`,
-    `${counts.messages} messages, ${counts.items} items, ${counts.watches} watches, ${counts.ticks} ticks`,
+    `${plural(counts.projects, "project")} (${counts.removedProjects} removed)`,
+    `${plural(counts.sessions, "session")} (${plural(counts.events, "event")})`,
+    `${plural(counts.settings, "settings section")} (${plural(counts.apiKeys, "API key")})`,
+    `${plural(counts.messages, "message")}, ${plural(counts.items, "item")}, ${plural(counts.watches, "watch", "watches")}, ${plural(counts.ticks, "tick")}`,
     `snapshot ${counts.snapshot ? "yes" : "no"}, memory ${counts.memory ? "yes" : "no"}`,
   ].join("; ");
 }

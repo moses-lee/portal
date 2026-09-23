@@ -5,8 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { buildApp } from "../src/app.ts";
-import { presence } from "../src/lib/presence.ts";
+import { appContext, buildApp } from "../src/app.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/fake-acp-agent.mjs", import.meta.url));
@@ -51,7 +50,8 @@ async function setup(t, { recentEvents } = {}) {
     ('proj-1', 'Repo', ${scratch}, 1), ('proj-gone', 'Gone', ${path.join(scratch, "missing")}, 2)`;
 
   const makeApp = async () => {
-    const app = await buildApp({ database, orchestrator: false, sessions: { agents, initializeTimeoutMs: 2_000, recentEvents } });
+    // A "restart" builds a second app over the same database while the first is still open.
+    const app = await buildApp({ database, orchestrator: false, singleInstance: false, sessions: { agents, initializeTimeoutMs: 2_000, recentEvents } });
     apps.push(app);
     return app;
   };
@@ -266,6 +266,7 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
   const { app } = await setup(t);
   const existing = await createSession(app);
   const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const { presence } = appContext(app);
   const before = presence.count();
   const controller = new AbortController();
   t.after(() => controller.abort());

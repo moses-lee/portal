@@ -54,10 +54,15 @@ function parseUserMessage(value: unknown): OrchestratorMessage | null {
   };
 }
 
-/** Hands a web `Response` (the AI SDK's UI message stream) to Fastify: same status and headers, body piped as it arrives. */
+/**
+ * Hands a web `Response` (the AI SDK's UI message stream) to Fastify: same status and headers, body
+ * piped as it arrives. `no-transform` on top of the SDK's `no-cache`: without it the Next proxy
+ * gzips the stream and never flushes, so the reply would reach the browser in one piece at the end.
+ */
 function sendWebResponse(reply: FastifyReply, response: Response) {
   reply.code(response.status);
   response.headers.forEach((value, name) => { void reply.header(name, value); });
+  void reply.header("cache-control", "no-cache, no-transform");
   return reply.send(response.body ? Readable.fromWeb(response.body as unknown as NodeReadableStream) : null);
 }
 

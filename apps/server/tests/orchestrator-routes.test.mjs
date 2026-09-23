@@ -11,8 +11,7 @@ import { temporaryDatabase } from "./helpers/db.mjs";
 const home = mkdtempSync(path.join(os.tmpdir(), "portal-orchestrator-routes-"));
 process.env.PORTAL_HOME = home;
 test.after(() => rmSync(home, { recursive: true, force: true }));
-const { buildApp } = await import("../src/app.ts");
-const { presence } = await import("../src/lib/presence.ts");
+const { appContext, buildApp } = await import("../src/app.ts");
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
@@ -179,6 +178,7 @@ test("POST /api/portal/messages streams the UI message stream and persists both 
   assert.match(response.headers["content-type"], /text\/event-stream/);
   assert.equal(response.headers["x-vercel-ai-ui-message-stream"], "v1");
   assert.equal(response.headers["content-encoding"], undefined, "the stream is not gzipped");
+  assert.equal(response.headers["cache-control"], "no-cache, no-transform", "nor gzipped (and buffered) by the Next proxy");
   assert.match(response.body, /Hello from Portal/);
   assert.equal(model.doStreamCalls.length, 1);
   await flush();
@@ -197,6 +197,7 @@ test("GET /api/portal/stream opens with status, items, watches, forwards events,
   const { app } = await setup(t);
   await app.listen({ port: 0, host: "127.0.0.1" });
   const { port } = app.server.address();
+  const { presence } = appContext(app);
   const before = presence.count();
   const controller = new AbortController();
   t.after(() => controller.abort());
@@ -249,6 +250,8 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
     listSessions: () => [{ id: "s1" }],
     sendPrompt: async (id, text) => { calls.push(["prompt", id, text]); },
     deleteSession: async (id) => id === "s1",
+    listAgents: () => [{ id: "fake", name: "Fake agent" }],
+    defaultAgentId: "fake",
   };
   ctx.projects = { ready: Promise.resolve(), list: () => [{ id: "p1" }], get: (id) => (id === "p1" ? { id } : undefined) };
   ctx.settings = { read: async () => ({ scripts: { preWorktreeDelete: { command: "", timeoutSeconds: 60, abortOnFailure: false } } }), orchestrator: async () => ({ provider: "openai" }), apiKey: async (p) => `key-${p}`, subscribe: () => () => {} };
@@ -258,8 +261,8 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
   assert.equal(await deps.sessions.remove("s1"), true);
   assert.deepEqual(await deps.projects.list(), [{ id: "p1" }]);
   assert.equal(await deps.projects.get("zz"), undefined);
-  const defaultId = await deps.agents.defaultId();
-  assert.ok((await deps.agents.list()).some((agent) => agent.id === defaultId));
+  assert.deepEqual(await deps.agents.list(), [{ id: "fake", name: "Fake agent" }], "the sessions service's agents, not the built-in ones");
+  assert.equal(await deps.agents.defaultId(), "fake");
   assert.equal(await settings.apiKey("anthropic"), "key-anthropic");
   // Scripts read their settings from the context's settings service; an unset script does not run.
   assert.deepEqual(await deps.scripts.run("preWorktreeDelete", { cwd: home }), { ran: false });

@@ -5,6 +5,7 @@ import { MEMORY_PROMPT_BYTES } from "../src/lib/orchestrator/digest.ts";
 import {
   BUSY_RETRY_MS, FIRST_TICK_DELAY_MS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, trimThread,
 } from "../src/lib/orchestrator/runtime.ts";
+import { RESCHEDULE_RETRY_MS } from "../src/lib/orchestrator/scheduler.ts";
 import { createMemoryOrchestratorStore } from "../src/lib/orchestrator/store.ts";
 import { TICK_TOOLS } from "../src/lib/orchestrator/tools/index.ts";
 import { T0, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
@@ -208,6 +209,31 @@ test("the scheduler uses the idle interval with no browser and the active one wi
 
   await timers.advance(60 * 60_000);
   assert.equal((await store.listTicks()).length, 2);
+});
+
+test("a settings read that fails while planning the next tick is logged and retried, not left unhandled", async (t) => {
+  const logged = t.mock.method(console, "error", () => {});
+  const { runtime, timers, presence, settings, store } = setup(t);
+  await runtime.ready;
+  await flush();
+  assert.equal((await runtime.status()).nextTickAt, T0 + FIRST_TICK_DELAY_MS);
+
+  // Postgres goes away for one read: the reschedule a new browser triggers fails.
+  const orchestrator = settings.orchestrator;
+  settings.orchestrator = async () => {
+    settings.orchestrator = orchestrator;
+    throw new Error("connect ECONNREFUSED 127.0.0.1:5433");
+  };
+  presence.set(1);
+  await flush();
+  assert.ok(logged.mock.calls.some((call) => /next Portal tick/.test(call.arguments[0]) && /ECONNREFUSED/.test(call.arguments[1]?.message)));
+  assert.equal((await runtime.status()).nextTickAt, null, "no plan while settings cannot be read");
+  assert.deepEqual(timers.pending.map((handle) => handle.at), [T0 + RESCHEDULE_RETRY_MS], "only the retry is pending");
+
+  await timers.advance(RESCHEDULE_RETRY_MS);
+  assert.equal((await runtime.status()).nextTickAt, T0 + FIRST_TICK_DELAY_MS, "the retry restored the plan");
+  await timers.advance(FIRST_TICK_DELAY_MS - RESCHEDULE_RETRY_MS);
+  assert.equal((await store.listTicks()).length, 1, "and the scheduled tick ran");
 });
 
 test("a manual tick reschedules: the status pushed at its end already carries the next tick time", async (t) => {

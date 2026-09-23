@@ -6,7 +6,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
-import { presence as livePresence } from "../presence.ts";
 import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import { MEMORY_PROMPT_BYTES, buildDigest, collectSnapshot, truncateBytes } from "./digest.ts";
@@ -39,7 +38,8 @@ export type OrchestratorRuntimeOptions = {
   settingsStore: OrchestratorSettingsStore;
   deps: OrchestratorDeps;
   timers?: SchedulerTimers;
-  presence?: PresenceSource;
+  /** Open browser streams; the app's counter (`ctx.presence`), or a fake in tests. */
+  presence: PresenceSource;
   /** Builds the model for a turn from the settings and the stored key; tests pass a mock. */
   model?: (settings: OrchestratorSettings, apiKey: string) => LanguageModel;
 };
@@ -110,7 +110,7 @@ export function historyWindow(messages: OrchestratorMessage[]): OrchestratorMess
 }
 
 export function createOrchestratorRuntime({
-  store, settingsStore, deps, timers = realTimers, presence = livePresence, model: buildModel = buildLanguageModel,
+  store, settingsStore, deps, timers = realTimers, presence, model: buildModel = buildLanguageModel,
 }: OrchestratorRuntimeOptions): OrchestratorRuntime {
   const listeners = new Set<(event: OrchestratorEvent) => void>();
   const startedAt = timers.now();
@@ -123,9 +123,11 @@ export function createOrchestratorRuntime({
   let lastBusyAt: number | null = null;
   let disposed = false;
 
+  // Never rejects: everything awaits it, and the scheduler starts from it. Without the last report
+  // the first tick is simply planned from process start.
   const ready = store.ready.then(async () => {
     lastReport = (await store.listTicks()).at(-1) ?? null;
-  });
+  }).catch((err) => { console.error("Could not read the last Portal tick:", err); });
 
   function emit(event: OrchestratorEvent) {
     for (const listener of listeners) {

@@ -41,7 +41,7 @@ export function shellTools({ deps }: ToolContext) {
       async ({ path: input, maxBytes = DEFAULT_FILE_BYTES }) => {
         const file = expandHome(input.trim());
         if (!path.isAbsolute(file)) throw httpError("Path must be absolute (or start with ~/).", 400);
-        // The settings file (and its imported backups) holds the API keys and the server key opens them;
+        // The settings file (and its backups and leftovers) holds the API keys and the server key opens them;
         // none of it is the model's business. Realpaths (of both) catch a symlink pointing at one of them.
         const home = path.dirname(defaultSettingsFile());
         const real = (target: string) => realpath(target).catch(() => target);

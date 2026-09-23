@@ -94,6 +94,19 @@ test("postgres store: concurrent appends land in order and appends after dispose
   await assert.rejects(store.putSession(record("c")), /disposed/i);
 });
 
+test("postgres store: NUL characters are stripped from events and records instead of failing the write", async (t) => {
+  const handle = await temporaryDatabase(t);
+  const store = createPgSessionStore({ db: handle.db });
+  await store.putSession(record("a", { title: "find -print0\u0000" }));
+  const binary = { seq: 0, ts: 1, type: "update", update: { sessionUpdate: "tool_call_update", rawOutput: { "k\u0000": "ELF\u0000\u0000bin" } } };
+  await store.appendEvent("a", binary);
+  await store.appendEvent("a", event(1));
+  assert.equal((await store.getSession("a")).title, "find -print0");
+  const { events } = await store.readTail("a", { limit: 10 });
+  assert.deepEqual(events.map(({ seq }) => seq), [0, 1]);
+  assert.deepEqual(events[0].update.rawOutput, { k: "ELFbin" });
+});
+
 test("postgres store: events are stored as real jsonb, and deleting a session cascades to its log", async (t) => {
   const handle = await temporaryDatabase(t);
   const store = createPgSessionStore({ db: handle.db });

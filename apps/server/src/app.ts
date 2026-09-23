@@ -6,12 +6,14 @@
 import compress from "@fastify/compress";
 import Fastify, { type FastifyInstance } from "fastify";
 import { type ServerConfig, loadConfig } from "./config.ts";
-import { type AppContext, setContext } from "./context.ts";
+import type { AppContext } from "./context.ts";
 import { type Db, connect } from "./db/client.ts";
+import { type InstanceLock, acquireInstanceLock } from "./db/instance-lock.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { errorMessage, errorStatus } from "./http/errors.ts";
+import { closeEventStreams } from "./http/sse.ts";
 import { importLegacyAtBoot } from "./import/boot.ts";
-import { presence } from "./lib/presence.ts";
+import { createPresence } from "./lib/presence.ts";
 import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
 import { createProjectsService } from "./projects/service.ts";
@@ -32,30 +34,55 @@ export interface AppOptions {
   orchestrator?: boolean | OrchestratorOptions;
   /** Sessions overrides (tests swap in a fake ACP agent). */
   sessions?: SessionsOptions;
+  /**
+   * Refuse to boot while another app holds the database (see `db/instance-lock.ts`). Only honoured
+   * with an injected `database`: tests that build several apps over one database turn it off.
+   */
+  singleInstance?: boolean;
 }
 
-export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions }: AppOptions = {}): Promise<FastifyInstance> {
+/** Each app's context, for tests that reach past the routes (swap a service, spy on a dispose). */
+const contexts = new WeakMap<FastifyInstance, AppContext>();
+
+export function appContext(app: FastifyInstance): AppContext {
+  const ctx = contexts.get(app);
+  if (!ctx) throw new Error("Not an app built by buildApp.");
+  return ctx;
+}
+
+export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true }: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger });
   await app.register(compress, { global: true, threshold: 1024, encodings: ["gzip"] });
 
   let owned: ReturnType<typeof connect> | null = null;
-  if (!database) {
-    owned = connect(config.databaseUrl);
-    await runMigrations(owned.db);
-    database = owned;
+  let lock: InstanceLock | null = null;
+  const ctx = { config, log: app.log, presence: createPresence() } as AppContext;
+  try {
+    if (!database) database = owned = connect(config.databaseUrl);
+    // Before migrations, the import, or any service touching sessions: a second server must fail
+    // here without writing anything the live one owns.
+    if (singleInstance || owned) lock = await acquireInstanceLock(database.sql);
+    if (owned) await runMigrations(owned.db);
+
+    // Before any service loads its cache from the tables the import fills.
+    await importLegacyAtBoot({ home: config.portalHome, db: database.db, log: app.log });
+
+    ctx.db = database.db;
+    ctx.sql = database.sql;
+    ctx.sessions = createSessionsService(ctx, sessions);
+    ctx.projects = createProjectsService(ctx);
+    ctx.settings = createSettingsService(ctx);
+    // A missing or broken server key fails the boot here rather than the first settings request.
+    await ctx.settings.ready;
+  } catch (err) {
+    // A failed boot hands the database back, so the next attempt (or another app) can take it.
+    await ctx.sessions?.dispose().catch(() => {});
+    await lock?.release();
+    await owned?.close();
+    throw err;
   }
-
-  // Before any service loads its cache from the tables the import fills.
-  await importLegacyAtBoot({ home: config.portalHome, db: database.db, log: app.log });
-
-  const ctx = { config, db: database.db, sql: database.sql, log: app.log, presence } as AppContext;
-  ctx.sessions = createSessionsService(ctx, sessions);
-  ctx.projects = createProjectsService(ctx);
-  ctx.settings = createSettingsService(ctx);
-  // A missing or broken server key fails the boot here rather than the first settings request.
-  await ctx.settings.ready;
+  contexts.set(app, ctx);
   ctx.terminals = createTerminalsService(ctx);
-  setContext(ctx);
   if (orchestrator) ctx.orchestrator = createOrchestratorService(ctx, typeof orchestrator === "object" ? orchestrator : {});
 
   app.setErrorHandler((err, _req, reply) => {
@@ -71,11 +98,21 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   registerTerminalRoutes(app, ctx);
   if (orchestrator) registerOrchestratorRoutes(app, ctx);
 
-  app.addHook("onClose", async () => {
+  // `preClose`, not `onClose`: Fastify runs `onClose` only once `server.close()` has seen every
+  // in-flight request finish, and each open tab holds an event stream (a hijacked, never-ending
+  // request), so disposal there would wait on the browsers. Runs after the terminals' own
+  // `preClose` (registered above), which drops the WebSockets.
+  app.addHook("preClose", async () => {
+    const failed = (what: string) => (err: unknown) => app.log.error({ err }, `Could not stop ${what}`);
     // Stop the scheduler and any running turn before the sessions it may be driving go away.
-    if (orchestrator) await ctx.orchestrator.dispose().catch(() => {});
-    await ctx.sessions.dispose().catch(() => {});
+    if (orchestrator) await ctx.orchestrator.dispose().catch(failed("the orchestrator"));
+    closeEventStreams(app.server);
+    // Stops the agent processes and flushes pending event writes, while the pool is still open.
+    await ctx.sessions.dispose().catch(failed("the sessions"));
     ctx.terminals.disposeAll();
+  });
+  app.addHook("onClose", async () => {
+    await lock?.release();
     await owned?.close();
   });
 

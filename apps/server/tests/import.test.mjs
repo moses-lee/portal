@@ -10,7 +10,7 @@ import { count } from "drizzle-orm";
 import { buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import * as schema from "../src/db/schema.ts";
-import { IMPORT_MARKER_KEY, importLegacyHome, readImportMarker } from "../src/import/import-legacy.ts";
+import { IMPORT_MARKER_KEY, describeCounts, importLegacyHome, readImportMarker } from "../src/import/import-legacy.ts";
 import { createPgOrchestratorStore } from "../src/orchestrator/pg-store.ts";
 import { createPgProjectsStore } from "../src/projects/pg-store.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
@@ -218,6 +218,66 @@ test("imports every domain and reads back through the real stores", async (t) =>
   assert.deepEqual(await tableCounts(db), before);
 });
 
+test("a log that repeats or reorders seqs is renumbered in file order instead of losing events", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const home = mkdtempSync(path.join(os.tmpdir(), "portal-import-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(path.join(home, "sessions", "logs"), { recursive: true });
+  writeFileSync(path.join(home, "sessions", "index.json"), json({ version: 1, sessions: [session("twice"), session("clean")] }));
+  // Two processes appended to one log: seq 1 and 2 repeat, and 3 comes after 5.
+  const written = [0, 1, 2, 1, 2, 5, 3].map((seq, i) => ({ type: "user", text: `line ${i} (seq ${seq})`, seq, ts: 100 + i }));
+  const lines = written.map((event) => JSON.stringify(event));
+  lines.splice(4, 0, "{ not json");
+  writeFileSync(path.join(home, "sessions", "logs", "twice.jsonl"), lines.join("\n") + "\n" + JSON.stringify(written[0]).slice(0, 15));
+  // A log that only has gaps keeps its seqs.
+  writeFileSync(path.join(home, "sessions", "logs", "clean.jsonl"), [0, 2, 3].map((seq) => JSON.stringify({ type: "user", text: `s${seq}`, seq, ts: seq })).join("\n") + "\n");
+
+  const result = await importLegacyHome({ home, db });
+  assert.equal(result.status, "imported");
+  assert.equal(result.counts.events, 10);
+  const warnings = result.warnings.join("\n");
+  assert.match(warnings, /Renumbered 3 events in .*twice\.jsonl/);
+  assert.match(warnings, /1 unreadable line in .*twice\.jsonl/);
+  assert.match(warnings, /torn last line from .*twice\.jsonl/);
+  assert.doesNotMatch(warnings, /clean\.jsonl/);
+
+  const sessions = createPgSessionStore({ db });
+  const { events } = await sessions.readTail("twice", { limit: 20 });
+  assert.deepEqual(events.map((e) => e.seq), [0, 1, 2, 3, 4, 5, 6], "dense, in file order");
+  assert.deepEqual(events.map((e) => e.text), written.map((e) => e.text), "every event kept, text intact");
+  assert.deepEqual(events.map((e) => e.ts), written.map((e) => e.ts));
+  assert.equal(await sessions.eventCount("twice"), 7);
+  assert.deepEqual((await sessions.readTail("clean", { limit: 20 })).events.map((e) => e.seq), [0, 2, 3]);
+});
+
+test("fractional or out-of-range times in the orchestrator files are rounded or cleared, not a failed import", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const home = mkdtempSync(path.join(os.tmpdir(), "portal-import-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(path.join(home, "orchestrator"));
+  const write = (name, value) => writeFileSync(path.join(home, "orchestrator", name), json(value));
+  write("items.json", [item("i1", 10.4, { status: "snoozed", snoozedUntil: 1234.5 }), item("i2", 20, { snoozedUntil: 1e300 }), item("i3", 1e300)]);
+  write("watches.json", [{ ...watch("w1", 10), lastCheckedAt: 99.9 }]);
+  write("ticks.json", [{ ...tick(1), startedAt: 1000.2, finishedAt: 1005.7 }]);
+
+  const result = await importLegacyHome({ home, db });
+  assert.equal(result.status, "imported");
+  assert.match(result.warnings.join("\n"), /Dropped 1 unreadable record from .*items\.json/);
+  const store = createPgOrchestratorStore({ db });
+  const items = Object.fromEntries((await store.listItems()).map((i) => [i.id, i]));
+  assert.deepEqual(Object.keys(items).sort(), ["i1", "i2"]);
+  assert.deepEqual([items.i1.createdAt, items.i1.snoozedUntil], [10, 1235]);
+  assert.equal(items.i2.snoozedUntil, null);
+  assert.equal((await store.listWatches())[0].lastCheckedAt, 100);
+  assert.deepEqual((await store.listTicks()).map((r) => [r.startedAt, r.finishedAt]), [[1000, 1006]]);
+});
+
+test("describeCounts pluralises each count", () => {
+  const one = { projects: 1, removedProjects: 0, sessions: 1, events: 1, settings: 1, apiKeys: 1, messages: 1, items: 1, watches: 1, ticks: 1, snapshot: 0, memory: 0 };
+  assert.equal(describeCounts(one), "1 project (0 removed); 1 session (1 event); 1 settings section (1 API key); 1 message, 1 item, 1 watch, 1 tick; snapshot no, memory no");
+  assert.match(describeCounts({ ...one, apiKeys: 2, watches: 0 }), /\(2 API keys\).*0 watches/);
+});
+
 test("a dry run counts everything and writes nothing", async (t) => {
   const { db } = await temporaryDatabase(t);
   const home = writeFixtureHome(t);
@@ -306,6 +366,8 @@ test("the orchestrator's file guard covers the settings backups and the server k
   const home = "/Users/me/.portal";
   assert.equal(portalSecretFile(`${home}/settings.json`, home), "settings");
   assert.equal(portalSecretFile(`${home}/settings.json.imported-2026-09-22T12-00-00-000Z`, home), "settings");
+  assert.equal(portalSecretFile(`${home}/settings.json.bad-1758542400000`, home), "settings");
+  assert.equal(portalSecretFile(`${home}/settings.json.tmp-1a2b3c4d`, home), "settings");
   assert.equal(portalSecretFile(`${home}/Settings.JSON`, home), "settings");
   assert.equal(portalSecretFile(`${home}/server.key`, home), "server-key");
   assert.equal(portalSecretFile(`${home}/sub/../server.key`, home), "server-key");

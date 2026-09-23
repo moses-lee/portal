@@ -1,7 +1,8 @@
 /**
  * Postgres cannot store U+0000: `text` columns reject the byte and `jsonb` rejects the `\u0000`
- * escape. The legacy JSON files could hold it (a pasted terminal transcript, a tool's raw output),
- * so every value headed for the database passes through here first. Object keys are cleaned too.
+ * escape. Agent output can hold it (`cat` on a binary, `find -print0`, a pasted terminal transcript),
+ * and so could the legacy JSON files, so every value headed for the database passes through here
+ * first: the importer and the live stores alike. Object keys are cleaned too.
  */
 export function stripNul<T>(value: T): T {
   return clean(value) as T;

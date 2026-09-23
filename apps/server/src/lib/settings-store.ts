@@ -26,15 +26,16 @@ export function defaultSettingsFile() {
 }
 
 /**
- * Which of Portal's secret files `file` is, or null: the settings file and the importer's
- * `settings.json.imported-*` backups (API keys in plain text) or the server key (which opens every
- * stored credential). Compared case-insensitively, since macOS volumes usually are.
+ * Which of Portal's secret files `file` is, or null: the settings file and every sibling named after
+ * it, since all may hold API keys in plain text (the importer's `settings.json.imported-*` backups,
+ * and the old store's `.bad-*` and `.tmp-*` leftovers), or the server key (which opens every stored
+ * credential). Compared case-insensitively, since macOS volumes usually are.
  */
 export function portalSecretFile(file: string, home = path.dirname(defaultSettingsFile())): "settings" | "server-key" | null {
   const resolved = path.resolve(file).toLowerCase();
   if (path.dirname(resolved) !== path.resolve(home).toLowerCase()) return null;
   const name = path.basename(resolved);
-  if (name === "settings.json" || name.startsWith("settings.json.imported-")) return "settings";
+  if (name.startsWith("settings.json")) return "settings";
   return name === "server.key" ? "server-key" : null;
 }
 

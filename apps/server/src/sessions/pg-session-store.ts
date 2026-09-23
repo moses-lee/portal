@@ -2,11 +2,13 @@
  * Postgres-backed session store: one row per session, one row per event. The event log is read
  * backwards with `ORDER BY seq DESC LIMIT n`, so serving the latest page costs the same however
  * long the log is. Appends for one session are chained so they land in order even when callers
- * do not await each other.
+ * do not await each other. Values are stripped of U+0000 on the way in, which Postgres cannot store:
+ * an agent's tool output may carry it, and the event would otherwise fail to save.
  */
-import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import type { StoredEvent } from "@portal/contracts/types";
 import type { Db } from "../db/client.ts";
+import { stripNul } from "../db/sanitize.ts";
 import { sessionEvents, sessions } from "../db/schema.ts";
 import type { SessionRecord, SessionStore, TailQuery, TailResult } from "./store.ts";
 
@@ -42,8 +44,9 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
     if (closed) throw new Error("Session store is disposed");
   }
 
-  async function append(id: string, event: StoredEvent) {
+  async function append(id: string, raw: StoredEvent) {
     assertOpen();
+    const event = stripNul(raw);
     // Reject seqs at or below the highest stored one in the same statement that inserts, so two
     // racing appends cannot both pass a separate check.
     let inserted: { seq: number }[];
@@ -91,7 +94,7 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
 
     async putSession(record) {
       assertOpen();
-      const { id, ...rest } = record;
+      const { id, ...rest } = stripNul(record);
       await db
         .insert(sessions)
         .values({ id, ...rest })
@@ -139,6 +142,3 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
     },
   };
 }
-
-// Kept for future range queries (SSE catch-up from a seq) without re-deriving the predicates.
-export const eventRange = { after: gt, from: gte };

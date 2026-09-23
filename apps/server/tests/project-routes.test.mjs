@@ -4,9 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildApp } from "../src/app.ts";
+import { appContext, buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
-import { context } from "../src/context.ts";
 import { defaultScriptSettings } from "@portal/shared/scripts";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
@@ -44,7 +43,7 @@ async function setup(t) {
   process.env.PORTAL_HOME = portalHome;
   const database = await temporaryDatabase(t);
   const app = await buildApp({ config: { ...loadConfig(), portalHome }, database, orchestrator: false });
-  const ctx = context();
+  const ctx = appContext(app);
   const realSessions = ctx.sessions;
   t.after(async () => {
     ctx.sessions = realSessions;
@@ -163,7 +162,7 @@ test("the directory browser lists subfolders, marks repositories, and reports ba
 });
 
 test("every project route refuses cross-origin requests", async (t) => {
-  const { root, call } = await setup(t);
+  const { app, root, call } = await setup(t);
   mkdirSync(path.join(root, "one"));
   const project = (await call("POST", "/api/projects", { path: path.join(root, "one") })).json();
   const routes = [
@@ -192,7 +191,7 @@ test("every project route refuses cross-origin requests", async (t) => {
   assert.deepEqual(site.json(), { error: "Cross-site requests are not allowed." });
   // A same-origin browser request goes through.
   assert.equal((await call("GET", "/api/projects", undefined, { origin: "http://localhost:3000", host: "localhost:3000" })).statusCode, 200);
-  assert.equal(context().projects.get(project.id).name, "one", "the refused rename did not happen");
+  assert.equal(appContext(app).projects.get(project.id).name, "one", "the refused rename did not happen");
 });
 
 test("per-project routes validate their input and answer 404 for unknown projects", async (t) => {
@@ -239,7 +238,7 @@ test("per-project routes validate their input and answer 404 for unknown project
 });
 
 test("worktrees: create, reuse, list branches, and delete with the pre-deletion script", async (t) => {
-  const { root, portalHome, call, useScript } = await setup(t);
+  const { app, root, portalHome, call, useScript } = await setup(t);
   process.env.LOG = path.join(root, "script.log");
   const main = repo(root);
   const project = (await call("POST", "/api/projects", { path: main })).json();
@@ -283,7 +282,7 @@ test("worktrees: create, reuse, list branches, and delete with the pre-deletion 
   assert.equal(refused.statusCode, 409);
   assert.match(refused.json().error, /exited with code 4\.\nrefusing/);
   assert.ok(existsSync(wtPath));
-  assert.ok(context().projects.get(wt.id));
+  assert.ok(appContext(app).projects.get(wt.id));
 
   // Uncommitted changes: git refuses, the answer is marked dirty, and a forced retry goes through.
   useScript({ command: 'echo "$PORTAL_BRANCH $PORTAL_WORKTREE_PATH $PORTAL_REPO_ROOT $(pwd)" >> "$LOG"' });
@@ -294,7 +293,7 @@ test("worktrees: create, reuse, list branches, and delete with the pre-deletion 
   const forced = await call("DELETE", `/api/projects/${wt.id}?worktree=delete&force=1`);
   assert.equal(forced.statusCode, 204, forced.body);
   assert.ok(!existsSync(wtPath));
-  assert.equal(context().projects.get(wt.id), undefined);
+  assert.equal(appContext(app).projects.get(wt.id), undefined);
   const runs = readFileSync(process.env.LOG, "utf8").trim().split("\n");
   assert.deepEqual(runs, Array(2).fill(`feat/x ${wtPath} ${main} ${wtPath}`), "runs in the worktree project's folder, again on the forced retry");
 });
@@ -315,7 +314,7 @@ test("github routes read the checkout: summary, a bad log cursor, and a fast-for
 });
 
 test("removed projects: kept while conversations point at them, listed, restored, and deleted", async (t) => {
-  const { root, portalHome, call, sessions, deleted, closedTerminals } = await setup(t);
+  const { app, root, portalHome, call, sessions, deleted, closedTerminals } = await setup(t);
   const main = repo(root);
   const project = (await call("POST", "/api/projects", { path: main })).json();
   const wt = (await call("POST", `/api/projects/${project.id}/worktrees`, { branch: "feat", create: true })).json().project;
@@ -364,7 +363,7 @@ test("removed projects: kept while conversations point at them, listed, restored
   assert.equal(forgot.statusCode, 204);
   assert.deepEqual(deleted, ["s5"]);
   assert.deepEqual(closedTerminals, ["s5"]);
-  assert.equal(context().projects.getRemoved(plain.id), undefined);
+  assert.equal(appContext(app).projects.getRemoved(plain.id), undefined);
   // The unassigned row stands for sessions with an empty project id.
   assert.equal((await call("DELETE", "/api/projects/removed/unassigned")).statusCode, 204);
   assert.deepEqual(deleted, ["s5", "s4"]);

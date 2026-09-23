@@ -7,7 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "pnpm db:up && concurrently -n server,web -c green,blue \"pnpm --filter @portal/server dev\" \"pnpm --filter @portal/web dev\"",
+    "dev": "pnpm db:up && concurrently --kill-others -n server,web -c green,blue \"pnpm --filter @portal/server dev\" \"pnpm --filter @portal/web dev\"",
     "build": "pnpm -r build",
     "start": "pnpm db:up && concurrently --kill-others -n server,web -c green,blue \"pnpm --filter @portal/server start\" \"pnpm --filter @portal/web start\"",
     "prod": "env -u NODE_ENV -u TURBOPACK -u NEXT_DEPLOYMENT_ID -u __NEXT_DEV_SERVER pnpm build && pnpm start",

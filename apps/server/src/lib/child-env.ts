@@ -1,7 +1,8 @@
 /**
- * Variables `next dev` sets on its own process. Portal's server runs Next in-process, so without
- * this every child it spawns (agents, embedded terminals) would inherit them and, for example,
- * `next build` in such a shell would build development React and fail prerendering.
+ * Variables `next dev` sets on its own process. The server picks them up when it is started from a
+ * shell that inherited them (a terminal inside a Portal whose web app runs under `next dev`), so
+ * without this every child it spawns (agents, embedded terminals) would pass them on and, for
+ * example, `next build` in such a shell would build development React and fail prerendering.
  */
 export const NEXT_DEV_SERVER_VARS = ["NODE_ENV", "TURBOPACK", "NEXT_DEPLOYMENT_ID", "__NEXT_DEV_SERVER"] as const;
 

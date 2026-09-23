@@ -15,7 +15,6 @@ import { runConfiguredScript } from "../script-runner.ts";
 import type { ScriptOutcome, ScriptRunOptions } from "../script-runner.ts";
 import type { ScriptKind } from "@portal/shared/scripts";
 import { toMeta } from "../acp-runtime.ts";
-import { defaultAgentId, listAgents } from "../agents.ts";
 import type { AppContext } from "../../context.ts";
 import { summarizeProject } from "../../projects/store.ts";
 import type {
@@ -179,9 +178,10 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       attach: async (id) => (await acp()).attach(id),
       remove: async (id) => (await acp()).deleteSession(id),
     },
+    // The sessions service's agents, not the built-in list: the orchestrator must offer only agents it can start.
     agents: {
-      list: async () => listAgents(),
-      defaultId: async () => defaultAgentId,
+      list: async () => ctx.sessions.listAgents(),
+      defaultId: async () => ctx.sessions.defaultAgentId,
     },
     projects: {
       list: async () => (await projects()).list(),

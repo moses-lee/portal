@@ -414,6 +414,13 @@ test("postgres: overrides are one jsonb object row, and each key is one sealed c
   assert.notEqual(again.ciphertext, cred.ciphertext);
 });
 
+test("postgres: a NUL character in an override is stripped instead of failing the write", async (t) => {
+  const { db, open } = await backends[1][1](t);
+  await open().patch({ gitActions: { prompts: { checks: "CI\u0000 please" } } });
+  const [row] = await db.select().from(settingsTable);
+  assert.deepEqual(row.body, { gitActions: { prompts: { checks: "CI please" } } });
+});
+
 test("postgres: a key sealed under another server key, or tampered with, reads as not stored and warns once", async (t) => {
   const { db, open } = await backends[1][1](t);
   await open().patch({ orchestrator: { apiKeys: { openai: "sk-openai", anthropic: "sk-ant" } } });

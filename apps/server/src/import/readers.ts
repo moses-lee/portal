@@ -17,7 +17,7 @@ import { SettingsError, parseSettingsFile, parseSettingsPatch } from "../lib/set
 import type { Project, RemovedProject } from "../lib/types.ts";
 import { dropLegacyWorktreeNames, legacyProjectsFile, parseLegacyProjectsFile } from "../projects/legacy.ts";
 import { isSessionRecord, isStoredEvent, type SessionRecord } from "../sessions/store.ts";
-import { stripNul } from "./sanitize.ts";
+import { stripNul } from "../db/sanitize.ts";
 
 /** A file's text, or null when it does not exist. */
 async function readText(file: string): Promise<string | null> {
@@ -182,10 +182,42 @@ const NEWLINE = 0x0a;
 /**
  * One log, oldest first. Mirrors the old store: blank lines are skipped, a line that is not a
  * stored event is skipped with a warning, and a last line without its newline (a crash mid-append)
- * is dropped, since the old store truncated it away on open. Seqs must rise; a repeated or
- * backwards seq (only a hand edit could produce one) is skipped so each (session, seq) stays unique.
+ * is dropped, since the old store truncated it away on open. Every other event is kept, in file
+ * order. Seqs normally rise (gaps included, and those are kept); a log that two Portal processes
+ * wrote at once repeats them, and the old app showed those events all the same. Such a log is
+ * renumbered as a whole, seq = position in the file, so each (session, seq) stays unique and reads
+ * page through it in the order the old app displayed. That takes a first pass to find out.
  */
 async function* readLog(file: string, batchSize: number, warnings: string[]): AsyncGenerator<StoredEvent[]> {
+  let renumber = false;
+  let last = -1;
+  for await (const event of logEvents(file, { unreadable: 0, torn: false })) {
+    if (event.seq <= last) {
+      renumber = true;
+      break;
+    }
+    last = event.seq;
+  }
+
+  const counts = { unreadable: 0, torn: false };
+  let batch: StoredEvent[] = [];
+  let position = 0;
+  let renumbered = 0;
+  for await (const event of logEvents(file, counts)) {
+    const seq = renumber ? position : event.seq;
+    position++;
+    if (seq !== event.seq) renumbered++;
+    batch.push(stripNul(seq === event.seq ? event : { ...event, seq }));
+    if (batch.length >= batchSize) yield batch.splice(0, batchSize);
+  }
+  if (counts.torn) warnings.push(`Dropped a torn last line from ${file}.`);
+  if (counts.unreadable > 0) warnings.push(`Skipped ${plural(counts.unreadable, "unreadable line")} in ${file}.`);
+  if (renumbered > 0) warnings.push(`Renumbered ${plural(renumbered, "event")} in ${file}, whose seqs repeated or went backwards; every event is kept in file order.`);
+  if (batch.length > 0) yield batch;
+}
+
+/** The stored events of one log in file order, counting the lines it had to skip into `counts`. */
+async function* logEvents(file: string, counts: { unreadable: number; torn: boolean }): AsyncGenerator<StoredEvent> {
   let stream: AsyncIterable<Buffer>;
   try {
     stream = createReadStream(file);
@@ -198,42 +230,21 @@ async function* readLog(file: string, batchSize: number, warnings: string[]): As
     throw new Error(`Cannot read ${file}: ${(err as Error).message}`, { cause: err });
   }
   let carry = Buffer.alloc(0);
-  let batch: StoredEvent[] = [];
-  let last = -1;
-  let unreadable = 0;
-  let outOfOrder = 0;
-  const take = (line: Buffer) => {
-    if (line.length === 0) return;
-    let event: unknown;
-    try { event = JSON.parse(line.toString("utf8")); } catch { event = null; }
-    if (!isStoredEvent(event)) {
-      unreadable++;
-      return;
-    }
-    if (event.seq <= last) {
-      outOfOrder++;
-      return;
-    }
-    last = event.seq;
-    batch.push(stripNul(event));
-  };
   for await (const chunk of stream) {
     const buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
     let start = 0;
     for (let i = buffer.indexOf(NEWLINE); i !== -1; i = buffer.indexOf(NEWLINE, start)) {
-      take(buffer.subarray(start, i));
+      const line = buffer.subarray(start, i);
       start = i + 1;
+      if (line.length === 0) continue;
+      let event: unknown;
+      try { event = JSON.parse(line.toString("utf8")); } catch { event = null; }
+      if (isStoredEvent(event)) yield event;
+      else counts.unreadable++;
     }
     carry = Buffer.from(buffer.subarray(start));
-    if (batch.length >= batchSize) {
-      // Yield whole batches; a remainder waits for the next chunk.
-      while (batch.length >= batchSize) yield batch.splice(0, batchSize);
-    }
   }
-  if (carry.length > 0) warnings.push(`Dropped a torn last line from ${file}.`);
-  if (unreadable > 0) warnings.push(`Skipped ${plural(unreadable, "unreadable line")} in ${file}.`);
-  if (outOfOrder > 0) warnings.push(`Skipped ${plural(outOfOrder, "event")} in ${file} whose seq did not follow the one before.`);
-  if (batch.length > 0) yield batch;
+  counts.torn = carry.length > 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -290,6 +301,21 @@ export async function readLegacyOrchestrator(home: string): Promise<LegacyOrches
     return unique.sort((a, b) => a.createdAt - b.createdAt);
   }
 
+  // Epoch-ms columns are bigint, and one fractional value (a hand edit, a model's tool call) would
+  // fail the whole import: round them. A required time that is out of range drops its record as
+  // unreadable; an optional one (snooze, last check) is cleared.
+  const safeEpoch = (value: number) => Number.isSafeInteger(Math.round(value));
+  const epoch = (value: number | null) => (value === null || !safeEpoch(value) ? null : Math.round(value));
+  const isImportableItem = (value: unknown): value is Item => isItem(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
+  const isImportableWatch = (value: unknown): value is Watch => isWatch(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
+  const isImportableTick = (value: unknown): value is TickReport => isTickReport(value) && safeEpoch(value.startedAt) && safeEpoch(value.finishedAt);
+  const items = list("items.json", isImportableItem)
+    .map((item) => ({ ...item, createdAt: Math.round(item.createdAt), updatedAt: Math.round(item.updatedAt), snoozedUntil: epoch(item.snoozedUntil) }));
+  const watches = list("watches.json", isImportableWatch)
+    .map((watch) => ({ ...watch, createdAt: Math.round(watch.createdAt), updatedAt: Math.round(watch.updatedAt), lastCheckedAt: epoch(watch.lastCheckedAt) }));
+  const ticks = list("ticks.json", isImportableTick)
+    .map((tick) => ({ ...tick, startedAt: Math.round(tick.startedAt), finishedAt: Math.round(tick.finishedAt) }));
+
   let snapshot: TickSnapshot | null = null;
   if (text["snapshot.json"] !== null) {
     let parsed: unknown;
@@ -300,9 +326,9 @@ export async function readLegacyOrchestrator(home: string): Promise<LegacyOrches
 
   return {
     messages: list("conversation.json", isOrchestratorMessage),
-    items: byCreation("items.json", list("items.json", isItem)),
-    watches: byCreation("watches.json", list("watches.json", isWatch)),
-    ticks: list("ticks.json", isTickReport).slice(-MAX_TICK_REPORTS),
+    items: byCreation("items.json", items),
+    watches: byCreation("watches.json", watches),
+    ticks: ticks.slice(-MAX_TICK_REPORTS),
     snapshot,
     memory: text["memory.md"] === null ? null : capMemory(stripNul(text["memory.md"])),
     warnings,

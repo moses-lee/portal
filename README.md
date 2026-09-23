@@ -51,7 +51,7 @@ Everything has a default, so `pnpm dev` needs no configuration.
 
 ### How the browser reaches the server
 
-The browser only ever talks to the web app. `apps/web/next.config.ts` rewrites every `/api/*` path to the server, which binds loopback only; that includes the terminal WebSocket (`/api/shell/socket`, Socket.IO), since the Next.js proxy forwards upgrades too. The server's event streams send `Cache-Control: no-cache, no-transform` so Next's compression does not buffer them, and ping every 15 seconds so the proxy's 30-second idle timeout never fires.
+The browser only ever talks to the web app. `apps/web/next.config.ts` rewrites every `/api/*` path to the server, which binds loopback only; that includes the terminal WebSocket (`/api/shell/socket`, Socket.IO), since the Next.js proxy forwards upgrades too. The server's event streams and the Talk to Portal chat reply send `Cache-Control: no-cache, no-transform` so Next's compression does not buffer them. The proxy gives up on a response that sends nothing for 30 seconds by default; `next.config.ts` raises that to an hour (`experimental.proxyTimeout`), since a manual tick or a script can stay silent for minutes, and the event streams ping every 15 seconds besides.
 
 ### Data
 
@@ -165,7 +165,7 @@ To run UI checks against an existing Portal, set `PORTAL_UI_BASE_URL=http://loca
 - Terminals live in the server's memory, so restarting the server loses them (sessions come back without their terminals).
 - Portal keeps its own copy of each transcript in Postgres, including the raw tool inputs and outputs the agent reported (file contents, command output), so anything an agent read is stored there as well as in the agent's own transcript. The database listens on `127.0.0.1:5433` only, with the development password from `docker-compose.yml`; deleting a session removes its log. Sessions started from the `claude` or `codex` CLI are not listed.
 - Worktrees are created from the repository's `origin` remote only; repositories without `origin` can still check out local branches but cannot create new ones. Worktrees Portal did not create are reused when their branch is picked but are never deleted by Portal.
-- Run one server per database; two servers on the same database would each run their own agents and schedulers over the same sessions.
+- One server per database: a second server started against the same database (say `pnpm dev` in a Portal worktree while the launchd Portal runs) exits at boot with "Another Portal server is already using the database", before it touches any session. Give it its own database with `DATABASE_URL` to run both.
 - If an agent process exits, its sessions go offline and are reconnected with `session/resume` when next opened or messaged. Other agents' sessions keep running.
 - Talk to Portal needs your own API key and bills per token; it cannot reuse the Claude Code or Codex logins. Pull request checks use the `gh` login on the host, and GitHub's search returns at most a few pages, so a very large backlog is reported as truncated.
 - Agent selection is fixed per session. Mode, model, and effort choices are limited to what the agent exposes as ACP config options; login screens and custom-agent configuration UI are not included.
