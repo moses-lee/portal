@@ -6,8 +6,10 @@
  */
 import { randomBytes } from "node:crypto";
 import type {
-  Item, ItemAction, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, TickReport, TickSnapshot, Watch, WatchPatch,
+  Item, ItemAction, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickReport,
+  TickSnapshot, Watch, WatchPatch,
 } from "./types.ts";
+import { MAIN_THREAD_ID, emptyScope } from "./types.ts";
 
 /** A store operation the caller got wrong; `status` is the HTTP status to answer with. */
 export class OrchestratorStoreError extends Error {
@@ -250,6 +252,65 @@ export function patchWatch(current: Watch, allowed: WatchPatch): Watch {
   return loadable("watch", { ...current, ...allowed, id: current.id, createdAt: current.createdAt, updatedAt: after(current.updatedAt) }, isWatch);
 }
 
+export const unknownThread = (id: string) => new OrchestratorStoreError(`Unknown thread "${id}".`, 404);
+
+/** The main thread as a fresh store holds it. */
+export function mainThread(at = Date.now()): Thread {
+  return { id: MAIN_THREAD_ID, kind: "main", title: "Portal", status: "active", scope: emptyScope(), intentId: null, createdAt: at, updatedAt: at, lastMessageAt: null };
+}
+
+/** `partial` over an empty scope, every list copied and deduplicated. */
+export function normalizeScope(partial: Partial<Scope> | undefined): Scope {
+  const scope = emptyScope();
+  if (!partial) return scope;
+  const unique = <T>(values: T[] | undefined, key: (value: T) => string) => {
+    const seen = new Set<string>();
+    return (values ?? []).filter((value) => {
+      const k = key(value);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  };
+  const same = (value: string) => value;
+  return {
+    projectIds: unique(partial.projectIds, same),
+    sessionIds: unique(partial.sessionIds, same),
+    pulls: unique(partial.pulls, (pull) => `${pull.repo}#${pull.number}`),
+    repos: unique(partial.repos, same),
+    people: unique(partial.people, same),
+    taskTypes: unique(partial.taskTypes, same),
+  };
+}
+
+export function buildThread(input: ThreadInput, id: string, at = Date.now()): Thread {
+  const title = input.title.trim();
+  if (!title) throw new OrchestratorStoreError("A thread needs a title.", 400);
+  return { id, kind: "side", title, status: "active", scope: normalizeScope(input.scope), intentId: input.intentId ?? null, createdAt: at, updatedAt: at, lastMessageAt: null };
+}
+
+export function patchThread(current: Thread, patch: ThreadPatch): Thread {
+  const next: Thread = { ...current, updatedAt: after(current.updatedAt) };
+  if (patch.title !== undefined) {
+    if (!patch.title.trim()) throw new OrchestratorStoreError("A thread needs a title.", 400);
+    next.title = patch.title.trim();
+  }
+  if (patch.status !== undefined) {
+    if (patch.status !== "active" && patch.status !== "archived") throw new OrchestratorStoreError("A thread's status is active or archived.", 400);
+    if (current.kind === "main" && patch.status === "archived") throw new OrchestratorStoreError("The main thread cannot be archived.", 400);
+    next.status = patch.status;
+  }
+  if (patch.scope !== undefined) next.scope = normalizeScope(patch.scope);
+  if (patch.intentId !== undefined) next.intentId = patch.intentId;
+  return next;
+}
+
+/** Main first, then side threads by latest activity. */
+export function sortThreads(threads: Thread[]): Thread[] {
+  const activity = (thread: Thread) => thread.lastMessageAt ?? thread.createdAt;
+  return [...threads].sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : activity(b) - activity(a)));
+}
+
 /** Whether an item still stands for its condition, so a tick with the same fingerprint updates it rather than creating another. */
 export const isLive = (item: Item) => item.status === "open" || item.status === "snoozed";
 
@@ -259,7 +320,8 @@ export const isLive = (item: Item) => item.status === "open" || item.status === 
 
 /** In-memory implementation; what tests and disposable runtimes use. Every change is synchronous, so no queueing is needed. */
 export function createMemoryOrchestratorStore(): OrchestratorStore {
-  let messages: OrchestratorMessage[] = [];
+  const messages = new Map<string, OrchestratorMessage[]>();
+  const threads = new Map<string, Thread>([[MAIN_THREAD_ID, mainThread()]]);
   /** Newest first. */
   let items: Item[] = [];
   /** Newest first. */
@@ -280,17 +342,43 @@ export function createMemoryOrchestratorStore(): OrchestratorStore {
     return watch;
   }
 
+  function requireThread(id: string): Thread {
+    const thread = threads.get(id);
+    if (!thread) throw unknownThread(id);
+    return thread;
+  }
+
   return {
     ready: Promise.resolve(),
 
-    async readMessages() {
-      return [...messages];
+    async readMessages(threadId = MAIN_THREAD_ID) {
+      return [...(messages.get(threadId) ?? [])];
     },
-    async writeMessages(next) {
-      messages = [...next];
+    async writeMessages(next, threadId = MAIN_THREAD_ID) {
+      requireThread(threadId);
+      messages.set(threadId, [...next]);
     },
-    async appendMessages(next) {
-      messages = [...messages, ...next];
+    async appendMessages(next, threadId = MAIN_THREAD_ID) {
+      const thread = requireThread(threadId);
+      messages.set(threadId, [...(messages.get(threadId) ?? []), ...next]);
+      if (next.length > 0) threads.set(threadId, { ...thread, lastMessageAt: Date.now() });
+    },
+
+    async listThreads() {
+      return sortThreads([...threads.values()]);
+    },
+    async getThread(id) {
+      return threads.get(id) ?? null;
+    },
+    async createThread(input) {
+      const thread = buildThread(input, newId((id) => threads.has(id)));
+      threads.set(thread.id, thread);
+      return thread;
+    },
+    async updateThread(id, patch) {
+      const thread = patchThread(requireThread(id), patch);
+      threads.set(id, thread);
+      return thread;
     },
 
     async listItems() {

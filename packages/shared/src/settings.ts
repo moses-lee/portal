@@ -1,4 +1,4 @@
-import { defaultOrchestratorSettings, orchestratorProviders } from "@portal/contracts/orchestrator";
+import { defaultModels, defaultOrchestratorSettings, orchestratorProviders } from "@portal/contracts/orchestrator";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "@portal/contracts/orchestrator";
 import { defaultScripts, mergeScripts, scriptsOverrides } from "./scripts.ts";
 import type { ScriptsPatch, ScriptsSettings } from "./scripts.ts";
@@ -80,10 +80,21 @@ function mergePrompts(base: GitActionPrompts, given: Partial<Record<GitActionKin
  * else leaves it. Key strings become the wire form's booleans (non-blank means "a key is stored").
  */
 function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettingsPatch | undefined): OrchestratorSettings {
-  const next: OrchestratorSettings = { ...base, apiKeys: { ...base.apiKeys } };
+  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, apiKeys: { ...base.apiKeys } };
   if (!given) return next;
-  if (isOrchestratorProvider(given.provider)) next.provider = given.provider;
+  // A provider change without a model takes that provider's default: a model id never outlives its provider.
+  if (isOrchestratorProvider(given.provider) && given.provider !== base.provider) {
+    next.provider = given.provider;
+    next.model = defaultModels[given.provider].chat;
+  }
   if (typeof given.model === "string" && given.model.trim()) next.model = given.model;
+  if (given.bookkeeping && typeof given.bookkeeping === "object") {
+    const { provider, model } = given.bookkeeping;
+    if (isOrchestratorProvider(provider) && provider !== base.bookkeeping.provider) {
+      next.bookkeeping = { provider, model: defaultModels[provider].bookkeeping };
+    }
+    if (typeof model === "string" && model.trim()) next.bookkeeping.model = model;
+  }
   if (Number.isInteger(given.intervalMinutes) && (given.intervalMinutes as number) > 0) next.intervalMinutes = given.intervalMinutes as number;
   if (Number.isInteger(given.idleIntervalMinutes) && (given.idleIntervalMinutes as number) > 0) {
     next.idleIntervalMinutes = given.idleIntervalMinutes as number;
@@ -131,6 +142,9 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   const given = settings.orchestrator;
   if (given.provider !== base.provider) orchestrator.provider = given.provider;
   if (given.model !== base.model) orchestrator.model = given.model;
+  if (given.bookkeeping.provider !== base.bookkeeping.provider || given.bookkeeping.model !== base.bookkeeping.model) {
+    orchestrator.bookkeeping = { ...given.bookkeeping };
+  }
   if (given.intervalMinutes !== base.intervalMinutes) orchestrator.intervalMinutes = given.intervalMinutes;
   if (given.idleIntervalMinutes !== base.idleIntervalMinutes) orchestrator.idleIntervalMinutes = given.idleIntervalMinutes;
   if (Object.keys(orchestrator).length > 0) result.orchestrator = orchestrator;

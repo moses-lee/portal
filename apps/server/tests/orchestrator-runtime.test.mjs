@@ -356,24 +356,80 @@ test("after a turn the stored thread is capped and older tool traffic is replace
   assert.equal(trimThread([]).changed, false);
 });
 
-test("a tick that finds the runtime busy is skipped with error busy and retried a minute later", async (t) => {
-  let release;
+test("a tick runs while a chat turn is answering; a tick that finds another tick running is skipped and retried a minute later", async (t) => {
+  let releaseChat;
+  let releaseTick;
   const { runtime, timers } = setup(t, {
-    doStream: () => new Promise((resolve) => { release = () => resolve(textStream("done")); }),
+    sessions: [waitingSession()],
+    doStream: () => new Promise((resolve) => { releaseChat = () => resolve(textStream("done")); }),
+    doGenerate: () => new Promise((resolve) => { releaseTick = () => resolve(textStep("NO_UPDATE")); }),
   });
   await runtime.ready;
   const pending = runtime.chat(userMessage("work"));
   await flush();
-  const report = await runtime.runTick("schedule");
-  assert.equal(report.error, "busy");
-  assert.equal(report.modelInvoked, false);
+  assert.deepEqual((await runtime.status()).busyThreads, ["main"]);
+  // The chat turn holds the main thread only: the tick goes ahead and reaches the model.
+  const first = runtime.runTick("manual");
+  await flush();
+  const second = await runtime.runTick("schedule");
+  assert.equal(second.error, "busy");
+  assert.equal(second.modelInvoked, false);
   await flush();
   assert.equal((await runtime.status()).nextTickAt, timers.now() + BUSY_RETRY_MS);
-  release();
-  const response = await pending;
-  await response.text();
+  releaseTick();
+  const report = await first;
+  assert.equal(report.error, null);
+  assert.equal(report.modelInvoked, true);
+  releaseChat();
+  await (await pending).text();
   await flush();
-  assert.equal((await runtime.status()).busy, false);
+  const status = await runtime.status();
+  assert.equal(status.busy, false);
+  assert.deepEqual(status.busyThreads, []);
+});
+
+test("each thread has its own lock: a side thread answers while main is busy, a second turn in a busy thread is refused, and cancel stops only its thread", async (t) => {
+  const { runtime, store } = setup(t, {
+    doStream: ({ abortSignal }) => new Promise((_, reject) => {
+      abortSignal.addEventListener("abort", () => reject(abortSignal.reason ?? new Error("aborted")));
+    }),
+  });
+  await runtime.ready;
+  const side = await store.createThread({ title: "Review acme/app#7", scope: { pulls: [{ repo: "acme/app", number: 7, url: "https://github.com/acme/app/pull/7" }] } });
+  const main = await runtime.chat(userMessage("main work", "m1"));
+  const other = await runtime.chat(userMessage("side work", "s1"), side.id);
+  await flush();
+  assert.deepEqual((await runtime.status()).busyThreads.sort(), ["main", side.id].sort());
+  await assert.rejects(runtime.chat(userMessage("again", "m2")), (err) => err.status === 409);
+  runtime.cancel(side.id);
+  await other.text().catch(() => {});
+  await flush();
+  assert.deepEqual((await runtime.status()).busyThreads, ["main"]);
+  assert.deepEqual((await runtime.history(side.id)).map((message) => message.parts[0].text), ["side work"]);
+  assert.deepEqual((await runtime.history()).map((message) => message.parts[0].text), ["main work"]);
+  runtime.cancel();
+  await main.text().catch(() => {});
+  await flush();
+  assert.deepEqual((await runtime.status()).busyThreads, []);
+  await assert.rejects(runtime.chat(userMessage("nowhere", "x1"), "no-such-thread"), (err) => err.status === 404);
+});
+
+test("chat turns and ticks are recorded as runs and the turn's tool calls land in the activity log", async (t) => {
+  const { runtime, store, events } = setup(t, {
+    doStream: textStream("Two items are open."),
+  });
+  await runtime.ready;
+  await store.createItem(itemInput);
+  await (await runtime.chat(userMessage("what is open?"))).text();
+  await flush();
+  const runs = events.filter((event) => event.type === "run").map((event) => event.run);
+  assert.deepEqual(runs.map((run) => [run.kind, run.status]), [["chat", "running"], ["chat", "succeeded"]]);
+  assert.equal(runs[1].usage.inputTokens, 10);
+  const entries = await runtime.hub.activity.list();
+  assert.equal(entries[0].kind, "chat.turn");
+  assert.equal(entries[0].refs.runId, runs[0].id);
+  const [assistant] = (await runtime.history()).filter((message) => message.role === "assistant");
+  assert.equal(assistant.metadata.run.id, runs[0].id);
 });
 
 test("cancel() aborts the running chat turn and releases busy", async (t) => {

@@ -55,6 +55,7 @@ export type SettingsFile = {
   orchestrator?: {
     provider?: OrchestratorProvider;
     model?: string;
+    bookkeeping?: { provider?: OrchestratorProvider; model?: string };
     intervalMinutes?: number;
     idleIntervalMinutes?: number;
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
@@ -177,6 +178,13 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
   const patch: OrchestratorSettingsPatch = {};
   if (given.provider !== undefined) patch.provider = required(checkProvider(given.provider));
   if (given.model !== undefined) patch.model = required(checkModel(given.model));
+  if (given.bookkeeping !== undefined) {
+    if (!isPlainObject(given.bookkeeping)) throw new SettingsError("orchestrator.bookkeeping must be an object.", 400);
+    const bookkeeping: NonNullable<OrchestratorSettingsPatch["bookkeeping"]> = {};
+    if (given.bookkeeping.provider !== undefined) bookkeeping.provider = required(checkProvider(given.bookkeeping.provider));
+    if (given.bookkeeping.model !== undefined) bookkeeping.model = required(checkModel(given.bookkeeping.model));
+    patch.bookkeeping = bookkeeping;
+  }
   if (given.intervalMinutes !== undefined) {
     patch.intervalMinutes = required(checkInterval("intervalMinutes", given.intervalMinutes, MAX_INTERVAL_MINUTES));
   }
@@ -243,6 +251,15 @@ function parseOrchestratorFile(given: unknown): SettingsFile["orchestrator"] {
   if ("value" in provider) section.provider = provider.value;
   const model = checkModel(given.model);
   if ("value" in model) section.model = model.value;
+  if (isPlainObject(given.bookkeeping)) {
+    const bookkeeping: NonNullable<NonNullable<SettingsFile["orchestrator"]>["bookkeeping"]> = {};
+    const role = given.bookkeeping;
+    const roleProvider = checkProvider(role.provider);
+    if ("value" in roleProvider) bookkeeping.provider = roleProvider.value;
+    const roleModel = checkModel(role.model);
+    if ("value" in roleModel) bookkeeping.model = roleModel.value;
+    if (Object.keys(bookkeeping).length > 0) section.bookkeeping = bookkeeping;
+  }
   const interval = checkInterval("intervalMinutes", given.intervalMinutes, MAX_INTERVAL_MINUTES);
   if ("value" in interval) section.intervalMinutes = interval.value;
   const idle = checkInterval("idleIntervalMinutes", given.idleIntervalMinutes, MAX_IDLE_INTERVAL_MINUTES);

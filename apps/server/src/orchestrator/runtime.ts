@@ -1,24 +1,35 @@
 /**
- * The orchestrator runtime: one shared chat thread, periodic ticks that turn changes into items,
- * and the events the page follows. `createOrchestratorRuntime` works over whatever store, settings,
- * deps, clock, and model it is given (tests pass fakes); `createOrchestratorService` in
- * `src/orchestrator/service.ts` wires the live server into it at boot.
+ * The orchestrator runtime: threads the user chats in (each with its own lock), the tick that turns
+ * changes into items, and the events the page follows. It builds the hub (see `hub.ts`) over
+ * whatever store, settings, deps, clock, and model it is given (tests pass fakes) and attaches the
+ * domain services; `createOrchestratorService` in `service.ts` wires the live server into it.
  */
 import { randomUUID } from "node:crypto";
 import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
+import type { Sql } from "postgres";
+import type { Db } from "../db/client.ts";
+import { type ActivityStore, createMemoryActivityStore } from "./activity/store.ts";
+import { createActivityService } from "./activity/service.ts";
 import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
+import { createApprovalsService } from "./approvals/service.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
-import { MEMORY_PROMPT_BYTES, buildDigest, collectSnapshot, truncateBytes } from "./digest.ts";
-import { buildLanguageModel, providerOptionsFor } from "./model.ts";
+import { buildDigest, collectSnapshot } from "./digest.ts";
+import type { ApprovalsService, JobsService, MemoryService, OrchestratorHub, PresenceSource, WorldService } from "./hub.ts";
+import { createJobsService } from "./jobs/service.ts";
+import { createMemoryService } from "./memory/service.ts";
+import { buildLanguageModel, providerOptionsFor, roleChoice } from "./model.ts";
 import { httpError, removeProject, startSession } from "./ops.ts";
-import { systemPrompt, tickPrompt } from "./prompt.ts";
 import { type SchedulerTimers, createScheduler, realTimers } from "./scheduler.ts";
 import { newId } from "./store.ts";
-import { type ToolContext, createTools } from "./tools/index.ts";
+import { performTick } from "./tick.ts";
+import type { ToolContext } from "./tools/index.ts";
+import { prepareTurn, runUsage } from "./turn.ts";
 import type {
-  Item, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings, OrchestratorStatus, OrchestratorStore,
+  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings, OrchestratorStatus, OrchestratorStore,
   TickReason, TickReport,
 } from "./types.ts";
+import { MAIN_THREAD_ID } from "./types.ts";
+import { createWorldService } from "./world/service.ts";
 
 /** Messages of the thread a chat turn sends to the model. */
 export const HISTORY_WINDOW = 40;
@@ -31,7 +42,15 @@ export const FIRST_TICK_DELAY_MS = 60_000;
 /** Retry delay after a scheduled tick found a chat turn (or another tick) running. */
 export const BUSY_RETRY_MS = 60_000;
 
-export type PresenceSource = { count(): number; subscribe(listener: (count: number) => void): () => void };
+export type { PresenceSource } from "./hub.ts";
+
+/** Builders for the domain services; tests and the live server swap in their own. */
+export type DomainFactories = {
+  jobs?: (hub: OrchestratorHub) => JobsService;
+  world?: (hub: OrchestratorHub) => WorldService;
+  memory?: (hub: OrchestratorHub) => MemoryService;
+  approvals?: (hub: OrchestratorHub) => ApprovalsService;
+};
 
 export type OrchestratorRuntimeOptions = {
   store: OrchestratorStore;
@@ -42,22 +61,26 @@ export type OrchestratorRuntimeOptions = {
   presence: PresenceSource;
   /** Builds the model for a turn from the settings and the stored key; tests pass a mock. */
   model?: (settings: OrchestratorSettings, apiKey: string) => LanguageModel;
+  /** The live database, for the Postgres-backed domain stores; omitted in tests (in-memory stores). */
+  db?: Db | null;
+  /** The postgres.js client behind `db`, for LISTEN/NOTIFY. */
+  sql?: Sql | null;
+  /** Where activity is recorded; in memory unless given. */
+  activityStore?: ActivityStore;
+  domains?: DomainFactories;
 };
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Which items changed between two listings, by what happened to them. */
-function itemDelta(before: Map<string, Item>, after: Item[]) {
-  const delta = { created: [] as string[], updated: [] as string[], resolved: [] as string[] };
-  for (const item of after) {
-    const was = before.get(item.id);
-    if (!was) delta.created.push(item.id);
-    else if (was.updatedAt !== item.updatedAt) (item.status === "resolved" && was.status !== "resolved" ? delta.resolved : delta.updated).push(item.id);
-  }
-  return delta;
+/** The text of a message's text parts, joined. */
+function messageText(message: OrchestratorMessage): string {
+  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
+
+/** Item statuses a user change moves to, as activity kinds. */
+const itemChangeKind: Record<string, string> = { resolved: "item.resolved", dismissed: "item.dismissed" };
 
 type Part = OrchestratorMessage["parts"][number];
 
@@ -110,24 +133,21 @@ export function historyWindow(messages: OrchestratorMessage[]): OrchestratorMess
 }
 
 export function createOrchestratorRuntime({
-  store, settingsStore, deps, timers = realTimers, presence, model: buildModel = buildLanguageModel,
+  store, settingsStore, deps, timers = realTimers, presence, model: buildModel = buildLanguageModel, db = null, sql = null,
+  activityStore = createMemoryActivityStore(), domains = {},
 }: OrchestratorRuntimeOptions): OrchestratorRuntime {
   const listeners = new Set<(event: OrchestratorEvent) => void>();
   const startedAt = timers.now();
-  let busy: "chat" | "tick" | null = null;
-  let current: AbortController | null = null;
+  /** The chat turn running in each thread; a thread takes one turn at a time. */
+  const chatTurns = new Map<string, AbortController>();
+  /** The running tick, if any; ticks never overlap each other but never wait for chat. */
+  let tickController: AbortController | null = null;
   /** The newest report, from the store at start and then from this process. */
   let lastReport: TickReport | null = null;
   /** When the last tick of this process finished; the schedule counts from here. */
   let lastTickEnd: number | null = null;
   let lastBusyAt: number | null = null;
   let disposed = false;
-
-  // Never rejects: everything awaits it, and the scheduler starts from it. Without the last report
-  // the first tick is simply planned from process start.
-  const ready = store.ready.then(async () => {
-    lastReport = (await store.listTicks()).at(-1) ?? null;
-  }).catch((err) => { console.error("Could not read the last Portal tick:", err); });
 
   function emit(event: OrchestratorEvent) {
     for (const listener of listeners) {
@@ -139,6 +159,30 @@ export function createOrchestratorRuntime({
       }
     }
   }
+
+  // Services read their siblings from the hub at call time, so the order below does not matter.
+  const hub = {
+    store, settings: settingsStore, deps, presence, timers, db, sql, emit,
+    async model(role) {
+      const settings = await settingsStore.orchestrator();
+      const choice = roleChoice(settings, role);
+      const apiKey = await settingsStore.apiKey(choice.provider);
+      if (!apiKey) return null;
+      return { role, choice, model: buildModel({ ...settings, ...choice }, apiKey), providerOptions: providerOptionsFor(choice.provider) };
+    },
+  } as OrchestratorHub;
+  hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
+  hub.jobs = (domains.jobs ?? createJobsService)(hub);
+  hub.world = (domains.world ?? createWorldService)(hub);
+  hub.memory = (domains.memory ?? createMemoryService)(hub);
+  hub.approvals = (domains.approvals ?? createApprovalsService)(hub);
+
+  // Never rejects: everything awaits it, and the scheduler starts from it. Without the last report
+  // the first tick is simply planned from process start.
+  const ready = Promise.all([store.ready, hub.jobs.ready, hub.world.ready, hub.memory.ready, hub.approvals.ready]).then(async () => {
+    lastReport = (await store.listTicks()).at(-1) ?? null;
+  }).catch((err) => { console.error("Could not start the Portal orchestrator:", err); });
+
   const emitStatus = () => status().then((current) => emit({ type: "status", status: current })).catch(() => {});
   const emitItems = () => store.listItems().then((items) => emit({ type: "items", items })).catch(() => {});
   const emitWatches = () => store.listWatches().then((watches) => emit({ type: "watches", watches })).catch(() => {});
@@ -155,8 +199,9 @@ export function createOrchestratorRuntime({
 
   async function nextTickAt(): Promise<number | null> {
     if (disposed) return null;
-    const { settings, apiKey } = await settingsAndKey();
-    if (!apiKey) return null;
+    const settings = await settingsStore.orchestrator();
+    // Ticks run on the bookkeeping model; without its key there is nothing to plan.
+    if (!(await settingsStore.apiKey(settings.bookkeeping.provider))) return null;
     if (lastBusyAt !== null && lastBusyAt > (lastTickEnd ?? -Infinity)) return lastBusyAt + BUSY_RETRY_MS;
     return lastTickEnd === null ? startedAt + FIRST_TICK_DELAY_MS : lastTickEnd + intervalMs(settings);
   }
@@ -164,9 +209,11 @@ export function createOrchestratorRuntime({
   const scheduler = createScheduler({ tick: () => runTick("schedule"), nextTickAt, timers });
   const unsubscribePresence = presence.subscribe(() => { void scheduler.reschedule(); void emitStatus(); });
   const unsubscribeSettings = settingsStore.subscribe(() => { void scheduler.reschedule(); void emitStatus(); });
-  void ready.then(() => scheduler.reschedule());
-
-  const login = () => deps.github.login().catch(() => null);
+  void ready.then(() => {
+    if (disposed) return;
+    hub.jobs.start();
+    return scheduler.reschedule();
+  });
 
   /** The digest as get_tick_digest reports it: a look, not a tick, so snoozes are left alone. */
   async function digestNow() {
@@ -177,82 +224,104 @@ export function createOrchestratorRuntime({
     return buildDigest({ store, snapshot, prevSnapshot: previous, intervalMs: intervalMs(settings), now, wakeSnoozed: false });
   }
 
-  function toolContext(touched: Set<string>, interactive: boolean): ToolContext {
-    return {
-      store, settings: settingsStore, deps, touched, interactive, now: () => timers.now(),
-      self: {
-        digest: digestNow,
-        schedule: async () => {
-          const { settings, apiKey } = await settingsAndKey();
-          return {
-            ready: !!apiKey, intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes,
-            presence: presence.count(), nextTickAt: scheduler.plannedAt(), lastTickAt: lastReport?.finishedAt ?? null,
-          };
-        },
-        lastTick: async () => lastReport,
-      },
-    };
-  }
+  const self: ToolContext["self"] = {
+    digest: digestNow,
+    schedule: async () => {
+      const { settings, apiKey } = await settingsAndKey();
+      return {
+        ready: !!apiKey, intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes,
+        presence: presence.count(), nextTickAt: scheduler.plannedAt(), lastTickAt: lastReport?.finishedAt ?? null,
+      };
+    },
+    lastTick: async () => lastReport,
+  };
 
-  /** Keep the stored thread bounded; runs after every persisted turn. */
-  async function trimStoredThread() {
+  /** Keep a stored thread bounded; runs after every persisted turn. */
+  async function trimStoredThread(threadId: string) {
     try {
-      const { messages, changed } = trimThread(await store.readMessages());
-      if (changed) await store.writeMessages(messages);
+      const { messages, changed } = trimThread(await store.readMessages(threadId));
+      if (changed) await store.writeMessages(messages, threadId);
     } catch (err) {
-      console.error("Could not trim the Portal thread:", err);
+      console.error("Could not trim a Portal thread:", err);
     }
   }
 
-  function release(controller: AbortController) {
-    if (current === controller) current = null;
-    busy = null;
+  function releaseChat(threadId: string, controller: AbortController) {
+    if (chatTurns.get(threadId) === controller) chatTurns.delete(threadId);
+  }
+
+  /** The status bar's line: what is running, else what comes next. */
+  function statusLine(runs: OrchestratorStatus["runs"], nextJob: OrchestratorStatus["nextJob"], ready: boolean): string {
+    if (!ready) return "Add an API key in Settings to start Portal.";
+    if (runs.length > 0) {
+      const names = runs.map((run) => run.summary ?? (run.kind === "chat" ? "Answering" : `Running ${run.kind}`));
+      return `${[...new Set(names)].join(" · ")}…`;
+    }
+    return nextJob ? `Idle · next: ${nextJob.title}` : "Idle";
   }
 
   async function status(): Promise<OrchestratorStatus> {
     await ready;
     const { settings, apiKey } = await settingsAndKey();
-    const items = await store.listItems();
+    const [items, watches, nextDue, inbox, approvals, intents] = await Promise.all([
+      store.listItems(), store.listWatches(), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(),
+      hub.jobs.listIntents({ status: ["active"] }),
+    ]);
     const open = (list: Item["list"]) => items.filter((item) => item.status === "open" && item.list === list).length;
+    const runs = hub.jobs.running().map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
+    const plannedTick = scheduler.plannedAt();
+    const nextJob = nextDue?.nextRunAt != null
+      ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt }
+      : plannedTick !== null ? { id: "tick", title: "Check for changes", at: plannedTick } : null;
     return {
-      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: busy !== null,
+      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0 || tickController !== null,
       intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes, presence: presence.count(),
-      lastTick: lastReport, nextTickAt: scheduler.plannedAt(), openItems: { needs_you: open("needs_you"), ideas: open("ideas") },
+      lastTick: lastReport, nextTickAt: plannedTick, openItems: { needs_you: open("needs_you"), ideas: open("ideas") },
+      busyThreads: [...chatTurns.keys()], runs, nextJob,
+      counts: {
+        needsYou: open("needs_you"), inbox, approvals: approvals.length,
+        intents: intents.length + watches.filter((watch) => watch.status === "active").length,
+      },
+      line: statusLine(runs, nextJob, !!apiKey),
     };
   }
 
-  async function chat(userMessage: OrchestratorMessage): Promise<Response> {
+  async function chat(userMessage: OrchestratorMessage, threadId: string = MAIN_THREAD_ID): Promise<Response> {
     await ready;
     if (disposed) throw httpError("Portal is shutting down.", 409);
+    const thread = await store.getThread(threadId);
+    if (!thread) throw httpError(`Unknown thread "${threadId}".`, 404);
+    if (thread.status !== "active") throw httpError("This thread is archived.", 409);
     const { settings, apiKey } = await settingsAndKey();
     if (!apiKey) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
-    if (busy) throw httpError(busy === "tick" ? "A tick is running; try again in a moment." : "Portal is still answering; wait for it or cancel it.", 409);
-    busy = "chat";
+    if (chatTurns.has(threadId)) throw httpError("Portal is still answering in this thread; wait for it or cancel it.", 409);
     const controller = new AbortController();
-    current = controller;
+    chatTurns.set(threadId, controller);
     void emitStatus();
     const touched = new Set<string>();
     const at = timers.now();
+    let prepared: Awaited<ReturnType<typeof prepareTurn>> = null;
     try {
       // Ids are the thread's React keys and the SDK's merge handle, so a client id that is already taken gets replaced.
-      const taken = new Set((await store.readMessages()).map((stored) => stored.id));
+      const taken = new Set((await store.readMessages(threadId)).map((stored) => stored.id));
       const id = userMessage.id && !taken.has(userMessage.id) ? userMessage.id : randomUUID();
       const message: OrchestratorMessage = { ...userMessage, id, role: "user", metadata: { ...userMessage.metadata, at } };
-      await store.appendMessages([message]);
-      const recent = historyWindow(await store.readMessages());
-      const tools = createTools(toolContext(touched, true));
+      await store.appendMessages([message], threadId);
+      const recent = historyWindow(await store.readMessages(threadId));
+      const text = messageText(message);
+      prepared = await prepareTurn(hub, {
+        kind: "chat", role: "chat", trigger: "user", threadId, interactive: true, query: text, touched, self,
+        summary: threadId === MAIN_THREAD_ID ? "Answering" : `Answering in ${thread.title}`,
+      });
+      if (!prepared) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
+      const turn = prepared;
       // Older turns keep their text but lose their tool traffic: the model answers from what it said, not from every listing it fetched.
       const modelMessages = pruneMessages({
-        messages: await convertToModelMessages(recent, { tools, ignoreIncompleteToolCalls: true }),
+        messages: await convertToModelMessages(recent, { tools: turn.tools, ignoreIncompleteToolCalls: true }),
         reasoning: "all",
         toolCalls: "before-last-message",
       });
-      const [memory, githubLogin] = await Promise.all([store.readMemory(), login()]);
-      const agent = createOrchestratorAgent({
-        model: buildModel(settings, apiKey), tools,
-        system: systemPrompt({ login: githubLogin, now: at, memory: truncateBytes(memory, MEMORY_PROMPT_BYTES) }),
-        providerOptions: providerOptionsFor(settings.provider),
-      });
+      const agent = createOrchestratorAgent({ model: turn.model.model, tools: turn.tools, system: turn.system, providerOptions: turn.model.providerOptions });
       const result = await agent.stream({ messages: modelMessages, abortSignal: controller.signal, timeout: CALL_TIMEOUT_MS });
       let settled = false;
       return result.toUIMessageStreamResponse<OrchestratorMessage>({
@@ -261,19 +330,25 @@ export function createOrchestratorRuntime({
         // The assistant message carries its own time, not the user message's. The `start` part is
         // emitted before the model answers, so the stored value is the one set when the turn finishes.
         messageMetadata: ({ part }) => {
-          if (part.type === "start") return { at: timers.now() };
-          if (part.type === "finish") return { at: timers.now(), itemIds: [...touched] };
+          if (part.type === "start") return { at: timers.now(), run: { id: turn.run.id, kind: "chat" as const } };
+          if (part.type === "finish") return { at: timers.now(), run: { id: turn.run.id, kind: "chat" as const }, itemIds: [...touched] };
           return undefined;
         },
-        onFinish: async ({ responseMessage }) => {
+        onFinish: async ({ responseMessage, isAborted }) => {
           if (settled) return;
           settled = true;
           if (responseMessage.parts.length > 0) {
-            await store.appendMessages([responseMessage]).catch((err: unknown) => console.error("Could not save the assistant message:", err));
+            await store.appendMessages([responseMessage], threadId).catch((err: unknown) => console.error("Could not save the assistant message:", err));
           }
-          await trimStoredThread();
-          release(controller);
-          emit({ type: "messages" });
+          await trimStoredThread(threadId);
+          const usage = await Promise.resolve(result.totalUsage).then(runUsage, () => null);
+          await turn.finish({ status: isAborted || controller.signal.aborted ? "cancelled" : "succeeded", usage, summary: text.slice(0, 120) });
+          void hub.activity.log({
+            actor: "user", kind: "chat.turn", summary: `Asked: ${text.slice(0, 160)}`,
+            refs: { threadId, runId: turn.run.id }, detail: { items: [...touched] },
+          });
+          releaseChat(threadId, controller);
+          emit({ type: "messages", threadId });
           void emitStatus();
           if (touched.size > 0) void emitItems();
         },
@@ -285,66 +360,11 @@ export function createOrchestratorRuntime({
         consumeSseStream: ({ stream }) => consumeStream({ stream }),
       });
     } catch (err) {
-      release(controller);
+      await prepared?.finish({ status: "failed", error: errorMessage(err) });
+      releaseChat(threadId, controller);
       void emitStatus();
       throw err;
     }
-  }
-
-  async function performTick(report: TickReport, signal: AbortSignal): Promise<void> {
-    const { log } = report;
-    const { settings, apiKey } = await settingsAndKey();
-    if (!apiKey) {
-      log.push(`No ${settings.provider} API key is stored; nothing was checked.`);
-      report.error = "not ready";
-      return;
-    }
-    const previous = await store.readSnapshot();
-    const now = timers.now();
-    const before = new Map((await store.listItems()).map((item) => [item.id, item]));
-    const snapshot = await collectSnapshot({ deps, previous, now, log });
-    const digest = await buildDigest({ store, snapshot, prevSnapshot: previous, intervalMs: intervalMs(settings), now });
-    report.changes = digest.changes.length;
-    for (const change of digest.changes) log.push(`${change.resolvesItemId ? "Cleared" : "Changed"}: ${change.summary} (${change.fingerprint})`);
-    if (digest.dueWatches.length > 0) log.push(`Due watches: ${digest.dueWatches.map((watch) => watch.id).join(", ")}.`);
-
-    if (digest.changes.length > 0 || digest.dueWatches.length > 0) {
-      const touched = new Set<string>();
-      const tools = createTools(toolContext(touched, false));
-      const agent = createOrchestratorAgent({
-        model: buildModel(settings, apiKey), tools,
-        system: systemPrompt({ login: await login(), now, memory: digest.memory }),
-        providerOptions: providerOptionsFor(settings.provider),
-      });
-      report.modelInvoked = true;
-      const result = await agent.generate({ prompt: tickPrompt(digest), abortSignal: signal, timeout: CALL_TIMEOUT_MS });
-      report.usage = { inputTokens: result.usage.inputTokens ?? 0, outputTokens: result.usage.outputTokens ?? 0 };
-      const text = result.text.trim();
-      if (text && text !== "NO_UPDATE") {
-        await store.appendMessages([{
-          id: randomUUID(), role: "assistant", parts: [{ type: "text", text }],
-          metadata: { at: timers.now(), tick: { id: report.id, reason: report.reason }, itemIds: [...touched] },
-        }]);
-        await trimStoredThread();
-        log.push("Posted a note to the thread.");
-        emit({ type: "messages" });
-      } else {
-        log.push("No note for the user (NO_UPDATE).");
-      }
-      for (const watch of digest.dueWatches) await store.updateWatch(watch.id, { lastCheckedAt: now }).catch(() => {});
-      if (digest.dueWatches.length > 0) void emitWatches();
-    } else {
-      log.push("Nothing changed; the model was not invoked.");
-    }
-    await store.writeSnapshot(snapshot);
-
-    // What happened to items, read back from the store (snoozes waking up count too).
-    const delta = itemDelta(before, await store.listItems());
-    report.itemsCreated = delta.created;
-    report.itemsUpdated = delta.updated;
-    report.itemsResolved = delta.resolved;
-    if (report.modelInvoked) log.push(`Items: ${delta.created.length} created, ${delta.updated.length} updated, ${delta.resolved.length} resolved.`);
-    if (delta.created.length + delta.updated.length + delta.resolved.length > 0) void emitItems();
   }
 
   async function runTick(reason: TickReason): Promise<TickReport> {
@@ -353,19 +373,19 @@ export function createOrchestratorRuntime({
       id: newId(), reason, startedAt: timers.now(), finishedAt: timers.now(), modelInvoked: false, changes: 0,
       itemsCreated: [], itemsUpdated: [], itemsResolved: [], log: [], error: null, usage: null,
     };
-    if (busy || disposed) {
+    if (tickController || disposed) {
       lastBusyAt = report.startedAt;
       report.error = "busy";
-      report.log.push(disposed ? "Portal is shutting down." : `Skipped: a ${busy} is already running; retrying in a minute.`);
+      report.log.push(disposed ? "Portal is shutting down." : "Skipped: a tick is already running; retrying in a minute.");
       void scheduler.reschedule();
       return report;
     }
-    busy = "tick";
     const controller = new AbortController();
-    current = controller;
+    tickController = controller;
     void emitStatus();
     try {
-      await performTick(report, controller.signal);
+      const { settings } = await settingsAndKey();
+      await performTick(hub, report, { intervalMs: intervalMs(settings), self, signal: controller.signal, trimThread: trimStoredThread });
     } catch (err) {
       report.error = errorMessage(err);
       report.log.push(`Failed: ${report.error}`);
@@ -374,7 +394,7 @@ export function createOrchestratorRuntime({
     lastReport = report;
     lastTickEnd = report.finishedAt;
     await store.appendTick(report).catch((err: unknown) => console.error("Could not save the tick report:", err));
-    release(controller);
+    if (tickController === controller) tickController = null;
     // Whatever started this tick, the next one counts from its end; the status pushed below carries that time.
     await scheduler.reschedule();
     emit({ type: "tick", report });
@@ -382,43 +402,66 @@ export function createOrchestratorRuntime({
     return report;
   }
 
-  async function performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string }> {
+  async function performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string; approvalId?: string }> {
     await ready;
     const item = await store.getItem(itemId);
     if (!item) throw httpError(`Unknown item "${itemId}".`, 404);
+    if (item.status !== "open" && item.status !== "snoozed") throw httpError(`This item is ${item.status}; its actions no longer run.`, 409);
     const action = item.actions[actionIndex];
     if (!action) throw httpError("The item has no such action.", 404);
+    if (action.type !== "start_session" && action.type !== "send_prompt" && action.type !== "remove_worktree") {
+      throw httpError(`The ${action.type} action runs in the browser.`, 400);
+    }
+    const approval = await hub.approvals.guardAction(item, actionIndex, action);
+    const refs = { itemId, ...(item.links.projectId ? { projectId: item.links.projectId } : {}), ...(item.links.sessionId ? { sessionId: item.links.sessionId } : {}) };
+    if (approval) {
+      void hub.activity.log({ actor: "user", kind: "item.action", summary: `Asked to run "${action.label ?? action.type}" on ${item.title}; waiting for approval`, refs: { ...refs, approvalId: approval.id } });
+      return { approvalId: approval.id };
+    }
+    let outcome: { sessionId?: string; promptError?: string } = {};
     switch (action.type) {
       case "start_session":
         // The session exists even when its prompt failed; the caller gets both facts.
-        return startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt });
+        outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt });
+        break;
       case "send_prompt":
         await deps.sessions.prompt(action.sessionId, action.prompt);
-        return {};
+        break;
       case "remove_worktree":
         await removeProject(deps, { id: action.projectId, deleteWorktree: true });
-        return {};
-      default:
-        throw httpError(`The ${action.type} action runs in the browser.`, 400);
+        break;
     }
+    void hub.activity.log({
+      actor: "user", kind: "item.action", summary: `Ran "${action.label ?? action.type}" on ${item.title}`,
+      refs: { ...refs, ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}) }, detail: { action: action.type, ...(outcome.promptError ? { promptError: outcome.promptError } : {}) },
+    });
+    return outcome;
+  }
+
+  async function updateItem(id: string, patch: ItemPatch) {
+    const item = await store.updateItem(id, patch);
+    void hub.activity.log({
+      actor: "user", kind: (patch.status && itemChangeKind[patch.status]) ?? "item.updated",
+      summary: patch.status ? `Marked "${item.title}" ${patch.status}` : `Edited "${item.title}"`, refs: { itemId: id },
+    });
+    void emitItems();
+    void emitStatus();
+    return item;
   }
 
   return {
     ready,
+    hub,
     status,
-    history: () => store.readMessages(),
+    listThreads: () => store.listThreads(),
+    history: (threadId = MAIN_THREAD_ID) => store.readMessages(threadId),
     chat,
-    cancel() {
-      current?.abort();
+    cancel(threadId = MAIN_THREAD_ID) {
+      chatTurns.get(threadId)?.abort();
     },
     runTick,
     listItems: () => store.listItems(),
-    async updateItem(id, patch) {
-      const item = await store.updateItem(id, patch);
-      void emitItems();
-      void emitStatus();
-      return item;
-    },
+    updateItem,
     listWatches: () => store.listWatches(),
     async updateWatch(id, patch) {
       const watch = await store.updateWatch(id, patch);
@@ -440,7 +483,9 @@ export function createOrchestratorRuntime({
       scheduler.stop();
       unsubscribePresence();
       unsubscribeSettings();
-      current?.abort();
+      for (const controller of chatTurns.values()) controller.abort();
+      tickController?.abort();
+      await hub.jobs.dispose().catch((err: unknown) => console.error("Could not stop the job worker:", err));
     },
   };
 }

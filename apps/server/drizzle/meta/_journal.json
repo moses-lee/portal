@@ -15,6 +15,13 @@
       "when": 1790128758163,
       "tag": "0001_fearless_wallflower",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790145521726,
+      "tag": "0002_orchestrator_v2",
+      "breakpoints": true
     }
   ]
 }

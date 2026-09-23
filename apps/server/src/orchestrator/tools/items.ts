@@ -7,7 +7,8 @@ const id = z.string().min(1);
 
 export const itemKinds = [
   "session_finished", "session_waiting", "session_offline", "pr_checks_failing", "pr_changes_requested", "pr_conflicts",
-  "pr_review_requested", "pr_merged", "pr_closed", "worktree_merged", "worktree_dirty", "folder_missing", "watch_update", "custom",
+  "pr_review_requested", "pr_merged", "pr_closed", "worktree_merged", "worktree_dirty", "folder_missing", "watch_update", "intent_update",
+  "approval_needed", "custom",
 ] as const satisfies readonly ItemKind[];
 
 export const pullRefSchema = z.object({ repo: z.string().min(1), number: z.number().int().positive(), url: z.string().min(1) });

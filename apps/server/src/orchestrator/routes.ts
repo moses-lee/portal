@@ -11,8 +11,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 import { openEventStream } from "../http/sse.ts";
+import { registerApprovalRoutes } from "./approvals/routes.ts";
+import { registerJobRoutes } from "./jobs/routes.ts";
+import { registerMemoryRoutes } from "./memory/routes.ts";
 import { parseItemPatch, parseWatchPatch } from "./store.ts";
 import type { OrchestratorEvent, OrchestratorMessage } from "./types.ts";
+import { MAIN_THREAD_ID } from "./types.ts";
+import { registerWorldRoutes } from "./world/routes.ts";
 
 type IdParams = { Params: { id: string } };
 
@@ -22,6 +27,13 @@ function readObject(body: unknown): Record<string, unknown> | null {
 }
 
 const notAnObject = (reply: FastifyReply) => reply.code(400).send({ error: "Expected a JSON object body." });
+
+/** A query value as a non-negative integer, or undefined. */
+function queryInt(value: unknown): number | undefined {
+  return typeof value === "string" && /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
+const queryString = (value: unknown) => (typeof value === "string" && value ? value : undefined);
 
 /** The `:index` segment as a non-negative integer, or null. */
 function parseIndex(value: string): number | null {
@@ -88,22 +100,65 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return { messages: await runtime.history() };
   });
 
-  /**
-   * `POST /api/portal/messages` — body `{ message }`, the newest user message only (the server owns
-   * the history); only its id and text are used. Answers with the AI SDK UI message stream; 409
-   * (JSON) while not ready or busy. Not compressed: gzip would hold the stream's chunks back.
-   */
-  app.post("/api/portal/messages", { compress: false }, async (req, reply) => {
+  /** Answers a chat turn in `threadId` for the request's `{ message }` body. */
+  async function postMessage(req: FastifyRequest, reply: FastifyReply, threadId: string) {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     const body = readObject(req.body);
     if (!body) return notAnObject(reply);
     const message = parseUserMessage(body.message);
     if (!message) return reply.code(400).send({ error: "Expected { message } with role \"user\" and a non-empty text part." });
-    return sendWebResponse(reply, await runtime.chat(message));
+    return sendWebResponse(reply, await runtime.chat(message, threadId));
+  }
+
+  /**
+   * `POST /api/portal/messages` — body `{ message }`, the newest user message only (the server owns
+   * the history); only its id and text are used. A turn in the main thread; answers with the AI SDK
+   * UI message stream; 409 (JSON) while not ready or while the main thread is answering. Not
+   * compressed: gzip would hold the stream's chunks back.
+   */
+  app.post("/api/portal/messages", { compress: false }, (req, reply) => postMessage(req, reply, MAIN_THREAD_ID));
+
+  /** `GET /api/portal/threads` — `{ threads }`: main first, then side threads by latest activity. */
+  app.get("/api/portal/threads", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    return { threads: await runtime.listThreads() };
   });
 
-  /** `POST /api/portal/cancel` — stops the running chat turn or tick; 204 either way. */
+  /** `GET /api/portal/threads/:id/messages` — one thread's messages `{ messages }`; 404 for an unknown thread. */
+  app.get<IdParams>("/api/portal/threads/:id/messages", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    if (!(await runtime.hub.store.getThread(req.params.id))) return reply.code(404).send({ error: `Unknown thread "${req.params.id}".` });
+    return { messages: await runtime.history(req.params.id) };
+  });
+
+  /** `POST /api/portal/threads/:id/messages` — as `POST /api/portal/messages`, in that thread (each thread has its own lock). */
+  app.post<IdParams>("/api/portal/threads/:id/messages", { compress: false }, (req, reply) => postMessage(req, reply, req.params.id));
+
+  /** `POST /api/portal/threads/:id/cancel` — stops that thread's chat turn; background jobs keep going. 204 either way. */
+  app.post<IdParams>("/api/portal/threads/:id/cancel", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    runtime.cancel(req.params.id);
+    return reply.code(204).send();
+  });
+
+  /** `GET /api/portal/activity?before=&limit=&kind=&threadId=&runId=` — `{ entries }`, newest first. */
+  app.get<{ Querystring: Record<string, string | undefined> }>("/api/portal/activity", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    const query = req.query ?? {};
+    return {
+      entries: await runtime.hub.activity.list({
+        before: queryInt(query.before), limit: queryInt(query.limit), kind: queryString(query.kind),
+        threadId: queryString(query.threadId), runId: queryString(query.runId),
+      }),
+    };
+  });
+
+  /** `POST /api/portal/cancel` — stops the main thread's chat turn; background jobs keep going. 204 either way. */
   app.post("/api/portal/cancel", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
@@ -190,16 +245,22 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, and `watches`, then forwards every runtime event (`status`, `messages`, `items`,
-   * `watches`, `tick`) as it happens. Holding it open counts the browser as present, which picks
+   * `items`, `watches`, `threads`, `approvals`, and `intents`, then forwards every runtime event as
+   * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter tick interval.
    */
   app.get("/api/portal/stream", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
-    const [status, items, watches] = await Promise.all([runtime.status(), runtime.listItems(), runtime.listWatches()]);
-    const opening: OrchestratorEvent[] = [{ type: "status", status }, { type: "items", items }, { type: "watches", watches }];
+    const [status, items, watches, threads, approvals, intents] = await Promise.all([
+      runtime.status(), runtime.listItems(), runtime.listWatches(), runtime.listThreads(), runtime.hub.approvals.pending(),
+      runtime.hub.jobs.listIntents({ status: ["active"] }),
+    ]);
+    const opening: OrchestratorEvent[] = [
+      { type: "status", status }, { type: "items", items }, { type: "watches", watches }, { type: "threads", threads },
+      { type: "approvals", approvals }, { type: "intents", intents },
+    ];
     const stream = openEventStream(req, reply);
     if (stream.closed) return reply;
     const leave = ctx.presence.open();
@@ -211,4 +272,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     });
     return reply;
   });
+
+  registerJobRoutes(app, ctx);
+  registerWorldRoutes(app, ctx);
+  registerMemoryRoutes(app, ctx);
+  registerApprovalRoutes(app, ctx);
 }

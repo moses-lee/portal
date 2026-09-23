@@ -41,6 +41,8 @@ export const kindLabels: Record<ItemKind, string> = {
   worktree_dirty: "Worktree dirty",
   folder_missing: "Folder missing",
   watch_update: "Watch update",
+  intent_update: "Goal update",
+  approval_needed: "Needs approval",
   custom: "Note",
 };
 

@@ -58,7 +58,7 @@ test("status, messages, ticks, items, watches, and memory answer their JSON shap
   assert.deepEqual(Object.keys(status.json()), ["status"]);
   assert.equal(status.json().status.ready, true);
   assert.equal(status.json().status.busy, false);
-  assert.equal(status.json().status.provider, "openai");
+  assert.equal(status.json().status.provider, "anthropic");
   assert.deepEqual(status.json().status.openItems, { needs_you: 0, ideas: 0 });
 
   assert.deepEqual((await inject(app, "GET", "/api/portal/messages")).json(), { messages: [] });

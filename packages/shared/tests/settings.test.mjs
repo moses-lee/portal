@@ -58,8 +58,8 @@ test("mergeSettings fills in defaults and ignores blank overrides", () => {
 test("mergeSettings applies orchestrator overrides and masks API keys to booleans", () => {
   const merged = mergeSettings({
     orchestrator: {
-      provider: "anthropic",
-      model: "claude-x",
+      provider: "openai",
+      model: "gpt-x",
       intervalMinutes: 5,
       idleIntervalMinutes: 120,
       apiKeys: { anthropic: "sk-ant-secret" },
@@ -67,8 +67,9 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
   });
   assert.deepEqual(merged.gitActions, defaultSettings.gitActions);
   assert.deepEqual(merged.orchestrator, {
-    provider: "anthropic",
-    model: "claude-x",
+    provider: "openai",
+    model: "gpt-x",
+    bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
     intervalMinutes: 5,
     idleIntervalMinutes: 120,
     apiKeys: { openai: false, anthropic: true },
@@ -106,11 +107,12 @@ test("settingsOverrides writes only the orchestrator fields that differ, and nev
   assert.deepEqual(mergeSettings(settingsOverrides(one)), one);
 
   const all = mergeSettings({
-    orchestrator: { provider: "anthropic", model: "claude-x", intervalMinutes: 1, idleIntervalMinutes: 10080 },
+    orchestrator: { provider: "openai", model: "gpt-x", bookkeeping: { provider: "openai", model: "gpt-mini" }, intervalMinutes: 1, idleIntervalMinutes: 10080 },
   });
   assert.deepEqual(settingsOverrides(all), {
-    orchestrator: { provider: "anthropic", model: "claude-x", intervalMinutes: 1, idleIntervalMinutes: 10080 },
+    orchestrator: { provider: "openai", model: "gpt-x", bookkeeping: { provider: "openai", model: "gpt-mini" }, intervalMinutes: 1, idleIntervalMinutes: 10080 },
   });
+  assert.deepEqual(mergeSettings(settingsOverrides(all)), all);
 
   // Explicit defaults are not overrides.
   assert.deepEqual(settingsOverrides(mergeSettings({ orchestrator: { ...orchestratorDefaults } })), {});
@@ -135,15 +137,16 @@ test("applySettingsPatch layers a patch on top and resets blank prompts to defau
 test("applySettingsPatch touches only the section a patch names", () => {
   const start = mergeSettings({
     gitActions: { prompts: { checks: "A" } },
-    orchestrator: { provider: "anthropic", model: "claude-x", intervalMinutes: 5, apiKeys: { anthropic: "k" } },
+    orchestrator: { provider: "openai", model: "gpt-x", intervalMinutes: 5, apiKeys: { anthropic: "k" } },
   });
 
   // An orchestrator-only patch keeps the prompts.
-  const orchestratorOnly = applySettingsPatch(start, { orchestrator: { model: "claude-y", idleIntervalMinutes: 30 } });
+  const orchestratorOnly = applySettingsPatch(start, { orchestrator: { model: "gpt-y", idleIntervalMinutes: 30 } });
   assert.deepEqual(orchestratorOnly.gitActions, start.gitActions);
   assert.deepEqual(orchestratorOnly.orchestrator, {
-    provider: "anthropic",
-    model: "claude-y",
+    provider: "openai",
+    model: "gpt-y",
+    bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
     intervalMinutes: 5,
     idleIntervalMinutes: 30,
     apiKeys: { openai: false, anthropic: true },
@@ -162,7 +165,7 @@ test("applySettingsPatch touches only the section a patch names", () => {
   assert.deepEqual(applySettingsPatch(keys, { orchestrator: { provider: "openai" } }).orchestrator.apiKeys, keys.orchestrator.apiKeys);
 
   // Orchestrator fields have no "blank means default": a blank model is ignored rather than reset.
-  assert.equal(applySettingsPatch(start, { orchestrator: { model: "" } }).orchestrator.model, "claude-x");
+  assert.equal(applySettingsPatch(start, { orchestrator: { model: "" } }).orchestrator.model, "gpt-x");
   assert.deepEqual(applySettingsPatch(start, { orchestrator: {} }), start);
   assert.deepEqual(applySettingsPatch(start, {}), start);
   assert.notEqual(applySettingsPatch(start, {}).orchestrator.apiKeys, start.orchestrator.apiKeys, "does not alias the input");
@@ -217,4 +220,23 @@ test("applySettingsPatch layers script fields and keeps the ones a patch leaves 
   assert.deepEqual(off.gitActions, defaultSettings.gitActions);
   assert.deepEqual(off.orchestrator, defaultSettings.orchestrator);
   assert.deepEqual(applySettingsPatch(second, { gitActions: { prompts: { checks: "x" } } }).scripts, second.scripts);
+});
+
+test("a provider change without a model takes that provider's default for the role, so the model follows the provider", () => {
+  const start = mergeSettings(null);
+  assert.equal(start.orchestrator.model, "claude-opus-5-5");
+  const switched = applySettingsPatch(start, { orchestrator: { provider: "openai" } });
+  assert.equal(switched.orchestrator.provider, "openai");
+  assert.equal(switched.orchestrator.model, "gpt-5");
+  // Naming a model with the provider keeps that model; re-sending the same provider keeps the current one.
+  assert.equal(applySettingsPatch(start, { orchestrator: { provider: "openai", model: "gpt-x" } }).orchestrator.model, "gpt-x");
+  const custom = applySettingsPatch(start, { orchestrator: { model: "claude-custom" } });
+  assert.equal(applySettingsPatch(custom, { orchestrator: { provider: "anthropic" } }).orchestrator.model, "claude-custom");
+  // The bookkeeping role follows the same rule on its own.
+  const cheap = applySettingsPatch(start, { orchestrator: { bookkeeping: { provider: "openai" } } });
+  assert.deepEqual(cheap.orchestrator.bookkeeping, { provider: "openai", model: "gpt-5-mini" });
+  assert.equal(cheap.orchestrator.model, "claude-opus-5-5");
+  assert.deepEqual(applySettingsPatch(cheap, { orchestrator: { bookkeeping: { model: "gpt-nano" } } }).orchestrator.bookkeeping, { provider: "openai", model: "gpt-nano" });
+  // An old overrides file that switched to anthropic but kept the OpenAI model id now reads a Claude model.
+  assert.equal(mergeSettings({ orchestrator: { provider: "openai" } }).orchestrator.model, "gpt-5");
 });

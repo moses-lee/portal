@@ -23,6 +23,9 @@
  *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `watches`
  */
 import type { UIMessage } from "ai";
+import type { ActivityEntry } from "./activity.ts";
+import type { Approval } from "./approvals.ts";
+import type { Intent, JobRun } from "./jobs.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Settings (the pure settings module owns storage; these are the shapes it exposes)
@@ -33,9 +36,12 @@ export const orchestratorProviders: readonly OrchestratorProvider[] = ["openai",
 
 /** Orchestrator settings as served to the browser: keys are reported as present/absent only. */
 export type OrchestratorSettings = {
+  /** The chat role's provider: chat turns, helpers, curation. */
   provider: OrchestratorProvider;
-  /** Provider model id, e.g. "gpt-5-mini". */
+  /** The chat role's model id, e.g. "claude-opus-5-5". */
   model: string;
+  /** The bookkeeping role (tick bookkeeping): a cheap model, possibly on another provider. */
+  bookkeeping: ModelChoice;
   /** Tick interval while at least one browser has Portal open. */
   intervalMinutes: number;
   /** Tick interval while no browser is connected. */
@@ -44,21 +50,81 @@ export type OrchestratorSettings = {
   apiKeys: Record<OrchestratorProvider, boolean>;
 };
 
-/** PATCH shape. An empty string for a key clears it. */
+/**
+ * PATCH shape. An empty string for a key clears it. A provider change without a model resets the
+ * model to that provider's default for the role, so the model always follows the provider.
+ */
 export type OrchestratorSettingsPatch = {
   provider?: OrchestratorProvider;
   model?: string;
+  bookkeeping?: Partial<ModelChoice>;
   intervalMinutes?: number;
   idleIntervalMinutes?: number;
   apiKeys?: Partial<Record<OrchestratorProvider, string>>;
 };
 
 export const defaultOrchestratorSettings: OrchestratorSettings = {
-  provider: "openai",
-  model: "gpt-5-mini",
+  provider: "anthropic",
+  model: "claude-opus-5-5",
+  bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
   intervalMinutes: 10,
   idleIntervalMinutes: 60,
   apiKeys: { openai: false, anthropic: false },
+};
+
+/** The two jobs a model does: talking with the user and curating (frontier), and tick bookkeeping (cheap). */
+export type ModelRole = "chat" | "bookkeeping";
+export const modelRoles: readonly ModelRole[] = ["chat", "bookkeeping"];
+
+/** A provider and one of its model ids. */
+export type ModelChoice = { provider: OrchestratorProvider; model: string };
+
+/** The model each role uses on a provider unless the user picked another one. */
+export const defaultModels: Record<OrchestratorProvider, Record<ModelRole, string>> = {
+  anthropic: { chat: "claude-opus-5-5", bookkeeping: "claude-haiku-4-5" },
+  openai: { chat: "gpt-5", bookkeeping: "gpt-5-mini" },
+};
+
+// ---------------------------------------------------------------------------------------------
+// Scope: what a thread, an intent, or a memory record is about
+// ---------------------------------------------------------------------------------------------
+
+export type Scope = {
+  projectIds: string[];
+  sessionIds: string[];
+  pulls: PullRef[];
+  /** "owner/name" */
+  repos: string[];
+  /** GitHub logins. */
+  people: string[];
+  /** Task-type slugs, e.g. "code-review". */
+  taskTypes: string[];
+};
+
+export const emptyScope = (): Scope => ({ projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] });
+
+// ---------------------------------------------------------------------------------------------
+// Threads
+// ---------------------------------------------------------------------------------------------
+
+/** The one thread the user talks in; side threads (one per task) are created by the agent only. */
+export const MAIN_THREAD_ID = "main";
+
+export type ThreadKind = "main" | "side";
+export type ThreadStatus = "active" | "archived";
+
+export type Thread = {
+  id: string;
+  kind: ThreadKind;
+  title: string;
+  status: ThreadStatus;
+  /** What the thread is about; memory retrieval in its turns narrows to this. Empty for the main thread. */
+  scope: Scope;
+  /** The intent the thread was opened for, when there is one. */
+  intentId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  lastMessageAt: number | null;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -83,6 +149,10 @@ export type ItemKind =
   | "worktree_dirty"
   | "folder_missing"
   | "watch_update"
+  /** An intent fired or needs the user. */
+  | "intent_update"
+  /** A background job is paused on an approval; the item links to it. */
+  | "approval_needed"
   | "custom";
 
 /** A GitHub pull request reference, independent of whether Portal has the repo locally. */
@@ -98,6 +168,10 @@ export type ItemLinks = {
   sessionId?: string;
   pull?: PullRef;
   watchId?: string;
+  intentId?: string;
+  jobId?: string;
+  threadId?: string;
+  approvalId?: string;
 };
 
 /** A button on an item card. Every action maps onto something the server can do without the model. */
@@ -158,6 +232,8 @@ export type OrchestratorMessageMetadata = {
   at: number;
   /** Set on assistant messages produced by a scheduled or manual tick rather than a user prompt. */
   tick?: { id: string; reason: TickReason };
+  /** The run that produced an assistant message (chat turn, tick, helper, intent check). */
+  run?: { id: string; kind: JobRun["kind"] };
   /** Items created or updated by this message, shown as cards beneath it. */
   itemIds?: string[];
 };
@@ -274,13 +350,34 @@ export type OrchestratorStatus = {
   lastTick: TickReport | null;
   nextTickAt: number | null;
   openItems: { needs_you: number; ideas: number };
+  /** Threads with a chat turn running; each thread has its own lock, and jobs never take one. */
+  busyThreads: string[];
+  /** Runs in progress right now (chat turns and background jobs), oldest first. */
+  runs: Pick<JobRun, "id" | "kind" | "jobId" | "threadId" | "startedAt" | "summary">[];
+  /** The next job due, for the status line. */
+  nextJob: { id: string; title: string; at: number } | null;
+  counts: { needsYou: number; inbox: number; approvals: number; intents: number };
+  /** One line for the live status bar: what is running, else what comes next. */
+  line: string;
 };
 
 /** Pushed over `GET /api/portal/stream` (Server-Sent Events). */
 export type OrchestratorEvent =
   | { type: "status"; status: OrchestratorStatus }
-  /** The thread changed outside the viewer's own chat turn (a tick appended a message, an action added a user message). Refetch history. */
-  | { type: "messages" }
+  /** A thread changed outside the viewer's own chat turn (a job appended a message). Refetch that thread; absent `threadId` means the main thread. */
+  | { type: "messages"; threadId?: string }
+  | { type: "threads"; threads: Thread[] }
+  | { type: "activity"; entry: ActivityEntry }
+  /** Jobs changed; refetch `/api/portal/jobs`. */
+  | { type: "jobs" }
+  | { type: "intents"; intents: Intent[] }
+  /** A run started or finished. */
+  | { type: "run"; run: JobRun }
+  | { type: "approvals"; approvals: Approval[] }
+  /** Memory records changed; refetch what is shown. */
+  | { type: "memory"; recordIds: string[] }
+  /** The world state was rebuilt. */
+  | { type: "world"; at: number }
   | { type: "items"; items: Item[] }
   | { type: "watches"; watches: Watch[] }
   | { type: "tick"; report: TickReport };

@@ -154,6 +154,7 @@ for (const [name, make] of backends) {
     assert.deepEqual(result.orchestrator, {
       provider: "anthropic",
       model: "claude-x",
+      bookkeeping: orchestratorDefaults.bookkeeping,
       intervalMinutes: 5,
       idleIntervalMinutes: orchestratorDefaults.idleIntervalMinutes,
       apiKeys: { openai: false, anthropic: true },
@@ -161,7 +162,7 @@ for (const [name, make] of backends) {
     assert.deepEqual(result.gitActions, defaultSettings.gitActions, "the other section is untouched");
     assert.ok(!JSON.stringify(result).includes("sk-ant"), "the returned settings never contain a key");
     assert.deepEqual(await stored(), {
-      overrides: { orchestrator: { provider: "anthropic", model: "claude-x", intervalMinutes: 5 } },
+      overrides: { orchestrator: { model: "claude-x", intervalMinutes: 5 } },
       keys: { anthropic: "sk-ant-secret" },
       written: true,
     });
@@ -474,10 +475,10 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
   assert.equal(await store.apiKey("openai"), null, "a key in the overrides row is never used");
 
   // The next change rewrites the row without the bad values.
-  await store.patch({ orchestrator: { provider: "anthropic" } });
+  await store.patch({ orchestrator: { intervalMinutes: 15 } });
   assert.deepEqual((await stored()).overrides, {
     gitActions: { prompts: { checks: "ok" } },
-    orchestrator: { provider: "anthropic", model: "claude-x", idleIntervalMinutes: 30 },
+    orchestrator: { model: "claude-x", intervalMinutes: 15, idleIntervalMinutes: 30 },
     scripts: { preWorktreeDelete: { command: "make clean" } },
   });
 });

@@ -149,7 +149,8 @@ export function fakeSettings({ key = "sk-test", ...overrides } = {}) {
   return {
     read,
     orchestrator: async () => (await read()).orchestrator,
-    apiKey: async (provider) => (provider === orchestrator.provider ? key : null),
+    // The key serves whichever providers the two model roles use.
+    apiKey: async (provider) => (provider === orchestrator.provider || provider === orchestrator.bookkeeping.provider ? key : null),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

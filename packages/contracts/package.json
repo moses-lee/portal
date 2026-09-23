@@ -8,7 +8,12 @@
     "./types": "./src/types.ts",
     "./git-info": "./src/git-info.ts",
     "./shell-types": "./src/shell-types.ts",
-    "./orchestrator": "./src/orchestrator.ts"
+    "./orchestrator": "./src/orchestrator.ts",
+    "./activity": "./src/activity.ts",
+    "./jobs": "./src/jobs.ts",
+    "./world": "./src/world.ts",
+    "./memory": "./src/memory.ts",
+    "./approvals": "./src/approvals.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.0",

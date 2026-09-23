@@ -314,6 +314,11 @@ export const portalStatus: OrchestratorStatus = {
   lastTick: null,
   nextTickAt: now + 7 * 60_000,
   openItems: { needs_you: 1, ideas: 0 },
+  busyThreads: [],
+  runs: [],
+  nextJob: { id: "tick", title: "Check for changes", at: now + 7 * 60_000 },
+  counts: { needsYou: 1, inbox: 0, approvals: 0, intents: 0 },
+  line: "Idle · next: Check for changes",
 };
 
 /** A failing-checks item on PR #42 with one action of each browser-side kind. */

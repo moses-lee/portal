@@ -5,14 +5,20 @@
  * server's modules keep importing everything from one place.
  */
 import type {
-  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, TickReason, TickReport, TickSnapshot, Watch, WatchPatch,
+  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickReason, TickReport, TickSnapshot, Watch, WatchPatch,
 } from "@portal/contracts/orchestrator";
+
+import type { OrchestratorHub } from "./hub.ts";
 
 export * from "@portal/contracts/orchestrator";
 
 // ---------------------------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------------------------
+
+/** A side thread as the agent opens it. */
+export type ThreadInput = { title: string; scope?: Partial<Scope>; intentId?: string | null };
+export type ThreadPatch = Partial<Pick<Thread, "title" | "status" | "scope" | "intentId">>;
 
 /**
  * Persistence for the orchestrator, in Postgres (`orchestrator_*` tables, see `src/db/schema.ts`):
@@ -23,10 +29,18 @@ export * from "@portal/contracts/orchestrator";
 export interface OrchestratorStore {
   ready: Promise<void>;
 
-  readMessages(): Promise<OrchestratorMessage[]>;
-  /** Replaces the thread. */
-  writeMessages(messages: OrchestratorMessage[]): Promise<void>;
-  appendMessages(messages: OrchestratorMessage[]): Promise<void>;
+  /** A thread's messages in order; `threadId` defaults to the main thread. */
+  readMessages(threadId?: string): Promise<OrchestratorMessage[]>;
+  /** Replaces the thread's messages. */
+  writeMessages(messages: OrchestratorMessage[], threadId?: string): Promise<void>;
+  /** Appends to the thread and moves its `lastMessageAt`. */
+  appendMessages(messages: OrchestratorMessage[], threadId?: string): Promise<void>;
+
+  /** Every thread, the main one first, then side threads newest first. */
+  listThreads(): Promise<Thread[]>;
+  getThread(id: string): Promise<Thread | null>;
+  createThread(input: ThreadInput): Promise<Thread>;
+  updateThread(id: string, patch: ThreadPatch): Promise<Thread>;
 
   listItems(): Promise<Item[]>;
   getItem(id: string): Promise<Item | null>;
@@ -56,23 +70,32 @@ export interface OrchestratorStore {
 
 export interface OrchestratorRuntime {
   ready: Promise<void>;
+  /** The shared parts and domain services; domain routes reach their service through it. */
+  hub: OrchestratorHub;
   status(): Promise<OrchestratorStatus>;
-  history(): Promise<OrchestratorMessage[]>;
+  listThreads(): Promise<Thread[]>;
+  /** A thread's messages; the main thread when `threadId` is omitted. */
+  history(threadId?: string): Promise<OrchestratorMessage[]>;
   /**
-   * Runs one chat turn for the user's newest message. Returns the AI SDK UI message stream response
-   * (`toUIMessageStreamResponse`); the runtime persists the user message immediately and the
-   * assistant message when the stream finishes, then emits a `messages` event.
-   * Rejects with an Error whose `status` is 409 when the runtime is not ready (no API key) or busy.
+   * Runs one chat turn in a thread (default: main) for the user's newest message. Returns the AI
+   * SDK UI message stream response (`toUIMessageStreamResponse`); the runtime persists the user
+   * message immediately and the assistant message when the stream finishes, then emits a
+   * `messages` event. Each thread has its own lock: rejects with status 409 while that thread is
+   * answering or when no key is stored, 404 for an unknown thread. Jobs never block it.
    */
-  chat(userMessage: OrchestratorMessage): Promise<Response>;
-  /** Cancels the running chat turn or tick, if any. */
-  cancel(): void;
+  chat(userMessage: OrchestratorMessage, threadId?: string): Promise<Response>;
+  /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
+  cancel(threadId?: string): void;
   runTick(reason: TickReason): Promise<TickReport>;
 
   listItems(): Promise<Item[]>;
   updateItem(id: string, patch: ItemPatch): Promise<Item>;
-  /** Executes one of an item's actions server-side (open_* actions are browser-only and rejected here). */
-  performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string }>;
+  /**
+   * Executes one of an item's actions server-side (open_* actions are browser-only and rejected
+   * here). Only open or snoozed items act (409 otherwise). An action the approval gate holds back
+   * answers `{ approvalId }` and runs once approved.
+   */
+  performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string; approvalId?: string }>;
   listWatches(): Promise<Watch[]>;
   updateWatch(id: string, patch: WatchPatch): Promise<Watch>;
   listTicks(): Promise<TickReport[]>;
@@ -83,6 +106,6 @@ export interface OrchestratorRuntime {
   // every SSE route opens/closes; the runtime subscribes to it rather than being told.
 
   subscribe(listener: (event: OrchestratorEvent) => void): () => void;
-  /** Stops the scheduler and any in-flight turn. */
+  /** Stops the scheduler, the job worker, and any in-flight turn. */
   dispose(): Promise<void>;
 }
