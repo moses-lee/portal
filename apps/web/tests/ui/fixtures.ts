@@ -10,11 +10,26 @@ import type {
   PortalEvent,
 } from "../../src/lib/types";
 import type {
+  ActivityEntry,
+  Approval,
+  ApprovalGrant,
+  ApprovalScope,
+  CoreDocument,
+  Intent,
   Item,
+  Job,
+  JobRun,
+  MemoryEntity,
+  MemoryRecord,
+  MemoryRevision,
+  OrchestratorEvent,
   OrchestratorMessage,
   OrchestratorStatus,
+  Thread,
   TickReport,
+  WorldResponse,
 } from "../../src/lib/orchestrator/types";
+import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
 
 const now = Date.now();
 export const project: ProjectSummary = {
@@ -397,7 +412,13 @@ declare global {
       seq?: number,
     ) => void;
     __portalSessions: SessionSummary[];
-    __portalLive: { status: OrchestratorStatus; items: Item[] };
+    __portalLive: {
+      status: OrchestratorStatus;
+      items: Item[];
+      threads: Thread[];
+      intents: Intent[];
+      approvals: Approval[];
+    };
   }
 }
 
@@ -413,6 +434,10 @@ export async function emit(
     { data, type, seq },
   );
 }
+
+/** Pushes one orchestrator event through the page's open `/api/portal/stream`. */
+export const emitPortal = (page: Page, event: OrchestratorEvent) =>
+  page.evaluate((event) => window.__portalEmit("/api/portal/stream", event, "message"), event);
 
 export async function setupPortal(
   page: Page,
@@ -433,11 +458,31 @@ export async function setupPortal(
     sessions?: SessionSummary[];
     /** Replaces the default two projects. */
     projects?: ProjectSummary[];
-    /** Talk to Portal's state: what `/api/portal`, its messages, items, and stream answer with. */
+    /**
+     * Talk to Portal's state: what `/api/portal`, its messages, items, and stream answer with, and
+     * what the phase 2 routes (threads, jobs, runs, intents, activity, memory, world, approvals)
+     * answer, per the contracts. Everything defaults to empty but the main thread.
+     */
     portal?: {
       status?: Partial<OrchestratorStatus>;
       messages?: OrchestratorMessage[];
       items?: Item[];
+      threads?: Thread[];
+      /** Side threads' messages by thread id. */
+      threadMessages?: Record<string, OrchestratorMessage[]>;
+      intents?: Intent[];
+      approvals?: Approval[];
+      jobs?: Job[];
+      runs?: JobRun[];
+      activity?: ActivityEntry[];
+      entities?: MemoryEntity[];
+      records?: MemoryRecord[];
+      revisions?: MemoryRevision[];
+      core?: CoreDocument;
+      world?: WorldResponse;
+      grants?: ApprovalGrant[];
+      /** What `POST /api/portal/items/:id/actions/:index` answers for server-side actions. */
+      actionResult?: { sessionId?: string; approvalId?: string };
     };
   } = {},
 ) {
@@ -450,6 +495,21 @@ export async function setupPortal(
     // Timed from now, not from module load, so "next check in 7 min" holds however long the run has been going.
     status: { ...portalStatus, nextTickAt: Date.now() + 7 * 60_000, ...options.portal?.status },
     items: structuredClone(options.portal?.items ?? [portalItem]),
+    threads: structuredClone(options.portal?.threads ?? [mainThread]),
+    intents: structuredClone(options.portal?.intents ?? []),
+    approvals: structuredClone(options.portal?.approvals ?? []),
+  };
+  const orch = {
+    threadMessages: structuredClone(options.portal?.threadMessages ?? {}),
+    jobs: structuredClone(options.portal?.jobs ?? []),
+    runs: structuredClone(options.portal?.runs ?? []),
+    activity: structuredClone(options.portal?.activity ?? []),
+    entities: structuredClone(options.portal?.entities ?? []),
+    records: structuredClone(options.portal?.records ?? []),
+    revisions: structuredClone(options.portal?.revisions ?? []),
+    core: structuredClone(options.portal?.core ?? coreDocument),
+    world: structuredClone(options.portal?.world ?? worldResponse),
+    grants: structuredClone(options.portal?.grants ?? []),
   };
   const portalThread = structuredClone(options.portal?.messages ?? portalMessages);
   const history = options.history ?? events;
@@ -458,6 +518,8 @@ export async function setupPortal(
   let sendDelay = 0;
   /** When set, `POST /api/portal/messages` answers 409 `{ error }` the way the runtime does while a check is running. */
   let failPortalSend: string | null = null;
+  /** Sends to these threads wait until the test releases them: a turn that stays "running". */
+  const sendHolds = new Map<string, Promise<void>>();
   await page.addInitScript(
     ({ sessions, live }) => {
       window.__portalSessions = sessions;
@@ -481,7 +543,9 @@ export async function setupPortal(
             else if (url === "/api/portal/stream") {
               this.send({ type: "status", status: window.__portalLive.status }, "message");
               this.send({ type: "items", items: window.__portalLive.items }, "message");
-              this.send({ type: "watches", watches: [] }, "message");
+              this.send({ type: "threads", threads: window.__portalLive.threads }, "message");
+              this.send({ type: "approvals", approvals: window.__portalLive.approvals }, "message");
+              this.send({ type: "intents", intents: window.__portalLive.intents }, "message");
             } else
               this.send(
                 window.__portalSessions.find((session) =>
@@ -540,18 +604,30 @@ export async function setupPortal(
     if (path === "/api/portal") return json({ status: live.status });
     if (path === "/api/portal/messages" && method === "GET")
       return json({ messages: portalThread });
-    if (path === "/api/portal/messages" && method === "POST") {
+    const threadRoute = path.match(/^\/api\/portal\/threads\/([^/]+)\/(messages|cancel)$/);
+    if (threadRoute?.[2] === "cancel" && method === "POST") return route.fulfill({ status: 204 });
+    if (threadRoute && method === "GET") {
+      const id = decodeURIComponent(threadRoute[1]);
+      if (id === "main") return json({ messages: portalThread });
+      if (!live.threads.some((thread) => thread.id === id)) return json({ error: `Unknown thread "${id}".` }, 404);
+      return json({ messages: orch.threadMessages[id] ?? [] });
+    }
+    if ((path === "/api/portal/messages" || threadRoute) && method === "POST") {
       if (failPortalSend) return json({ error: failPortalSend }, 409);
+      const id = threadRoute ? decodeURIComponent(threadRoute[1]) : "main";
+      const thread = id === "main" ? portalThread : (orch.threadMessages[id] ??= []);
+      const hold = sendHolds.get(id);
+      if (hold) await hold;
       // Like the runtime: keep the user message and the reply, and answer with the AI SDK UI message stream.
       const reply = `Portal reply to: ${body?.message?.parts?.[0]?.text ?? ""}`;
-      portalThread.push(body.message, {
-        id: `reply-${portalThread.length}`,
+      thread.push(body.message, {
+        id: `reply-${id}-${thread.length}`,
         role: "assistant",
         metadata: { at: now },
         parts: [{ type: "text", text: reply }],
       });
       const chunks = [
-        { type: "start", messageId: `reply-${portalThread.length - 1}` },
+        { type: "start", messageId: `reply-${id}-${thread.length - 1}` },
         { type: "text-start", id: "t" },
         { type: "text-delta", id: "t", delta: reply },
         { type: "text-end", id: "t" },
@@ -569,12 +645,16 @@ export async function setupPortal(
     if (path === "/api/portal/cancel") return route.fulfill({ status: 204 });
     if (path === "/api/portal/tick") return json({ report: portalTickReport });
     if (path === "/api/portal/items") return json({ items: live.items });
-    if (path === "/api/portal/watches") return json({ watches: [] });
+    const orchestratorReply = handleOrchestrator(path, method, url.searchParams, body, live, orch);
+    if (orchestratorReply)
+      return orchestratorReply.status === 204
+        ? route.fulfill({ status: 204 })
+        : json(orchestratorReply.body, orchestratorReply.status);
     const itemMatch = path.match(/^\/api\/portal\/items\/([^/]+)(?:\/actions\/(\d+))?$/);
     if (itemMatch) {
       const item = live.items.find((row) => row.id === itemMatch[1]);
       if (!item) return json({ error: "Unknown item." }, 404);
-      if (itemMatch[2] !== undefined) return json({ sessionId: "s1" });
+      if (itemMatch[2] !== undefined) return json(options.portal?.actionResult ?? { sessionId: "s1" });
       Object.assign(item, body, { updatedAt: now });
       return json({ item });
     }
@@ -774,8 +854,184 @@ export async function setupPortal(
       failPortalSend = error;
     },
     /** Adds to the thread `GET /api/portal/messages` answers with, the way a tick does; pair with a `messages` stream event. */
-    appendPortalMessage: (message: OrchestratorMessage) => {
-      portalThread.push(structuredClone(message));
+    appendPortalMessage: (message: OrchestratorMessage, threadId = "main") => {
+      if (threadId === "main") portalThread.push(structuredClone(message));
+      else (orch.threadMessages[threadId] ??= []).push(structuredClone(message));
     },
+    /** Holds chat sends to `threadId` until the returned function is called. */
+    holdSends: (threadId = "main") => {
+      let release = () => {};
+      sendHolds.set(
+        threadId,
+        new Promise<void>((resolve) => {
+          release = () => {
+            sendHolds.delete(threadId);
+            resolve();
+          };
+        }),
+      );
+      return release;
+    },
+    /** The mocked server's orchestrator data, for asserting what a request changed. */
+    orchestrator: orch,
+    /** What the stream opened with (status, items, threads, intents, approvals); the mocked routes read it too. */
+    portalLive: live,
   };
+}
+
+type OrchestratorData = {
+  threadMessages: Record<string, OrchestratorMessage[]>;
+  jobs: Job[];
+  runs: JobRun[];
+  activity: ActivityEntry[];
+  entities: MemoryEntity[];
+  records: MemoryRecord[];
+  revisions: MemoryRevision[];
+  core: CoreDocument;
+  world: WorldResponse;
+  grants: ApprovalGrant[];
+};
+
+/**
+ * The phase 2 routes as the contracts describe them (jobs, runs, intents, activity, memory,
+ * world, approvals), answered from `data`; null for any other path. Writes change `data` the way
+ * the server would, so a refetch shows the result.
+ */
+function handleOrchestrator(
+  path: string,
+  method: string,
+  params: URLSearchParams,
+  body: Record<string, unknown> | null,
+  live: { threads: Thread[]; intents: Intent[]; approvals: Approval[] },
+  data: OrchestratorData,
+): { body: unknown; status?: number } | null {
+  const ok = (value: unknown) => ({ body: value });
+  const missing = (what: string) => ({ body: { error: `Unknown ${what}.` }, status: 404 });
+  const limit = Number(params.get("limit") ?? 50);
+  const before = params.get("before");
+  if (path === "/api/portal/threads" && method === "GET") return ok({ threads: live.threads });
+  if (path === "/api/portal/activity" && method === "GET") {
+    const kind = params.get("kind");
+    const entries = data.activity
+      .filter((entry) => (!kind || entry.kind.startsWith(kind)) && (!before || entry.id < Number(before)))
+      .sort((a, b) => b.id - a.id)
+      .slice(0, limit);
+    return ok({ entries });
+  }
+  if (path === "/api/portal/jobs" && method === "GET") {
+    const status = params.get("status");
+    return ok({ jobs: data.jobs.filter((job) => (status ? job.status === status : job.status === "active")) });
+  }
+  const job = path.match(/^\/api\/portal\/jobs\/([^/]+)(\/run)?$/);
+  if (job) {
+    const row = data.jobs.find((entry) => entry.id === job[1]);
+    if (!row) return missing("job");
+    if (job[2] && method === "POST") {
+      const run: JobRun = {
+        id: `run-${row.id}-now`, jobId: row.id, kind: row.kind, threadId: row.threadId, parentRunId: null, status: "running",
+        trigger: "manual", startedAt: Date.now(), finishedAt: null, model: null, usage: null, log: [], result: null, summary: null, error: null,
+      };
+      data.runs.unshift(run);
+      return ok({ run });
+    }
+    if (method === "PATCH") {
+      Object.assign(row, body, { updatedAt: Date.now() });
+      if (row.status !== "active") row.nextRunAt = null;
+      return ok({ job: row });
+    }
+  }
+  if (path === "/api/portal/runs" && method === "GET") {
+    const index = before ? data.runs.findIndex((run) => run.id === before) + 1 : 0;
+    return ok({ runs: data.runs.slice(index, index + limit) });
+  }
+  const runCancel = path.match(/^\/api\/portal\/runs\/([^/]+)\/cancel$/);
+  if (runCancel && method === "POST") return { body: null, status: 204 };
+  if (path === "/api/portal/intents" && method === "GET") return ok({ intents: live.intents });
+  const intentPatch = path.match(/^\/api\/portal\/intents\/([^/]+)$/);
+  if (intentPatch && method === "PATCH") {
+    const row = live.intents.find((entry) => entry.id === intentPatch[1]);
+    if (!row) return missing("intent");
+    return ok({ intent: { ...row, ...body, updatedAt: Date.now() } });
+  }
+  if (path === "/api/portal/world" && method === "GET") return ok(data.world);
+  if (path === "/api/portal/world/refresh" && method === "POST") {
+    data.world = { ...data.world, world: { ...data.world.world, at: Date.now() }, tokens: data.world.tokens + 10 };
+    return ok(data.world);
+  }
+  if (path === "/api/portal/memory/core" && method === "GET") return ok(data.core);
+  if (path === "/api/portal/memory/entities" && method === "GET") return ok({ entities: data.entities });
+  const entity = path.match(/^\/api\/portal\/memory\/entities\/([^/]+)$/);
+  if (entity && method === "GET") {
+    const row = data.entities.find((entry) => entry.id === decodeURIComponent(entity[1]));
+    if (!row) return missing("entity");
+    return ok({ entity: row, records: data.records.filter((record) => record.entityId === row.id) });
+  }
+  if (path === "/api/portal/memory/records" && method === "GET") {
+    const status = params.get("status");
+    const entityId = params.get("entityId");
+    return ok({
+      records: data.records.filter((record) => (!status || record.status === status) && (!entityId || record.entityId === entityId)),
+    });
+  }
+  if (path === "/api/portal/memory/records" && method === "POST") {
+    const input = body as unknown as { entity: { type: MemoryEntity["type"]; key: string }; type: MemoryRecord["type"]; key: string; body: string; pinned?: boolean };
+    let owner = data.entities.find((entry) => entry.type === input.entity.type && entry.key === input.entity.key);
+    if (!owner) {
+      owner = { id: `e-${input.entity.key}`, type: input.entity.type, key: input.entity.key, name: input.entity.key, summary: "", activeRecords: 0, createdAt: Date.now(), updatedAt: Date.now() };
+      data.entities.push(owner);
+    }
+    const record: MemoryRecord = {
+      id: `r-new-${data.records.length}`, entityId: owner.id, type: input.type, key: input.key, body: input.body, status: "active",
+      scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] }, authority: "user_stated",
+      source: { kind: "ui" }, trust: 1, pinned: !!input.pinned, reviewBy: null, supersedes: null, supersededBy: null,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    data.records.push(record);
+    owner.activeRecords++;
+    return ok({ record });
+  }
+  const recordAction = path.match(/^\/api\/portal\/memory\/records\/([^/]+)(?:\/(approve|reject|forget))?$/);
+  if (recordAction) {
+    const row = data.records.find((entry) => entry.id === recordAction[1]);
+    if (!row) return missing("record");
+    const action = recordAction[2];
+    if (action === "approve") Object.assign(row, { status: "active", authority: "user_confirmed" });
+    else if (action === "reject") row.status = "rejected";
+    else if (action === "forget") row.status = "archived";
+    else if (method === "PATCH" && typeof body?.body === "string") {
+      // A body edit supersedes: the old record goes to history, a new one takes its place.
+      const next: MemoryRecord = { ...row, id: `${row.id}-v2`, body: body.body as string, supersedes: row.id, authority: "user_stated", source: { kind: "ui" }, updatedAt: Date.now() };
+      Object.assign(row, { status: "superseded", supersededBy: next.id });
+      data.records.push(next);
+      return ok({ record: next });
+    } else if (method === "PATCH") Object.assign(row, body);
+    row.updatedAt = Date.now();
+    return ok({ record: row });
+  }
+  if (path === "/api/portal/memory/revisions" && method === "GET") {
+    const recordId = params.get("recordId");
+    return ok({ revisions: data.revisions.filter((revision) => !recordId || revision.recordId === recordId) });
+  }
+  if (path === "/api/portal/approvals" && method === "GET") return ok({ approvals: live.approvals.filter((a) => a.status === "pending") });
+  const decide = path.match(/^\/api\/portal\/approvals\/([^/]+)\/decide$/);
+  if (decide && method === "POST") {
+    const row = live.approvals.find((entry) => entry.id === decide[1]);
+    if (!row) return missing("approval");
+    const approve = !!body?.approve;
+    Object.assign(row, {
+      status: approve ? "approved" : "denied",
+      decidedAt: Date.now(),
+      decision: { approve, scope: (body?.scope as ApprovalScope | undefined) ?? "once" },
+    });
+    return ok({ approval: row });
+  }
+  if (path === "/api/portal/approvals/grants" && method === "GET") return ok({ grants: data.grants });
+  const grant = path.match(/^\/api\/portal\/approvals\/grants\/([^/]+)$/);
+  if (grant && method === "DELETE") {
+    const row = data.grants.find((entry) => entry.id === grant[1]);
+    if (!row) return missing("grant");
+    row.revokedAt = Date.now();
+    return { body: null, status: 204 };
+  }
+  return null;
 }

@@ -9,6 +9,7 @@ import {
   MessageCircleMore,
   MoreHorizontal,
   RotateCcw,
+  ShieldQuestion,
   Timer,
 } from "lucide-react";
 import PortalMarkdown from "./PortalMarkdown";
@@ -40,7 +41,7 @@ export const kindLabels: Record<ItemKind, string> = {
   worktree_merged: "Worktree merged",
   worktree_dirty: "Worktree dirty",
   folder_missing: "Folder missing",
-  watch_update: "Watch update",
+  watch_update: "Follow-up",
   intent_update: "Goal update",
   approval_needed: "Needs approval",
   custom: "Note",
@@ -94,6 +95,8 @@ export type ItemCardHandlers = {
   onAsk: (text: string) => void;
   /** The server's copy of the item after a PATCH, so the list updates before the stream confirms. */
   onPatched: (item: Item) => void;
+  /** Open the approvals dialog on this request (an item that links one, or an action the server gated). */
+  onReviewApproval: (approvalId: string) => void;
 };
 
 /** "Resolved", "Dismissed", or "Snoozed until 09:00" for the badge row; null while the item is open. */
@@ -113,16 +116,19 @@ export function describeItemStatus(item: Item): string | null {
 }
 
 /**
- * One action item: title, Markdown body, list and kind badges, its action buttons, and a `⋯`
- * menu to resolve, snooze, or dismiss it (or reopen it once it is settled). `open_*` and
- * `ask_portal` actions run in the browser; the rest go to `POST /api/portal/items/[id]/actions/[index]`.
- * Settled items render dimmed with their status in the badge row.
+ * One action item: title, Markdown body, kind badge, its action buttons, and a `⋯` menu to
+ * resolve, snooze, or dismiss it (or reopen it once it is settled). `open_*` and `ask_portal`
+ * actions run in the browser; the rest go to `POST /api/portal/items/[id]/actions/[index]`, which
+ * may answer `{ approvalId }` when the server gates the action: the approvals dialog takes over.
+ * An item that links an approval (`approval_needed`) gets a "Review request" button for the same
+ * dialog. Settled items render dimmed with their status in the badge row.
  */
 export default function PortalItemCard({
   item,
   onOpenSession,
   onAsk,
   onPatched,
+  onReviewApproval,
 }: { item: Item } & ItemCardHandlers) {
   const [pending, setPending] = useState<number | "menu" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,8 +173,11 @@ export default function PortalItemCard({
         throw new Error(NETWORK_ERROR);
       }
       if (!r.ok) throw await readFailure(r, "Could not run that action. Try again.");
-      const result = (await r.json().catch(() => ({}))) as { sessionId?: string };
-      if (result.sessionId) onOpenSession(result.sessionId);
+      const result = (await r.json().catch(() => ({}))) as { sessionId?: string; approvalId?: string };
+      if (result.approvalId) {
+        flash("Waiting for your approval");
+        onReviewApproval(result.approvalId);
+      } else if (result.sessionId) onOpenSession(result.sessionId);
       else flash("Done");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not run that action. Try again.");
@@ -202,6 +211,7 @@ export default function PortalItemCard({
   };
 
   const settled = item.status === "resolved" || item.status === "dismissed";
+  const approvalId = item.links.approvalId;
   const statusLabel = describeItemStatus(item);
   return (
     <article
@@ -212,15 +222,11 @@ export default function PortalItemCard({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase">
-            <span
-              className={`rounded-full px-1.5 leading-4 ${
-                item.list === "needs_you"
-                  ? "bg-amber-300/15 text-amber-200"
-                  : "bg-white/8 text-foreground/70"
-              }`}
-            >
-              {item.list === "needs_you" ? "Needs you" : "Idea"}
-            </span>
+            {item.list === "needs_you" && (
+              <span className="rounded-full bg-amber-300/15 px-1.5 leading-4 text-amber-200">
+                Needs you
+              </span>
+            )}
             <span className="text-muted-foreground">{kindLabels[item.kind]}</span>
             {statusLabel && <span className="text-muted-foreground">· {statusLabel}</span>}
           </div>
@@ -284,14 +290,26 @@ export default function PortalItemCard({
           <PortalMarkdown text={item.body} compact />
         </div>
       )}
-      {(item.actions.length > 0 || notice) && (
+      {(item.actions.length > 0 || notice || approvalId) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {approvalId && !settled && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => onReviewApproval(approvalId)}
+              className="text-xs"
+            >
+              <ShieldQuestion />
+              Review request
+            </Button>
+          )}
           {item.actions.map((action, index) => (
             <Button
               key={index}
               type="button"
               size="sm"
-              variant={index === 0 ? "secondary" : "ghost"}
+              variant={index === 0 && !approvalId ? "secondary" : "ghost"}
               disabled={pending !== null}
               onClick={() => void perform(index)}
               className="text-xs"
