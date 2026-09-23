@@ -472,7 +472,14 @@ export default function SettingsDialog({
       () => update({ orchestrator: patch }),
       "Could not save the provider.",
     );
-    if (ok) clearOrchestratorDraft(modelField);
+    // Only the draft that went out with the change: a model typed while it saved stays unsaved.
+    if (ok)
+      setOrchestratorDrafts((prev) => {
+        if (!(modelField in prev) || prev[modelField]?.trim() !== typed) return prev;
+        const next = { ...prev };
+        delete next[modelField];
+        return next;
+      });
   };
 
   /** Stores (or, with "", clears) the key for `provider`. Resolves true on success so the field can reset. */
