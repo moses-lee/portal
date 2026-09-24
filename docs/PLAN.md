@@ -2,9 +2,9 @@
 
 Status as of 2026-09-23. This is the working plan for turning Portal from a chat UI with a
 timer-driven assistant into a coordinator that knows the user's world, runs its own background
-work, and keeps an auditable memory. Phases 1 and 2 are merged into `main` (§1.2, §1.5); phase 3
-is on branch `feat/phase-3`, waiting for review before it merges (§1.8). The live instance still
-runs phase 1 code until it is restarted (§1.6). What comes after is in §1.9.
+work, and keeps an auditable memory. Phases 1, 2, and 3 are merged into `main` (§1.2, §1.5, §1.8).
+The live instance still runs phase 1 code until it is restarted (§1.6). Known gaps are in §1.7;
+what comes next is in §1.9.
 
 Companion research (outside the repo, in the author's notes): Muse product/architecture,
 Muse agent design, Muse memory deep-dive, Instinct memory, agent-memory survey, the original
@@ -139,7 +139,7 @@ for both roles; until then the page asks for a key.
 
 ### 1.7 Known gaps
 
-After phase 3; none blocks use. Phase 3 closed these phase 2 gaps: prompt weight, the inline helper
+After phase 3; none blocks use, and each is a candidate for what comes next. Phase 3 closed these phase 2 gaps: prompt weight, the inline helper
 that ignored a cancelled chat turn, the `consolidate` stub, entity summaries and `reviewBy`, the
 expired or declined job approval that left its job stuck, the recurring job that asked for the
 same approval again, and `resolve_pull` finding only repos Portal has checked out (the user's own
@@ -150,11 +150,20 @@ PRs now resolve anywhere).
   command). The goal now raises the `session_waiting` item at once. Starting review sessions in a
   mode that allows read-only commands would remove the wait; that is a permissions decision for
   the user.
+- **Review goals leave their worktrees behind.** Each reviewed PR keeps its worktree (under
+  `<PORTAL_HOME>/worktrees`) and the local branch created for it after the findings arrive;
+  nothing offers to remove them, and the tick's `worktree_merged` item only covers merged branches.
 - **Consolidator.**
+  - Corroboration is never recorded: proposing a claim that already waits in the inbox answers
+    `unchanged` and drops the second source, so "recurring or corroborated" can only be seen in
+    differently worded duplicates. Live, all nine real proposals stayed in the inbox as
+    single-source. A proposal needs a list of sources (or a sightings count) that a repeat appends to.
   - The 25% guard counts rejected proposals as removals, so with a small memory a pass that
     rejects a few noisy proposals is refused whole.
   - The job always follows Settings: a reschedule from Goals is overwritten on the next settings
     change. Goals' runs list does not link to the curation run page.
+- **Model-written text.** A proposal written by the model can carry HTML entities (`&lt;n&gt;`
+  seen live), which the memory browser and digests show literally.
 - **Monitors.** A check job that fails five times (GitHub down) is marked failed and the intent
   stays active without a check. The world gains PRs only on a full refresh (the tick), so a bare
   number that is not in the attention list falls back to asking each Portal repo.
@@ -175,7 +184,7 @@ PRs now resolve anywhere).
   Upcoming fetches active and paused jobs in two requests.
 - **Types.** The hub's memory and approvals interfaces are narrower than the services.
 
-### 1.8 What phase 3 delivered (branch `feat/phase-3`)
+### 1.8 What phase 3 delivered (merged into `main`)
 
 - **Prompt weight.** A chat turn starts with the 28 tools most turns use (about 5k tokens of
   schemas instead of 11k for all 69) and loads the rest by group with `use_tools`; a call to a
@@ -217,11 +226,16 @@ PRs now resolve anywhere).
 
 ### 1.9 What's next
 
-1. Review and merge `feat/phase-3`. No new migrations: phase 3 keeps its watch state in job
-   payloads. Switching the live instance is still the §1.6 restart (it applies 0002–0005).
-2. Decide how review sessions handle permission prompts (§1.7).
-3. Soften the consolidator guard to count only removals of active records, with a floor.
-4. The remaining §1.7 gaps, then bearer-token auth for external clients (§6).
+The three phases in §5 are done. What remains is making them dependable in daily use:
+
+1. **Switch the live instance** to the current `main` (the §1.6 restart; it applies migrations
+   0002–0005, phase 3 added none). The live database now stores an Anthropic key.
+2. **Unattended reviews:** decide how review sessions handle permission prompts (a mode that
+   allows read-only commands, or an allowlist Portal answers), and clean up review worktrees and
+   branches once the findings are read.
+3. **Memory that can learn:** record repeat sightings on proposals so the consolidator can promote,
+   and count only removals of active records in its guard, with a floor.
+4. **The rest of §1.7**, then bearer-token auth for external clients (§6).
 
 ---
 
@@ -384,7 +398,7 @@ Exit: "review PR 2367" resolves to the monorepo without a question; the user can
 runs; a destructive tool call shows an approval card; the memory browser shows every record with
 its source; all of it under test.
 
-### Phase 3: flows and reflection (done on `feat/phase-3`; see §1.8)
+### Phase 3: flows and reflection (done; see §1.8 and §1.7)
 
 Goal: the three flows the user asked for, end to end, plus the background hygiene that keeps the
 memory trustworthy.
