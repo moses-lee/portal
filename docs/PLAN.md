@@ -2,10 +2,9 @@
 
 Status as of 2026-09-24. This is the working plan for turning Portal from a chat UI with a
 timer-driven assistant into a coordinator that knows the user's world, runs its own background
-work, and keeps an auditable memory. Phases 1, 2, and 3 are merged into `main` (§1.2, §1.5, §1.8),
-and the first two items of the daily-use round are on `feat/daily-use` (§1.10). The live instance
-still runs phase 1 code until it is restarted (§1.6). Known gaps are in §1.7; what comes next is
-in §1.9.
+work, and keeps an auditable memory. Phases 1, 2, and 3 (§1.2, §1.5, §1.8) and the daily-use round
+(§1.10) are merged into `main` (c9e6304). The live instance still runs phase 1 code until it is
+restarted (§1.6). What is left is small and listed in §1.7, batched; what comes next is in §1.9.
 
 Companion research (outside the repo, in the author's notes): Muse product/architecture,
 Muse agent design, Muse memory deep-dive, Instinct memory, agent-memory survey, the original
@@ -128,54 +127,74 @@ Built by the integrator plus five parallel agents (jobs, world, memory, approval
   dialog and a denial was respected; a remembered preference showed in the memory browser with its
   quote. The migrations ran cleanly on the real data.
 
-### 1.6 Switching the live instance to phase 2
+### 1.6 Switching the live instance to the current `main`
 
 The live server (`node src/index.ts` on 3100, no watch) and web (`next start` on 3000) keep running
-the phase 1 code they loaded. To switch: stop both by port, `pnpm install`, `pnpm prod` from the
-repo root. The first boot applies migrations 0002–0005 to the live database (verified on a clone:
-watches become intents, open ideas are resolved, tick reports become runs). The live database
-stores only an OpenAI key and the new defaults are Anthropic (`claude-opus-5-5` for chat,
-`claude-haiku-4-5` for bookkeeping), so add an Anthropic key in Settings, or choose OpenAI models
-for both roles; until then the page asks for a key.
+the phase 1 code they loaded. To switch: pull `~/repos/portal`, stop both by port, `pnpm install`,
+`pnpm prod` from the repo root. The first boot applies migrations 0002–0006 to the live database
+(verified on clones: watches become intents, open ideas are resolved, tick reports become runs,
+memory records gain `sightings`). The live database stores an Anthropic key, so the defaults
+(`claude-opus-5-5` for chat, `claude-haiku-4-5` for bookkeeping) work as they are. Back up
+`~/.portal/server.key` first: credentials are unrecoverable without it.
 
-### 1.7 Known gaps
+### 1.7 What is left, in batches
 
-After phase 3; none blocks use, and each is a candidate for what comes next. Phase 3 closed these phase 2 gaps: prompt weight, the inline helper
-that ignored a cancelled chat turn, the `consolidate` stub, entity summaries and `reviewBy`, the
-expired or declined job approval that left its job stuck, the recurring job that asked for the
-same approval again, and `resolve_pull` finding only repos Portal has checked out (the user's own
-PRs now resolve anywhere).
+None of this blocks use. Phase 3 closed the phase 2 gaps (prompt weight, the cancelled helper, the
+`consolidate` stub, entity summaries and `reviewBy`, stuck job approvals, repeated approvals,
+`resolve_pull` beyond checked-out repos); the daily-use round closed corroboration, the removal
+guard, the cards in the thread, Portal's send behaviour, the review worktrees, and the permission
+audit. The rest is grouped by how much each change risks, one branch per batch, each batch green
+on the suites and checked live on a scratch clone.
 
-- **Review sessions still wait on most commands.** Portal now answers read-only permission
-  requests of review sessions (§1.10), but the read-only checker vouches only for plain commands:
-  a Claude Code review chains `git fetch` into its first command, assigns shell variables
-  (`R=…; cd $R; git status`), and uses `$(…)` and `for` loops, all of which the checker refuses, so
-  live those requests still waited for the user. Widening what counts as read-only for a review
-  (fetch, plain variable assignment and expansion, `--repo`) is the next permissions decision.
-- **Consolidator.** The job always follows Settings: a reschedule from Goals is overwritten on the
-  next settings change. Goals' runs list does not link to the curation run page. (Corroboration and
-  the guard's counting were fixed in §1.10.)
-- **Model-written text.** A proposal written by the model can carry HTML entities (`&lt;n&gt;`
-  seen live), which the memory browser and digests show literally.
-- **Monitors.** A check job that fails five times (GitHub down) is marked failed and the intent
-  stays active without a check. The world gains PRs only on a full refresh (the tick), so a bare
-  number that is not in the attention list falls back to asking each Portal repo.
-- **Approvals.**
-  - Approving a card action holds the `decide` request open until the replayed call finishes,
-    which can take minutes for a worktree removal with scripts.
-  - The shell classifier cannot see repo-local git config: `core.fsmonitor`, `core.pager`, or an
-    alias can run code even during a read-only `git status`.
-  - Only the classic tools are gated and replayable. Gating a jobs, world, or memory tool needs an
-    entry in `approvals/policy.ts` and in the replay rebuild.
-- **Jobs and runs.** `POST /api/portal/runs/:id/cancel` answers 409 for chat runs. Without a key
-  the tick still runs on schedule and records a run saying nothing was checked.
-- **Memory.** There is no route to create an entity on its own. Retrieval scans every entity on
-  each turn, which is fine at the current size.
-- **World.** Ids in the rendered world are 8-character prefixes, but classic tools need full ids.
-  World rebuilds write no activity entry. `get_tick_digest` still calls `collectSnapshot` itself.
-- **Web.** Any open tab counts as present. "Decide later" on an approval lasts until a reload.
-  Upcoming fetches active and paused jobs in two requests.
-- **Types.** The hub's memory and approvals interfaces are narrower than the services.
+**Batch 1: mechanical fixes** (about a day; one-file changes, one test each).
+
+- Decode HTML entities in model-written text before it reaches memory bodies and digests
+  (`&lt;n&gt;` was seen live).
+- `POST /api/portal/runs/:id/cancel` cancels chat runs instead of answering 409.
+- Without a key the tick job is skipped rather than recording a run that checked nothing.
+- Goals' runs list links to the curation run page.
+- Upcoming fetches active and paused jobs in one request.
+- World rebuilds write an activity entry; `get_tick_digest` reuses the world service instead of
+  calling `collectSnapshot` itself.
+- The hub's memory and approvals interfaces match the services.
+
+**Batch 2: behaviour changes** (about two days; each has one small design choice, stated in the
+commit rather than asked).
+
+- Consolidator scheduling: Settings is the default the job follows only until the user
+  reschedules it from Goals; a later settings change no longer overwrites that.
+- Monitors: after five failed checks (GitHub down) the intent pauses with a Needs-you item instead
+  of staying active without a check. `resolve_pull` adds a fetched PR to the world, so a bare
+  number outside the attention list resolves without asking each repo.
+- Approvals: `decide` answers as soon as the approval is recorded and the replayed call runs in
+  the background, its outcome reported through the item and the stream (today a worktree removal
+  with scripts holds the request open for minutes). "Decide later" is remembered per approval, not
+  per page load.
+- Memory: a route to create an entity on its own.
+- Presence: a tab counts as present only while visible (the aurora already reads that signal).
+
+**Batch 3: permissions** (each needs the user's decision first).
+
+- The read-only checker's reach for review sessions (kept strict on 2026-09-24). Live, a Claude
+  Code review made 40 permission requests and the checker vouched for none: the first chained
+  `git fetch`, the rest were `R=…; cd $R; git status | head`, `for r in $(gh run list …)`, and
+  `$(git rev-parse …)`. Candidates, by value: `git fetch`; plain variable assignment and `$VAR`
+  when the value is a literal path; `$(…)` whose inner command is itself read-only; `for` loops
+  over literals or such substitutions. Built as a review-only widening, `run_command` keeps the
+  strict rule.
+- Repo-local git config: `core.fsmonitor`, `core.pager`, or an alias can run code during a
+  read-only `git status`. The fix that needs no classifier change is to run vouched-for git
+  commands with `-c core.fsmonitor= -c core.pager=cat` and aliases disabled.
+- Gating jobs, world, and memory tools: only the classic tools are gated and replayable; each
+  new one needs an entry in `approvals/policy.ts` and in the replay rebuild, and a decision on
+  which of them count as destructive at all.
+- World ids: the rendered world shows 8-character prefixes but classic tools need full ids; render
+  full ids or accept prefixes, bundled here to check the token cost.
+
+**Left alone on purpose.** Retrieval scans every entity per turn (fine at the current size). The
+server suite times out when run alongside the Playwright build, `jobs-routes.test.mjs` can hang on
+a teardown race under load, and Playwright's relative-time assertions drift when the suite runs
+slowly; all pass when run alone.
 
 ### 1.8 What phase 3 delivered (merged into `main`)
 
@@ -219,41 +238,18 @@ PRs now resolve anywhere).
 
 ### 1.9 What's next
 
-The three phases in §5 are done. What remains is making them dependable in daily use:
+1. **Switch the live instance** to `main` (the §1.6 restart). It applies migrations 0002–0006; the
+   live database already stores an Anthropic key. Pull `~/repos/portal` first (it is at d5675d1),
+   back up `~/.portal/server.key`, stop 3000 and 3100 by port, `pnpm install`, `pnpm prod`. After
+   boot: the status line names the Anthropic models, a chat reply arrives in prose with the send
+   spinner clearing on acknowledgement, Settings shows the review toggle, Memory's inbox is empty.
+2. **§1.7 batch 1**, then **batch 2** (a short plan first, since some of it changes what the user
+   sees day to day), then **batch 3** once its decisions are made.
+3. **Bearer-token auth** for external clients (CLI, Hermes) (§6).
 
-1. **Switch the live instance** to the current `main` (the §1.6 restart; it applies migrations
-   0002–0005, phase 3 added none). The live database now stores an Anthropic key.
-2. **Unattended reviews** (built, §1.10; decided 2026-09-24: Portal answers read-only requests of
-   review sessions, once per command, only for those sessions, writes wait for the user; worktrees
-   go when the findings item is settled, without an approval when clean): what remains is the
-   read-only checker's reach (§1.7).
-3. **Memory that can learn** (done, §1.10): record repeat sightings on proposals so the consolidator
-   can promote, and count only removals of active records in its guard, with a floor.
-4. **Talk to Portal feels like a session** (done, §1.10). Three changes, decided with the user:
-   - **Prose, not cards.** The thread stops attaching item cards and per-PR lists to messages.
-     When the tick or a goal has something to say, Portal writes a short summary in sentences
-     ("two of your PRs need you: …; 139 review requests wait, the oldest a month old"); review
-     results arrive as a prose verdict. The Needs-you strip stays as the place to act, dismiss,
-     and open an item's full detail (per-PR lists, file:line findings). Today the tick prompt
-     (`prompt.ts`) tells the model to paste the digest's detail lists as item bodies, and
-     `PortalMessage.tsx` renders every touched item as a card under its message; phase 3's
-     findings and monitor items followed the same pattern.
-   - **Same send behaviour as sessions.** Both pages already render `ChatComposer`, but each wires
-     its own sending: sessions clear the draft when the server acknowledges the prompt and show
-     "Sending…" meanwhile; Portal (`PortalThread.tsx`, on `useChat`) clears only at the first
-     streamed token, which in this AI SDK version comes after the model starts answering, so the
-     text sits in the box. Move the session page's send logic (draft capture, sending state, clear
-     on acknowledgement, error text, prompt history) into one hook both pages use; for Portal the
-     acknowledgement is the reply stream opening, by when the server has stored the message.
-     Changing Portal's API so replies arrive over its event stream, as sessions do, is deferred.
-   - **The aurora.** Mount the session pages' `AuroraBackground` unchanged in `PortalPage`,
-     covering every tab: working while Portal answers the user, waiting (amber) while an approval
-     is pending, idle otherwise, including while background jobs run.
-5. **The rest of §1.7**, then bearer-token auth for external clients (§6).
+### 1.10 What the daily-use round delivered (merged into `main` 2026-09-24, c9e6304)
 
-### 1.10 What the daily-use round delivered so far (branch `feat/daily-use`)
-
-Items 4, 3, and 2 of §1.9, each committed green on the unit suites, typecheck, lint, and the Playwright
+Talk to Portal as a session page, memory that learns, and unattended reviews, each committed green on the unit suites, typecheck, lint, and the Playwright
 suite, and checked live on a scratch instance (ports 3010/3110, `PORTAL_HOME` under `/tmp`) over a
 clone of the live database with real Anthropic calls.
 
@@ -531,6 +527,12 @@ data with its diff visible in the UI; the activity log explains every action the
 - Bearer-token auth for external clients (CLI, Hermes): later. Single user for now.
 - Talk to Portal matches the session pages: same composer and send behaviour, same aurora, and a
   thread in prose, with actionable detail only in the Needs-you strip.
+- Unattended reviews (2026-09-24): Portal answers permission requests of the review sessions it
+  started, and only those, when the step is read-only, once per command; anything that writes
+  waits for the user. Every permission answer says who gave it (you or Portal) in the transcript.
+  A review's worktree, project entry, and local branch go when the user settles the findings item,
+  without an approval when the worktree is clean and unused; otherwise a Needs-you item offers the
+  gated removal. The read-only checker stays as strict as `run_command`'s for now (§1.7, batch 3).
 
 ## 7. Open questions
 
