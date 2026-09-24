@@ -39,13 +39,19 @@ export type JobsCore = {
   emitJobs(): void;
   emitIntents(): Promise<void>;
   scheduleJob(input: NewJob, actor: ActivityActor, refs?: { runId?: string; threadId?: string }): Promise<Job>;
-  changeJob(id: string, changes: JobChanges, how: { actor: ActivityActor; summary: string; kind?: string; runId?: string }): Promise<Job>;
+  /**
+   * Change a job. Cancelling it also stops its runs in progress in this process (never `runId`, the
+   * run doing the cancelling); their ids are added to `stopped` when given.
+   */
+  changeJob(id: string, changes: JobChanges, how: { actor: ActivityActor; summary: string; kind?: string; runId?: string; stopped?: string[] }): Promise<Job>;
   /** Apply a user's or the agent's patch: status, schedule, title (see `JobPatch`). */
-  patchJob(id: string, patch: unknown, how: { actor: ActivityActor; runId?: string }): Promise<Job>;
+  patchJob(id: string, patch: unknown, how: { actor: ActivityActor; runId?: string; stopped?: string[] }): Promise<Job>;
   /** Cancel (or finish) every live job of an intent. */
-  endIntentJobs(intentId: string, status: "cancelled" | "done", how: { actor: ActivityActor; runId?: string }): Promise<void>;
+  endIntentJobs(intentId: string, status: "cancelled" | "done", how: { actor: ActivityActor; runId?: string; stopped?: string[] }): Promise<void>;
+  /** Abort the job's runs in progress in this process except `exceptRunId`; answers their ids (set by the service). */
+  stopJobRuns(jobId: string, exceptRunId?: string): string[];
   /** Hook set by the intents part: a check job was cancelled, so its intent goes too. */
-  onCheckJobCancelled?: (job: Job, how: { actor: ActivityActor; runId?: string }) => Promise<void>;
+  onCheckJobCancelled?: (job: Job, how: { actor: ActivityActor; runId?: string; stopped?: string[] }) => Promise<void>;
   /** Post an assistant note to a thread as `run` did. */
   postToThread(threadId: string | null, text: string, run: Pick<JobRun, "id" | "kind">, itemIds?: string[]): Promise<void>;
   lastTick: TickReport | null;
@@ -81,6 +87,7 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
     ...base,
     lastTick: null,
     wake: () => {},
+    stopJobRuns: () => [],
     present: () => hub.presence.count() > 0,
     notify() {
       if (hub.sql) void hub.sql.notify(JOBS_CHANNEL, "").catch(() => {});
@@ -107,8 +114,10 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
       return job;
     },
 
-    async changeJob(id, changes, { actor, summary, kind, runId }) {
+    async changeJob(id, changes, { actor, summary, kind, runId, stopped }) {
       const job = await store.updateJob(id, changes);
+      // After the write, so a run that checks its job before its next change sees it cancelled too.
+      if (changes.status === "cancelled") stopped?.push(...core.stopJobRuns(id, runId));
       void hub.activity.log({
         actor, kind: kind ?? (changes.status === "cancelled" ? "job.cancelled" : "job.updated"), summary, refs: jobRefs(job, runId),
         detail: { ...(changes.status ? { status: changes.status } : {}), ...(changes.schedule ? { schedule: changes.schedule } : {}), nextRunAt: job.nextRunAt },
@@ -118,7 +127,7 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
       return job;
     },
 
-    async patchJob(id, raw, { actor, runId }) {
+    async patchJob(id, raw, { actor, runId, stopped }) {
       const patch = parseJobPatch(raw);
       const current = await store.getJob(id);
       if (!current) throw httpError(`Unknown job "${id}".`, 404);
@@ -149,14 +158,14 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
         changes.nextRunAt = replanned({ ...current, schedule: changes.schedule ?? current.schedule, nextRunAt: current.status === "active" ? current.nextRunAt : null }, hub.timers.now(), core.present());
         if (changes.nextRunAt === null) changes.status = "done";
       }
-      const job = await core.changeJob(id, changes, { actor, runId, summary: `"${current.title}": ${parts.join(", ")}` });
-      if (job.status === "cancelled" && job.kind === "intent_check" && core.onCheckJobCancelled) await core.onCheckJobCancelled(job, { actor, runId });
+      const job = await core.changeJob(id, changes, { actor, runId, stopped, summary: `"${current.title}": ${parts.join(", ")}` });
+      if (job.status === "cancelled" && job.kind === "intent_check" && core.onCheckJobCancelled) await core.onCheckJobCancelled(job, { actor, runId, stopped });
       return job;
     },
 
-    async endIntentJobs(intentId, status, { actor, runId }) {
+    async endIntentJobs(intentId, status, { actor, runId, stopped }) {
       for (const job of await store.listJobs({ intentId, status: ["active", "paused", "failed"] })) {
-        await core.changeJob(job.id, { status }, { actor, runId, summary: `${status === "done" ? "Finished" : "Cancelled"} "${job.title}"` });
+        await core.changeJob(job.id, { status }, { actor, runId, stopped, summary: `${status === "done" ? "Finished" : "Cancelled"} "${job.title}"` });
       }
     },
 

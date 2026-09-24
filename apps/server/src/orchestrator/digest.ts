@@ -4,7 +4,7 @@
  * costs nothing when nothing moved and every rule below is unit-testable.
  */
 import { agentActivity } from "@portal/shared/agent-activity";
-import type { Project, SessionMeta, WorktreeMeta } from "../lib/types.ts";
+import type { PortalEvent, Project, SessionMeta, WorktreeMeta } from "../lib/types.ts";
 import type { AttentionSearch, OrchestratorDeps } from "./deps.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "./github-attention.ts";
 import type { DigestChange, Item, ItemKind, ItemLinks, OrchestratorStore, PullAttention, TickDigest, TickSnapshot } from "./types.ts";
@@ -17,7 +17,9 @@ export const STALE_PULL_MS = 60 * 24 * 60 * 60 * 1000;
 export const REVIEW_LIST_ROWS = 15;
 const WORKTREE_CONCURRENCY = 4;
 
-const sessionKinds: ItemKind[] = ["session_finished", "session_waiting", "session_offline"];
+const sessionKinds: ItemKind[] = ["session_finished", "session_stopped", "session_waiting", "session_offline"];
+/** Events read to learn how a session's last turn ended; the end is the turn's last event. */
+const TURN_END_WINDOW = 20;
 /** The kinds a PR the user authored can warrant, most severe first; the item takes the first one that applies. */
 const authoredKinds: ItemKind[] = ["pr_changes_requested", "pr_checks_failing", "pr_conflicts"];
 const worktreeKinds: ItemKind[] = ["worktree_merged", "worktree_dirty"];
@@ -69,6 +71,17 @@ export function snapshotActivity(meta: Pick<SessionMeta, "busy" | "awaitingPermi
   return agentActivity({ busy: meta.busy, awaitingPermission: meta.awaitingPermission, link: quiet ? null : meta.link });
 }
 
+/** How the last turn in `events` ended: its stop reason ("cancelled" when stopped), "error", or null while it is open or none is in view. */
+export function lastTurnEnd(events: PortalEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type === "turn_end") return event.stopReason;
+    if (event.type === "error") return "error";
+    if (event.type === "turn_start") return null;
+  }
+  return null;
+}
+
 export type CollectOptions = {
   deps: OrchestratorDeps;
   /** The previous snapshot; a source that fails keeps its slice from here. */
@@ -87,6 +100,14 @@ export async function collectSnapshot({ deps, previous, now, log }: CollectOptio
       snapshot.sessions[meta.id] = {
         activity: snapshotActivity(meta), lastActiveAt: meta.lastActiveAt, title: meta.title, projectId: meta.projectId, link: meta.link.status,
       };
+    }
+    // A session that went idle since the last snapshot: a stopped turn is reported as stopped, not finished.
+    if (previous) {
+      await Promise.all(Object.entries(snapshot.sessions).map(async ([id, session]) => {
+        if (session.activity !== "idle" || previous.sessions[id]?.activity === "idle") return;
+        const page = await deps.sessions.readEvents(id, { limit: TURN_END_WINDOW }).catch(() => null);
+        if (page && lastTurnEnd(page.events) === "cancelled") session.stopped = true;
+      }));
     }
   } catch (err) {
     log.push(`Sessions could not be listed (${errorMessage(err)}); kept the previous list.`);
@@ -265,6 +286,7 @@ export function reviewDetail(pulls: PullAttention[], now: number): string {
 function subjectPresent(snapshot: TickSnapshot, kind: string, key: string): boolean | null {
   switch (kind) {
     case "session_finished":
+    case "session_stopped":
     case "session_waiting":
     case "session_offline":
       return key in snapshot.sessions;
@@ -341,21 +363,23 @@ export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, ite
     const before = prev?.sessions[id];
     const links: ItemLinks = { sessionId: id, ...(session.projectId ? { projectId: session.projectId } : {}) };
     const name = session.title ? `"${session.title}"` : id;
+    const ended = () => session.stopped
+      ? condition("session_stopped", id, `Session ${name} stopped: its turn was cancelled`, links)
+      : condition("session_finished", id, `Session ${name} finished its turn`, links);
     // Finished only counts while the user has not come back to the session (a prompt moves lastActiveAt)
     // and while the agent is attached: a session read as idle because Portal restarted did not finish anything.
-    if (before?.activity === "working" && session.activity === "idle" && session.link === "live" && session.lastActiveAt <= before.lastActiveAt) {
-      condition("session_finished", id, `Session ${name} finished its turn`, links);
-    }
+    if (before?.activity === "working" && session.activity === "idle" && session.link === "live" && session.lastActiveAt <= before.lastActiveAt) ended();
     // A session too short for any tick to see it working: new since the last snapshot, prompted since
     // then (it has a title), and now idle with its agent attached, so its turn ran and ended in between.
-    if (prev && !before && session.activity === "idle" && session.link === "live" && session.title !== null && session.lastActiveAt > prev.at) {
-      condition("session_finished", id, `Session ${name} finished its turn`, links);
-    }
+    if (prev && !before && session.activity === "idle" && session.link === "live" && session.title !== null && session.lastActiveAt > prev.at) ended();
     if (session.activity === "waiting" && before?.activity !== "waiting") condition("session_waiting", id, `Session ${name} is waiting for your permission`, links);
     if (session.activity === "error" && before?.activity !== "error") condition("session_offline", id, `Session ${name} lost its agent`, links);
     if (session.activity !== "waiting") cleared("session_waiting", id, `Session ${name} is no longer waiting`, links);
     if (session.activity !== "error") cleared("session_offline", id, `Session ${name} is connected again`, links);
-    if (session.activity === "working") cleared("session_finished", id, `Session ${name} is working again`, links);
+    if (session.activity === "working") {
+      cleared("session_finished", id, `Session ${name} is working again`, links);
+      cleared("session_stopped", id, `Session ${name} is working again`, links);
+    }
   }
   for (const id of sortedKeys(prev?.sessions)) {
     if (next.sessions[id]) continue;

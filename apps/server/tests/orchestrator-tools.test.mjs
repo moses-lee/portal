@@ -316,6 +316,37 @@ test("get_pending_permission finds the open request", async () => {
   assert.deepEqual(await run(idle.get_pending_permission, { sessionId: "s1" }), { sessionId: "s1", pending: null });
 });
 
+test("stop_session cancels a busy session's turn, waits until it is idle, and answers the state it confirmed", async () => {
+  const { tools, deps, state } = setup({ sessions: [sessionMeta({ busy: true })], events: { s1: [{ seq: 0, ts: T0, type: "turn_start" }] } });
+  const cancels = [];
+  let polls = 0;
+  deps.sessions.get = async (id) => {
+    const meta = state.sessions.find((session) => session.id === id);
+    // The agent acknowledges the cancel a few looks later, as a real one does.
+    if (cancels.length && ++polls === 3) {
+      meta.busy = false;
+      state.events.s1.push({ seq: 1, ts: T0, type: "turn_end", stopReason: "cancelled" });
+    }
+    return meta;
+  };
+  deps.sessions.cancel = async (id) => { cancels.push(id); };
+  const result = await run(tools.stop_session, { sessionId: "s1" });
+  assert.deepEqual(result, { sessionId: "s1", stopped: true, activity: "idle", stopReason: "cancelled" });
+  assert.deepEqual(cancels, ["s1"]);
+  assert.ok(polls >= 3, "it waited for the session to go idle");
+
+  // Nothing to stop: no cancel is sent.
+  assert.deepEqual(await run(tools.stop_session, { sessionId: "s1" }), { sessionId: "s1", stopped: false, activity: "idle", note: "The session had no turn to stop." });
+  assert.deepEqual(cancels, ["s1"]);
+  assert.match((await run(tools.stop_session, { sessionId: "nope" })).error, /Unknown session/);
+});
+
+test("stop_session reports a session that stays busy past the timeout as not stopped", async () => {
+  const { tools } = setup({ sessions: [sessionMeta({ busy: true })] });
+  const result = await run(tools.stop_session, { sessionId: "s1", timeoutSeconds: 1 });
+  assert.deepEqual(result, { sessionId: "s1", stopped: false, activity: "working", note: "The session was still busy 1s after the stop was sent." });
+});
+
 test("create_session mirrors the sessions route, sends the first prompt, and reports a failed prompt without losing the session", async () => {
   const { tools, state } = setup({ projects: [project()] });
   const created = await run(tools.create_session, { projectId: "p1", prompt: "Say hi" });

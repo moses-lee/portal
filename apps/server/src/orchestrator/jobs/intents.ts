@@ -37,7 +37,8 @@ const NO_UPDATE = "NO_UPDATE";
 
 export type IntentsPart = ReturnType<typeof createIntents>;
 
-type How = { actor: ActivityActor; runId?: string; threadId?: string | null };
+/** `stopped` collects the ids of runs in progress that ending a check job stopped. */
+type How = { actor: ActivityActor; runId?: string; threadId?: string | null; stopped?: string[] };
 
 const intentRefs = (intent: Pick<Intent, "id" | "threadId">, runId?: string) =>
   ({ intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}), ...(runId ? { runId } : {}) });

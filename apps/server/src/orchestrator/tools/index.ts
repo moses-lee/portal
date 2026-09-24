@@ -38,6 +38,21 @@ export const TICK_TOOLS = [
 
 const tickToolSet = new Set<string>(TICK_TOOLS);
 
+/**
+ * Tools that only look, in every domain. A job's run calls any other tool only while its job is
+ * still wanted (see `turn.ts`), so a tool missing here is checked, never let through unchecked.
+ */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "use_tools",
+  "list_projects", "get_project", "search_projects", "list_removed_projects", "list_directories", "list_branches", "read_file",
+  "list_sessions", "list_active_sessions", "get_session", "search_sessions", "read_transcript", "get_pending_permission", "list_agents",
+  "list_attention_pulls", "list_pulls", "get_pull", "get_github_status", "github_identity",
+  "list_items", "list_threads", "get_settings", "get_schedule", "get_last_tick", "get_tick_digest",
+  "list_jobs", "list_runs", "list_intents",
+  "get_world", "resolve_pull", "resolve_repo", "resolve_session",
+  "search_memory", "explain_memory",
+]);
+
 export function createTools(ctx: ToolContext): OrchestratorTools {
   const tools = withRedaction(ctx, allTools(ctx));
   if (ctx.interactive) return tools;

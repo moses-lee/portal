@@ -1,9 +1,10 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import { displayPath } from "../../lib/git-info.ts";
 import { type Block, reduce, segment } from "@portal/shared/transcript";
 import type { SessionMeta, SessionState } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
-import { snapshotActivity } from "../digest.ts";
+import { lastTurnEnd, snapshotActivity } from "../digest.ts";
 import { httpError, startSession } from "../ops.ts";
 import { DEFAULT_LIMIT, type ToolContext, capped, define } from "./context.ts";
 
@@ -14,6 +15,11 @@ export const EVENT_WINDOW = 300;
 /** Sessions scanned by a transcript search; beyond the most recent ones, titles have to do. */
 const SEARCH_TRANSCRIPTS = 20;
 export const TRANSCRIPT_CAP = 6 * 1024;
+/** How often stop_session looks whether the session went idle, and how long it waits by default. */
+export const STOP_POLL_MS = 200;
+export const STOP_WAIT_SECONDS = 30;
+/** Events read to find how the last turn ended; its end is the last event of the turn. */
+const TURN_END_WINDOW = 20;
 
 function sessionRow(meta: SessionMeta) {
   return {
@@ -164,11 +170,30 @@ export function sessionTools({ deps }: ToolContext) {
       },
     ),
     cancel_turn: define(
-      "Stop the turn a session is working on.",
+      "Send a stop to the turn a session is working on, without waiting for it (stop_session waits and confirms).",
       z.object({ sessionId }),
       async ({ sessionId }) => {
         await deps.sessions.cancel(sessionId);
         return { sessionId, cancelled: true };
+      },
+    ),
+    stop_session: define(
+      "Stop the turn a session is working on and wait until the session is idle (up to timeoutSeconds, default 30). Answers the state Portal confirmed afterwards: stopped, its activity, and how the turn ended.",
+      z.object({ sessionId, timeoutSeconds: z.number().int().min(1).max(120).optional() }),
+      async ({ sessionId, timeoutSeconds = STOP_WAIT_SECONDS }, options) => {
+        const before = await requireSession(sessionId);
+        if (!before.busy) return { sessionId, stopped: false, activity: snapshotActivity(before), note: "The session had no turn to stop." };
+        await deps.sessions.cancel(sessionId);
+        // Counted rather than timed: the tool context's clock may be a test's, which never moves by itself.
+        let meta = await requireSession(sessionId);
+        for (let left = Math.ceil((timeoutSeconds * 1000) / STOP_POLL_MS); meta.busy && left > 0; left--) {
+          await sleep(STOP_POLL_MS, undefined, { signal: options?.abortSignal });
+          meta = await requireSession(sessionId);
+        }
+        const activity = snapshotActivity(meta);
+        if (meta.busy) return { sessionId, stopped: false, activity, note: `The session was still busy ${timeoutSeconds}s after the stop was sent.` };
+        const { events } = await deps.sessions.readEvents(sessionId, { limit: TURN_END_WINDOW });
+        return { sessionId, stopped: true, activity, stopReason: lastTurnEnd(events) };
       },
     ),
     answer_permission: define(

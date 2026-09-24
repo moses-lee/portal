@@ -90,7 +90,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     consolidate: consolidation.run,
   };
   /** Job runs in progress in this process, by run id, so they can be cancelled. */
-  const controllers = new Map<string, { controller: AbortController; byUser: boolean }>();
+  const controllers = new Map<string, { jobId: string; controller: AbortController; byUser: boolean }>();
   let prunedAt = -Infinity;
   const worker = createWorker(core, {
     execute,
@@ -106,6 +106,17 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     },
   }, options.worker);
   core.wake = () => worker.wake();
+  // Cancelling a job stops the run it has in progress; the reschedule then leaves it cancelled.
+  core.stopJobRuns = (jobId, exceptRunId) => {
+    const stopped: string[] = [];
+    for (const [runId, entry] of controllers) {
+      if (entry.jobId !== jobId || runId === exceptRunId || entry.controller.signal.aborted) continue;
+      entry.byUser = true;
+      entry.controller.abort(new Error("The job was cancelled."));
+      stopped.push(runId);
+    }
+    return stopped;
+  };
   let disposed = false;
   const unsubscribers: (() => void)[] = [];
 
@@ -139,7 +150,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
 
   /** Run the job's kind, record the run's end, and release the job with its next run. */
   async function fire(job: Job, run: JobRun, trigger: RunTrigger): Promise<JobRun> {
-    const entry = { controller: new AbortController(), byUser: false };
+    const entry = { jobId: job.id, controller: new AbortController(), byUser: false };
     controllers.set(run.id, entry);
     if (disposed) entry.controller.abort();
     const { value, error, turn } = await runs.adopting(run, () => kinds[job.kind]({ job, run, trigger, signal: entry.controller.signal }));
@@ -331,6 +342,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     updateJob: (id, patch, actor) => core.patchJob(id, patch, { actor }),
     listRuns: (filter?: RunFilter) => store.listRuns(filter),
     getRun: async (id) => runs.get(id) ?? store.getRun(id),
+    stopJobRuns: (jobId) => core.stopJobRuns(jobId),
     cancelRun,
     getIntent: (id) => store.getIntent(id),
     createIntent: (input, how) => intents.create(input, how),

@@ -12,7 +12,7 @@ import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
 import type { DomainToolContext, OrchestratorHub, ResolvedModel, RunOutcome, ToolSet, TurnInfo } from "./hub.ts";
 import { systemPrompt } from "./prompt.ts";
 import { normalizeScope } from "./store.ts";
-import { type ToolContext, createTools } from "./tools/index.ts";
+import { READ_ONLY_TOOLS, type ToolContext, createTools } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
 import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
 import { threadTools } from "./tools/threads.ts";
@@ -128,7 +128,43 @@ function withActivity(hub: OrchestratorHub, turn: TurnInfo, tools: ToolSet): Too
   return wrapped;
 }
 
-/** The turn's tools: classic plus domain, redacted, cut to `toolNames`, gated, and logged. */
+/** What a job's run hears when it tries to change something after its job was cancelled. */
+export const JOB_CANCELLED = "This job was cancelled, so the call did not run and the run stops here. Do nothing further.";
+
+/**
+ * In a job's run, every tool that changes something first checks that the job is still wanted: a
+ * run whose job was cancelled (here, or in another Portal process) is refused and stopped. The
+ * store is read on each such call, so a cancel from anywhere is seen before the next change.
+ */
+function withJobGuard(hub: OrchestratorHub, turn: TurnInfo, tools: ToolSet): ToolSet {
+  const jobId = turn.jobId;
+  if (!jobId) return tools;
+  const wrapped: ToolSet = {};
+  for (const [name, tool] of Object.entries(tools)) {
+    const execute = tool.execute;
+    if (!execute || READ_ONLY_TOOLS.has(name)) {
+      wrapped[name] = tool;
+      continue;
+    }
+    wrapped[name] = {
+      ...tool,
+      execute: async (input: unknown, options: Parameters<NonNullable<Tool["execute"]>>[1]) => {
+        let cancelled = !!options?.abortSignal?.aborted;
+        if (!cancelled) {
+          // A job that cannot be read counts as cancelled: the run must not act on a guess.
+          const job = await hub.jobs.getJob(jobId).catch(() => null);
+          cancelled = !job || job.status === "cancelled";
+        }
+        if (!cancelled) return execute(input, options);
+        hub.jobs.stopJobRuns(jobId);
+        return { error: JOB_CANCELLED };
+      },
+    } as Tool;
+  }
+  return wrapped;
+}
+
+/** The turn's tools: classic plus domain, redacted, cut to `toolNames`, gated, checked against a cancelled job, and logged. */
 function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: readonly string[] | undefined, extra: ToolSet = {}): ToolSet {
   // An explicit list decides on its own; otherwise each tool family offers what suits the turn
   // (a background turn gets the tick subset of the classic tools and the domains' background tools).
@@ -140,7 +176,7 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
     const allowed = new Set(toolNames);
     tools = Object.fromEntries(Object.entries(tools).filter(([name]) => allowed.has(name)));
   }
-  return withActivity(hub, ctx.turn, { ...hub.approvals.gate(tools, ctx), ...extra });
+  return withActivity(hub, ctx.turn, withJobGuard(hub, ctx.turn, { ...hub.approvals.gate(tools, ctx), ...extra }));
 }
 
 /**

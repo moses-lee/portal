@@ -21,7 +21,7 @@ export const TOOL_GROUPS = {
   },
   sessions: {
     about: "search, configure, reconnect, delete sessions; permissions; stop a turn",
-    tools: ["search_sessions", "delete_session", "set_session_config", "reconnect_session", "answer_permission", "get_pending_permission", "cancel_turn", "list_agents"],
+    tools: ["search_sessions", "delete_session", "set_session_config", "reconnect_session", "answer_permission", "get_pending_permission", "cancel_turn", "stop_session", "list_agents"],
   },
   github: { about: "pull request lists and per-project GitHub state", tools: ["list_pulls", "get_github_status", "github_identity"] },
   jobs: { about: "inspect and change jobs, runs, intents", tools: ["list_jobs", "update_job", "list_runs", "update_intent"] },

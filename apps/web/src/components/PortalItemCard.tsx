@@ -31,6 +31,7 @@ import type {
 
 export const kindLabels: Record<ItemKind, string> = {
   session_finished: "Session finished",
+  session_stopped: "Session stopped",
   session_waiting: "Session waiting",
   session_offline: "Session offline",
   pr_checks_failing: "Checks failing",

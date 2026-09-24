@@ -170,6 +170,8 @@ export type ItemStatus = "open" | "snoozed" | "resolved" | "dismissed";
 
 export type ItemKind =
   | "session_finished"
+  /** A session's turn ended because it was cancelled (Stop, cancel_turn, stop_session). */
+  | "session_stopped"
   | "session_waiting"
   | "session_offline"
   | "pr_checks_failing"
@@ -274,6 +276,8 @@ export type TickSnapshot = {
     projectId: string;
     /** The agent link at snapshot time; "finished" only counts between two live readings. Absent in snapshots from before this field. */
     link?: "live" | "connecting" | "offline";
+    /** Set when the session went idle since the previous snapshot because its turn was cancelled. */
+    stopped?: true;
   }>;
   /** Keyed by "owner/name#number". */
   pulls: Record<string, PullAttention>;

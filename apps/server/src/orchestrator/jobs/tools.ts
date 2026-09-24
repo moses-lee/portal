@@ -139,6 +139,23 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
     tz: z.string().optional(),
   };
 
+  /**
+   * What a cancel did to runs in progress: `runStopped` when it aborted one in this process. A run in
+   * another Portal process cannot be aborted from here; it checks its job before each change and stops.
+   */
+  async function runsReport(jobIds: string[], stopped: string[]) {
+    const elsewhere: string[] = [];
+    for (const jobId of jobIds) {
+      for (const run of await store.listRuns({ jobId, status: ["running"], limit: 5 })) {
+        if (!stopped.includes(run.id) && run.id !== turn.runId && !runs.get(run.id)) elsewhere.push(run.id);
+      }
+    }
+    return {
+      runStopped: stopped.length > 0, ...(stopped.length ? { stoppedRunIds: stopped } : {}),
+      ...(elsewhere.length ? { stoppingRunIds: elsewhere, note: "Another Portal process is running it; that run stops before its next change." } : {}),
+    };
+  }
+
   /** The active monitor of a PR (its intent and check job), when one exists. */
   async function monitorOf(repo: string | null, number: number): Promise<{ intent: Intent; job: Job } | null> {
     for (const job of await store.listJobs({ kind: ["intent_check"], status: ["active", "paused"] })) {
@@ -244,12 +261,15 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     cancel_intent: define(
-      "Cancel an intent the user no longer wants (or that can never fire); its check job stops too. Give its id, or pull (and repo) to stop the monitor of that PR.",
+      "Cancel an intent the user no longer wants (or that can never fire); its check job stops too, including a check in progress (runStopped says whether one was). Give its id, or pull (and repo) to stop the monitor of that PR.",
       z.object({ id: z.string().min(1).optional(), pull: z.number().int().positive().optional(), repo: z.string().optional(), reason: z.string().max(500).optional() }),
       async ({ id, pull, repo, reason }) => {
         const target = id ?? (pull ? (await monitorOf(repo && REPO_PATTERN.test(repo) ? repo : null, pull))?.intent.id : undefined);
         if (!target) throw httpError(pull ? `No active monitor watches PR #${pull}.` : "Give the intent's id or a PR number.", pull ? 404 : 400);
-        return intentRow(await intents.close(target, "cancelled", { ...how, reason }), true);
+        const stopped: string[] = [];
+        const intent = await intents.close(target, "cancelled", { ...how, reason, stopped });
+        const jobIds = (await store.listJobs({ intentId: intent.id })).map((job) => job.id);
+        return { ...intentRow(intent, true), ...(await runsReport(jobIds, stopped)) };
       },
     ),
     list_intents: define(
@@ -289,9 +309,13 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     cancel_job: define(
-      "Cancel a job that is no longer needed. Cancelling an intent's check job cancels the intent.",
+      "Cancel a job that is no longer needed; a run of it in progress is stopped too (runStopped says whether one was). Cancelling an intent's check job cancels the intent.",
       z.object({ id: z.string().min(1) }),
-      async ({ id }) => jobRow(await core.patchJob(id, { status: "cancelled" }, { actor: "agent", runId: turn.runId })),
+      async ({ id }) => {
+        const stopped: string[] = [];
+        const job = await core.patchJob(id, { status: "cancelled" }, { actor: "agent", runId: turn.runId, stopped });
+        return { ...jobRow(job), ...(await runsReport([job.id], stopped)) };
+      },
     ),
     list_jobs: define(
       "Jobs by status (default active), soonest first.",

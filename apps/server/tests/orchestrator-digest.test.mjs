@@ -100,6 +100,34 @@ test("a session that went from working to idle without a new prompt finished, bu
   }
 });
 
+test("a session whose turn was cancelled is reported as stopped, not finished; working again resolves that item", () => {
+  const prev = snap({ sessions: { s1: session({ activity: "working" }) } });
+  const stopped = diffSnapshots(prev, snap({ at: T0 + 1, sessions: { s1: session({ stopped: true }) } }), []);
+  assert.deepEqual(kinds(stopped), ["session_stopped"]);
+  assert.equal(stopped[0].fingerprint, "session_stopped:s1");
+  assert.match(stopped[0].summary, /stopped: its turn was cancelled/);
+  assert.doesNotMatch(stopped[0].summary, /finished/);
+  const [working] = diffSnapshots(snap({ sessions: { s1: session() } }), snap({ at: T0 + 1, sessions: { s1: session({ activity: "working" }) } }), [item("session_stopped:s1")]);
+  assert.equal(working.resolvesItemId, "item-session_stopped:s1");
+});
+
+test("collectSnapshot marks a session that went idle through a cancelled turn, reading events only for sessions that just went idle", async () => {
+  const cancelled = [{ type: "turn_start", seq: 0, ts: 0 }, { type: "permission_response", requestId: "r", outcome: "cancelled", seq: 1, ts: 0 }, { type: "turn_end", stopReason: "cancelled", seq: 2, ts: 0 }];
+  const done = [{ type: "turn_start", seq: 0, ts: 0 }, { type: "turn_end", stopReason: "end_turn", seq: 1, ts: 0 }];
+  const { deps } = fakeDeps({ sessions: [sessionMeta({ id: "s1" }), sessionMeta({ id: "s2" }), sessionMeta({ id: "s3" })], events: { s1: cancelled, s2: done, s3: cancelled } });
+  const reads = [];
+  const readEvents = deps.sessions.readEvents;
+  deps.sessions.readEvents = async (id, opts) => { reads.push(id); return readEvents(id, opts); };
+  const busy = session({ activity: "working", lastActiveAt: T0 - 30_000 });
+  const previous = snap({ sessions: { s1: busy, s2: busy, s3: session() } });
+  const snapshot = await collectSnapshot({ deps, previous, now: T0, log: [] });
+  assert.equal(snapshot.sessions.s1.stopped, true);
+  assert.equal(snapshot.sessions.s2.stopped, undefined, "a turn that ended by itself finished");
+  assert.equal(snapshot.sessions.s3.stopped, undefined, "idle before: an old stop is not news");
+  assert.deepEqual(reads.sort(), ["s1", "s2"]);
+  assert.deepEqual(kinds(diffSnapshots(previous, snapshot, [])), ["session_stopped", "session_finished"]);
+});
+
 test("entering waiting or error is reported once; leaving it resolves the open item", () => {
   const idle = snap({ sessions: { s1: session() } });
   const waiting = snap({ at: T0 + 1, sessions: { s1: session({ activity: "waiting" }) } });

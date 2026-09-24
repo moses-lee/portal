@@ -116,6 +116,8 @@ export interface JobsService {
   /** Newest first; `before` is a run id (the next page). */
   listRuns(filter?: { jobId?: string; threadId?: string; kind?: RunKind; status?: RunStatus[]; before?: string; limit?: number }): Promise<JobRun[]>;
   getRun(id: string): Promise<JobRun | null>;
+  /** Abort the runs of a job in progress in this process (as cancelling the job does); answers their ids. */
+  stopJobRuns(jobId: string): string[];
   /** Stop a job run or an inline helper of this process; false when it is not running here. */
   cancelRun(id: string): Promise<boolean>;
   getIntent(id: string): Promise<Intent | null>;
