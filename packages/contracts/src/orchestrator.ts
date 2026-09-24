@@ -51,8 +51,20 @@ export type OrchestratorSettings = {
   idleIntervalMinutes: number;
   /** When the memory curation pass runs. */
   consolidation: ConsolidationSettings;
+  /** How Portal treats the review sessions it starts. */
+  reviews: ReviewSettings;
   /** True when a key is stored for the provider. The key itself never leaves the server. */
   apiKeys: Record<OrchestratorProvider, boolean>;
+};
+
+/**
+ * Review sessions run unattended. With `answerReadOnly`, Portal answers their permission requests
+ * for read-only steps (file reads, searches, shell commands its read-only checker vouches for) with
+ * "allow once", each answer marked as Portal's in the transcript; everything else waits for the
+ * user as before. Off, every request waits for the user.
+ */
+export type ReviewSettings = {
+  answerReadOnly: boolean;
 };
 
 /**
@@ -80,6 +92,7 @@ export type OrchestratorSettingsPatch = {
   intervalMinutes?: number;
   idleIntervalMinutes?: number;
   consolidation?: Partial<ConsolidationSettings>;
+  reviews?: Partial<ReviewSettings>;
   apiKeys?: Partial<Record<OrchestratorProvider, string>>;
 };
 
@@ -90,6 +103,7 @@ export const defaultOrchestratorSettings: OrchestratorSettings = {
   intervalMinutes: 10,
   idleIntervalMinutes: 60,
   consolidation: { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 },
+  reviews: { answerReadOnly: true },
   apiKeys: { openai: false, anthropic: false },
 };
 

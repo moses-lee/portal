@@ -6,6 +6,7 @@
  */
 import { open } from "node:fs/promises";
 import os from "node:os";
+import type { PermissionAdvisor } from "../lib/acp-runtime.ts";
 import { execCommand } from "../lib/exec-command.ts";
 import type { ExecResult } from "../lib/exec-command.ts";
 import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
@@ -58,6 +59,8 @@ export type OrchestratorDeps = {
     prompt(id: string, text: string): Promise<void>;
     cancel(id: string): Promise<void>;
     respondPermission(id: string, requestId: string, optionId: string | null): Promise<void>;
+    /** Install (or remove) the advisor asked about every new permission request; see `PermissionAdvisor`. */
+    setPermissionAdvisor(advisor: PermissionAdvisor | null): void;
     setConfigOption(id: string, configId: string, value: string | boolean): Promise<SessionState>;
     setMode(id: string, modeId: string): Promise<SessionState>;
     readEvents(id: string, opts?: { before?: number; limit?: number }): Promise<EventPage>;
@@ -86,7 +89,7 @@ export type OrchestratorDeps = {
     repoRootOf(dir: string): Promise<string>;
     mainWorktreeOf(dir: string): Promise<string>;
     ensureWorktree(opts: { repoRoot: string; branch: string; create?: boolean }): Promise<{ path: string; created: boolean }>;
-    removeWorktree(opts: { repoRoot: string; path: string; branch: string; force?: boolean }): Promise<{ branchDeleted: boolean }>;
+    removeWorktree(opts: { repoRoot: string; path: string; branch: string; force?: boolean; deleteBranch?: "merged" | "pushed" }): Promise<{ branchDeleted: boolean }>;
     listBranches(repoRoot: string): Promise<{ defaultBranch: string | null; branches: BranchInfo[] }>;
     listPulls(repoRoot: string): Promise<{ pulls: PullInfo[] | null; pullsError: string | null }>;
     getPull(repoRoot: string, number: number): Promise<PullInfo>;
@@ -187,6 +190,9 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       cancel: async (id) => (await acp()).cancel(id),
       respondPermission: async (id, requestId, optionId) => {
         (await acp()).respondPermission(id, requestId, optionId);
+      },
+      setPermissionAdvisor: (advisor) => {
+        void acp().then((runtime) => runtime.setPermissionAdvisor(advisor)).catch(() => {});
       },
       setConfigOption: async (id, configId, value) => (await acp()).setConfigOption(id, configId, value),
       setMode: async (id, modeId) => (await acp()).setMode(id, modeId),

@@ -43,7 +43,7 @@ const emptyState = () => ({ modes: null, configOptions: [], commands: [] });
  * override those groups; anything else overrides `git`. Set `state.promptFailure` to make `sessions.prompt` throw that message.
  */
 export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = [], terminals = [], github = {}, fs = {}, scripts = {}, ...git } = {}) {
-  const state = { sessions, projects, events, pulls, terminals, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null };
+  const state = { sessions, projects, events, pulls, terminals, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null, permissionAdvisor: null, answered: [] };
   const reject = (what) => async () => { throw new Error(`${what} is not available in this test.`); };
   const deps = {
     sessions: {
@@ -60,7 +60,12 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
         state.prompts.push({ id, text });
       },
       cancel: async () => {},
-      respondPermission: async () => {},
+      respondPermission: async (id, requestId, optionId) => {
+        state.answered.push({ id, requestId, optionId });
+      },
+      setPermissionAdvisor: (advisor) => {
+        state.permissionAdvisor = advisor;
+      },
       setConfigOption: async () => emptyState(),
       setMode: async () => emptyState(),
       readEvents: async (id) => ({ events: state.events[id] ?? [], hasMore: false, nextSeq: (state.events[id] ?? []).length }),

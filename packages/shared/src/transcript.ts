@@ -4,10 +4,10 @@
  * exercise the reducer without React.
  */
 import type { PermissionOption, SessionUpdate, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import type { StoredEvent } from "@portal/contracts/types";
+import type { StoredEvent, PermissionAnswerer } from "@portal/contracts/types";
 
 export type PermissionResponse =
-  | { outcome: "selected"; optionId: string; optionName: string }
+  | { outcome: "selected"; optionId: string; optionName: string; by?: PermissionAnswerer; reason?: string }
   | { outcome: "cancelled" };
 
 export type PermissionBlock = {
@@ -77,7 +77,7 @@ export function reduce(events: StoredEvent[]): Block[] {
         const b = permissions.get(ev.requestId);
         if (!b) break;
         b.response = ev.outcome === "selected"
-          ? { outcome: "selected", optionId: ev.optionId, optionName: ev.optionName }
+          ? { outcome: "selected", optionId: ev.optionId, optionName: ev.optionName, ...(ev.by ? { by: ev.by } : {}), ...(ev.reason ? { reason: ev.reason } : {}) }
           : { outcome: "cancelled" };
         break;
       }

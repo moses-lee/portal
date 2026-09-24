@@ -322,11 +322,13 @@ async function isMergedIntoDefault(repoRoot: string, branch: string): Promise<bo
 
 /**
  * Remove a worktree (or prune its registration when the folder is already gone), then delete the
- * local branch only when it is fully merged into the default branch and git agrees (`-d`, never `-D`).
- * A refusal to remove (changes in the tree) is a 409 marked `dirty` so the caller can retry with `force`.
+ * local branch only when it is fully merged into the default branch and git agrees (`-d`, never `-D`),
+ * or, with `deleteBranch: "pushed"`, also when its tip is exactly `origin/<branch>` (a PR branch
+ * checked out for a review: nothing local would be lost). A refusal to remove (changes in the tree)
+ * is a 409 marked `dirty` so the caller can retry with `force`.
  */
-export async function removeWorktree({ repoRoot, path: dir, branch, force = false }: {
-  repoRoot: string; path: string; branch: string; force?: boolean;
+export async function removeWorktree({ repoRoot, path: dir, branch, force = false, deleteBranch = "merged" }: {
+  repoRoot: string; path: string; branch: string; force?: boolean; deleteBranch?: "merged" | "pushed";
 }): Promise<{ branchDeleted: boolean }> {
   const exists = await stat(dir).then(() => true, () => false);
   if (exists) {
@@ -341,6 +343,17 @@ export async function removeWorktree({ repoRoot, path: dir, branch, force = fals
   let branchDeleted = false;
   if (branch && await isMergedIntoDefault(repoRoot, branch)) {
     branchDeleted = await gitMaybe(repoRoot, ["branch", "-d", branch]) !== null;
+  } else if (branch && deleteBranch === "pushed" && await matchesOrigin(repoRoot, branch)) {
+    branchDeleted = await gitMaybe(repoRoot, ["branch", "-D", branch]) !== null;
   }
   return { branchDeleted };
+}
+
+/** True when the local branch points exactly where `origin/<branch>` does, so deleting it loses nothing. */
+async function matchesOrigin(repoRoot: string, branch: string): Promise<boolean> {
+  const [local, remote] = await Promise.all([
+    gitMaybe(repoRoot, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]),
+    gitMaybe(repoRoot, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]),
+  ]);
+  return !!local && !!remote && local.trim() === remote.trim();
 }

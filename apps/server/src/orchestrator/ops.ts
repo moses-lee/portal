@@ -83,7 +83,7 @@ export async function worktreeProject(deps: OrchestratorDeps, { from, branch, cr
 }
 
 /** Remove the worktree folder behind a worktree project; see DELETE /api/projects/[id]?worktree=delete. */
-async function deleteWorktreeFolder(deps: OrchestratorDeps, project: Project & { worktree: WorktreeMeta }, force: boolean) {
+async function deleteWorktreeFolder(deps: OrchestratorDeps, project: Project & { worktree: WorktreeMeta }, force: boolean, deleteBranch?: "merged" | "pushed"): Promise<{ branchDeleted: boolean }> {
   const present = await exists(project.path);
   // The project may sit in a subfolder of the worktree; git needs the worktree's root.
   const worktreeRoot = present ? (await deps.git.info(project.path))?.root ?? null : null;
@@ -92,26 +92,31 @@ async function deleteWorktreeFolder(deps: OrchestratorDeps, project: Project & {
   if (parent && await exists(parent.path)) repoRoot = (await deps.git.info(parent.path))?.root ?? null;
   if (!repoRoot && worktreeRoot) repoRoot = await deps.git.mainWorktreeOf(worktreeRoot);
   // Without a folder and without a repository there is nothing left for git to clean up.
-  if (!repoRoot) return;
+  if (!repoRoot) return { branchDeleted: false };
   const worktreePath = worktreeRoot ?? project.path;
   // The user's pre-deletion script runs first, while the folder is still there; a forced retry runs it again.
   if (present) await deps.scripts.run("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
-  await deps.git.removeWorktree({ repoRoot, path: worktreePath, branch: project.worktree.branch, force });
+  return deps.git.removeWorktree({ repoRoot, path: worktreePath, branch: project.worktree.branch, force, ...(deleteBranch ? { deleteBranch } : {}) });
 }
 
 /**
  * Take a project out of Portal (DELETE /api/projects/[id]). Sessions created from it keep running;
  * while any exist the project is kept as a removed record so it can be restored.
  */
-export async function removeProject(deps: OrchestratorDeps, { id, deleteWorktree = false, force = false }: { id: string; deleteWorktree?: boolean; force?: boolean }): Promise<{ kept: boolean }> {
+export async function removeProject(deps: OrchestratorDeps, { id, deleteWorktree = false, force = false, deleteBranch }: {
+  id: string; deleteWorktree?: boolean; force?: boolean;
+  /** With `"pushed"`, a local branch whose tip is exactly on origin goes too (a review's PR branch); default only a merged one. */
+  deleteBranch?: "merged" | "pushed";
+}): Promise<{ kept: boolean; branchDeleted: boolean }> {
   const project = await requireProject(deps, id);
+  let branchDeleted = false;
   if (deleteWorktree) {
     if (!project.worktree) throw httpError("This project is not a worktree.", 400);
-    await deleteWorktreeFolder(deps, { ...project, worktree: project.worktree }, force);
+    ({ branchDeleted } = await deleteWorktreeFolder(deps, { ...project, worktree: project.worktree }, force, deleteBranch));
   }
   const keep = (await deps.sessions.list()).some((session) => session.projectId === id);
   await deps.projects.remove(id, { keep });
-  return { kept: keep };
+  return { kept: keep, branchDeleted };
 }
 
 /** Bring a removed project back, recreating its worktree first when the folder is gone (POST /api/projects/removed/[id]/restore). */

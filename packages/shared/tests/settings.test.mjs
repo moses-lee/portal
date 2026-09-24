@@ -74,6 +74,7 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
     intervalMinutes: 5,
     idleIntervalMinutes: 120,
     consolidation: orchestratorDefaults.consolidation,
+    reviews: { answerReadOnly: true },
     apiKeys: { openai: false, anthropic: true },
   });
   assert.ok(!JSON.stringify(merged).includes("sk-ant-secret"), "the key text never reaches the wire form");
@@ -172,6 +173,7 @@ test("applySettingsPatch touches only the section a patch names", () => {
     intervalMinutes: 5,
     idleIntervalMinutes: 30,
     consolidation: orchestratorDefaults.consolidation,
+    reviews: { answerReadOnly: true },
     apiKeys: { openai: false, anthropic: true },
   });
 
@@ -262,4 +264,13 @@ test("a provider change without a model takes that provider's default for the ro
   assert.deepEqual(applySettingsPatch(cheap, { orchestrator: { bookkeeping: { model: "gpt-nano" } } }).orchestrator.bookkeeping, { provider: "openai", model: "gpt-nano" });
   // An old overrides file that switched to anthropic but kept the OpenAI model id now reads a Claude model.
   assert.equal(mergeSettings({ orchestrator: { provider: "openai" } }).orchestrator.model, "gpt-5");
+});
+
+test("the review toggle defaults to on, merges only a boolean, and is written only when it differs", () => {
+  assert.deepEqual(orchestratorDefaults.reviews, { answerReadOnly: true });
+  assert.equal(mergeSettings({ orchestrator: { reviews: { answerReadOnly: false } } }).orchestrator.reviews.answerReadOnly, false);
+  assert.equal(mergeSettings({ orchestrator: { reviews: { answerReadOnly: "no" } } }).orchestrator.reviews.answerReadOnly, true, "a non-boolean leaves the default");
+  const off = mergeSettings({ orchestrator: { reviews: { answerReadOnly: false } } });
+  assert.deepEqual(settingsOverrides(off).orchestrator, { reviews: { answerReadOnly: false } });
+  assert.equal(settingsOverrides(mergeSettings({})).orchestrator, undefined);
 });

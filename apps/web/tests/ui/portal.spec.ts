@@ -266,10 +266,44 @@ test("activity colors and controls follow streaming, permission, and cancellatio
       outcome: "selected",
       optionId: "once",
       optionName: "Allow once",
+      by: "user",
     },
     "message",
     101,
   );
+  const card = page.getByRole("group", { name: /Permission request: Run the project test suite/ });
+  await expect(card).toContainText("Allowed once by you");
+  await expect(card).toHaveAttribute("data-answered-by", "user");
+  // A request Portal answered itself (a read-only step of a review) says so, with its reason.
+  await emit(
+    page,
+    {
+      type: "permission_request",
+      requestId: "approve-2",
+      toolCall: { toolCallId: "tool4", title: "gh pr view 42 --json title", kind: "execute", rawInput: { command: "gh pr view 42 --json title" } },
+      options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
+    },
+    "message",
+    102,
+  );
+  await emit(
+    page,
+    {
+      type: "permission_response",
+      requestId: "approve-2",
+      outcome: "selected",
+      optionId: "once",
+      optionName: "Allow once",
+      by: "portal",
+      reason: "Portal allowed this command of the review: it only reads.",
+    },
+    "message",
+    103,
+  );
+  const auto = page.getByRole("group", { name: /Permission request: gh pr view 42/ });
+  await expect(auto).toContainText("Allowed once by Portal");
+  await expect(auto).toContainText("it only reads");
+  await expect(auto).toHaveAttribute("data-answered-by", "portal");
   await page.getByRole("button", { name: "Stop agent" }).click();
   expect(
     fixture.requests.some((request) => request.path.endsWith("/cancel")),
@@ -278,7 +312,7 @@ test("activity colors and controls follow streaming, permission, and cancellatio
     page,
     { type: "turn_end", stopReason: "cancelled" },
     "message",
-    102,
+    104,
   );
   await expect(
     page.getByRole("button", { name: "Send message", exact: true }),

@@ -201,10 +201,17 @@ export type PortalEvent =
   | { type: "turn_end"; stopReason: StopReason }
   /** The agent asked for permission; the request stays open until a `permission_response` with the same `requestId`. */
   | { type: "permission_request"; requestId: string; toolCall: ToolCallUpdate; options: PermissionOption[] }
-  /** A viewer answered (`selected`), or the request was cancelled by Stop, agent failure, or the turn ending. */
-  | { type: "permission_response"; requestId: string; outcome: "selected"; optionId: string; optionName: string }
+  /**
+   * Someone answered (`selected`): a viewer (`by: "user"`), or Portal itself for a read-only step of a
+   * review session (`by: "portal"`, with the reason); or the request was cancelled by Stop, agent
+   * failure, or the turn ending. Answers logged before `by` existed came from a viewer.
+   */
+  | { type: "permission_response"; requestId: string; outcome: "selected"; optionId: string; optionName: string; by?: PermissionAnswerer; reason?: string }
   | { type: "permission_response"; requestId: string; outcome: "cancelled" }
   | { type: "error"; message: string };
+
+/** Who answered a permission request: a person in the browser, or Portal on their behalf. */
+export type PermissionAnswerer = "user" | "portal";
 
 /** A logged event with its position in the session's log (dense from 0) and epoch ms timestamp. */
 export type StoredEvent = PortalEvent & { seq: number; ts: number };

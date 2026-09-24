@@ -7,7 +7,7 @@ import type { AgentDefinition } from "./agents.ts";
 import { childEnv } from "./child-env.ts";
 import { coalesceTextChunks, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
-import type { EventPage, PortalEvent, SessionLink, SessionListPatch, SessionMeta, SessionState, StoredEvent } from "./types.ts";
+import type { EventPage, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionMeta, SessionState, StoredEvent } from "./types.ts";
 
 /** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
 export type SessionListChange =
@@ -59,6 +59,20 @@ type PendingPermission = {
   options: acp.PermissionOption[];
   resolve: (response: acp.RequestPermissionResponse) => void;
 };
+
+/** What the advisor sees of a permission request. */
+export type PermissionRequestView = { sessionId: string; requestId: string; toolCall: acp.RequestPermissionRequest["toolCall"]; options: acp.PermissionOption[] };
+/** Portal's answer to a request, with the reason shown in the transcript. */
+export type PermissionAdvice = { optionId: string; reason: string };
+/**
+ * Asked for every permission request before a viewer sees it answered: an advice settles the
+ * request as answered by Portal (the request and the answer still reach the transcript); null
+ * leaves it for a viewer. Errors count as null.
+ */
+export type PermissionAdvisor = (request: PermissionRequestView) => Promise<PermissionAdvice | null>;
+
+/** Who answered, for the transcript and the audit trail. */
+type Answered = { by: PermissionAnswerer; reason?: string };
 
 const TITLE_LENGTH = 80;
 
@@ -139,6 +153,7 @@ export function createAcpRuntime(
 ) {
   const definitions = new Map(agentDefinitions.map((agent) => [agent.id, agent]));
   const processes = new Map<string, AgentProcess>();
+  let advisor: PermissionAdvisor | null = null;
   const sessions = new Map<string, Session>();
   // Capabilities announced by the last process of each agent, so an agent known not to support
   // resuming is not restarted just to be asked again.
@@ -221,7 +236,7 @@ export function createAcpRuntime(
     announce(session);
   }
 
-  function settlePermission(requestId: string, outcome: acp.RequestPermissionOutcome) {
+  function settlePermission(requestId: string, outcome: acp.RequestPermissionOutcome, answered?: Answered) {
     const request = pending.get(requestId);
     if (!request) return;
     pending.delete(requestId);
@@ -235,6 +250,7 @@ export function createAcpRuntime(
         outcome: "selected",
         optionId: outcome.optionId,
         optionName: option?.name ?? outcome.optionId,
+        ...(answered ? { by: answered.by, ...(answered.reason ? { reason: answered.reason } : {}) } : {}),
       });
     } else {
       emit(request.session, { type: "permission_response", requestId, outcome: "cancelled" });
@@ -297,13 +313,14 @@ export function createAcpRuntime(
         if (!session || instance.failure || session.replaying) {
           return { outcome: { outcome: "cancelled" as const } };
         }
-        // Hold the agent's request open until a viewer answers or the turn is cancelled.
+        // Hold the agent's request open until a viewer (or the advisor) answers or the turn is cancelled.
         return new Promise<acp.RequestPermissionResponse>((resolve) => {
           const requestId = randomUUID();
           pending.set(requestId, { session, options: params.options, resolve });
           session.pendingPermissions.add(requestId);
           emit(session, { type: "permission_request", requestId, toolCall: params.toolCall, options: params.options });
           announce(session);
+          if (advisor) void advise(advisor, { sessionId: session.id, requestId, toolCall: params.toolCall, options: params.options });
         });
       })
       .onNotification(acp.methods.client.session.update, ({ params }) => {
@@ -655,7 +672,25 @@ export function createAcpRuntime(
     if (!request.options.some((option) => option.optionId === optionId)) {
       throw new Error(`Unknown permission option: ${optionId}`);
     }
-    settlePermission(requestId, { outcome: "selected", optionId });
+    settlePermission(requestId, { outcome: "selected", optionId }, { by: "user" });
+  }
+
+  /** Portal's own answer to a request, when the advisor has one and nobody answered meanwhile. */
+  async function advise(current: PermissionAdvisor, request: PermissionRequestView): Promise<void> {
+    let advice: PermissionAdvice | null = null;
+    try {
+      advice = await current(request);
+    } catch (error) {
+      console.error("The permission advisor failed; the request waits for a viewer:", error);
+    }
+    const open = pending.get(request.requestId);
+    if (!advice || !open || !open.options.some((option) => option.optionId === advice!.optionId)) return;
+    settlePermission(request.requestId, { outcome: "selected", optionId: advice.optionId }, { by: "portal", reason: advice.reason });
+  }
+
+  /** Install (or remove, with null) the advisor asked about every new permission request. */
+  function setPermissionAdvisor(next: PermissionAdvisor | null): void {
+    advisor = next;
   }
 
   async function setConfigOption(id: string, configId: string, value: string | boolean): Promise<SessionState> {
@@ -791,7 +826,7 @@ export function createAcpRuntime(
 
   return {
     ready, listSessions, getSession, createSession, attach, sendPrompt, cancel,
-    respondPermission, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
+    respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
   };
 }
 

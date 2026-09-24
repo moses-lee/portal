@@ -33,3 +33,20 @@ test("settings pick a chat model and a bookkeeping model; a provider change rese
   expect(patches().at(-1)).toEqual({ orchestrator: { provider: "openai" } });
   await expect(dialog.getByText("API keys", { exact: true })).toBeVisible();
 });
+
+test("the review-session toggle saves on change and reports it", async ({ page }) => {
+  const fixture = await setupPortal(page);
+  await page.goto("/portal");
+  await page.evaluate(() =>
+    window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "orchestrator" } })),
+  );
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const toggle = dialog.getByRole("switch", { name: "Answer read-only permission requests in review sessions" });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  await expect
+    .poll(() => fixture.requests.filter((r) => r.path === "/api/settings" && r.method === "PATCH").map((r) => r.body).at(-1))
+    .toEqual({ orchestrator: { reviews: { answerReadOnly: false } } });
+  await expect(dialog.locator("#reviews-answer-read-only-status")).toHaveText("Saved");
+});

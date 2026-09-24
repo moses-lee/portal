@@ -124,7 +124,7 @@ test("colliding upstream IDs keep events, approvals, and cancellation in their o
         toolCall: { toolCallId: "tool-1", title: `${session.agentId} tool` },
         options: PERMISSION_OPTIONS,
       },
-      { type: "permission_response", requestId, outcome: "selected", optionId: "always", optionName: "Always allow" },
+      { type: "permission_response", requestId, outcome: "selected", optionId: "always", optionName: "Always allow", by: "user" },
     ]);
     assert.equal(session.pendingPermissions.size, 0);
     assert.equal(messages(session.agentId, "session/prompt")[0].message.params.sessionId, "session-1");
@@ -935,4 +935,50 @@ test("subscribe delivers one session's events, state, link, and close until unsu
   await answerPermission(runtime, again, "once");
   await until(() => !again.busy, "quiet turn");
   assert.deepEqual(late, []);
+});
+
+test("a permission advisor answers as Portal, with its reason; a viewer's answer is theirs; null leaves the request open", async (t) => {
+  const { runtime } = setup(t);
+  const asked = [];
+  let advice = null;
+  runtime.setPermissionAdvisor(async (request) => {
+    asked.push(request);
+    return advice;
+  });
+  const session = await runtime.createSession(process.cwd(), "claude", "p1");
+  // No advice: the request stays for a viewer, whose answer is recorded as theirs.
+  const first = runtime.sendPrompt(session.id, "hello");
+  const requestId = await answerPermission(runtime, session, "once");
+  await first;
+  assert.equal(asked.length, 1);
+  assert.deepEqual(asked[0].toolCall.title, "claude tool");
+  assert.deepEqual(asked[0].options.map((option) => option.optionId), ["reject", "once", "always"]);
+  const responses = () => session.events.filter(({ type }) => type === "permission_response");
+  assert.deepEqual(responses().at(-1), { type: "permission_response", requestId, outcome: "selected", optionId: "once", optionName: "Allow once", by: "user" });
+
+  // Advice settles the request without a viewer, marked as Portal's.
+  advice = { optionId: "once", reason: "Portal allowed this command of the review: it only reads." };
+  await until(() => !session.busy, "the first turn to end");
+  await runtime.sendPrompt(session.id, "again");
+  await until(() => responses().length === 2, "Portal's own answer");
+  assert.equal(session.pendingPermissions.size, 0);
+  const auto = responses().at(-1);
+  assert.equal(auto.by, "portal");
+  assert.equal(auto.reason, advice.reason);
+  assert.equal(auto.optionId, "once");
+  assert.equal(session.events.filter(({ type }) => type === "permission_request").length, 2, "the request itself still reaches the transcript");
+
+  // Advice naming an option the agent did not offer is ignored; a failing advisor is too: both wait for a viewer.
+  advice = { optionId: "nope", reason: "x" };
+  await until(() => !session.busy, "the second turn to end");
+  await runtime.sendPrompt(session.id, "third");
+  await answerPermission(runtime, session, "once");
+  await until(() => !session.busy, "the third turn to end");
+  runtime.setPermissionAdvisor(async () => { throw new Error("advisor broke"); });
+  await runtime.sendPrompt(session.id, "fourth");
+  await answerPermission(runtime, session, "reject");
+  await until(() => !session.busy, "the fourth turn to end");
+  assert.equal(responses().length, 4);
+  assert.deepEqual(responses().slice(2).map((event) => event.by), ["user", "user"]);
+  runtime.setPermissionAdvisor(null);
 });

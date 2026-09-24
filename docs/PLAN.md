@@ -146,14 +146,12 @@ expired or declined job approval that left its job stuck, the recurring job that
 same approval again, and `resolve_pull` finding only repos Portal has checked out (the user's own
 PRs now resolve anywhere).
 
-- **Review sessions stop on permission prompts.** Claude Code asks before each `gh` or shell
-  command, so an unattended review waits for the user (live: both sessions stopped on their first
-  command). The goal now raises the `session_waiting` item at once. Starting review sessions in a
-  mode that allows read-only commands would remove the wait; that is a permissions decision for
-  the user.
-- **Review goals leave their worktrees behind.** Each reviewed PR keeps its worktree (under
-  `<PORTAL_HOME>/worktrees`) and the local branch created for it after the findings arrive;
-  nothing offers to remove them, and the tick's `worktree_merged` item only covers merged branches.
+- **Review sessions still wait on most commands.** Portal now answers read-only permission
+  requests of review sessions (§1.10), but the read-only checker vouches only for plain commands:
+  a Claude Code review chains `git fetch` into its first command, assigns shell variables
+  (`R=…; cd $R; git status`), and uses `$(…)` and `for` loops, all of which the checker refuses, so
+  live those requests still waited for the user. Widening what counts as read-only for a review
+  (fetch, plain variable assignment and expansion, `--repo`) is the next permissions decision.
 - **Consolidator.** The job always follows Settings: a reschedule from Goals is overwritten on the
   next settings change. Goals' runs list does not link to the curation run page. (Corroboration and
   the guard's counting were fixed in §1.10.)
@@ -225,9 +223,10 @@ The three phases in §5 are done. What remains is making them dependable in dail
 
 1. **Switch the live instance** to the current `main` (the §1.6 restart; it applies migrations
    0002–0005, phase 3 added none). The live database now stores an Anthropic key.
-2. **Unattended reviews:** decide how review sessions handle permission prompts (a mode that
-   allows read-only commands, or an allowlist Portal answers), and clean up review worktrees and
-   branches once the findings are read.
+2. **Unattended reviews** (built, §1.10; decided 2026-09-24: Portal answers read-only requests of
+   review sessions, once per command, only for those sessions, writes wait for the user; worktrees
+   go when the findings item is settled, without an approval when clean): what remains is the
+   read-only checker's reach (§1.7).
 3. **Memory that can learn** (done, §1.10): record repeat sightings on proposals so the consolidator
    can promote, and count only removals of active records in its guard, with a floor.
 4. **Talk to Portal feels like a session** (done, §1.10). Three changes, decided with the user:
@@ -254,7 +253,7 @@ The three phases in §5 are done. What remains is making them dependable in dail
 
 ### 1.10 What the daily-use round delivered so far (branch `feat/daily-use`)
 
-Items 4 and 3 of §1.9, each committed green on the unit suites, typecheck, lint, and the Playwright
+Items 4, 3, and 2 of §1.9, each committed green on the unit suites, typecheck, lint, and the Playwright
 suite, and checked live on a scratch instance (ports 3010/3110, `PORTAL_HOME` under `/tmp`) over a
 clone of the live database with real Anthropic calls.
 
@@ -296,6 +295,38 @@ clone of the live database with real Anthropic calls.
     with each source (the third sighting was the same session again, which the final identity rule
     no longer counts), and a curation pass promoted it ("Seen 3× across pull and session sources;
     no conflicting active claim") and wrote the repo's summary.
+- **Unattended reviews.**
+  - *Portal answers read-only requests.* The ACP runtime takes a `PermissionAdvisor`
+    (`setPermissionAdvisor`); the orchestrator installs `createReviewPermissionAdvisor` at boot.
+    For a request from a session of an active review goal (the check job's `payload.review`), with
+    Settings → Talk to Portal → "Answer read-only permission requests in review sessions" on
+    (default) and the goal not opted out (`setup_pr_reviews` `answerPermissions: false`), Portal
+    picks the agent's "allow once" option when the tool call is a read or search, or a shell
+    command `classifyCommand` (the checker behind `run_command`) vouches for. Never "allow always".
+    Everything else waits for the user, and the goal's `session_waiting` item is raised as before.
+    Cancelling the goal stops the answering.
+  - *Audit.* Every `permission_response` now says who answered: `by: "user"` or `by: "portal"`
+    with the reason. The permission card in the transcript reads "Allowed once by you" or
+    "Allowed once by Portal" with the reason beneath, in a distinct tint, and the activity log gets
+    a `session.permission_answered` entry per answer.
+  - *Worktree cleanup.* `setup_pr_reviews` records `worktreeCreated` per session. When the user
+    resolves or dismisses a PR's `review_findings` item, `settleReviewWorktree` removes the
+    worktree Portal created, its project entry, and the local branch when its tip is exactly on
+    origin (`removeWorktree` `deleteBranch: "pushed"`), without an approval, and says so in one
+    line in the thread. A worktree still used by a running session, with uncommitted changes, or
+    that git refuses to remove is kept with a `worktree_dirty` item carrying the approval-gated
+    Remove worktree action. The review session keeps its transcript.
+  - Live (scratch instance over a clone of the live database, real Anthropic and Claude Code calls):
+    "Review PR 2579 on liquid-labs-inc/monorepo" started a review in a new worktree; the session
+    made 40 permission requests and the checker vouched for none of them (the first chained
+    `git fetch`, the rest were `R=…; cd $R; git status | head`, `for r in $(gh run list …)`, and
+    `$(git rev-parse …)`), so every one waited for the user (answered by a stand-in script) and
+    each card in the transcript read "Allowed once by you". The advisor itself is covered by unit
+    tests (plain `git status`, `gh pr view`, reads and searches are answered as Portal). The
+    review finished ("looks good, with four nits"), the thread got the prose verdict, and resolving
+    the findings item removed the worktree, its project entry, and the local branch (its tip was on
+    origin), with "Removed the review worktree for liquid-labs-inc/monorepo#2579 and its local
+    branch …, now that its findings are read." in the thread and a `review.worktree_removed` entry.
 
 ---
 

@@ -168,6 +168,7 @@ type FieldKey =
   | "provider"
   | "bookkeepingProvider"
   | OrchestratorTextField
+  | "reviews.answerReadOnly"
   | `apiKey.${OrchestratorProvider}`
   | `script.${ScriptKind}.${keyof ScriptSettings}`;
 
@@ -446,6 +447,16 @@ export default function SettingsDialog({
       "Could not save the setting.",
     );
     if (ok) clearOrchestratorDraft(field);
+  };
+
+  /** Whether Portal answers read-only permission requests of the review sessions it starts. */
+  const saveAnswerReadOnly = async (answerReadOnly: boolean) => {
+    if (!settings || answerReadOnly === settings.orchestrator.reviews.answerReadOnly) return;
+    await run(
+      "reviews.answerReadOnly",
+      () => update({ orchestrator: { reviews: { answerReadOnly } } }),
+      "Could not save the setting.",
+    );
   };
 
   /**
@@ -758,6 +769,36 @@ export default function SettingsDialog({
                       }}
                     />
                   ))}
+                </div>
+              </div>
+              <div className="space-y-3 rounded-xl border border-border/60 p-4">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium">Review sessions</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Reviews run unattended. With this on, Portal answers their permission requests
+                    for read-only steps (reading files, searching, commands its read-only checker
+                    vouches for) with &ldquo;allow once&rdquo;, and marks each answer as its own in the
+                    transcript. Anything that writes still waits for you.
+                  </p>
+                </div>
+                <div className="flex h-8 items-center gap-2.5">
+                  <Switch
+                    id="reviews-answer-read-only"
+                    checked={settings.orchestrator.reviews.answerReadOnly}
+                    disabled={!!saving["reviews.answerReadOnly"]}
+                    aria-describedby="reviews-answer-read-only-status"
+                    onCheckedChange={(checked) => void saveAnswerReadOnly(checked)}
+                  />
+                  <label htmlFor="reviews-answer-read-only" className="text-xs">
+                    Answer read-only permission requests in review sessions
+                  </label>
+                  <span id="reviews-answer-read-only-status" className="text-[11px] text-muted-foreground" aria-live="polite">
+                    {status["reviews.answerReadOnly"]?.kind === "error"
+                      ? status["reviews.answerReadOnly"]?.message
+                      : status["reviews.answerReadOnly"]?.kind === "saved"
+                        ? "Saved"
+                        : ""}
+                  </span>
                 </div>
               </div>
               <div className="space-y-3">

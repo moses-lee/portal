@@ -15,6 +15,8 @@ import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
 import { isServerAction, runItemAction } from "./approvals/card-actions.ts";
 import { createApprovalsService } from "./approvals/service.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
+import { settleReviewWorktree } from "./jobs/review-cleanup.ts";
+import { createReviewPermissionAdvisor } from "./jobs/review-permissions.ts";
 import { buildDigest, collectSnapshot } from "./digest.ts";
 import type { ApprovalsService, JobsService, MemoryService, OrchestratorHub, PresenceSource, WorldService } from "./hub.ts";
 import { createJobsService } from "./jobs/service.ts";
@@ -220,7 +222,10 @@ export function createOrchestratorRuntime({
   const unsubscribePresence = presence.subscribe(() => { void emitStatus(); });
   const unsubscribeSettings = settingsStore.subscribe(() => { void emitStatus(); });
   void ready.then(() => {
-    if (!disposed) hub.jobs.start();
+    if (disposed) return;
+    hub.jobs.start();
+    // Review sessions run unattended: Portal answers their read-only permission requests itself.
+    deps.sessions.setPermissionAdvisor(createReviewPermissionAdvisor(hub));
   });
 
   /** The digest as get_tick_digest reports it: a look, not a tick, so snoozes are left alone. */
@@ -405,6 +410,8 @@ export function createOrchestratorRuntime({
     });
     void emitItems();
     void emitStatus();
+    // Findings read: the review's worktree can go (see jobs/review-cleanup.ts).
+    if (patch.status === "resolved" || patch.status === "dismissed") void settleReviewWorktree(hub, item);
     return item;
   }
 
@@ -431,6 +438,7 @@ export function createOrchestratorRuntime({
     },
     async dispose() {
       disposed = true;
+      deps.sessions.setPermissionAdvisor(null);
       unsubscribePresence();
       unsubscribeSettings();
       for (const controller of chatTurns.values()) controller.abort();

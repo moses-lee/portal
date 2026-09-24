@@ -19,7 +19,11 @@ import type { JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
 
 /** One PR under review and the session reviewing it. */
-export type ReviewSession = { pr: number; url: string; sessionId: string; projectId: string; title?: string; author?: string };
+export type ReviewSession = {
+  pr: number; url: string; sessionId: string; projectId: string; title?: string; author?: string;
+  /** True when the review checked the PR's branch out into a new worktree (Portal's to remove once the findings are read). */
+  worktreeCreated?: boolean;
+};
 
 /** The check job's `payload.review`. */
 export type ReviewWatch = {
@@ -27,6 +31,8 @@ export type ReviewWatch = {
   sessions: ReviewSession[];
   /** Memory records the review brief was written from, for the audit trail. */
   memoryIds?: string[];
+  /** False when the user asked to be asked for every command: Portal answers no permission request of these sessions. */
+  answerPermissions?: boolean;
 };
 
 export type SessionProgress = { state: "working" | "waiting" | "finished" | "failed" | "gone"; note?: string };
@@ -59,7 +65,7 @@ export function reviewWatchOf(payload: Record<string, unknown>): ReviewWatch | n
     && typeof entry.pr === "number" && typeof entry.sessionId === "string" && typeof entry.url === "string" && typeof entry.projectId === "string");
   if (!sessions.length) return null;
   const memoryIds = Array.isArray(raw.memoryIds) ? raw.memoryIds.filter((id): id is string => typeof id === "string") : [];
-  return { repo: raw.repo, sessions, ...(memoryIds.length ? { memoryIds } : {}) };
+  return { repo: raw.repo, sessions, ...(memoryIds.length ? { memoryIds } : {}), ...(raw.answerPermissions === false ? { answerPermissions: false } : {}) };
 }
 
 /**

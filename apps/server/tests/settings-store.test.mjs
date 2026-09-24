@@ -158,6 +158,7 @@ for (const [name, make] of backends) {
       intervalMinutes: 5,
       idleIntervalMinutes: orchestratorDefaults.idleIntervalMinutes,
       consolidation: orchestratorDefaults.consolidation,
+      reviews: orchestratorDefaults.reviews,
       apiKeys: { openai: false, anthropic: true },
     });
     assert.deepEqual(result.gitActions, defaultSettings.gitActions, "the other section is untouched");

@@ -116,7 +116,7 @@ test("chat: after the wait the call reports pending; a later approval runs it se
   assert.deepEqual(state.removed, []);
 
   const decided = await hub.approvals.decide(approval.id, { approve: true });
-  assert.deepEqual(decided.result, { id: "p1", removed: true, kept: true });
+  assert.deepEqual(decided.result, { id: "p1", removed: true, kept: true, branchDeleted: false });
   assert.deepEqual(state.removed, [{ id: "p1", keep: true }]);
   const [note] = await store.readMessages("main");
   assert.equal(note.role, "assistant");

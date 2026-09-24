@@ -345,8 +345,8 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
   });
   const result = await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [1, 2, 3, 4] });
   assert.deepEqual(result.sessions, [
-    { pr: 1, url: "https://github.com/acme/app/pull/1", sessionId: "s1", projectId: "p2", title: "PR 1", author: "Moses-Lee" },
-    { pr: 2, url: "https://github.com/acme/app/pull/2", sessionId: "s2", projectId: "p3", title: "PR 2", author: "someone" },
+    { pr: 1, url: "https://github.com/acme/app/pull/1", sessionId: "s1", projectId: "p2", title: "PR 1", author: "Moses-Lee", worktreeCreated: true },
+    { pr: 2, url: "https://github.com/acme/app/pull/2", sessionId: "s2", projectId: "p3", title: "PR 2", author: "someone", worktreeCreated: true },
   ]);
   assert.equal(result.errors.length, 2);
   assert.match(result.errors[0], /PR #3: .*fork/);
@@ -450,7 +450,7 @@ test("remove_project runs the pre-deletion script in the worktree before git rem
     removeWorktree: async (opts) => { order.push(["removeWorktree", opts]); return { branchDeleted: false }; },
     scripts: { run: async (kind, opts) => { order.push([kind, opts]); return { ran: true, ok: true, code: 0, stdout: "", stderr: "", timedOut: false }; } },
   });
-  assert.deepEqual(await run(tools.remove_project, { id: "p2", deleteWorktree: true }), { id: "p2", removed: true, kept: false });
+  assert.deepEqual(await run(tools.remove_project, { id: "p2", deleteWorktree: true }), { id: "p2", removed: true, kept: false, branchDeleted: false });
   assert.deepEqual(order, [
     ["preWorktreeDelete", { cwd: worktreePath, env: { PORTAL_WORKTREE_PATH: worktreePath, PORTAL_REPO_ROOT: parentPath, PORTAL_BRANCH: "feat/x" } }],
     ["removeWorktree", { repoRoot: parentPath, path: worktreePath, branch: "feat/x", force: false }],
@@ -459,7 +459,7 @@ test("remove_project runs the pre-deletion script in the worktree before git rem
 
   // Without deleteWorktree nothing runs; the script is about the folder, not the project record.
   const quiet = setup({ projects: [project({ id: "p1", path: parentPath }), project({ id: "p3", path: worktreePath, worktree: { parentId: "p1", branch: "feat/y" } })], removeWorktree: async () => { throw new Error("should not run"); } });
-  assert.deepEqual(await run(quiet.tools.remove_project, { id: "p3" }), { id: "p3", removed: true, kept: false });
+  assert.deepEqual(await run(quiet.tools.remove_project, { id: "p3" }), { id: "p3", removed: true, kept: false, branchDeleted: false });
   assert.deepEqual(quiet.state.scripts, []);
 
   // A script that aborts stops before git and before the project record is touched.

@@ -61,6 +61,7 @@ export type SettingsFile = {
     intervalMinutes?: number;
     idleIntervalMinutes?: number;
     consolidation?: Partial<ConsolidationSettings>;
+    reviews?: { answerReadOnly?: boolean };
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
   };
   scripts?: ScriptsPatch;
@@ -224,6 +225,13 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
       (consolidation as Record<string, unknown>)[field] = required(checkConsolidationField(field, given.consolidation[field]));
     }
     patch.consolidation = consolidation;
+  }
+  if (given.reviews !== undefined) {
+    if (!isPlainObject(given.reviews)) throw new SettingsError("orchestrator.reviews must be an object.", 400);
+    if (given.reviews.answerReadOnly !== undefined) {
+      if (typeof given.reviews.answerReadOnly !== "boolean") throw new SettingsError("orchestrator.reviews.answerReadOnly must be true or false.", 400);
+      patch.reviews = { answerReadOnly: given.reviews.answerReadOnly };
+    }
   }
   if (given.apiKeys !== undefined) {
     if (!isPlainObject(given.apiKeys)) throw new SettingsError("orchestrator.apiKeys must be an object.", 400);

@@ -68,7 +68,7 @@ export function compositeTools(ctx: ToolContext) {
 
   return {
     setup_pr_reviews: define(
-      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send a review prompt. Creates one goal that reports each PR's findings as a Needs-you item when the sessions finish. Use this instead of doing the steps by hand. Write prompt yourself from what memory says about reviewing (the author's review style, the code-review task type, the repo's conventions), interpreted for these PRs rather than pasted, and pass the ids of those records as memoryIds; when memory has such guidance and no prompt is given, the call is refused with the guidance to write from. Without guidance, the user's own PRs get their stored triage prompt and everyone else's get a reviewer's brief.",
+      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send a review prompt. Creates one goal that reports each PR's findings as a Needs-you item when the sessions finish. Use this instead of doing the steps by hand. Write prompt yourself from what memory says about reviewing (the author's review style, the code-review task type, the repo's conventions), interpreted for these PRs rather than pasted, and pass the ids of those records as memoryIds; when memory has such guidance and no prompt is given, the call is refused with the guidance to write from. Without guidance, the user's own PRs get their stored triage prompt and everyone else's get a reviewer's brief. Portal answers the sessions' permission requests for read-only steps itself (marked as Portal's in the transcript) unless Settings turns that off or answerPermissions is false; anything else waits for the user. cancel_intent on the goal stops the answering; the worktrees are removed once the user settles the findings.",
       z.object({
         repo: z.string().regex(REPO_PATTERN, "Expected owner/name.").optional(),
         projectId: z.string().optional(),
@@ -76,8 +76,9 @@ export function compositeTools(ctx: ToolContext) {
         prompt: z.string().optional(),
         memoryIds: z.array(z.string()).max(20).optional().describe("Ids of the memory records the prompt was written from."),
         agentId: z.string().optional(),
+        answerPermissions: z.boolean().optional().describe("false when the user wants to be asked before every command of these reviews (default true)."),
       }),
-      async ({ repo, projectId, numbers, prompt, memoryIds = [], agentId }) => {
+      async ({ repo, projectId, numbers, prompt, memoryIds = [], agentId, answerPermissions = true }) => {
         const project = await resolveProject({ projectId, repo });
         const origin = await repoOf(deps, project);
         if (!origin) throw httpError(`${project.name} has no GitHub origin.`, 409);
@@ -104,12 +105,13 @@ export function compositeTools(ctx: ToolContext) {
             const pull = fetched.get(number)!;
             if (pull instanceof Error) throw pull;
             if (pull.fork) throw httpError(`comes from a fork; Portal cannot check it out.`, 409);
-            const { project: target } = await worktreeProject(deps, { from: project, branch: pull.branch });
+            const { project: target, created } = await worktreeProject(deps, { from: project, branch: pull.branch });
             const url = `${origin.url}/pull/${number}`;
             const reviewPrompt = reviewPromptFor({ given: prompt, author: pull.author, login, stored });
             const { sessionId, promptError } = await startSession(deps, { projectId: target.id, agentId, prompt: `${reviewPrompt}\n\nPR #${number}: ${url}` });
             sessions.push({
               pr: number, url, sessionId, projectId: target.id, title: pull.title, ...(pull.author ? { author: pull.author } : {}), ...(promptError ? { promptError } : {}),
+              worktreeCreated: created,
             });
             if (promptError) errors.push(`PR #${number}: the session started but the prompt failed: ${promptError}`);
             pulls.push({ repo: origin.repo, number, url });
@@ -137,6 +139,7 @@ export function compositeTools(ctx: ToolContext) {
           checkPayload: {
             review: {
               repo: origin.repo, sessions: sessions.map(({ promptError: _promptError, ...entry }) => entry), ...(known.length ? { memoryIds: known } : {}),
+              ...(answerPermissions ? {} : { answerPermissions: false }),
             },
           },
         }, { actor: "agent", runId: domain.turn.runId, threadId: domain.turn.threadId });

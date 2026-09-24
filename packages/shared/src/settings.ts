@@ -102,7 +102,7 @@ function mergePrompts(base: GitActionPrompts, given: Partial<Record<GitActionKin
  * else leaves it. Key strings become the wire form's booleans (non-blank means "a key is stored").
  */
 function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettingsPatch | undefined): OrchestratorSettings {
-  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, consolidation: { ...base.consolidation }, apiKeys: { ...base.apiKeys } };
+  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, consolidation: { ...base.consolidation }, reviews: { ...base.reviews }, apiKeys: { ...base.apiKeys } };
   if (!given) return next;
   // A provider change without a model takes that provider's default: a model id never outlives its provider.
   if (isOrchestratorProvider(given.provider) && given.provider !== base.provider) {
@@ -122,6 +122,9 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
     next.idleIntervalMinutes = given.idleIntervalMinutes as number;
   }
   next.consolidation = mergeConsolidation(base.consolidation, given.consolidation);
+  if (given.reviews && typeof given.reviews === "object" && typeof given.reviews.answerReadOnly === "boolean") {
+    next.reviews = { answerReadOnly: given.reviews.answerReadOnly };
+  }
   if (given.apiKeys) {
     for (const provider of orchestratorProviders) {
       const value = given.apiKeys[provider];
@@ -175,6 +178,7 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
     if (given.consolidation[field] !== base.consolidation[field]) (consolidation as Record<string, unknown>)[field] = given.consolidation[field];
   }
   if (Object.keys(consolidation).length > 0) orchestrator.consolidation = consolidation;
+  if (given.reviews.answerReadOnly !== base.reviews.answerReadOnly) orchestrator.reviews = { answerReadOnly: given.reviews.answerReadOnly };
   if (Object.keys(orchestrator).length > 0) result.orchestrator = orchestrator;
 
   const scripts = scriptsOverrides(settings.scripts);
