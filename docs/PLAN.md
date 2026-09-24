@@ -235,7 +235,27 @@ The three phases in §5 are done. What remains is making them dependable in dail
    branches once the findings are read.
 3. **Memory that can learn:** record repeat sightings on proposals so the consolidator can promote,
    and count only removals of active records in its guard, with a floor.
-4. **The rest of §1.7**, then bearer-token auth for external clients (§6).
+4. **Talk to Portal feels like a session.** Three changes, decided with the user:
+   - **Prose, not cards.** The thread stops attaching item cards and per-PR lists to messages.
+     When the tick or a goal has something to say, Portal writes a short summary in sentences
+     ("two of your PRs need you: …; 139 review requests wait, the oldest a month old"); review
+     results arrive as a prose verdict. The Needs-you strip stays as the place to act, dismiss,
+     and open an item's full detail (per-PR lists, file:line findings). Today the tick prompt
+     (`prompt.ts`) tells the model to paste the digest's detail lists as item bodies, and
+     `PortalMessage.tsx` renders every touched item as a card under its message; phase 3's
+     findings and monitor items followed the same pattern.
+   - **Same send behaviour as sessions.** Both pages already render `ChatComposer`, but each wires
+     its own sending: sessions clear the draft when the server acknowledges the prompt and show
+     "Sending…" meanwhile; Portal (`PortalThread.tsx`, on `useChat`) clears only at the first
+     streamed token, which in this AI SDK version comes after the model starts answering, so the
+     text sits in the box. Move the session page's send logic (draft capture, sending state, clear
+     on acknowledgement, error text, prompt history) into one hook both pages use; for Portal the
+     acknowledgement is the reply stream opening, by when the server has stored the message.
+     Changing Portal's API so replies arrive over its event stream, as sessions do, is deferred.
+   - **The aurora.** Mount the session pages' `AuroraBackground` unchanged in `PortalPage`,
+     covering every tab: working while Portal answers the user, waiting (amber) while an approval
+     is pending, idle otherwise, including while background jobs run.
+5. **The rest of §1.7**, then bearer-token auth for external clients (§6).
 
 ---
 
@@ -438,6 +458,8 @@ data with its diff visible in the UI; the activity log explains every action the
   credentials; Next.js is a frontend only.
 - Node 24 + pnpm + Fastify 5 + Drizzle/postgres.js. Bun was abandoned. Socket.IO stays.
 - Bearer-token auth for external clients (CLI, Hermes): later. Single user for now.
+- Talk to Portal matches the session pages: same composer and send behaviour, same aurora, and a
+  thread in prose, with actionable detail only in the Needs-you strip.
 
 ## 7. Open questions
 
