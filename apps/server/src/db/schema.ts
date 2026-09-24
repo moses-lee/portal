@@ -288,6 +288,8 @@ export const memoryRecords = pgTable(
     scope: jsonb("scope").$type<Json>().notNull(),
     authority: text("authority").notNull(),
     source: jsonb("source").$type<Json>().notNull(),
+    /** Further sources of the same claim while it was proposed (see MemoryRecord.sightings). */
+    sightings: jsonb("sightings").$type<Json[]>().notNull().default([]),
     trust: real("trust").notNull(),
     pinned: boolean("pinned").notNull().default(false),
     reviewBy: epochMs("review_by"),

@@ -314,6 +314,7 @@ export const memoryRecords: MemoryRecord[] = [
     type: "preference",
     body: "Prefers squash merges.",
     status: "proposed",
+    sightings: [{ kind: "pull", pull: pull42, quote: "squash on merge, as usual" }],
     authority: "observed",
     trust: 0.5,
     source: { kind: "session", sessionId: "s1", quote: "please squash this" },

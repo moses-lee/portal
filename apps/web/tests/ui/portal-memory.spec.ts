@@ -71,6 +71,10 @@ test("the inbox approves and rejects proposed records", async ({ page }) => {
   await expect(proposed).toContainText("Prefers squash merges.");
   await expect(proposed).toContainText("octocat");
   await expect(proposed).toContainText("please squash this");
+  // A repeat sighting from another source shows with the proposal, so the user sees the claim recur.
+  await expect(proposed).toContainText("Seen 2 times");
+  await expect(proposed).toContainText("squash on merge, as usual");
+  await expect(proposed.getByText("From a pull request")).toBeVisible();
   await proposed.getByRole("button", { name: "Approve" }).click();
   await expect(inbox.getByText("Nothing waiting for review.")).toBeVisible();
   expect(fixture.requests.some((r) => r.path === "/api/portal/memory/records/r-prop/approve" && r.method === "POST")).toBe(true);

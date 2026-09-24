@@ -1,0 +1,1 @@
+ALTER TABLE "memory_records" ADD COLUMN "sightings" jsonb DEFAULT '[]'::jsonb NOT NULL;

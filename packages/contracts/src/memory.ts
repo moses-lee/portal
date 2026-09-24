@@ -91,6 +91,12 @@ export type MemoryRecord = {
   scope: Scope;
   authority: Authority;
   source: RecordSource;
+  /**
+   * Further sources that made the same claim while it waited in the inbox: a repeat proposal from
+   * another turn, session, or PR appends its source here instead of opening a second proposal, so
+   * the consolidator can see a claim recur. Absent or empty: seen once.
+   */
+  sightings?: RecordSource[];
   /** 0..1: how far to rely on it. */
   trust: number;
   /** Always in CORE.md as a directive. */
@@ -119,9 +125,9 @@ export type MemoryRecordInput = {
 /** A user edit from the browser. Changing `body` supersedes the record with a new one. */
 export type MemoryRecordPatch = Partial<Pick<MemoryRecord, "body" | "pinned" | "reviewBy" | "type">> & { status?: "archived" };
 
-/** `summarized`: an entity's summary was rewritten (a revision with no record). */
+/** `corroborated`: a proposal was seen again and gained a sighting. `summarized`: an entity's summary was rewritten (a revision with no record). */
 export type MemoryRevisionAction =
-  | "created" | "updated" | "approved" | "rejected" | "superseded" | "expired" | "archived" | "forgotten" | "restored" | "imported" | "summarized";
+  | "created" | "updated" | "corroborated" | "approved" | "rejected" | "superseded" | "expired" | "archived" | "forgotten" | "restored" | "imported" | "summarized";
 
 export type MemoryRevision = {
   id: number;

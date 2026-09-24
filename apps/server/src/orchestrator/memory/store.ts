@@ -16,7 +16,7 @@ import { OrchestratorStoreError, newId } from "../store.ts";
 export type RevisionMeta = { actor: MemoryRevision["actor"]; action: MemoryRevisionAction; reason?: string | null; runId?: string | null };
 
 /** What an update may change. The claim itself (entity, key, body, scope, source) is fixed once written. */
-export type RecordUpdate = Partial<Pick<MemoryRecord, "status" | "authority" | "trust" | "pinned" | "reviewBy" | "type" | "supersedes" | "supersededBy">>;
+export type RecordUpdate = Partial<Pick<MemoryRecord, "status" | "authority" | "trust" | "pinned" | "reviewBy" | "type" | "supersedes" | "supersededBy" | "sightings">>;
 
 export type RecordChange =
   | { op: "insert"; record: MemoryRecord; revision: RevisionMeta }
@@ -114,7 +114,7 @@ export function compareEntities(a: MemoryEntity, b: MemoryEntity): number {
 /** The record after an update, with `updatedAt` moved forward. */
 export function applyUpdate(record: MemoryRecord, patch: RecordUpdate, now: number): MemoryRecord {
   const next: MemoryRecord = { ...record, updatedAt: Math.max(now, record.updatedAt + 1) };
-  for (const key of ["status", "authority", "trust", "pinned", "reviewBy", "type", "supersedes", "supersededBy"] as const) {
+  for (const key of ["status", "authority", "trust", "pinned", "reviewBy", "type", "supersedes", "supersededBy", "sightings"] as const) {
     if (patch[key] !== undefined) (next as Record<string, unknown>)[key] = patch[key];
   }
   return next;

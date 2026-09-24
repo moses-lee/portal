@@ -24,13 +24,14 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 const recordFromRow = (row: RecordRow): MemoryRecord => ({
   id: row.id, entityId: row.entityId, type: row.type as MemoryRecord["type"], key: row.key, body: row.body, status: row.status as MemoryRecord["status"],
   scope: row.scope as unknown as MemoryRecord["scope"], authority: row.authority as MemoryRecord["authority"], source: row.source as MemoryRecord["source"],
-  trust: row.trust, pinned: row.pinned, reviewBy: row.reviewBy, supersedes: row.supersedes, supersededBy: row.supersededBy,
+  sightings: (row.sightings ?? []) as unknown as MemoryRecord["sightings"], trust: row.trust, pinned: row.pinned, reviewBy: row.reviewBy, supersedes: row.supersedes, supersededBy: row.supersededBy,
   createdAt: row.createdAt, updatedAt: row.updatedAt,
 });
 
 const recordColumns = (record: MemoryRecord) => ({
   id: record.id, entityId: record.entityId, type: record.type, key: record.key, body: record.body, status: record.status,
-  scope: record.scope as unknown as Json, authority: record.authority, source: record.source as unknown as Json, trust: record.trust,
+  scope: record.scope as unknown as Json, authority: record.authority, source: record.source as unknown as Json,
+  sightings: (record.sightings ?? []) as unknown as Json[], trust: record.trust,
   pinned: record.pinned, reviewBy: record.reviewBy, supersedes: record.supersedes, supersededBy: record.supersededBy,
   createdAt: record.createdAt, updatedAt: record.updatedAt,
 });

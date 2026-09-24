@@ -43,6 +43,13 @@
       "when": 1790150822549,
       "tag": "0005_items_without_lists",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790219280577,
+      "tag": "0006_memory_sightings",
+      "breakpoints": true
     }
   ]
 }

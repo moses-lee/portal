@@ -1,10 +1,11 @@
 # Portal: server split and the Muse-style orchestrator
 
-Status as of 2026-09-23. This is the working plan for turning Portal from a chat UI with a
+Status as of 2026-09-24. This is the working plan for turning Portal from a chat UI with a
 timer-driven assistant into a coordinator that knows the user's world, runs its own background
-work, and keeps an auditable memory. Phases 1, 2, and 3 are merged into `main` (§1.2, §1.5, §1.8).
-The live instance still runs phase 1 code until it is restarted (§1.6). Known gaps are in §1.7;
-what comes next is in §1.9.
+work, and keeps an auditable memory. Phases 1, 2, and 3 are merged into `main` (§1.2, §1.5, §1.8),
+and the first two items of the daily-use round are on `feat/daily-use` (§1.10). The live instance
+still runs phase 1 code until it is restarted (§1.6). Known gaps are in §1.7; what comes next is
+in §1.9.
 
 Companion research (outside the repo, in the author's notes): Muse product/architecture,
 Muse agent design, Muse memory deep-dive, Instinct memory, agent-memory survey, the original
@@ -153,15 +154,9 @@ PRs now resolve anywhere).
 - **Review goals leave their worktrees behind.** Each reviewed PR keeps its worktree (under
   `<PORTAL_HOME>/worktrees`) and the local branch created for it after the findings arrive;
   nothing offers to remove them, and the tick's `worktree_merged` item only covers merged branches.
-- **Consolidator.**
-  - Corroboration is never recorded: proposing a claim that already waits in the inbox answers
-    `unchanged` and drops the second source, so "recurring or corroborated" can only be seen in
-    differently worded duplicates. Live, all nine real proposals stayed in the inbox as
-    single-source. A proposal needs a list of sources (or a sightings count) that a repeat appends to.
-  - The 25% guard counts rejected proposals as removals, so with a small memory a pass that
-    rejects a few noisy proposals is refused whole.
-  - The job always follows Settings: a reschedule from Goals is overwritten on the next settings
-    change. Goals' runs list does not link to the curation run page.
+- **Consolidator.** The job always follows Settings: a reschedule from Goals is overwritten on the
+  next settings change. Goals' runs list does not link to the curation run page. (Corroboration and
+  the guard's counting were fixed in §1.10.)
 - **Model-written text.** A proposal written by the model can carry HTML entities (`&lt;n&gt;`
   seen live), which the memory browser and digests show literally.
 - **Monitors.** A check job that fails five times (GitHub down) is marked failed and the intent
@@ -233,9 +228,9 @@ The three phases in §5 are done. What remains is making them dependable in dail
 2. **Unattended reviews:** decide how review sessions handle permission prompts (a mode that
    allows read-only commands, or an allowlist Portal answers), and clean up review worktrees and
    branches once the findings are read.
-3. **Memory that can learn:** record repeat sightings on proposals so the consolidator can promote,
-   and count only removals of active records in its guard, with a floor.
-4. **Talk to Portal feels like a session.** Three changes, decided with the user:
+3. **Memory that can learn** (done, §1.10): record repeat sightings on proposals so the consolidator
+   can promote, and count only removals of active records in its guard, with a floor.
+4. **Talk to Portal feels like a session** (done, §1.10). Three changes, decided with the user:
    - **Prose, not cards.** The thread stops attaching item cards and per-PR lists to messages.
      When the tick or a goal has something to say, Portal writes a short summary in sentences
      ("two of your PRs need you: …; 139 review requests wait, the oldest a month old"); review
@@ -256,6 +251,51 @@ The three phases in §5 are done. What remains is making them dependable in dail
      covering every tab: working while Portal answers the user, waiting (amber) while an approval
      is pending, idle otherwise, including while background jobs run.
 5. **The rest of §1.7**, then bearer-token auth for external clients (§6).
+
+### 1.10 What the daily-use round delivered so far (branch `feat/daily-use`)
+
+Items 4 and 3 of §1.9, each committed green on the unit suites, typecheck, lint, and the Playwright
+suite, and checked live on a scratch instance (ports 3010/3110, `PORTAL_HOME` under `/tmp`) over a
+clone of the live database with real Anthropic calls.
+
+- **Talk to Portal matches the session pages.**
+  - *Prose.* `PortalMessage` no longer draws item cards under messages (the `itemIds` metadata
+    stays for the audit trail); the Needs-you strip is where an item is read and acted on. The
+    system prompt says the thread is prose and the tick prompt asks for sentences with names and
+    counts, never a list or a repeat of item bodies. A finished review goal posts one sentence
+    ("Both reviews on acme/app finished: #1 needs changes, with one blocking finding and one nit;
+    #2 looks good, with one nit. The findings are in Needs you.") built by `reviewProse`.
+  - *Send behaviour.* `apps/web/src/components/useSend.ts` holds what both pages did on their own:
+    the draft stays in the box with "Sending…" until the server has taken the message, then clears
+    (unless edited meanwhile) and joins the Up/Down history; a refused send keeps the text with the
+    reason, and text from a card goes back into an empty draft. Sessions acknowledge on the prompt
+    route's answer. Portal acknowledges when the reply's response opens (the server stores the
+    message before starting the turn), through the transport's `fetch`; the AI SDK's `streaming`
+    status comes only with the first chunk, after the model has started. Until the acknowledgement
+    the composer shows the send spinner, not Stop, as on a session page.
+  - *Aurora.* `AuroraBackground` is mounted in `PortalPage` behind every view; `portalActivity()`
+    makes it working while a chat turn answers in any thread, amber while an approval is pending,
+    idle otherwise (background jobs included).
+  - Live: the chat reply ("Two of your PRs need you: …#2572 has changes requested and failing
+    checks, and …#2577 … has failing checks.") and the tick's note were prose; no card under any of
+    the 202 entries; the send spinner showed after 75 ms, the box cleared after 766 ms when the
+    stream opened, and the aurora was working meanwhile and idle after.
+- **Memory that can learn.**
+  - *Sightings.* `MemoryRecord.sightings` (migration 0006, a jsonb list) holds further sources of a
+    claim that already waits in the inbox: `propose` appends the new source with a `corroborated`
+    revision and a `memory.corroborated` activity entry instead of answering `unchanged`; the same
+    source again (the same session, pull, message, or link, whatever the turn or quote) adds
+    nothing. The tool answers `corroborated` and `timesSeen`. The curation prompt shows
+    "seen N× (pull, session)" per inbox line and says a claim seen once stays unless it repeats
+    another record; the memory browser lists the sightings under the record's source.
+  - *Guard.* `resolvePlan` counts only active records taken out of force (supersessions and
+    expiries) against the active records, and refuses only above `max(REMOVAL_FLOOR = 3, 25%)`.
+    Rejecting inbox proposals is not a removal, so a small memory can lose its noise.
+  - Live (the clone had no memory records; the live instance still runs phase 1 code): the same
+    claim proposed from a PR and then a session became one inbox record shown as "Seen 3 times"
+    with each source (the third sighting was the same session again, which the final identity rule
+    no longer counts), and a curation pass promoted it ("Seen 3× across pull and session sources;
+    no conflicting active claim") and wrote the repo's summary.
 
 ---
 

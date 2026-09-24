@@ -68,6 +68,7 @@ const sourceLabels: Record<MemoryRecord["source"]["kind"], string> = {
 const revisionLabels: Record<MemoryRevision["action"], string> = {
   created: "Created",
   updated: "Updated",
+  corroborated: "Seen again",
   approved: "Approved",
   rejected: "Rejected",
   superseded: "Superseded",
@@ -132,11 +133,11 @@ function Revisions({ record, now }: { record: MemoryRecord; now: number }) {
 }
 
 /** Where a claim came from: the kind, the words it rests on, and a link back when there is one. */
-function Source({ record, links }: { record: MemoryRecord; links: PortalLinks }) {
-  const { source } = record;
+/** One source: where it came from, links to it, and the words it rests on. */
+function SourceLine({ source, links }: { source: MemoryRecord["source"]; links: PortalLinks }) {
   const url = source.url ?? source.pull?.url;
   return (
-    <div className="mt-2.5 rounded-lg bg-black/15 px-3 py-2 text-[11px] leading-relaxed">
+    <>
       <p className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
         <span>{sourceLabels[source.kind] ?? source.kind}</span>
         {source.pull && (
@@ -162,6 +163,30 @@ function Source({ record, links }: { record: MemoryRecord; links: PortalLinks })
       </p>
       {source.quote && (
         <blockquote className="mt-1 border-l-2 border-white/15 pl-2 text-foreground/75 italic">{source.quote}</blockquote>
+      )}
+    </>
+  );
+}
+
+/** The record's source, then the sightings a repeat proposal added while it waited in the inbox. */
+function Source({ record, links }: { record: MemoryRecord; links: PortalLinks }) {
+  const sightings = record.sightings ?? [];
+  return (
+    <div className="mt-2.5 rounded-lg bg-black/15 px-3 py-2 text-[11px] leading-relaxed">
+      <SourceLine source={record.source} links={links} />
+      {sightings.length > 0 && (
+        <div className="mt-2 border-t border-white/5 pt-2">
+          <p className="mb-1 text-muted-foreground">
+            Seen {sightings.length + 1} times
+          </p>
+          <ul className="space-y-1.5">
+            {sightings.map((sighting, index) => (
+              <li key={index}>
+                <SourceLine source={sighting} links={links} />
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

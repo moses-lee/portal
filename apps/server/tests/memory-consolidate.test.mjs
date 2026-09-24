@@ -3,7 +3,7 @@ import test from "node:test";
 import { CONSOLIDATE_JOB_ID, nightlySchedule } from "../src/orchestrator/jobs/consolidate-job.ts";
 import { nextRunAt } from "../src/orchestrator/jobs/schedule.ts";
 import { RECONFIRM_FINGERPRINT } from "../src/orchestrator/memory/consolidate.ts";
-import { MAX_REMOVAL_SHARE, mayReplace, resolvePlan } from "../src/orchestrator/memory/curation.ts";
+import { MAX_REMOVAL_SHARE, REMOVAL_FLOOR, mayReplace, resolvePlan } from "../src/orchestrator/memory/curation.ts";
 import { newRecordId } from "../src/orchestrator/memory/store.ts";
 import { T0, flush, jobsHarness, started, textStep, toolStep } from "./fixtures/jobs-harness.mjs";
 import { memorySetup } from "./fixtures/memory-setup.mjs";
@@ -158,29 +158,30 @@ test("a pass applies the plan: promotions, a supersession the authority rule all
   assert.equal((await h.jobs.getJob(CONSOLIDATE_JOB_ID)).failures, 0);
 });
 
-test("the guard refuses a plan that would remove more than a quarter of the records: nothing is applied and the run fails with its digest", async (t) => {
+test("the guard refuses a plan that would take more than a quarter of the active records out of force: nothing is applied and the run fails with its digest", async (t) => {
   let proposals = [];
   const h = jobsHarness(t, {
     doGenerate: scripted(() => ({
-      decisions: proposals.slice(0, 2).map((entry) => ({ recordId: entry.id, action: "reject", reason: "Noise." })),
+      decisions: proposals.map((entry) => ({ recordId: entry.id, action: "supersede", reason: "Newer." })),
       summaries: [],
     })),
   });
   await started(h);
   const memory = h.hub.memory;
   const repo = await memory.store.ensureEntity({ type: "repo", key: "acme/app" });
-  proposals = await insert(memory, ["a", "b", "c", "d"].map((key) => record(repo.id, key, `Claim ${key}.`, { status: "proposed" })));
-  await insert(memory, [record(repo.id, "kept", "Kept.", { authority: "user_stated" })]);
+  const active = await insert(memory, ["a", "b", "c", "d", "e"].map((key) => record(repo.id, key, `Claim ${key}.`)));
+  proposals = await insert(memory, ["a", "b", "c", "d"].map((key) => record(repo.id, key, `Newer claim ${key}.`, { status: "proposed" })));
 
   const run = await curateNow(h);
   assert.equal(run.status, "failed");
-  assert.match(run.error, /remove 2 of 5 active and proposed records \(40%\), more than the 25% limit; nothing was applied/);
+  assert.match(run.error, /take 4 of 5 active records out of force \(80%\), more than the 25% limit; nothing was applied/);
   assert.equal(run.result.refused, run.error);
   assert.match(run.result.digest, /^\*\*Refused\.\*\*/);
-  assert.match(run.result.digest, /\*\*Would have rejected\*\*/);
-  assert.deepEqual(run.result.changes.filter((change) => change.action === "rejected").map((change) => change.after), [null, null]);
+  assert.match(run.result.digest, /\*\*Would have replaced\*\*/);
+  assert.deepEqual(run.result.changes.filter((change) => change.action === "promoted").map((change) => change.after), [null, null, null, null]);
   for (const entry of proposals) assert.equal((await memory.store.getRecord(entry.id)).status, "proposed");
-  assert.equal((await memory.store.listRevisions({ action: "rejected" })).length, 0);
+  for (const entry of active) assert.equal((await memory.store.getRecord(entry.id)).status, "active");
+  assert.equal((await memory.store.listRevisions({ action: "superseded" })).length, 0);
   assert.equal((await h.hub.activity.list({ kind: "memory.consolidated" })).length, 0);
   // The model heard the refusal while it planned.
   assert.match(JSON.stringify(h.model.doGenerateCalls[1].prompt), /more than the 25% limit/);
@@ -323,7 +324,28 @@ test("the inbox trigger starts a run once the inbox reaches the threshold, and a
   assert.equal((await runs()).length, 2);
 });
 
-test("resolvePlan: the authority rule, one promotion per key, and the 25% boundary", () => {
+test("rejecting every proposal of a small memory is not a removal: the pass applies", async (t) => {
+  let proposals = [];
+  const h = jobsHarness(t, {
+    doGenerate: scripted(() => ({
+      decisions: proposals.map((entry) => ({ recordId: entry.id, action: "reject", reason: "Noise." })),
+      summaries: [],
+    })),
+  });
+  await started(h);
+  const memory = h.hub.memory;
+  const repo = await memory.store.ensureEntity({ type: "repo", key: "acme/app" });
+  proposals = await insert(memory, ["a", "b", "c", "d"].map((key) => record(repo.id, key, `Claim ${key}.`, { status: "proposed" })));
+  await insert(memory, [record(repo.id, "kept", "Kept.", { authority: "user_stated" })]);
+  const run = await curateNow(h);
+  assert.equal(run.status, "succeeded");
+  assert.equal(run.result.refused, null);
+  assert.equal(run.result.counts.rejected, 4);
+  for (const entry of proposals) assert.equal((await memory.store.getRecord(entry.id)).status, "rejected");
+  assert.equal(run.result.considered.active, 1);
+});
+
+test("resolvePlan: the authority rule, one promotion per key, and the removal guard with its floor", () => {
   assert.equal(mayReplace("observed", "observed"), true);
   assert.equal(mayReplace("observed", "inferred"), true);
   assert.equal(mayReplace("inferred", "observed"), false, "a weaker claim never replaces a stronger one");
@@ -346,13 +368,33 @@ test("resolvePlan: the authority rule, one promotion per key, and the 25% bounda
   assert.deepEqual(resolved.left.map((entry) => entry.record.id), [inbox[1].id]);
   assert.equal(resolved.issues.length, 3);
   assert.deepEqual(resolved.summaries.map((entry) => entry.after), ["New."]);
-  // 1 of 8 removed: allowed; exactly a quarter is still allowed.
+  // 1 of 6 active records replaced: allowed.
   assert.equal(resolved.refused, null);
+  assert.deepEqual([resolved.removals, resolved.base], [1, 6]);
   assert.equal(resolved.removals / resolved.base <= MAX_REMOVAL_SHARE, true);
-  const quarter = resolvePlan({ now: T0, entities: [entity], inbox: inbox.slice(0, 1), active: active.slice(0, 3) }, { decisions: [{ recordId: inbox[0].id, action: "reject", reason: "r" }], summaries: [] });
-  assert.equal(quarter.refused, null, "1 of 4 is exactly 25%");
-  const over = resolvePlan({ now: T0, entities: [entity], inbox: inbox.slice(0, 1), active: active.slice(0, 2) }, { decisions: [{ recordId: inbox[0].id, action: "reject", reason: "r" }], summaries: [] });
-  assert.match(over.refused, /1 of 3/);
+
+  // The guard counts only active records taken out of force: rejecting every proposal removes nothing.
+  const rejectAll = (n) => {
+    const proposals = Array.from({ length: n }, (_, i) => record("e1", `p${i}`, `P${i}`, { status: "proposed" }));
+    return resolvePlan({ now: T0, entities: [entity], inbox: proposals, active: active.slice(0, 1) }, {
+      decisions: proposals.map((p) => ({ recordId: p.id, action: "reject", reason: "r" })), summaries: [],
+    });
+  };
+  assert.deepEqual([rejectAll(6).refused, rejectAll(6).removals, rejectAll(6).base], [null, 0, 1]);
+
+  // Supersessions do count, against the active records, with a floor: a small memory may still lose a few.
+  const replaceAll = (activeCount, replaced) => {
+    const holders = Array.from({ length: activeCount }, (_, i) => record("e1", `k${i}`, `Old ${i}`));
+    const newer = holders.slice(0, replaced).map((h) => record("e1", h.key, `New ${h.key}`, { status: "proposed" }));
+    return resolvePlan({ now: T0, entities: [entity], inbox: newer, active: holders }, {
+      decisions: newer.map((p) => ({ recordId: p.id, action: "supersede", reason: "r" })), summaries: [],
+    });
+  };
+  assert.equal(replaceAll(3, 3).refused, null, `${REMOVAL_FLOOR} removals are always allowed, even all of a small memory`);
+  assert.match(replaceAll(4, 4).refused, /take 4 of 4 active records out of force \(100%\)/);
+  assert.match(replaceAll(13, 4).refused, /take 4 of 13 active records out of force \(31%\)/);
+  assert.equal(replaceAll(16, 4).refused, null, "4 of 16 is exactly 25%");
+  assert.match(replaceAll(16, 5).refused, /5 of 16/);
 });
 
 test("postgres: a resolved plan is written in one commit with its summaries and revisions", async (t) => {

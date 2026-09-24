@@ -49,6 +49,20 @@ test("propose goes to the inbox; duplicates are no-ops; approving supersedes the
   assert.equal(await memory.inboxCount(), 1);
   assert.equal((await memory.propose(proposal({ body: "PRs are squash-merged. " }), agent)).record.id, proposed.record.id);
   assert.equal(await memory.inboxCount(), 1);
+  // The same claim from the same source is nothing new; from another source it is a sighting, not a second proposal.
+  assert.equal((await memory.propose(proposal({ source: { ...source, quote: "squash again" } }), agent)).unchanged, true);
+  const fromSession = { kind: "session", sessionId: "s9", quote: "we squash on merge" };
+  const seen = await memory.propose(proposal({ source: fromSession }), agent);
+  assert.equal(seen.corroborated, true);
+  assert.equal(seen.record.id, proposed.record.id);
+  assert.deepEqual(seen.record.sightings, [fromSession]);
+  assert.equal(seen.record.source.quote, "we always squash", "the first source stays the record's own");
+  assert.equal((await memory.propose(proposal({ source: fromSession }), agent)).unchanged, true, "the same session again adds nothing");
+  assert.equal((await memory.propose(proposal({ source: { ...fromSession, runId: "run2", quote: "squash!" } }), agent)).unchanged, true, "nor does the same session in a later turn");
+  assert.equal((await memory.store.getRecord(proposed.record.id)).sightings.length, 1);
+  assert.equal(await memory.inboxCount(), 1);
+  assert.deepEqual((await memory.store.listRevisions({ recordId: proposed.record.id })).map((r) => r.action), ["corroborated", "created"]);
+  assert.equal((await activity()).at(-1).kind, "memory.corroborated");
 
   const approved = await memory.approve(proposed.record.id, user);
   assert.equal(approved.record.status, "active");
@@ -69,7 +83,7 @@ test("propose goes to the inbox; duplicates are no-ops; approving supersedes the
   assert.equal((await memory.store.getRecord(proposed.record.id)).status, "superseded");
   await assert.rejects(memory.approve(rival.record.id, user), (err) => err.status === 409);
   assert.deepEqual((await memory.store.listRevisions({ recordId: rival.record.id })).map((r) => r.action), ["approved", "created"]);
-  assert.deepEqual((await activity()).map((entry) => entry.kind), ["memory.proposed", "memory.approved", "memory.proposed", "memory.approved", "memory.superseded"]);
+  assert.deepEqual((await activity()).map((entry) => entry.kind), ["memory.proposed", "memory.corroborated", "memory.approved", "memory.proposed", "memory.approved", "memory.superseded"]);
 
   await assert.rejects(memory.propose(proposal({ authority: "user_stated" }), agent), (err) => err.status === 400);
 });

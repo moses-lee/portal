@@ -17,6 +17,9 @@ export const MAX_RETRIEVED_BODY_CHARS = 600;
 /** Keys listed on one index line before "…". */
 export const INDEX_KEYS = 8;
 
+/** How many times a claim was seen: its source plus its sightings. */
+export const timesSeen = (record: Pick<MemoryRecord, "sightings">) => 1 + (record.sightings?.length ?? 0);
+
 /** A rough token count (four characters a token), enough for budgets. */
 export const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 

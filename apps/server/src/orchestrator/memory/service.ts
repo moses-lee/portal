@@ -15,7 +15,7 @@ import { recordTypes } from "@portal/contracts/memory";
 import type { MemoryPromptContext, MemoryService, OrchestratorHub, ToolSet, DomainToolContext } from "../hub.ts";
 import { OrchestratorStoreError } from "../store.ts";
 import { orchestratorProviders, type Scope } from "../types.ts";
-import { buildCore, entityLabel, rankRetrieved, renderRetrieved } from "./core.ts";
+import { buildCore, entityLabel, rankRetrieved, renderRetrieved, timesSeen } from "./core.ts";
 import { type CurationPlan, type CurationSnapshot, type ResolvedPlan, planCounts, resolvePlan } from "./curation.ts";
 import { splitLegacyMemory } from "./import.ts";
 import { createPgMemoryStore } from "./pg-store.ts";
@@ -39,7 +39,20 @@ export type ChangeResult = {
   superseded?: MemoryRecord | null;
   /** True when the same claim was already there and nothing was written. */
   unchanged?: boolean;
+  /** True when the same claim was already waiting in the inbox and this source was added to its sightings. */
+  corroborated?: boolean;
 };
+
+/**
+ * The same source: what it points at (the session, pull, message, thread, or link) and its kind.
+ * The quote and the run that proposed it are left out: the same session read again in a later turn
+ * is not a second sighting.
+ */
+function sameSource(a: RecordSource, b: RecordSource): boolean {
+  const keyOf = ({ quote: _quote, runId: _runId, ...rest }: RecordSource) => JSON.stringify(Object.entries(rest).sort(([x], [y]) => x.localeCompare(y)));
+  return keyOf(a) === keyOf(b);
+}
+
 
 export type Explanation = {
   record: MemoryRecord;
@@ -193,9 +206,21 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
     const active = await store.activeRecord(entity.id, valid.key);
     if (active && sameClaim(active.body, valid.body)) return { record: active, unchanged: true };
     const waiting = (await store.listRecords({ status: ["proposed"], entityIds: [entity.id], key: valid.key })).find((record) => sameClaim(record.body, valid.body));
-    if (waiting) return { record: waiting, unchanged: true };
+    if (waiting) {
+      // The claim is already waiting: a new source corroborates it; the same source again is nothing new.
+      const seen = [waiting.source, ...(waiting.sightings ?? [])];
+      if (seen.some((source) => sameSource(source, valid.source))) return { record: waiting, unchanged: true };
+      const [record] = await store.commit([{
+        op: "update", id: waiting.id, from: ["proposed"], patch: { sightings: [...(waiting.sightings ?? []), valid.source] },
+        revision: meta(who, "corroborated", `Seen again, from ${valid.source.kind}`),
+      }]);
+      await changed([record], who, [{
+        kind: "memory.corroborated", summary: `Seen again for ${entityLabel(entity)} (${timesSeen(record)}×): ${short(record.body)}`, record, detail: { sightings: timesSeen(record) },
+      }]);
+      return { record, corroborated: true };
+    }
     const [record] = await store.commit([
-      { op: "insert", record: build(valid, entity, "proposed", { supersedes: active?.id ?? null }), revision: meta(who, "created") },
+      { op: "insert", record: build(valid, entity, "proposed", { supersedes: active?.id ?? null, sightings: [] }), revision: meta(who, "created") },
     ]);
     const where = entityLabel(entity);
     await changed([record], who, [{

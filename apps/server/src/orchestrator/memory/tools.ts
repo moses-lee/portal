@@ -12,7 +12,7 @@ import type { DomainToolContext, ToolSet } from "../hub.ts";
 import { define } from "../tools/context.ts";
 import { pullRefSchema } from "../tools/items.ts";
 import type { OrchestratorMessage } from "../types.ts";
-import { entityLabel } from "./core.ts";
+import { entityLabel, timesSeen } from "./core.ts";
 import { curationPlanSchema } from "./curation.ts";
 import type { Actor, CuratedMemoryService } from "./service.ts";
 
@@ -94,7 +94,10 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
           ...input, type: input.type as MemoryRecord["type"], entity: { ...input.entity, type: input.entity.type as MemoryEntity["type"] },
           source: { ...source, runId: turn.runId, ...(turn.threadId && source.kind === "message" ? { threadId: turn.threadId } : {}) },
         }, who);
-        return { ...recordRow(result.record), ...(result.unchanged ? { unchanged: true } : {}) };
+        return {
+          ...recordRow(result.record), ...(result.unchanged ? { unchanged: true } : {}),
+          ...(result.corroborated ? { corroborated: true, timesSeen: timesSeen(result.record) } : {}),
+        };
       },
     ),
     search_memory: define(
