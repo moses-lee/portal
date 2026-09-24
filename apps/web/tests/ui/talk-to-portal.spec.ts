@@ -154,6 +154,29 @@ test("a refused send keeps the text in the composer and shows the server's reaso
   await expect(input).toHaveValue("");
 });
 
+test("sending behaves as on a session page: the text stays, with Sending…, until the server takes it", async ({
+  page,
+}) => {
+  const fixture = await setupPortal(page);
+  const release = fixture.holdSends("main");
+  await page.goto("/portal");
+  const input = page.getByRole("textbox", { name: "Message Portal" });
+  await input.fill("What changed overnight?");
+  await input.press("Enter");
+  // The server has not answered: the send button shows the wait, and the draft is still in the box.
+  await expect(page.getByRole("button", { name: "Sending message" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop agent" })).toHaveCount(0);
+  await expect(input).toHaveValue("What changed overnight?");
+  await expect(page.getByRole("log", { name: "Messages" }).getByText("What changed overnight?", { exact: true })).toBeVisible();
+  // The reply stream opens: the message was taken, the box clears, and the turn can be stopped from here.
+  release();
+  await expect(input).toHaveValue("");
+  await expect(page.getByText("Portal reply to: What changed overnight?")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await input.press("ArrowUp");
+  await expect(input).toHaveValue("What changed overnight?");
+});
+
 test("background work never blocks the composer; only this thread's own turn does", async ({
   page,
 }) => {

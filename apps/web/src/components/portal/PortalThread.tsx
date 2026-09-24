@@ -8,7 +8,7 @@ import ChatComposer from "../ChatComposer";
 import PortalMessage from "../PortalMessage";
 import PortalNeedsYou from "../PortalNeedsYou";
 import { isVisibleItem, type ItemCardHandlers } from "../PortalItemCard";
-import { useDraft } from "../useDraft";
+import { useSend } from "../useSend";
 import { openSettings } from "../useSettings";
 import { usePortalEvents, usePortalLive } from "./PortalLive";
 import { Button } from "@/components/ui/button";
@@ -19,24 +19,24 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { clearSubmittedDraft, readDraft, writeDraft } from "@/lib/drafts";
+import { readDraft, writeDraft } from "@/lib/drafts";
 import { formatDateTime } from "@/lib/orchestrator/format";
-import { recordPrompt } from "@/lib/prompt-history";
 import { MAIN_THREAD_ID, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
 
 /** The transport throws the response body as the message; surface the server's `{ error }` when it is one. */
-function describeChatError(error: Error): string {
+function describeChatError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
   try {
-    const parsed = JSON.parse(error.message) as { error?: string };
+    const parsed = JSON.parse(message) as { error?: string };
     if (parsed.error) return parsed.error;
   } catch {
     /* Not JSON. */
   }
-  return error.message === "Failed to fetch"
+  return message === "Failed to fetch"
     ? "Could not reach the server. Check the connection and try again."
-    : error.message || "Portal could not answer. Try again.";
+    : message || "Portal could not answer. Try again.";
 }
 
 /** Where a thread's messages live. The main thread keeps its original routes. */
@@ -45,6 +45,32 @@ function threadRoutes(threadId: string) {
     return { messages: "/api/portal/messages", cancel: `/api/portal/threads/${MAIN_THREAD_ID}/cancel` };
   const base = `/api/portal/threads/${encodeURIComponent(threadId)}`;
   return { messages: `${base}/messages`, cancel: `${base}/cancel` };
+}
+
+/**
+ * The send waiting for the server's acknowledgement. The reply's response opening (2xx) is the
+ * acknowledgement: the server stores the user message before it starts the turn. A refused send
+ * (409, a dropped connection) rejects it, so the composer keeps what the user typed.
+ */
+class Acknowledgement {
+  private waiting: { resolve: () => void; reject: (error: unknown) => void } | null = null;
+  /** Settles with the next `accept` or `refuse`. */
+  wait(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.waiting = { resolve, reject };
+    });
+  }
+  accept(): void {
+    this.waiting?.resolve();
+    this.waiting = null;
+  }
+  /** Rejects the waiting send; false when none was waiting (the error came after the acknowledgement). */
+  refuse(error: unknown): boolean {
+    const waiting = this.waiting;
+    this.waiting = null;
+    waiting?.reject(error);
+    return waiting !== null;
+  }
 }
 
 /** Drafts and prompt history per thread; the main thread keeps the keys it had before side threads existed. */
@@ -110,9 +136,12 @@ function ThreadIntro({ thread, onOpenGoals }: { thread: Thread; onOpenGoals: () 
 
 /**
  * One thread's conversation: its history, its composer, its own send and stop. Turns go through
- * the thread's message route (only the newest user message; the server owns history). The composer
- * waits only for this thread's own turn; background jobs and other threads never block it. The page
- * keeps visited threads mounted (hidden) so a reply keeps streaming while the user looks elsewhere.
+ * the thread's message route (only the newest user message; the server owns history). Sending
+ * behaves as on a session page (`useSend`): the text stays in the box, with "Sending…", until the
+ * server has taken the message, which for Portal is the reply stream opening (by then the message
+ * is stored). The composer waits only for this thread's own turn; background jobs and other threads
+ * never block it. The page keeps visited threads mounted (hidden) so a reply keeps streaming while
+ * the user looks elsewhere.
  */
 export default function PortalThread({
   threadId,
@@ -132,53 +161,40 @@ export default function PortalThread({
   const { status, items } = live;
   const routes = useMemo(() => threadRoutes(threadId), [threadId]);
   const key = threadKey(threadId);
+  const [ack] = useState(() => new Acknowledgement());
   const transport = useMemo(
     () =>
       new DefaultChatTransport<OrchestratorMessage>({
         api: routes.messages,
         prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
+        fetch: async (input, init) => {
+          const response = await fetch(input, init);
+          if (response.ok) ack.accept();
+          return response;
+        },
       }),
-    [routes],
+    [routes, ack],
   );
-  const [chatError, setChatError] = useState<string | null>(null);
   /** Bumped whenever the server's thread should replace the local one; the load waits for our own turn to end. */
   const [historyRequest, setHistoryRequest] = useState(0);
   const refetchHistory = useCallback(() => setHistoryRequest((n) => n + 1), []);
-  /**
-   * The text of the turn in flight. The composer keeps it until the server has taken the message
-   * (the reply starts streaming, or the turn finishes without error), so a refused send (409, a
-   * dropped connection) never loses what the user typed.
-   */
-  const inFlight = useRef<string | null>(null);
+  /** Shows an error that arrived after the server took the message (the reply broke off); set by `useSend` below. */
+  const reportError = useRef<(message: string | null) => void>(() => {});
   const { messages, setMessages, sendMessage, stop, status: chatStatus } = useChat<OrchestratorMessage>({
     id: `portal:${threadId}`,
     transport,
     onFinish: ({ isError }) => {
-      const text = inFlight.current;
-      inFlight.current = null;
-      if (text !== null && !isError) {
-        clearSubmittedDraft(key, text);
-        recordPrompt(key, text);
-      }
+      if (!isError) ack.accept();
     },
     onError: (error) => {
-      setChatError(describeChatError(error));
-      // The text came from a card, or the user cleared the composer meanwhile: put it back so it can be retried.
-      const text = inFlight.current;
-      inFlight.current = null;
-      if (text !== null && readDraft(key).trim() === "") writeDraft(key, text);
+      const message = describeChatError(error);
+      // Before the acknowledgement the send itself failed (useSend shows it); after, the reply did.
+      if (!ack.refuse(new Error(message))) reportError.current(message);
       // The server did not keep this turn; reloading the thread drops the local copy.
       refetchHistory();
     },
   });
   const responding = chatStatus === "submitted" || chatStatus === "streaming";
-  // The first chunk means the server accepted and persisted the message; the composer can let go of it.
-  useEffect(() => {
-    if (chatStatus !== "streaming" || inFlight.current === null) return;
-    clearSubmittedDraft(key, inFlight.current);
-    recordPrompt(key, inFlight.current);
-    inFlight.current = null;
-  }, [chatStatus, key]);
 
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -236,33 +252,39 @@ export default function PortalThread({
     [items, isMain],
   );
 
-  const [draft, setDraft] = useDraft(key);
-  const composerWrap = useRef<HTMLDivElement>(null);
-  /** Send `text` as the user's next message; false when nothing was sent (empty, not ready, archived, or mid-turn). */
-  const sendText = useCallback(
+  /** Start the turn; settles when the reply stream opens (taken) or the send is refused. */
+  const submit = useCallback(
     (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || !ready || archived || responding || otherTurn) return false;
-      setChatError(null);
-      inFlight.current = text;
-      void sendMessage({ text: trimmed, metadata: { at: Date.now() } });
-      return true;
+      const taken = ack.wait();
+      sendMessage({ text, metadata: { at: Date.now() } }).catch((error: unknown) => ack.refuse(error));
+      return taken;
     },
-    [ready, archived, responding, otherTurn, sendMessage],
+    [sendMessage, ack],
   );
-  const send = () => void sendText(draft);
+  const canSend = useCallback(() => ready && !archived && !responding && !otherTurn, [ready, archived, responding, otherTurn]);
+  const { draft, setDraft, sending, error: chatError, send, reportError: setChatError } = useSend({
+    draftKey: key,
+    historyKey: key,
+    submit,
+    canSend,
+    describeError: describeChatError,
+  });
+  useEffect(() => {
+    reportError.current = setChatError;
+  }, [setChatError]);
+  const composerWrap = useRef<HTMLDivElement>(null);
   /**
    * A card's "Ask Portal". When the turn cannot start right now (a reply is running, or there is
    * no key yet) the text goes into the composer instead, ready to send, so nothing is dropped.
    */
   const ask = useCallback(
     (text: string) => {
-      if (sendText(text)) return;
+      if (send(text)) return;
       const current = readDraft(key);
       if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
       composerWrap.current?.querySelector("textarea")?.focus();
     },
-    [sendText, key],
+    [send, key],
   );
   const stopTurn = () => {
     stop();
@@ -358,9 +380,10 @@ export default function PortalThread({
         <ChatComposer
           value={draft}
           onChange={setDraft}
-          onSend={send}
+          onSend={() => void send()}
           onStop={stopTurn}
-          busy={responding || otherTurn}
+          busy={(responding && !sending) || otherTurn}
+          sending={sending}
           disabled={!ready || archived}
           label={isMain ? "Message Portal" : `Message Portal in ${thread?.title ?? "this thread"}`}
           historyKey={key}

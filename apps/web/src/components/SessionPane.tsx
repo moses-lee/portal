@@ -11,9 +11,8 @@ import Conversation from "./Conversation";
 import SessionHeader from "./SessionHeader";
 import AuroraBackground from "./AuroraBackground";
 import { Button } from "@/components/ui/button";
-import { useDraft } from "./useDraft";
-import { clearSubmittedDraft } from "@/lib/drafts";
-import { recordPrompt, sessionHistoryKey } from "@/lib/prompt-history";
+import { useSend } from "./useSend";
+import { sessionHistoryKey } from "@/lib/prompt-history";
 import { applyConfigChange } from "@/lib/session-config";
 import { agentActivity } from "@/lib/agent-activity";
 import type {
@@ -114,14 +113,9 @@ export default function SessionPane({
   );
   const [configInFlight, setConfigInFlight] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [input, setInput] = useDraft(sessionId ?? "new");
-  const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
   const shellButton = useRef<HTMLButtonElement>(null);
-  /** A prompt POST is in flight or its turn has not started yet. */
-  const pendingPromptRef = useRef(false);
   /** Client-only notices (failed requests) get negative seqs so they never collide with the log. */
   const localSeqRef = useRef(-1);
   const loadingOlderRef = useRef(false);
@@ -164,8 +158,6 @@ export default function SessionPane({
         cursorRef.current = entry.cursor;
         loadedRef.current = true;
         setHistory(entry.history);
-        // The page is authoritative: whatever prompt was in flight has either started or failed by now.
-        pendingPromptRef.current = false;
         es?.close();
         const mine = new EventSource(
           sessionUrl(sessionId, `/stream?since=${entry.cursor}`),
@@ -182,12 +174,6 @@ export default function SessionPane({
               ? prev
               : appendEvent(prev, { ...ev, seq, ts: Date.now() });
           });
-          if (
-            ev.type === "turn_start" ||
-            ev.type === "turn_end" ||
-            ev.type === "error"
-          )
-            pendingPromptRef.current = false;
           if (ev.type === "turn_start") setBusy(true);
           if (ev.type === "turn_end" || ev.type === "error") {
             setBusy(false);
@@ -278,22 +264,13 @@ export default function SessionPane({
     setHistory((previous) => appendEvent(previous, event));
   };
 
-  const send = async () => {
-    const text = input.trim();
-    if (
-      !text ||
-      !sessionId ||
-      busy ||
-      pendingPromptRef.current ||
-      (initialSend?.sessionId === sessionId && initialSend.pending)
-    )
-      return;
-    const draft = input;
-    onInitialSendHandled(sessionId);
-    pendingPromptRef.current = true;
-    setSending(true);
-    setSendError(null);
-    try {
+  const initialPending =
+    initialSend?.sessionId === sessionId && initialSend.pending;
+  /** `POST /prompt`; resolves once the agent has the prompt (its `turn_start` follows on the stream). */
+  const submitPrompt = useCallback(
+    async (text: string) => {
+      if (!sessionId) throw new Error("No active session.");
+      onInitialSendHandled(sessionId);
       const response = await fetch(sessionUrl(sessionId, "/prompt"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -308,20 +285,22 @@ export default function SessionPane({
             "Could not send your message. Your draft is saved; try again.",
         );
       }
-      clearSubmittedDraft(sessionId, draft);
-      recordPrompt(sessionHistoryKey(sessionId), text);
-      setScrollRequest((request) => request + 1);
-    } catch (error) {
-      setSendError(
-        error instanceof Error
-          ? error.message
-          : "Could not send your message. Your draft is saved; try again.",
-      );
-    } finally {
-      pendingPromptRef.current = false;
-      setSending(false);
-    }
-  };
+    },
+    [sessionId, onInitialSendHandled],
+  );
+  const {
+    draft: input,
+    setDraft: setInput,
+    sending,
+    error: sendError,
+    send,
+  } = useSend({
+    draftKey: sessionId ?? "new",
+    historyKey: sessionId ? sessionHistoryKey(sessionId) : undefined,
+    submit: submitPrompt,
+    canSend: () => !!sessionId && !busy && !initialPending,
+    onSent: () => setScrollRequest((request) => request + 1),
+  });
 
   const stop = async () => {
     if (!sessionId || stopping) return;
@@ -443,8 +422,6 @@ export default function SessionPane({
     link,
     failed: lastTurn?.blocks.at(-1)?.kind === "error",
   });
-  const initialPending =
-    initialSend?.sessionId === sessionId && initialSend.pending;
   const composerError =
     sendError ??
     (initialSend?.sessionId === sessionId ? initialSend.error : null);

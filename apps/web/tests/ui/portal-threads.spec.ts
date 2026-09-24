@@ -57,19 +57,23 @@ test("a turn running in one thread leaves every other thread free to chat", asyn
   const sideInput = page.getByRole("textbox", { name: `Message Portal in ${reviewThread.title}` });
   await sideInput.fill("Summarize the review so far");
   await sideInput.press("Enter");
-  await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
+  // Until the server takes the message the side thread shows it is sending (the text stays); the main thread is untouched.
+  await expect(page.getByRole("button", { name: "Sending message" })).toBeVisible();
+  await expect(sideInput).toHaveValue("Summarize the review so far");
 
   await page.getByRole("tablist", { name: "Threads" }).getByRole("tab", { name: "Main" }).click();
   const mainInput = page.getByRole("textbox", { name: "Message Portal" });
-  await expect(page.getByRole("button", { name: "Stop agent" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Sending message" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await mainInput.fill("And what else needs me?");
   await mainInput.press("Enter");
   await expect(page.getByText("Portal reply to: And what else needs me?")).toBeVisible();
 
-  // The side thread's reply kept streaming while it was out of view.
+  // The side thread's reply arrived while it was out of view, and its composer let go of the text.
   release();
   await page.getByRole("tablist", { name: "Threads" }).getByRole("tab", { name: reviewThread.title }).click();
   await expect(page.getByText("Portal reply to: Summarize the review so far")).toBeVisible();
+  await expect(sideInput).toHaveValue("");
 });
 
 test("messages events refetch only their thread and mark other threads as having news", async ({ page }) => {
