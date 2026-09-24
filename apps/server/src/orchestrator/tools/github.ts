@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { displayPath } from "../../lib/git-info.ts";
 import type { GithubSummary } from "../../lib/types.ts";
+import { STALE_PULL_MS } from "../digest.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "../github-attention.ts";
 import { requireProject } from "../ops.ts";
 import { type ToolContext, capped, define } from "./context.ts";
@@ -28,16 +29,19 @@ function compactStatus(summary: GithubSummary) {
   };
 }
 
-export function githubTools({ deps }: ToolContext) {
+export function githubTools({ deps, now }: ToolContext) {
   const repoRootFor = async (id: string) => deps.git.repoRootOf((await requireProject(deps, id)).path);
   return {
     github_identity: define("The GitHub login gh is signed in as.", z.object({}), async () => ({ login: await deps.github.login() })),
     list_attention_pulls: define(
-      "Open PRs across GitHub that concern the user (authored, or their review requested), newest first, with why each needs attention and the Portal project when the repo is local.",
-      z.object({}),
-      async () => {
-        const { pulls, error } = await deps.github.searchAttentionPulls();
-        if (error) return { error };
+      `Open PRs across GitHub that concern the user (authored, or their review requested), newest first, with why each needs attention and the Portal project when the repo is local. PRs untouched for over ${STALE_PULL_MS / 86_400_000} days are left out unless includeStale is true.`,
+      z.object({ includeStale: z.boolean().optional() }),
+      async ({ includeStale }) => {
+        const since = includeStale ? null : now() - STALE_PULL_MS;
+        const search = await deps.github.searchAttentionPulls(since === null ? {} : { updatedSince: since });
+        if (search.error) return { error: search.error };
+        // The search filters by day; anything older than the cutoff that slipped through is dropped here, as the digest does.
+        const pulls = since === null ? search.pulls : search.pulls.filter((pull) => pull.updatedAt >= since);
         const locals: LocalProject[] = await Promise.all((await deps.projects.list()).map(async (project) => ({
           id: project.id, path: project.path, remoteUrl: await deps.git.originUrl(project.path).catch(() => null), worktree: project.worktree,
         })));

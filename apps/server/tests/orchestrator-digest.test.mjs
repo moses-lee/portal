@@ -442,7 +442,7 @@ test("collectSnapshot records sessions with their link, attaches local projects 
   assert.deepEqual(Object.keys(snapshot.pulls), ["acme/app#7"], "the stale PR is left out");
   assert.equal(snapshot.pulls["acme/app#7"].localProjectId, "p1");
   assert.deepEqual(state.searches, [{ updatedSince: T0 - STALE_PULL_MS }]);
-  assert.deepEqual(log, ["Skipped 1 pull request untouched for over 60 days."]);
+  assert.deepEqual(log, ["Skipped 1 pull request untouched for over 14 days."]);
 });
 
 test("collectSnapshot keeps the previous slice of every source that fails and says so", async () => {

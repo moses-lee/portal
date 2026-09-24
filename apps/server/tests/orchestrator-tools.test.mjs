@@ -5,12 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { execCommand, readFileCapped } from "../src/orchestrator/deps.ts";
+import { STALE_PULL_MS } from "../src/orchestrator/digest.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { REDACTED } from "../src/orchestrator/tools/context.ts";
 import { TICK_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
 import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
 import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
-import { T0, fakeDeps, fakeSettings, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
+import { T0, attentionPull, fakeDeps, fakeSettings, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const options = { toolCallId: "call", messages: [] };
 
@@ -501,4 +502,14 @@ test("remove_project runs the pre-deletion script in the worktree before git rem
   });
   assert.deepEqual(await run(failing.tools.remove_project, { id: "p4", deleteWorktree: true, force: true }), { error: "The script exited with code 2." });
   assert.deepEqual(failing.state.removed, []);
+});
+
+test("list_attention_pulls narrows the search to the stale window unless includeStale asks for everything", async () => {
+  // The search filters by whole days, so a PR just past the cutoff can come back; the tool drops it like the digest does.
+  const { tools, state } = setup({ pulls: [attentionPull({ number: 1 }), attentionPull({ number: 99, updatedAt: T0 - STALE_PULL_MS - 1 })] });
+  const narrowed = await run(tools.list_attention_pulls, {});
+  assert.deepEqual(narrowed.pulls.map((row) => row.key), ["acme/app#1"]);
+  const everything = await run(tools.list_attention_pulls, { includeStale: true });
+  assert.deepEqual(everything.pulls.map((row) => row.key), ["acme/app#1", "acme/app#99"]);
+  assert.deepEqual(state.searches, [{ updatedSince: T0 - STALE_PULL_MS }, {}]);
 });

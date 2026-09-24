@@ -11,8 +11,8 @@ import type { DigestChange, Item, ItemKind, ItemLinks, OrchestratorStore, PullAt
 
 /** A dirty worktree is only worth mentioning once no session has touched it for this long. */
 export const DIRTY_IDLE_MS = 24 * 60 * 60 * 1000;
-/** Pull requests untouched for this long are left out: a 2022 conflict is not news. */
-export const STALE_PULL_MS = 60 * 24 * 60 * 60 * 1000;
+/** Pull requests untouched for this long are left out of attention searches unless asked for: a conflict from last month is not news. */
+export const STALE_PULL_MS = 14 * 24 * 60 * 60 * 1000;
 /** Rows of the per-repo review list before it says "+N more". */
 export const REVIEW_LIST_ROWS = 15;
 const WORKTREE_CONCURRENCY = 4;
