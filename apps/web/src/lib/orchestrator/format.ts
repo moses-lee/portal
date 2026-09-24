@@ -2,7 +2,8 @@
  * Wording for the orchestrator views: relative times, schedules in words, durations, token counts,
  * and the live status line. Pure, so the unit tests pin the phrasing.
  */
-import type { JobRun, JobSchedule, OrchestratorStatus, RunUsage } from "./types.ts";
+import type { Approval, JobRun, JobSchedule, OrchestratorStatus, RunUsage } from "./types.ts";
+import type { AgentActivity } from "../agent-activity.ts";
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -124,6 +125,17 @@ export function describeUsage(usage: RunUsage): string {
 /** How long a run took, or has been going for. */
 export function runDuration(run: Pick<JobRun, "startedAt" | "finishedAt">, now: number): string {
   return formatDuration(Math.max(0, (run.finishedAt ?? now) - run.startedAt));
+}
+
+/**
+ * What the aurora shows on Talk to Portal, matching the session pages: working while Portal answers
+ * the user in any thread, waiting (amber) while an approval is pending, idle otherwise, background
+ * jobs included (they never make the user wait).
+ */
+export function portalActivity(status: OrchestratorStatus | null, approvals: readonly Pick<Approval, "status">[]): AgentActivity {
+  if (approvals.some((approval) => approval.status === "pending")) return "waiting";
+  if (status && status.busyThreads.length > 0) return "working";
+  return "idle";
 }
 
 export type StatusLine = {

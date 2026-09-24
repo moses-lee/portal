@@ -12,6 +12,7 @@ import {
   Target,
   type LucideIcon,
 } from "lucide-react";
+import AuroraBackground from "./AuroraBackground";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import { formatTime } from "./PortalMessage";
@@ -27,6 +28,7 @@ import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { Button } from "@/components/ui/button";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { portalJson } from "@/lib/orchestrator/api";
+import { portalActivity } from "@/lib/orchestrator/format";
 import { MAIN_THREAD_ID, type TickReport } from "@/lib/orchestrator/types";
 import { portalLocation, portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
 
@@ -56,7 +58,8 @@ const views: PortalView[] = ["chat", "goals", "activity", "memory", "system"];
  * tabs; Chat holds the main thread and the side threads Portal opened (each its own conversation),
  * Goals the intents, upcoming jobs, and recent runs, Activity the audit log, Memory the curated
  * records, and System what the model is shown (CORE.md, the world) plus approval grants. The URL
- * says which (`/portal/**`), so reloads and links land in place.
+ * says which (`/portal/**`), so reloads and links land in place. The session pages' aurora sits
+ * behind every view: working while Portal answers the user, amber while an approval waits.
  */
 export default function PortalPage({
   pathname,
@@ -72,7 +75,7 @@ export default function PortalPage({
   onOpenSession: (sessionId: string) => void;
 }) {
   const live = usePortalLive();
-  const { status, threads, lastTick, putItem, noteTick, requestApproval, items } = live;
+  const { status, threads, lastTick, putItem, noteTick, requestApproval, items, approvals } = live;
   const location = useMemo(() => portalLocation(pathname), [pathname]);
   const view = location.view;
   const go = useCallback((to: PortalLocation | PortalView) => onNavigate(portalPath(to)), [onNavigate]);
@@ -177,6 +180,7 @@ export default function PortalPage({
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
+      <AuroraBackground activity={portalActivity(status, approvals)} />
       <header className="workspace-header !items-start max-sm:!items-center">
         <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={onOpenSidebar} className="text-muted-foreground">
           <PanelLeft className="size-4" />

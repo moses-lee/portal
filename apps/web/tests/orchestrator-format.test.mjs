@@ -8,6 +8,7 @@ import {
   describeUsage,
   formatDuration,
   formatTokens,
+  portalActivity,
   relativeTime,
 } from "../src/lib/orchestrator/format.ts";
 
@@ -128,4 +129,15 @@ test("the status line keeps the server's words and adds the countdown", () => {
     next: null,
     tone: "paused",
   });
+});
+
+test("the aurora follows the user's turn and pending approvals, never background jobs", () => {
+  const status = (busyThreads, runs = []) => ({ ready: true, busy: runs.length > 0 || busyThreads.length > 0, busyThreads, runs });
+  assert.equal(portalActivity(null, []), "idle");
+  assert.equal(portalActivity(status([]), []), "idle");
+  assert.equal(portalActivity(status([], [{ id: "r1", kind: "tick" }]), []), "idle", "a job running is not the user waiting");
+  assert.equal(portalActivity(status(["main"]), []), "working");
+  assert.equal(portalActivity(status(["t-review"]), []), "working", "any thread's turn counts");
+  assert.equal(portalActivity(status(["main"]), [{ status: "pending" }]), "waiting", "an approval outranks the turn");
+  assert.equal(portalActivity(status([]), [{ status: "approved" }]), "idle");
 });

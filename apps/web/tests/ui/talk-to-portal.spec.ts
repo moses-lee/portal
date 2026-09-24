@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { emitPortal, portalItem, portalStatus, setupPortal } from "./fixtures";
+import { approval } from "./orchestrator-fixtures";
 import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
 declare global {
@@ -267,4 +268,31 @@ test("Open session navigates to the session and Run now posts a tick", async ({
   await expect(
     page.getByRole("combobox", { name: "Message Claude Code" }),
   ).toBeVisible();
+});
+
+test("the aurora sits behind every Portal view and follows the user's turn and pending approvals", async ({
+  page,
+}) => {
+  await setupPortal(page);
+  await page.goto("/portal");
+  const aurora = page.locator(".aurora");
+  await expect(aurora).toHaveAttribute("data-activity", "idle");
+  // A background job never colours it; a turn answering the user (in any thread) does.
+  await emitPortal(page, {
+    type: "status",
+    status: { ...portalStatus, busy: true, runs: [{ id: "r1", kind: "tick", jobId: "tick", threadId: null, startedAt: Date.now(), summary: "Checking" }] },
+  });
+  await expect(aurora).toHaveAttribute("data-activity", "idle");
+  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["t-review"] } });
+  await expect(aurora).toHaveAttribute("data-activity", "working");
+  // An approval waiting turns it amber, whichever view is open.
+  await emitPortal(page, { type: "approvals", approvals: [approval] });
+  await expect(aurora).toHaveAttribute("data-activity", "waiting");
+  await page.getByRole("button", { name: "Decide later" }).click();
+  await page.getByRole("button", { name: "Goals" }).click();
+  await expect(page).toHaveURL(/\/portal\/goals$/);
+  await expect(aurora).toHaveAttribute("data-activity", "waiting");
+  await emitPortal(page, { type: "approvals", approvals: [] });
+  await emitPortal(page, { type: "status", status: portalStatus });
+  await expect(aurora).toHaveAttribute("data-activity", "idle");
 });
