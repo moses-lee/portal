@@ -14,21 +14,28 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
       records: memoryRecords,
     },
   });
-  await page.goto("/portal");
-  const nav = page.getByRole("navigation", { name: "Portal views" });
-  await expect(nav).toBeVisible();
+  await page.goto("/");
+  // The sidebar is a sheet on a phone: open it for each move, it closes itself on the way.
+  const go = async (view: string) => {
+    await page.getByRole("button", { name: "Toggle sidebar" }).click();
+    const nav = page.getByRole("dialog").getByRole("navigation", { name: "Portal", exact: true });
+    await expect(nav).toBeVisible();
+    await nav.getByRole("button", { name: view, exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Your workspace" })).toHaveCount(0);
+  };
+  await expect(page.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Threads" })).toBeVisible();
   const noHorizontalScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-chat.png") });
 
-  await nav.getByRole("button", { name: /Goals/ }).click();
+  await go("Goals");
   await expect(page.getByRole("listitem", { name: intentJob.title })).toBeVisible();
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-goals.png") });
 
   // Memory: the list first, then one entity with a way back.
-  await nav.getByRole("button", { name: /Memory/ }).click();
+  await go("Memory");
   await page.getByRole("navigation", { name: "Memory" }).getByRole("button", { name: /example\/portal/ }).click();
   await expect(page.getByRole("heading", { name: "example/portal" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Memory" })).toHaveCount(0);

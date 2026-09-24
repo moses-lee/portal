@@ -10,7 +10,7 @@ test("Activity shows the log newest first with its links, and filters by kind pr
   page.on("request", (request) => {
     if (request.url().includes("/api/portal/activity")) searches.push(new URL(request.url()).search);
   });
-  await page.goto("/portal/activity");
+  await page.goto("/activity");
   const log = page.getByRole("list", { name: "Activity log" });
   const rows = log.getByRole("listitem");
   await expect(rows).toHaveCount(3);
@@ -34,7 +34,7 @@ test("live entries are prepended when they match the filter, and Load older page
   page.on("request", (request) => {
     if (request.url().includes("/api/portal/activity")) urls.push(new URL(request.url()).search);
   });
-  await page.goto("/portal/activity");
+  await page.goto("/activity");
   const rows = page.getByRole("list", { name: "Activity log" }).getByRole("listitem");
   await expect(rows).toHaveCount(50);
   await page.getByRole("button", { name: "Load older" }).click();
@@ -64,7 +64,7 @@ test("activity links open the thread, the item, the session, and memory", async 
   await setupPortal(page, {
     portal: { threads: [mainThread, reviewThread], activity: activityEntries(), entities: [octoEntity] },
   });
-  await page.goto("/portal/activity");
+  await page.goto("/activity");
   const rows = page.getByRole("list", { name: "Activity log" }).getByRole("listitem");
 
   await rows.nth(2).getByRole("button", { name: "Item" }).click();
@@ -74,12 +74,12 @@ test("activity links open the thread, the item, the session, and memory", async 
   await expect(dialog).toHaveCount(0);
 
   await rows.nth(0).getByRole("button", { name: "Memory record" }).click();
-  await expect(page).toHaveURL(/\/portal\/memory\/e-octo$/);
+  await expect(page).toHaveURL(/\/memory\/e-octo$/);
   await page.goBack();
-  await expect(page).toHaveURL(/\/portal\/activity$/);
+  await expect(page).toHaveURL(/\/activity$/);
 
   await rows.nth(1).getByRole("button", { name: reviewThread.title }).click();
-  await expect(page).toHaveURL(/\/portal\/threads\/t-review$/);
+  await expect(page).toHaveURL(/\/threads\/t-review$/);
   await page.goBack();
 
   await rows.nth(2).getByRole("button", { name: "Session" }).click();

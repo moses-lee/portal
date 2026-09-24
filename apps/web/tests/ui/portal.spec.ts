@@ -132,7 +132,7 @@ test("new conversation sends the first prompt once and retains a failed first pr
 }, info) => {
   const fixture = await setupPortal(page);
   fixture.failSend();
-  await page.goto("/");
+  await page.goto("/new");
   await expect(
     page.getByRole("heading", { name: "What would you like to work on?" }),
   ).toBeVisible();
@@ -664,7 +664,7 @@ test("each project has a new conversation button, and the start page applies cho
   await page
     .getByRole("button", { name: "New conversation in portal", exact: true })
     .click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/new$/);
   await expect(
     page.getByRole("combobox", { name: "Project", exact: true }),
   ).toContainText("portal");
@@ -703,8 +703,9 @@ test("each project has a new conversation button, and the start page applies cho
     ["/api/sessions/created/config", { configId: "model", value: "opus" }],
     ["/api/sessions/created/prompt", { text: "Build a project dashboard" }],
   ]);
-  // The next start page seeds from the session just created, so Opus is now the default.
-  await page.getByRole("button", { name: "New conversation", exact: true }).first().click();
+  // The next start page seeds from the session just created, so Opus is now the default. (The
+  // header's button: the sidebar row of the session just created carries the same name as its title.)
+  await page.getByRole("main").getByRole("button", { name: "New conversation", exact: true }).click();
   await expect(settings).toContainText("Opus");
 });
 
@@ -723,7 +724,8 @@ test("git action prompts persist across reloads and reset to their default", asy
   page,
 }) => {
   await setupPortal(page, { realSettings: true });
-  await page.goto("/sessions/s1");
+  // Portal's home: Settings sits with its entries and stays there across the reloads below.
+  await page.goto("/");
   const openSettings = () =>
     page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -761,6 +763,8 @@ test("settings sections live in a sidebar, the last one viewed is remembered, an
 }, info) => {
   await setupPortal(page);
   await page.goto("/sessions/s1");
+  // Settings sits with Portal's entries; a session opens the sidebar on Projects.
+  await page.getByRole("button", { name: "Back to Portal" }).click();
   const openSettings = () =>
     page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -857,7 +861,7 @@ test("source control actions draft a prompt on the start page without creating a
   const prompts = defaultSettings.gitActions.prompts;
 
   await checks.click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/new$/);
   await expect(
     page.getByRole("combobox", { name: "Project", exact: true }),
   ).toContainText("portal");
@@ -910,6 +914,8 @@ test("the sidebar opens a standalone terminal page with its own URL", async ({
   // No PTY behind the fixtures: the tab stays connecting instead of being closed as unknown.
   await page.routeWebSocket("**/api/shell/socket**", () => {});
   await page.goto("/sessions/s1");
+  // A session opens the sidebar on Projects; Terminal sits with Portal's entries one step back.
+  await page.getByRole("button", { name: "Back to Portal" }).click();
   const terminalButton = page.getByRole("button", {
     name: "Terminal",
     exact: true,
@@ -928,20 +934,22 @@ test("the sidebar opens a standalone terminal page with its own URL", async ({
     page.getByRole("button", { name: /GitHub inspector/ }),
   ).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "First message" })).toHaveCount(0);
+  // Portal's column shows no session rows, so none can read as open.
   await expect(
     page.getByRole("button", { name: firstTitle, exact: true }),
-  ).not.toHaveAttribute("aria-current", "page");
+  ).toHaveCount(0);
 
-  // The page survives a reload and leaves via the sidebar.
+  // The page survives a reload and leaves via the sidebar's Projects section.
   await page.reload();
   await expect(page).toHaveURL(/\/terminal$/);
   await expect(page.getByRole("tab", { name: "Terminal 1" })).toBeVisible();
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
   await page
-    .getByRole("button", { name: "New conversation", exact: true })
-    .first()
+    .getByRole("button", { name: "New conversation in portal", exact: true })
     .click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/new$/);
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Portal" }).click();
   await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
 });
 
@@ -949,7 +957,7 @@ test("the Removed view lists removed projects, restores one, and opens its conve
   page,
 }) => {
   const fixture = await setupPortal(page, { removed: [removedProject] });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const workspace = sidebar.getByRole("navigation", {
     name: "Projects and sessions",
@@ -961,7 +969,7 @@ test("the Removed view lists removed projects, restores one, and opens its conve
   await sidebar.getByRole("button", { name: "Removed", exact: true }).click();
   const view = sidebar.getByRole("region", { name: "Removed projects" });
   await expect(view).toBeVisible();
-  await expect(workspace).toHaveCount(0);
+  await expect(workspace).toBeHidden();
   const row = view.getByRole("listitem", { name: "feat/old-branch" });
   await expect(row.getByText("portal · feat/old-branch")).toBeVisible();
   await expect(row.getByText("2 conversations · removed 2h ago")).toBeVisible();
@@ -1000,7 +1008,7 @@ test("the Removed view explains unrestorable rows and deletes their conversation
       },
     ],
   });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   await sidebar.getByRole("button", { name: "Removed", exact: true }).click();
   const view = sidebar.getByRole("region", { name: "Removed projects" });
@@ -1024,7 +1032,7 @@ test("the Removed view explains unrestorable rows and deletes their conversation
     ),
   ).toHaveLength(1);
 
-  await view.getByRole("button", { name: "Back to workspace" }).click();
+  await view.getByRole("button", { name: "Back to projects" }).click();
   await expect(
     sidebar.getByRole("navigation", { name: "Projects and sessions" }),
   ).toBeVisible();
@@ -1034,7 +1042,7 @@ test("a project lists five conversations and reveals the rest on request", async
   page,
 }) => {
   await setupPortal(page, { sessions: manySessions() });
-  await page.goto("/");
+  await page.goto("/new");
   const portalSection = page.getByRole("region", { name: "portal" });
 
   // The five most recent show; the older three are only a count until asked for.
@@ -1074,7 +1082,7 @@ test("collapse all folds every project, survives a reload, and expands again", a
   page,
 }) => {
   await setupPortal(page, { sessions: manySessions() });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const first = sidebar.getByRole("button", { name: "Conversation 1", exact: true });
   await expect(first).toBeVisible();
@@ -1113,7 +1121,7 @@ test("projects are ordered by most recent activity, below pinned ones", async ({
       { ...makeSession("b1", "Newer work", "codex", worktree), lastActiveAt: base },
     ],
   });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const regions = sidebar
     .getByRole("navigation", { name: "Projects and sessions" })
@@ -1134,7 +1142,7 @@ test("collapsing one project folds only it and forgets its expanded list", async
   page,
 }) => {
   await setupPortal(page, { sessions: manySessions() });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const portalSection = page.getByRole("region", { name: project.name, exact: true });
   const eighth = portalSection.getByRole("button", { name: "Conversation 8", exact: true });
@@ -1163,7 +1171,7 @@ test("collapsing one project folds only it and forgets its expanded list", async
 
 test("collapse all covers projects the search filtered out", async ({ page }) => {
   await setupPortal(page, { sessions: manySessions() });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const search = page.getByRole("textbox", { name: "Search sessions" });
   const headers = [project.id, worktree.id].map((id) =>
@@ -1182,7 +1190,7 @@ test("the collapse toggle is disabled when there are no projects", async ({
   page,
 }) => {
   await setupPortal(page, { projects: [], sessions: [] });
-  await page.goto("/");
+  await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   await expect(
     sidebar.getByText("Add a project to create your first conversation."),

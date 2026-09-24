@@ -260,7 +260,7 @@ test("mobile source control keeps long names in bounds and closes after drafting
     .getByRole("button", { name: actionNames[1], exact: true })
     .click();
   await expect(panel).toHaveCount(0);
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/new$/);
   await expect(
     page.getByRole("textbox", { name: "First message" }),
   ).toHaveValue(/PR #42/);

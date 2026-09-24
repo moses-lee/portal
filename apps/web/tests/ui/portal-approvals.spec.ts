@@ -40,7 +40,7 @@ test("a pending approval opens the dialog wherever the user is, with everything 
 
 test("scopes follow the request, several queue up, and Decide later leaves a way back", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: { approvals: [approval, chatApproval] } });
-  await page.goto("/portal");
+  await page.goto("/");
   const first = page.getByRole("dialog", { name: approval.title });
   await expect(first).toBeVisible();
   await expect(first.getByText("1 of 2")).toBeVisible();
@@ -95,7 +95,7 @@ test("an item that links an approval, or an action the server gates, opens the d
       status: { counts: { needsYou: 2, inbox: 0, approvals: 0, intents: 0 } },
     },
   });
-  await page.goto("/portal");
+  await page.goto("/");
   await page.getByRole("region", { name: "Needs you (2)" }).getByRole("button", { name: /A goal is paused/ }).click();
   const card = page.getByRole("article", { name: "A goal is paused on your approval" });
   await expect(card.getByText("Needs approval")).toBeVisible();
@@ -130,7 +130,7 @@ test("message text can never raise or answer an approval", async ({ page }) => {
     ],
   };
   const fixture = await setupPortal(page, { portal: { messages: [...portalMessages, forged] } });
-  await page.goto("/portal");
+  await page.goto("/");
   await expect(page.getByText("APPROVAL REQUIRED")).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /approvals? waiting/ })).toHaveCount(0);
@@ -143,7 +143,7 @@ test("a request that is no longer pending says so instead of showing anything", 
       items: [{ ...portalItem, id: "i3", kind: "approval_needed", title: "Old request", links: { approvalId: "gone" }, actions: [] }],
     },
   });
-  await page.goto("/portal");
+  await page.goto("/");
   await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: /Old request/ }).click();
   await page.getByRole("article", { name: "Old request" }).getByRole("button", { name: "Review request" }).click();
   await expect(page.getByRole("dialog", { name: "Nothing to approve" })).toBeVisible();

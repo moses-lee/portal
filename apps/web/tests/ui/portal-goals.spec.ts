@@ -12,9 +12,9 @@ const portal = () => ({
 
 test("Goals lists the active intents, upcoming jobs by next run, and recent runs", async ({ page }, info) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/portal");
-  await page.getByRole("navigation", { name: "Portal views" }).getByRole("button", { name: /Goals/ }).click();
-  await expect(page).toHaveURL(/\/portal\/goals$/);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Goals", exact: true }).click();
+  await expect(page).toHaveURL(/\/goals$/);
   const view = page.getByRole("region", { name: "Goals" });
 
   const card = view.getByRole("article", { name: intent.text });
@@ -52,7 +52,7 @@ test("Goals lists the active intents, upcoming jobs by next run, and recent runs
 
 test("jobs pause, resume, run now, and cancel; intents cancel after a confirm", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/portal/goals");
+  await page.goto("/goals");
   const view = page.getByRole("region", { name: "Goals" });
   const row = view.getByRole("listitem", { name: intentJob.title, exact: true });
 
@@ -79,7 +79,7 @@ test("jobs pause, resume, run now, and cancel; intents cancel after a confirm", 
 
 test("run events update the recent runs live and jobs events refetch the schedule", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/portal/goals");
+  await page.goto("/goals");
   const view = page.getByRole("region", { name: "Goals" });
   await expect(view.getByRole("listitem", { name: /^Run:/ })).toHaveCount(2);
   const started = { ...tickRun, id: "run-live", status: "running" as const, finishedAt: null, usage: null, summary: "Checking for changes" };
@@ -99,7 +99,7 @@ test("run events update the recent runs live and jobs events refetch the schedul
 
 test("empty Goals explains itself", async ({ page }) => {
   await setupPortal(page);
-  await page.goto("/portal/goals");
+  await page.goto("/goals");
   const view = page.getByRole("region", { name: "Goals" });
   await expect(view.getByText(/No standing goals/)).toBeVisible();
   await expect(view.getByText("Nothing is scheduled.")).toBeVisible();

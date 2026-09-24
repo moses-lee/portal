@@ -185,7 +185,7 @@ export default function RemovedProjects({
     >
       <div className="mb-3 flex items-center gap-1 px-1">
         <IconButton
-          label="Back to workspace"
+          label="Back to projects"
           size="icon-xs"
           onClick={onBack}
           className="text-muted-foreground"

@@ -41,11 +41,15 @@ import {
 } from "@/lib/session-config";
 import {
   isPortalPath,
+  isStartPath,
   isTerminalPath,
+  portalLocation,
   portalPath,
   sessionIdFromPath,
   sessionPath,
+  startPath,
   terminalPath,
+  type PortalView,
 } from "@/lib/session-routes";
 import type {
   AgentInfo,
@@ -102,9 +106,11 @@ export default function Chat() {
   const active = useMemo(() => sessionIdFromPath(pathname ?? "/"), [pathname]);
   /** The standalone terminal page: no session, no start page. */
   const terminalOpen = isTerminalPath(pathname ?? "/");
-  /** Talk to Portal: the orchestrator's thread, outside every project and session. */
+  /** The start page (`/new`): a new conversation in a project. */
+  const onStartPage = isStartPath(pathname ?? "/");
+  /** Portal, the orchestrator: the home (`/`) and its views, outside every project and session. */
   const portalOpen = isPortalPath(pathname ?? "/");
-  const onStartPage = !active && !terminalOpen && !portalOpen;
+  const portalView: PortalView | null = portalOpen ? portalLocation(pathname ?? "/").view : null;
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -374,7 +380,7 @@ export default function Chat() {
   /** Navigate to a session (or the start page); the URL drives the rest. */
   const selectSession = (sessionId: string | null) => {
     if (sessionId !== active || terminalOpen || portalOpen)
-      pushPath(sessionId ? sessionPath(sessionId) : "/");
+      pushPath(sessionId ? sessionPath(sessionId) : startPath());
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
     if (projectId && projects.some((p) => p.id === projectId))
@@ -449,7 +455,7 @@ export default function Chat() {
     const newest = fetched
       .filter((s) => s.projectId === project.id)
       .sort(byRecentActivity)[0];
-    pushPath(newest ? sessionPath(newest.id) : "/");
+    pushPath(newest ? sessionPath(newest.id) : startPath());
     setShowSidebar(false);
   };
 
@@ -501,7 +507,7 @@ export default function Chat() {
   /** The sidebar's `+`: open the start page with `projectId` selected so the worktree picker is available. */
   const startIn = (projectId: string) => {
     selectProject(projectId);
-    if (!onStartPage) pushPath("/");
+    if (!onStartPage) pushPath(startPath());
     setShowSidebar(false);
   };
 
@@ -511,9 +517,14 @@ export default function Chat() {
     setShowSidebar(false);
   };
 
-  /** The sidebar's Talk to Portal button: open the orchestrator's page. */
-  const openPortal = () => {
-    if (!portalOpen) pushPath(portalPath());
+  /**
+   * A Portal entry in the sidebar: open that view's root (Chat is the main thread, `/`). Compares
+   * paths, not views, so Chat from a side thread returns to the main thread and Memory from an
+   * entity returns to the list.
+   */
+  const openPortalView = (view: PortalView) => {
+    const path = portalPath(view);
+    if (path !== pathname) pushPath(path);
     setShowSidebar(false);
   };
 
@@ -676,7 +687,7 @@ export default function Chat() {
     // The start page begins at Original again; the draft replaces whatever was there.
     setWorktreePick(null);
     writeDraft("new", text);
-    if (!onStartPage) pushPath("/");
+    if (!onStartPage) pushPath(startPath());
     setShowSidebar(false);
   };
   return (
@@ -707,11 +718,11 @@ export default function Chat() {
         onDiscardRemoved={discardRemovedProject}
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
-        onHome={() => selectSession(null)}
         onTerminal={openTerminal}
         terminalActive={terminalOpen}
-        onPortal={openPortal}
-        portalActive={portalOpen}
+        onPortalView={openPortalView}
+        portalView={portalView}
+        projectsActive={!!active || onStartPage}
         desktopOpen={sidebarPreference === "true"}
         onCollapse={() => setSidebarPreference("false")}
       />
@@ -733,7 +744,7 @@ export default function Chat() {
       />
       {portalOpen ? (
         <PortalPage
-          pathname={pathname ?? "/portal"}
+          pathname={pathname ?? "/"}
           onNavigate={pushPath}
           onOpenSidebar={toggleSidebar}
           onOpenSession={selectSession}

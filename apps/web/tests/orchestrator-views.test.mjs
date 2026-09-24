@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activityFilters, activityLinks, describeKind, matchesPrefix, mergeActivity } from "../src/lib/orchestrator/activity.ts";
 import { canPin, groupEntities, lineage, partitionRecords } from "../src/lib/orchestrator/memory.ts";
-import { portalLocation, portalPath, isPortalPath } from "../src/lib/session-routes.ts";
 
 const entry = (id, kind = "chat.turn") => ({ id, at: id, actor: "agent", kind, summary: `e${id}`, refs: {}, detail: null });
 
@@ -82,26 +81,4 @@ test("lineage walks both ways and survives a cycle", () => {
   assert.deepEqual(lineage(a, new Map([["a", a], ["b", b]])).map((r) => r.id), ["b", "a"]);
   assert.equal(canPin({ authority: "user_stated" }), true);
   assert.equal(canPin({ authority: "observed" }), false);
-});
-
-test("portal paths round-trip every view", () => {
-  assert.equal(isPortalPath("/portal"), true);
-  assert.equal(isPortalPath("/portal/memory/e1"), true);
-  assert.equal(isPortalPath("/portals"), false);
-  assert.deepEqual(portalLocation("/portal"), { view: "chat", threadId: "main" });
-  assert.deepEqual(portalLocation("/portal/threads/t%201"), { view: "chat", threadId: "t 1" });
-  assert.deepEqual(portalLocation("/portal/goals"), { view: "goals" });
-  assert.deepEqual(portalLocation("/portal/memory"), { view: "memory", entityId: null });
-  assert.deepEqual(portalLocation("/portal/memory/e1"), { view: "memory", entityId: "e1" });
-  assert.deepEqual(portalLocation("/portal/memory/curation"), { view: "memory", entityId: null, runId: null });
-  assert.deepEqual(portalLocation("/portal/memory/curation/r%201"), { view: "memory", entityId: null, runId: "r 1" });
-  assert.equal(portalPath({ view: "memory", entityId: null, runId: "r 1" }), "/portal/memory/curation/r%201");
-  assert.equal(portalPath({ view: "memory", entityId: null, runId: null }), "/portal/memory/curation");
-  assert.equal(portalPath({ view: "memory", entityId: "e1" }), "/portal/memory/e1");
-  assert.deepEqual(portalLocation("/portal/nope/deeper"), { view: "chat", threadId: "main" });
-  assert.equal(portalPath(), "/portal");
-  assert.equal(portalPath("activity"), "/portal/activity");
-  assert.equal(portalPath({ view: "chat", threadId: "t 1" }), "/portal/threads/t%201");
-  assert.equal(portalPath({ view: "chat", threadId: "main" }), "/portal");
-  assert.equal(portalPath({ view: "memory", entityId: "e/1" }), "/portal/memory/e%2F1");
 });

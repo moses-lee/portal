@@ -9,15 +9,24 @@ declare global {
   }
 }
 
-test("the sidebar's Talk to Portal button opens /portal and is marked current", async ({
+test("Portal is the home: the sidebar's Chat entry opens / and is marked current", async ({
   page,
 }) => {
   await setupPortal(page);
-  await page.goto("/");
-  const button = page.getByRole("button", { name: "Talk to Portal", exact: true });
+  // The start page opens the sidebar on Projects; Portal's entries sit one step back.
+  await page.goto("/new");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Back to Portal" }).click();
+  const nav = sidebar.getByRole("navigation", { name: "Portal", exact: true });
+  // Chat carries the needs-you count (one in the fixture) as a badge.
+  await expect(nav.getByRole("button")).toHaveText([/^Chat/, "Goals", "Activity", "Memory", "System", "Terminal", "Projects", "Settings"]);
+  await expect(nav.getByRole("button", { name: "Chat", exact: true })).toContainText("1");
+  const button = nav.getByRole("button", { name: "Chat", exact: true });
   await expect(button).not.toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("button", { name: "Projects", exact: true })).toHaveAttribute("aria-current", "page");
   await button.click();
-  await expect(page).toHaveURL(/\/portal$/);
+  await expect(page).toHaveURL(/\/$/);
   await expect(button).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
   // The status line: the server's words, then the next job counted down in the browser (the
@@ -25,11 +34,22 @@ test("the sidebar's Talk to Portal button opens /portal and is marked current", 
   const line = page.getByTestId("portal-status-line");
   await expect(line).toContainText("Idle · next: Check for changes");
   await expect(line).toContainText(/· in [67] min/);
-  // The GitHub inspector belongs to sessions; Talk to Portal has none.
+  // The GitHub inspector belongs to sessions; Portal has none.
   await expect(page.getByRole("button", { name: "Open GitHub inspector" })).toHaveCount(0);
-  await page.getByRole("button", { name: "New conversation", exact: true }).first().click();
+  // The other views drop the status line and Run now and take their own title.
+  await nav.getByRole("button", { name: "Goals", exact: true }).click();
+  await expect(page).toHaveURL(/\/goals$/);
+  await expect(page.getByRole("heading", { name: "Goals", level: 1 })).toBeVisible();
+  await expect(line).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Run now" })).toHaveCount(0);
+  // The brand is a home link.
+  await sidebar.getByRole("button", { name: "Portal home" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(button).not.toHaveAttribute("aria-current", "page");
+  // Projects opens the projects column; a new conversation from there leaves Portal.
+  await nav.getByRole("button", { name: "Projects", exact: true }).click();
+  await sidebar.getByRole("button", { name: "New conversation in portal", exact: true }).click();
+  await expect(page).toHaveURL(/\/new$/);
+  await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
 });
 
 test("without an API key the page asks for one and Add API key opens settings", async ({
@@ -38,7 +58,7 @@ test("without an API key the page asks for one and Add API key opens settings", 
   await setupPortal(page, {
     portal: { status: { ready: false, line: "Add an API key in Settings to start Portal." }, items: [] },
   });
-  await page.goto("/portal");
+  await page.goto("/");
   await expect(page.getByTestId("portal-status-line")).toHaveText("Add an API key in Settings to start Portal.");
   await expect(
     page.getByText("Talk to Portal needs an API key for OpenAI."),
@@ -62,7 +82,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   page,
 }, info) => {
   const fixture = await setupPortal(page);
-  await page.goto("/portal");
+  await page.goto("/");
   await expect(page.getByText("What needs me today?")).toBeVisible();
   await expect(
     page.getByText("Nothing yet. I will keep an eye on your pull requests."),
@@ -118,7 +138,7 @@ test("a refused send keeps the text in the composer and shows the server's reaso
 }) => {
   const fixture = await setupPortal(page);
   fixture.failPortalSend("Portal is running a check. Try again in a moment.");
-  await page.goto("/portal");
+  await page.goto("/");
   const input = page.getByRole("textbox", { name: "Message Portal" });
   await input.fill("Which PRs are waiting on me?");
   await input.press("Enter");
@@ -160,7 +180,7 @@ test("sending behaves as on a session page: the text stays, with Sending…, unt
 }) => {
   const fixture = await setupPortal(page);
   const release = fixture.holdSends("main");
-  await page.goto("/portal");
+  await page.goto("/");
   const input = page.getByRole("textbox", { name: "Message Portal" });
   await input.fill("What changed overnight?");
   await input.press("Enter");
@@ -190,7 +210,7 @@ test("background work never blocks the composer; only this thread's own turn doe
       },
     },
   });
-  await page.goto("/portal");
+  await page.goto("/");
   await expect(page.getByTestId("portal-status-line")).toContainText("Checking for changes…");
   const input = page.getByRole("textbox", { name: "Message Portal" });
   // A job is running, and the user can still talk.
@@ -225,7 +245,7 @@ test("a messages stream event refetches the thread and shows what a tick appende
   page,
 }) => {
   const fixture = await setupPortal(page);
-  await page.goto("/portal");
+  await page.goto("/");
   await expect(page.getByText("What needs me today?")).toBeVisible();
   const appended: OrchestratorMessage = {
     id: "m4",
@@ -249,7 +269,7 @@ test("Open session navigates to the session and Run now posts a tick", async ({
   page,
 }) => {
   const fixture = await setupPortal(page);
-  await page.goto("/portal");
+  await page.goto("/");
   await page.getByRole("button", { name: "Run now" }).click();
   await expect(page.getByRole("status").filter({ hasText: /^Checked at/ })).toContainText(
     "2 changes, 1 new",
@@ -274,7 +294,7 @@ test("the aurora sits behind every Portal view and follows the user's turn and p
   page,
 }) => {
   await setupPortal(page);
-  await page.goto("/portal");
+  await page.goto("/");
   const aurora = page.locator(".aurora");
   await expect(aurora).toHaveAttribute("data-activity", "idle");
   // A background job never colours it; a turn answering the user (in any thread) does.
@@ -289,8 +309,8 @@ test("the aurora sits behind every Portal view and follows the user's turn and p
   await emitPortal(page, { type: "approvals", approvals: [approval] });
   await expect(aurora).toHaveAttribute("data-activity", "waiting");
   await page.getByRole("button", { name: "Decide later" }).click();
-  await page.getByRole("button", { name: "Goals" }).click();
-  await expect(page).toHaveURL(/\/portal\/goals$/);
+  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Goals", exact: true }).click();
+  await expect(page).toHaveURL(/\/goals$/);
   await expect(aurora).toHaveAttribute("data-activity", "waiting");
   await emitPortal(page, { type: "approvals", approvals: [] });
   await emitPortal(page, { type: "status", status: portalStatus });

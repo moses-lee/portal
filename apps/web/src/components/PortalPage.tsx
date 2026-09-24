@@ -1,36 +1,42 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Activity,
-  Brain,
-  LoaderCircle,
-  MessagesSquare,
-  PanelLeft,
-  Play,
-  ServerCog,
-  Target,
-  type LucideIcon,
-} from "lucide-react";
+import dynamic from "next/dynamic";
+import { LoaderCircle, PanelLeft, Play } from "lucide-react";
 import AuroraBackground from "./AuroraBackground";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import { formatTime } from "./PortalMessage";
 import ResponsiveDialog from "./ResponsiveDialog";
-import ActivityView from "./portal/ActivityView";
-import GoalsView from "./portal/GoalsView";
-import MemoryView from "./portal/MemoryView";
 import PortalStatusLine from "./portal/PortalStatusLine";
 import PortalThread from "./portal/PortalThread";
-import SystemView from "./portal/SystemView";
 import ThreadSwitcher from "./portal/ThreadSwitcher";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
+import { viewMeta } from "./portal/views";
 import { Button } from "@/components/ui/button";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { portalJson } from "@/lib/orchestrator/api";
 import { portalActivity } from "@/lib/orchestrator/format";
 import { MAIN_THREAD_ID, type TickReport } from "@/lib/orchestrator/types";
 import { portalLocation, portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
+
+/** Stands in for a view while its chunk loads: the views mount only when opened. */
+function ViewLoading() {
+  return (
+    <div className="flex flex-1 items-center justify-center text-muted-foreground">
+      <LoaderCircle className="size-4 animate-spin" />
+    </div>
+  );
+}
+
+/**
+ * The views other than Chat load on demand so they stay off the home's (`/`) bundle: Chat is where
+ * the app lands, and these unmount when left anyway. Their `PortalLinks` import is type-only.
+ */
+const GoalsView = dynamic(() => import("./portal/GoalsView"), { loading: ViewLoading });
+const ActivityView = dynamic(() => import("./portal/ActivityView"), { loading: ViewLoading });
+const MemoryView = dynamic(() => import("./portal/MemoryView"), { loading: ViewLoading });
+const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewLoading });
 
 /** "Checked at 10:42 · 2 changes, 1 new item" for the inline tick line. */
 function describeTick(report: TickReport): string {
@@ -44,22 +50,14 @@ function describeTick(report: TickReport): string {
   return `${when} · ${parts.join(", ")}`;
 }
 
-const viewMeta: Record<PortalView, { label: string; icon: LucideIcon }> = {
-  chat: { label: "Chat", icon: MessagesSquare },
-  goals: { label: "Goals", icon: Target },
-  activity: { label: "Activity", icon: Activity },
-  memory: { label: "Memory", icon: Brain },
-  system: { label: "System", icon: ServerCog },
-};
-const views: PortalView[] = ["chat", "goals", "activity", "memory", "system"];
-
 /**
- * Talk to Portal: the orchestrator's page. The header carries the live status line and the view
- * tabs; Chat holds the main thread and the side threads Portal opened (each its own conversation),
+ * Portal's pages: the orchestrator is the app's home. Chat (`/`) holds the main thread and the side
+ * threads Portal opened (each its own conversation), and carries the live status line and Run now;
  * Goals the intents, upcoming jobs, and recent runs, Activity the audit log, Memory the curated
- * records, and System what the model is shown (CORE.md, the world) plus approval grants. The URL
- * says which (`/portal/**`), so reloads and links land in place. The session pages' aurora sits
- * behind every view: working while Portal answers the user, amber while an approval waits.
+ * records, and System what the model is shown (CORE.md, the world) plus approval grants. The
+ * sidebar switches between them and the URL says which, so reloads and links land in place. The
+ * session pages' aurora sits behind every view: working while Portal answers the user, amber while
+ * an approval waits.
  */
 export default function PortalPage({
   pathname,
@@ -170,12 +168,6 @@ export default function PortalPage({
     [go, onOpenSession, requestApproval],
   );
 
-  const counts = status?.counts;
-  const badge: Partial<Record<PortalView, number>> = {
-    chat: counts?.needsYou,
-    goals: counts?.intents,
-    memory: counts?.inbox,
-  };
   const threadExists = shownThread === MAIN_THREAD_ID || threads.some((thread) => thread.id === shownThread);
 
   return (
@@ -186,54 +178,23 @@ export default function PortalPage({
           <PanelLeft className="size-4" />
         </IconButton>
         <div className="min-w-0 flex-1 pt-1.5 max-sm:pt-0">
-          <h1 className="text-[13px] font-medium leading-snug tracking-[-.01em]">Talk to Portal</h1>
-          <PortalStatusLine onOpenThread={links.openThread} />
+          <h1 className="text-[13px] font-medium leading-snug tracking-[-.01em]">{viewMeta[view].title}</h1>
+          {view === "chat" && <PortalStatusLine onOpenThread={links.openThread} />}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={!ready || ticking}
-          onClick={() => void runNow()}
-          className="mt-1.5 text-xs text-foreground/80 max-sm:mt-0"
-        >
-          {ticking ? <LoaderCircle className="animate-spin" /> : <Play />}
-          Run now
-        </Button>
+        {view === "chat" && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!ready || ticking}
+            onClick={() => void runNow()}
+            className="mt-1.5 text-xs text-foreground/80 max-sm:mt-0"
+          >
+            {ticking ? <LoaderCircle className="animate-spin" /> : <Play />}
+            Run now
+          </Button>
+        )}
       </header>
-      <nav aria-label="Portal views" className="border-b border-white/5">
-        <div className="flex items-center gap-0.5 overflow-x-auto px-4 [scrollbar-width:none] max-sm:px-2">
-          {views.map((entry) => {
-            const Icon = viewMeta[entry].icon;
-            const selected = entry === view;
-            const count = badge[entry];
-            return (
-              <button
-                key={entry}
-                type="button"
-                aria-current={selected ? "page" : undefined}
-                onClick={() => go(entry === "chat" ? { view: "chat", threadId: shownThread } : entry)}
-                className={`relative flex h-9 shrink-0 items-center gap-1.5 px-2.5 text-xs transition-colors ${
-                  selected ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Icon className="size-3.5" />
-                {viewMeta[entry].label}
-                {!!count && (
-                  <span
-                    className={`rounded-full px-1.5 text-[10px] leading-4 ${entry === "chat" ? "bg-amber-300/15 text-amber-200" : "bg-white/10 text-foreground/80"}`}
-                  >
-                    <span className="sr-only">(</span>
-                    {count}
-                    <span className="sr-only">)</span>
-                  </span>
-                )}
-                {selected && <span className="absolute inset-x-2 -bottom-px h-px bg-foreground/70" aria-hidden="true" />}
-              </button>
-            );
-          })}
-        </div>
-      </nav>
       {(tickNotice || tickError || live.error) && (
         <p
           role={tickError || live.error ? "alert" : "status"}

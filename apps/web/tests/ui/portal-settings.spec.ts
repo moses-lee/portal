@@ -3,7 +3,7 @@ import { setupPortal } from "./fixtures";
 
 test("settings pick a chat model and a bookkeeping model; a provider change resets that role's model", async ({ page }, info) => {
   const fixture = await setupPortal(page);
-  await page.goto("/portal");
+  await page.goto("/");
   await page.evaluate(() =>
     window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "orchestrator" } })),
   );
@@ -36,7 +36,7 @@ test("settings pick a chat model and a bookkeeping model; a provider change rese
 
 test("the review-session toggle saves on change and reports it", async ({ page }) => {
   const fixture = await setupPortal(page);
-  await page.goto("/portal");
+  await page.goto("/");
   await page.evaluate(() =>
     window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "orchestrator" } })),
   );
