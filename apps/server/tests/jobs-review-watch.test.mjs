@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { REVIEW_CHECK_MS, findingsItem, reviewWatchOf, sessionProgress } from "../src/orchestrator/jobs/review-watch.ts";
+import { REVIEW_CHECK_MS, findingsItem, reviewProse, reviewWatchOf, sessionProgress } from "../src/orchestrator/jobs/review-watch.ts";
 import { POLL_MS } from "../src/orchestrator/jobs/worker.ts";
 import { fakeDeps, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 import { T0, flush, jobsHarness, started, textStep, toolStep } from "./fixtures/jobs-harness.mjs";
@@ -108,12 +108,12 @@ test("a review goal waits without a model call, then summarizes the reviews into
   const [finalJob] = await h.jobs.listJobs({ intentId: intent.id });
   assert.equal(finalJob.status, "done");
   [run] = await h.jobs.listRuns({ jobId: job.id, kind: "intent_check" });
-  assert.match(run.summary, /^Reviews finished on acme\/app: #1 needs changes \(1 blocking, 1 nit\); #2 looks good \(1 nit\)/);
+  assert.equal(run.summary, "Both reviews on acme/app finished: #1 needs changes, with one blocking finding and one nit; #2 looks good, with one nit. The findings are in Needs you.");
   const [helper] = await h.jobs.listRuns({ kind: "helper" });
   assert.equal(helper.parentRunId, run.id, "the summarizer is a child run of the check");
   assert.deepEqual(helper.model, { provider: "anthropic", model: "claude-opus-5-5" }, "summaries use the chat model");
   const note = (await h.store.readMessages()).at(-1);
-  assert.match(note.parts[0].text, /^Reviews finished on acme\/app/);
+  assert.equal(note.parts[0].text, run.summary, "the thread gets the same sentence, not a list");
   assert.deepEqual(note.metadata.itemIds.sort(), items.map((item) => item.id).sort());
 });
 
@@ -182,4 +182,19 @@ test("a review waiting for a permission raises the tick's waiting item at once a
   await flush();
   [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_waiting");
   assert.equal(item.status, "resolved");
+});
+
+test("the thread's verdict is prose: one sentence per goal, counts spelled out, no list", () => {
+  const report = (pr, verdict, findings = []) => ({ pr, verdict, summary: "s", findings: findings.map((severity) => ({ severity, title: "t" })) });
+  assert.equal(reviewProse("acme/app", [report(1, "approve")]), "The review of acme/app#1 finished: it looks good. The findings are in Needs you.");
+  assert.equal(
+    reviewProse("acme/app", [report(1, "request_changes", ["blocking", "blocking", "should_fix", "nit", "nit", "nit"])]),
+    "The review of acme/app#1 finished: it needs changes, with two blocking findings, one you should fix, and three nits. The findings are in Needs you.",
+  );
+  assert.equal(reviewProse("acme/app", [report(1, "incomplete")]), "The review of acme/app#1 did not finish. Open the session to see what happened.");
+  assert.equal(
+    reviewProse("acme/app", [report(1, "comment", ["nit"]), report(2, "incomplete"), report(3, "approve")]),
+    "All three reviews on acme/app finished: #1 got comments only, with one nit; the review of #2 did not finish; #3 looks good. The findings are in Needs you.",
+  );
+  assert.equal(reviewProse("acme/app", [report(1, "incomplete"), report(2, "incomplete")]), "Both reviews on acme/app finished: the review of #1 did not finish; the review of #2 did not finish. Open the sessions to see what happened.");
 });

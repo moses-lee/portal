@@ -57,7 +57,7 @@ test("without an API key the page asks for one and Add API key opens settings", 
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 });
 
-test("the thread renders replies, the tick label, tool rows, and item cards", async ({
+test("the thread renders replies, the tick label, and tool rows in prose; items live in the Needs-you strip", async ({
   page,
 }, info) => {
   const fixture = await setupPortal(page);
@@ -71,7 +71,13 @@ test("the thread renders replies, the tick label, tool rows, and item cards", as
   await expect(toolRow).toBeVisible();
   await toolRow.click();
   await expect(page.getByText('"changes": 1')).toBeVisible();
-  const card = page.getByRole("article", { name: portalItem.title });
+  // The tick's message touched the item, but the thread stays prose: no card under it.
+  const log = page.getByRole("log", { name: "Messages" });
+  await expect(log.getByRole("article")).toHaveCount(0);
+  const strip = page.getByRole("region", { name: "Needs you (1)" });
+  await expect(strip).toBeVisible();
+  await strip.getByRole("button", { name: portalItem.title }).click();
+  const card = strip.getByRole("article", { name: portalItem.title });
   await expect(card).toBeVisible();
   await expect(card.getByText("Needs you", { exact: true })).toBeVisible();
   await expect(card.getByText("Checks failing")).toBeVisible();
@@ -79,7 +85,6 @@ test("the thread renders replies, the tick label, tool rows, and item cards", as
   await expect(card.getByRole("button", { name: "Open session" })).toBeVisible();
   await expect(card.getByRole("button", { name: "Open on GitHub" })).toBeVisible();
   await expect(card.getByRole("button", { name: "Ask Portal" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Needs you (1)" })).toBeVisible();
   await page.screenshot({ animations: "disabled", path: info.outputPath("portal.png") });
 
   // Ask Portal sends the action's text as a chat message; only that message goes to the server.
@@ -95,8 +100,7 @@ test("the thread renders replies, the tick label, tool rows, and item cards", as
   expect(Object.keys(sent[0].body as object)).toEqual(["message"]);
   expect((sent[0].body as { message: { role: string } }).message.role).toBe("user");
 
-  // Resolve goes through PATCH and hides the item from the strip, but the card under the tick's
-  // message stays as a dimmed record of what happened, and can be reopened.
+  // Resolve goes through PATCH and leaves the strip empty; the thread's messages are unchanged.
   await card.getByRole("button", { name: `More actions for ${portalItem.title}` }).click();
   await page.getByRole("menuitem", { name: "Resolve" }).click();
   await expect(page.getByRole("region", { name: "Needs you (0)" })).toBeVisible();
@@ -104,17 +108,8 @@ test("the thread renders replies, the tick label, tool rows, and item cards", as
     (request) => request.path === "/api/portal/items/i1" && request.method === "PATCH",
   );
   expect(patch?.body).toEqual({ status: "resolved", snoozedUntil: null });
-  await expect(card).toBeVisible();
-  await expect(card).toHaveAttribute("data-status", "resolved");
-  await expect(card.getByText("Resolved")).toBeVisible();
-  // The first menu must finish dismissing before the trigger can open the next one.
-  await expect(page.getByRole("menu")).toHaveCount(0);
-  await card.getByRole("button", { name: `More actions for ${portalItem.title}` }).click();
-  await expect(page.getByRole("menuitem", { name: "Reopen" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Resolve" })).toHaveCount(0);
-  await page.getByRole("menuitem", { name: "Reopen" }).click();
-  await expect(page.getByRole("region", { name: "Needs you (1)" })).toBeVisible();
-  await expect(card).toHaveAttribute("data-status", "open");
+  await expect(page.getByRole("article", { name: portalItem.title })).toHaveCount(0);
+  await expect(log.getByRole("article")).toHaveCount(0);
 });
 
 test("a refused send keeps the text in the composer and shows the server's reason", async ({
@@ -184,6 +179,7 @@ test("background work never blocks the composer; only this thread's own turn doe
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
   await expect(page.getByText(/Portal is answering in this thread/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
+  await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: portalItem.title }).click();
   await page
     .getByRole("article", { name: portalItem.title })
     .getByRole("button", { name: "Ask Portal" })
@@ -239,6 +235,7 @@ test("Open session navigates to the session and Run now posts a tick", async ({
       (request) => request.path === "/api/portal/tick" && request.method === "POST",
     ),
   ).toHaveLength(1);
+  await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: portalItem.title }).click();
   await page
     .getByRole("article", { name: portalItem.title })
     .getByRole("button", { name: "Open session" })

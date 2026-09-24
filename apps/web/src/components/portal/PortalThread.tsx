@@ -226,7 +226,6 @@ export default function PortalThread({
   const archived = thread?.status === "archived";
   /** A turn in this thread that this view did not start (another tab, or one still running from before a reload). */
   const otherTurn = !responding && !!status?.busyThreads.includes(threadId);
-  const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const needsYou = useMemo(
     () =>
       isMain
@@ -340,9 +339,8 @@ export default function PortalThread({
                 <MessageScrollerItem key={message.id} messageId={message.id} className="![content-visibility:visible]">
                   <PortalMessage
                     message={message}
-                    items={itemsById}
                     streaming={responding && index === messages.length - 1}
-                    handlers={cardHandlers}
+                    onOpenCurationRun={handlers.onOpenCurationRun}
                   />
                 </MessageScrollerItem>
               ))}

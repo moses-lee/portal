@@ -100,6 +100,55 @@ const verdictLabel: Record<ReviewReport["verdict"], string> = {
 };
 const severityLabel: Record<ReviewFinding["severity"], string> = { blocking: "Blocking", should_fix: "Should fix", nit: "Nits" };
 
+const numberWords = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+const spell = (n: number) => numberWords[n] ?? String(n);
+
+/** The findings as a clause: "two blocking findings, one you should fix, and three nits". */
+function findingsClause(findings: ReviewFinding[]): string {
+  const blocking = findings.filter((finding) => finding.severity === "blocking").length;
+  const fix = findings.filter((finding) => finding.severity === "should_fix").length;
+  const nits = findings.filter((finding) => finding.severity === "nit").length;
+  const parts: string[] = [];
+  if (blocking) parts.push(`${spell(blocking)} blocking finding${blocking === 1 ? "" : "s"}`);
+  if (fix) parts.push(`${spell(fix)} you should fix`);
+  if (nits) parts.push(`${spell(nits)} nit${nits === 1 ? "" : "s"}`);
+  if (!parts.length) return "";
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(", ")}${parts.length > 2 ? "," : ""} and ${parts.at(-1)}`;
+}
+
+/** One PR's verdict as a clause of the thread's sentence: "#12 needs changes, with two blocking findings". */
+function verdictClause(report: ReviewReport, name = `#${report.pr}`): string {
+  const clause = findingsClause(report.findings);
+  const withFindings = clause ? `, with ${clause}` : "";
+  switch (report.verdict) {
+    case "approve":
+      return `${name} looks good${withFindings}`;
+    case "request_changes":
+      return `${name} needs changes${withFindings}`;
+    case "comment":
+      return `${name} got comments only${withFindings}`;
+    case "incomplete":
+      return `the review of ${name} did not finish`;
+  }
+}
+
+/**
+ * What the thread says when a review goal finishes: one or two sentences, no list. The findings
+ * themselves live on the Needs-you items, so the sentence names each PR's verdict and counts only.
+ */
+export function reviewProse(repo: string, reports: ReviewReport[]): string {
+  const tail = reports.some((report) => report.verdict !== "incomplete") ? " The findings are in Needs you." : ` Open the session${reports.length === 1 ? "" : "s"} to see what happened.`;
+  if (reports.length === 1) {
+    const [report] = reports;
+    const name = `${repo}#${report.pr}`;
+    if (report.verdict === "incomplete") return `The review of ${name} did not finish.${tail}`;
+    return `The review of ${name} finished: ${verdictClause(report, "it")}.${tail}`;
+  }
+  const head = reports.length === 2 ? "Both" : `All ${spell(reports.length)}`;
+  return `${head} reviews on ${repo} finished: ${reports.map((report) => verdictClause(report)).join("; ")}.${tail}`;
+}
+
 function counts(findings: ReviewFinding[]): string {
   const parts = (["blocking", "should_fix", "nit"] as const).flatMap((severity) => {
     const n = findings.filter((finding) => finding.severity === severity).length;
@@ -250,12 +299,14 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
 
   const touched = new Set<string>();
   const verdicts: string[] = [];
+  const reported: ReviewReport[] = [];
   for (const session of watch.sessions) {
     const state = progress.get(session.sessionId)!;
     const report = reports.get(session.pr) ?? {
       pr: session.pr, verdict: "incomplete" as const, findings: [],
       summary: state.state === "finished" ? "The summary did not cover this review; open the session to read it." : `The review did not finish: ${state.note ?? state.state}.`,
     };
+    reported.push(report);
     const fields = findingsItem(report, session, watch.repo, watch.memoryIds);
     const links = {
       pull: { repo: watch.repo, number: session.pr, url: session.url }, sessionId: session.sessionId, projectId: session.projectId, intentId: intent.id,
@@ -270,7 +321,7 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
     verdicts.push(`#${session.pr} ${verdictLabel[report.verdict]}${tally ? ` (${tally})` : ""}`);
   }
   hub.emit({ type: "items", items: await hub.store.listItems() });
-  const line = `Reviews finished on ${watch.repo}: ${verdicts.join("; ")}. The findings are in Needs you.`;
+  const line = reviewProse(watch.repo, reported);
   await fire(intent.id, { title: `Reviews finished on ${watch.repo}`, body: verdicts.join("\n"), item: false }, { actor: "system", runId: run.id });
   await core.postToThread(threadId, line, run as Pick<JobRun, "id" | "kind">, [...touched]);
   return {

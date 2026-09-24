@@ -238,7 +238,7 @@ export type OrchestratorMessageMetadata = {
   tick?: { id: string; reason: TickReason };
   /** The run that produced an assistant message (chat turn, tick, helper, intent check). */
   run?: { id: string; kind: JobRun["kind"] };
-  /** Items created or updated by this message, shown as cards beneath it. */
+  /** Items created or updated by this message. The thread does not show them (they live in Needs you); the audit trail does. */
   itemIds?: string[];
 };
 

@@ -13,7 +13,6 @@ import {
   Wrench,
 } from "lucide-react";
 import { getToolName, isToolUIPart, type UIMessagePart, type UIDataTypes, type UITools } from "ai";
-import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import PortalMarkdown from "./PortalMarkdown";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
@@ -22,7 +21,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Message, MessageContent } from "@/components/ui/message";
-import type { Item, OrchestratorMessage } from "@/lib/orchestrator/types";
+import type { OrchestratorMessage } from "@/lib/orchestrator/types";
 
 type Part = UIMessagePart<UIDataTypes, UITools>;
 
@@ -149,22 +148,20 @@ function userText(message: OrchestratorMessage) {
 
 /**
  * One message of the thread: the user's bubble, or the orchestrator's reply with its text through
- * Markdown, reasoning folded away, tool calls as compact rows, and cards for the items it touched.
- * Every touched item still known to the page gets a card, settled ones dimmed, so the thread reads
- * as a record of what happened. Tick messages carry a "Scheduled check · 10:42" label instead of
- * the Portal label.
+ * Markdown, reasoning folded away, and tool calls as compact rows. The thread is prose: the items
+ * a message touched are not drawn under it (the Needs-you strip is where they are read and acted
+ * on). Tick messages carry a "Scheduled check · 10:42" label instead of the Portal label.
  */
 const PortalMessage = memo(function PortalMessage({
   message,
-  items,
   streaming,
-  handlers,
+  onOpenCurationRun,
 }: {
   message: OrchestratorMessage;
-  items: ReadonlyMap<string, Item>;
   /** True while this message is still arriving. */
   streaming: boolean;
-  handlers: ItemCardHandlers;
+  /** Set when the page can show a curation run's digest and diff (a consolidator's note links to it). */
+  onOpenCurationRun?: (runId: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -182,10 +179,7 @@ const PortalMessage = memo(function PortalMessage({
   const tick = message.metadata?.tick;
   const at = message.metadata?.at;
   const run = message.metadata?.run;
-  const curationRun = run?.kind === "consolidate" && handlers.onOpenCurationRun ? run.id : null;
-  const cards = (message.metadata?.itemIds ?? [])
-    .map((id) => items.get(id))
-    .filter((item): item is Item => !!item);
+  const curationRun = run?.kind === "consolidate" && onOpenCurationRun ? run.id : null;
   return (
     <Message>
       <MessageContent className="gap-3">
@@ -212,19 +206,12 @@ const PortalMessage = memo(function PortalMessage({
         {curationRun && (
           <button
             type="button"
-            onClick={() => handlers.onOpenCurationRun?.(curationRun)}
+            onClick={() => onOpenCurationRun?.(curationRun)}
             className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
           >
             <History className="size-3.5" />
             Open the digest and changes
           </button>
-        )}
-        {cards.length > 0 && (
-          <div className="mt-1 space-y-2.5">
-            {cards.map((item) => (
-              <PortalItemCard key={item.id} item={item} {...handlers} />
-            ))}
-          </div>
         )}
       </MessageContent>
     </Message>
