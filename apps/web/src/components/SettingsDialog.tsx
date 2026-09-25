@@ -94,7 +94,7 @@ const sectionMeta: Record<
   orchestrator: {
     label: "Talk to Portal",
     description:
-      "The assistant that keeps an eye on your sessions and pull requests. Choose the models it runs on, how often it checks in, and the API keys it uses. Keys never leave this machine.",
+      "The assistant that keeps an eye on your sessions and pull requests. Choose the models it runs on and the API keys it uses. Keys never leave this machine.",
     icon: Bot,
   },
   scripts: {
@@ -125,21 +125,15 @@ const providerLabels: Record<OrchestratorProvider, string> = {
 type OrchestratorTextField =
   | "model"
   | "bookkeepingModel"
-  | "intervalMinutes"
-  | "idleIntervalMinutes"
   | ConsolidationField;
 const orchestratorTextFields: readonly OrchestratorTextField[] = [
   "model",
   "bookkeepingModel",
-  "intervalMinutes",
-  "idleIntervalMinutes",
   ...consolidationFields,
 ];
 const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
   model: "Chat model",
   bookkeepingModel: "Bookkeeping model",
-  intervalMinutes: "Check every … minutes while Portal is open",
-  idleIntervalMinutes: "Check every … minutes while no browser is connected",
   nightlyAt: "Curate every night at",
   inboxThreshold: "Also curate when the inbox holds … proposals",
   minIntervalMinutes: "At most one inbox-started run every … minutes",
@@ -403,7 +397,7 @@ export default function SettingsDialog({
         return;
       }
       patch = { consolidation: { [field]: parsed.value } };
-    } else if (field === "model" || field === "bookkeepingModel") {
+    } else {
       if (!trimmed) {
         setStatusFor(field, { kind: "error", message: "Enter a model id." });
         return;
@@ -425,21 +419,6 @@ export default function SettingsDialog({
       }
       patch =
         field === "model" ? { model: trimmed } : { bookkeeping: { model: trimmed } };
-    } else {
-      const max = orchestratorLimits[field];
-      const minutes = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
-      if (!(minutes >= 1 && minutes <= max)) {
-        setStatusFor(field, {
-          kind: "error",
-          message: `Enter a whole number of minutes between 1 and ${max}.`,
-        });
-        return;
-      }
-      if (minutes === settings.orchestrator[field]) {
-        clearOrchestratorDraft(field);
-        return;
-      }
-      patch = { [field]: minutes };
     }
     const ok = await run(
       field,
@@ -708,32 +687,6 @@ export default function SettingsDialog({
                   </div>
                 );
               })}
-              {(["intervalMinutes", "idleIntervalMinutes"] as const).map(
-                (field) => (
-                  <OrchestratorTextInput
-                    key={field}
-                    field={field}
-                    value={
-                      orchestratorDrafts[field] ??
-                      String(settings.orchestrator[field])
-                    }
-                    dirty={orchestratorDrafts[field] !== undefined}
-                    saving={!!saving[field]}
-                    status={status[field] ?? null}
-                    onChange={(value) =>
-                      setOrchestratorDrafts((prev) => ({
-                        ...prev,
-                        [field]: value,
-                      }))
-                    }
-                    onBlur={() => {
-                      const draft = orchestratorDrafts[field];
-                      if (draft !== undefined)
-                        void saveOrchestratorField(field, draft);
-                    }}
-                  />
-                ),
-              )}
               <div className="space-y-3 rounded-xl border border-border/60 p-4">
                 <div className="space-y-1">
                   <p className="text-xs font-medium">Memory curation</p>
@@ -1344,11 +1297,7 @@ function OrchestratorTextInput({
 }) {
   const id = useId();
   const statusId = `${id}-status`;
-  const numeric =
-    field === "intervalMinutes" ||
-    field === "idleIntervalMinutes" ||
-    field === "inboxThreshold" ||
-    field === "minIntervalMinutes";
+  const numeric = field === "inboxThreshold" || field === "minIntervalMinutes";
   const time = field === "nightlyAt";
   return (
     <div className="space-y-2">
@@ -1362,7 +1311,7 @@ function OrchestratorTextInput({
         type={numeric ? "number" : time ? "time" : "text"}
         inputMode={numeric ? "numeric" : undefined}
         min={numeric ? 1 : undefined}
-        max={numeric ? orchestratorLimits[field as "intervalMinutes"] : undefined}
+        max={numeric ? orchestratorLimits[field as "inboxThreshold"] : undefined}
         step={numeric ? 1 : undefined}
         maxLength={numeric || time ? undefined : orchestratorLimits.modelLength}
         autoComplete="off"
@@ -1375,11 +1324,9 @@ function OrchestratorTextInput({
         onBlur={onBlur}
         placeholder={
           placeholder ??
-          (field === "intervalMinutes" || field === "idleIntervalMinutes"
-            ? String(defaultSettings.orchestrator[field])
-            : field === "minIntervalMinutes"
-              ? String(defaultSettings.orchestrator.consolidation[field])
-              : undefined)
+          (field === "minIntervalMinutes"
+            ? String(defaultSettings.orchestrator.consolidation[field])
+            : undefined)
         }
         className="text-xs md:text-xs"
       />

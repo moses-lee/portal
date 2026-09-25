@@ -43,7 +43,6 @@ export function portalSecretFile(file: string, home = path.dirname(defaultSettin
 /** The longest prompt accepted, after trimming. */
 export const MAX_PROMPT_LENGTH = 4000;
 const { modelLength: MAX_MODEL_LENGTH, apiKeyLength: MAX_API_KEY_LENGTH } = orchestratorLimits;
-const { intervalMinutes: MAX_INTERVAL_MINUTES, idleIntervalMinutes: MAX_IDLE_INTERVAL_MINUTES } = orchestratorLimits;
 const { inboxThreshold: MAX_INBOX_THRESHOLD, minIntervalMinutes: MAX_CONSOLIDATION_INTERVAL } = orchestratorLimits;
 
 /**
@@ -58,8 +57,6 @@ export type SettingsFile = {
     provider?: OrchestratorProvider;
     model?: string;
     bookkeeping?: { provider?: OrchestratorProvider; model?: string };
-    intervalMinutes?: number;
-    idleIntervalMinutes?: number;
     consolidation?: Partial<ConsolidationSettings>;
     reviews?: { answerReadOnly?: boolean };
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
@@ -93,13 +90,6 @@ function checkModel(value: unknown): Checked<string> {
     return { error: `The model is too long (${trimmed.length} characters; the limit is ${MAX_MODEL_LENGTH}).` };
   }
   return { value: trimmed };
-}
-
-function checkInterval(field: "intervalMinutes" | "idleIntervalMinutes", value: unknown, max: number): Checked<number> {
-  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > max) {
-    return { error: `${field} must be a whole number of minutes between 1 and ${max}.` };
-  }
-  return { value: value as number };
 }
 
 /** One consolidation field: the nightly time as "HH:MM" or null, the inbox threshold as a count or null, the interval in minutes. */
@@ -211,12 +201,6 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
     if (given.bookkeeping.model !== undefined) bookkeeping.model = required(checkModel(given.bookkeeping.model));
     patch.bookkeeping = bookkeeping;
   }
-  if (given.intervalMinutes !== undefined) {
-    patch.intervalMinutes = required(checkInterval("intervalMinutes", given.intervalMinutes, MAX_INTERVAL_MINUTES));
-  }
-  if (given.idleIntervalMinutes !== undefined) {
-    patch.idleIntervalMinutes = required(checkInterval("idleIntervalMinutes", given.idleIntervalMinutes, MAX_IDLE_INTERVAL_MINUTES));
-  }
   if (given.consolidation !== undefined) {
     if (!isPlainObject(given.consolidation)) throw new SettingsError("orchestrator.consolidation must be an object.", 400);
     const consolidation: Partial<ConsolidationSettings> = {};
@@ -302,10 +286,6 @@ function parseOrchestratorFile(given: unknown): SettingsFile["orchestrator"] {
     if ("value" in roleModel) bookkeeping.model = roleModel.value;
     if (Object.keys(bookkeeping).length > 0) section.bookkeeping = bookkeeping;
   }
-  const interval = checkInterval("intervalMinutes", given.intervalMinutes, MAX_INTERVAL_MINUTES);
-  if ("value" in interval) section.intervalMinutes = interval.value;
-  const idle = checkInterval("idleIntervalMinutes", given.idleIntervalMinutes, MAX_IDLE_INTERVAL_MINUTES);
-  if ("value" in idle) section.idleIntervalMinutes = idle.value;
   if (isPlainObject(given.consolidation)) {
     const consolidation: Partial<ConsolidationSettings> = {};
     for (const field of consolidationFields) {

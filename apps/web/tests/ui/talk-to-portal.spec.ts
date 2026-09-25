@@ -32,16 +32,15 @@ test("Portal is the home: the sidebar's Chat entry opens / and is marked current
   // The status line: the server's words, then the next job counted down in the browser (the
   // fixture times it seven minutes out at setup; a slow run may have shaved one off).
   const line = page.getByTestId("portal-status-line");
-  await expect(line).toContainText("Idle · next: Check for changes");
+  await expect(line).toContainText("Idle · next: Curate memory");
   await expect(line).toContainText(/· in [67] min/);
   // The GitHub inspector belongs to sessions; Portal has none.
   await expect(page.getByRole("button", { name: "Open GitHub inspector" })).toHaveCount(0);
-  // The other views drop the status line and Run now and take their own title.
+  // The other views drop the status line and take their own title.
   await nav.getByRole("button", { name: "Goals", exact: true }).click();
   await expect(page).toHaveURL(/\/goals$/);
   await expect(page.getByRole("heading", { name: "Goals", level: 1 })).toBeVisible();
   await expect(line).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Run now" })).toHaveCount(0);
   // The brand is a home link.
   await sidebar.getByRole("button", { name: "Portal home" }).click();
   await expect(page).toHaveURL(/\/$/);
@@ -64,7 +63,6 @@ test("without an API key the page asks for one and Add API key opens settings", 
     page.getByText("Talk to Portal needs an API key for OpenAI."),
   ).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message Portal" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Run now" })).toBeDisabled();
   await page.evaluate(() => {
     window.__openSettingsRequests = [];
     window.addEventListener("portal:open-settings", (event) =>
@@ -205,13 +203,13 @@ test("background work never blocks the composer; only this thread's own turn doe
     portal: {
       status: {
         busy: true,
-        line: "Checking for changes…",
-        runs: [{ id: "r1", kind: "tick", jobId: "tick", threadId: null, startedAt: Date.now() - 5000, summary: "Checking for changes" }],
+        line: "Checking example/portal#42…",
+        runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", threadId: null, startedAt: Date.now() - 5000, summary: "Checking example/portal#42" }],
       },
     },
   });
   await page.goto("/");
-  await expect(page.getByTestId("portal-status-line")).toContainText("Checking for changes…");
+  await expect(page.getByTestId("portal-status-line")).toContainText("Checking example/portal#42…");
   const input = page.getByRole("textbox", { name: "Message Portal" });
   // A job is running, and the user can still talk.
   await input.fill("Anything new?");
@@ -241,7 +239,7 @@ test("background work never blocks the composer; only this thread's own turn doe
   await expect(input).toHaveValue("Set up a fix for example/portal#42");
 });
 
-test("a messages stream event refetches the thread and shows what a tick appended", async ({
+test("a messages stream event refetches the thread and shows what was appended", async ({
   page,
 }) => {
   const fixture = await setupPortal(page);
@@ -265,20 +263,11 @@ test("a messages stream event refetches the thread and shows what a tick appende
   expect(loads()).toBe(before + 1);
 });
 
-test("Open session navigates to the session and Run now posts a tick", async ({
+test("Open session navigates to the session", async ({
   page,
 }) => {
-  const fixture = await setupPortal(page);
+  await setupPortal(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Run now" }).click();
-  await expect(page.getByRole("status").filter({ hasText: /^Checked at/ })).toContainText(
-    "2 changes, 1 new",
-  );
-  expect(
-    fixture.requests.filter(
-      (request) => request.path === "/api/portal/tick" && request.method === "POST",
-    ),
-  ).toHaveLength(1);
   await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: portalItem.title }).click();
   await page
     .getByRole("article", { name: portalItem.title })
@@ -300,7 +289,7 @@ test("the aurora sits behind every Portal view and follows the user's turn and p
   // A background job never colours it; a turn answering the user (in any thread) does.
   await emitPortal(page, {
     type: "status",
-    status: { ...portalStatus, busy: true, runs: [{ id: "r1", kind: "tick", jobId: "tick", threadId: null, startedAt: Date.now(), summary: "Checking" }] },
+    status: { ...portalStatus, busy: true, runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", threadId: null, startedAt: Date.now(), summary: "Checking" }] },
   });
   await expect(aurora).toHaveAttribute("data-activity", "idle");
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["t-review"] } });

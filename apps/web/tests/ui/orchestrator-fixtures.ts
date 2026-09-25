@@ -107,26 +107,27 @@ export const intent: Intent = {
   updatedAt: now - 4 * min,
 };
 
-export const tickJob: Job = {
-  id: "tick",
-  kind: "tick",
-  title: "Check for changes",
+/** A helper the agent scheduled that follows presence: every 10 minutes, hourly while nobody is looking. */
+export const helperJob: Job = {
+  id: "j-reviews",
+  kind: "helper",
+  title: "Summarize new review comments",
   schedule: { type: "every", everyMs: 10 * min, idleEveryMs: 60 * min },
   payload: {},
   status: "active",
   nextRunAt: now + 7 * min,
   lastRunAt: now - 3 * min,
-  lastRunId: "run-t1",
+  lastRunId: "run-h1",
   intentId: null,
   threadId: null,
-  createdBy: "system",
+  createdBy: "agent",
   failures: 0,
   createdAt: now - 30 * 24 * 60 * min,
   updatedAt: now - 3 * min,
 };
 
 export const intentJob: Job = {
-  ...tickJob,
+  ...helperJob,
   id: "j-pr42",
   kind: "intent_check",
   title: "Check example/portal#42 until merged",
@@ -139,7 +140,7 @@ export const intentJob: Job = {
 };
 
 export const nightlyJob: Job = {
-  ...tickJob,
+  ...helperJob,
   id: "j-nightly",
   kind: "consolidate",
   title: "Curate memory",
@@ -150,10 +151,10 @@ export const nightlyJob: Job = {
   createdBy: "agent",
 };
 
-export const tickRun: JobRun = {
-  id: "run-t1",
-  jobId: "tick",
-  kind: "tick",
+export const helperRun: JobRun = {
+  id: "run-h1",
+  jobId: "j-reviews",
+  kind: "helper",
   threadId: null,
   parentRunId: null,
   status: "succeeded",
@@ -164,12 +165,12 @@ export const tickRun: JobRun = {
   usage: { inputTokens: 1200, outputTokens: 80 },
   log: ["Considered PR #42: still failing."],
   result: null,
-  summary: "One change: checks failing on #42.",
+  summary: "One new comment on #42.",
   error: null,
 };
 
 export const failedRun: JobRun = {
-  ...tickRun,
+  ...helperRun,
   id: "run-h0",
   jobId: "j-pr42",
   kind: "intent_check",
@@ -338,13 +339,14 @@ export const memoryRevisions: MemoryRevision[] = [
 
 /** The seeded curation job, nightly at 03:00. */
 export const consolidateJob: Job = {
-  ...tickJob,
+  ...helperJob,
   id: "consolidate",
   kind: "consolidate",
   title: "Curate memory",
   schedule: { type: "cron", expr: "0 3 * * *", tz: "Europe/Berlin" },
   nextRunAt: now + 5 * 60 * min,
   lastRunId: "run-c1",
+  createdBy: "system",
 };
 
 const curationResult: ConsolidationResult = {
@@ -371,7 +373,7 @@ const curationResult: ConsolidationResult = {
 };
 
 export const curationRun: JobRun = {
-  ...tickRun,
+  ...helperRun,
   id: "run-c1",
   jobId: "consolidate",
   kind: "consolidate",

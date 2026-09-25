@@ -1,7 +1,7 @@
 /**
  * Which pull requests across all of GitHub concern the user: PRs they authored and PRs where their
- * review is requested, whether or not the repository is a Portal project. Read by the orchestrator's
- * tick through one `gh api graphql` call, so a tick costs one request however many PRs there are.
+ * review is requested, whether or not the repository is a Portal project. Read by every full world
+ * refresh through one `gh api graphql` call, so a refresh costs one request however many PRs there are.
  */
 import { execFile } from "node:child_process";
 import { mkdir, rm, stat } from "node:fs/promises";
@@ -65,9 +65,9 @@ export const AUTHORED_SEARCH = "is:pr is:open author:@me sort:updated-desc";
 export const REVIEW_REQUESTED_SEARCH = "is:pr is:open review-requested:@me sort:updated-desc";
 
 const PULL_FRAGMENT = `... on PullRequest {
-      number title url isDraft state mergeable reviewDecision baseRefName headRefName updatedAt
+      number title url isDraft state mergeable reviewDecision baseRefName headRefName updatedAt createdAt
       author { login } repository { nameWithOwner }
-      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
     }`;
 
 /** One page of a search: the count of everything that matches, the cursor to continue from, and the nodes. */
@@ -93,10 +93,21 @@ export function pullKey(pull: Pick<PullAttention, "repo" | "number">): string {
   return `${pull.repo}#${pull.number}`;
 }
 
-function toChecks(commits: unknown): PullAttention["checks"] {
+/** The head commit of a PR node's `commits(last: 1)`. */
+function headCommit(commits: unknown): Record<string, unknown> | null {
   const nodes = asRecord(commits)?.nodes;
   const head = Array.isArray(nodes) ? asRecord(nodes[0]) : null;
-  const rollup = asRecord(asRecord(head?.commit)?.statusCheckRollup);
+  return asRecord(head?.commit);
+}
+
+/** Epoch ms of an ISO time, or null. */
+function epoch(value: unknown): number | null {
+  const at = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(at) ? at : null;
+}
+
+function toChecks(commits: unknown): PullAttention["checks"] {
+  const rollup = asRecord(headCommit(commits)?.statusCheckRollup);
   const state = String(rollup?.state ?? "").toUpperCase();
   return state === "SUCCESS" ? "passing"
     : state === "FAILURE" || state === "ERROR" ? "failing"
@@ -127,6 +138,9 @@ function toAttention(raw: unknown, role: Role): PullAttention | null {
       : review === "REVIEW_REQUIRED" ? "review_required" : null,
     mergeable: mergeable === "MERGEABLE" ? "mergeable" : mergeable === "CONFLICTING" ? "conflicting" : "unknown",
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+    createdAt: epoch(p.createdAt),
+    // GitHub no longer reports push times; the head commit's date is the cheap stand-in.
+    pushedAt: epoch(headCommit(p.commits)?.committedDate),
     localProjectId: null,
     worktreeProjectId: null,
   };
@@ -262,7 +276,7 @@ async function collectPages(first: unknown, search: string, gh: GhRunner, cwd: s
  * rate limited) the list is empty and `error` says why; a transient failure is retried once first.
  * Each search is paged up to MAX_SEARCH_PAGES; `truncated` and `total` say when that was not enough
  * (a long-standing account can have hundreds of review requests), and `updatedSince` narrows the
- * searches so a tick that only wants recent changes never hits the cap. `localProjectId` /
+ * searches so a refresh that only wants recent changes never hits the cap. `localProjectId` /
  * `worktreeProjectId` are null here; `attachLocalProjects` fills them in.
  */
 export async function searchAttentionPulls({

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  DIRTY_IDLE_MS, REVIEW_LIST_ROWS, STALE_PULL_MS, buildDigest, collectSnapshot, diffSnapshots, resetDigestCaches,
+  DIRTY_IDLE_MS, REVIEW_LIST_ROWS, STALE_PULL_MS, collectSnapshot, diffSnapshots, resetDigestCaches,
   reviewDetail, snapshotActivity,
 } from "../src/orchestrator/digest.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
@@ -35,10 +35,10 @@ const only = (changes, kind) => changes.filter((change) => change.kind === kind)
 const fingerprints = (changes) => changes.map((change) => change.fingerprint);
 
 // ---------------------------------------------------------------------------------------------
-// First tick
+// First snapshot
 // ---------------------------------------------------------------------------------------------
 
-test("the first tick reports current conditions only, never transitions", () => {
+test("the first snapshot reports current conditions only, never transitions", () => {
   const next = snap({
     sessions: {
       idle: session(),
@@ -230,7 +230,7 @@ test("a pull that left the set as merged or closed is reported and resolves ever
 
   const closed = diffSnapshots(prev, snap({ at: T0 + 1, pulls: keyed(pull({ state: "closed" })) }), []);
   assert.deepEqual(kinds(closed), ["pr_closed"]);
-  // Reported once: the tick after, the pull is still non-open and nothing new is said.
+  // Reported once: the refresh after, the pull is still non-open and nothing new is said.
   const after = snap({ at: T0 + 2, pulls: keyed(pull({ state: "merged" })) });
   assert.deepEqual(diffSnapshots(snap({ at: T0 + 1, pulls: keyed(pull({ state: "merged" })) }), after, []), []);
 });
@@ -529,42 +529,16 @@ test("snapshotActivity treats a quietly offline session as idle and a lost agent
   assert.equal(snapshotActivity({ ...base, link: { status: "connecting" } }), "connecting");
 });
 
-test("buildDigest wakes expired snoozes and diffs against snoozed items too", async () => {
+test("the diff sees snoozed items too: a snoozed item whose condition cleared is named for resolving", async () => {
   const store = createMemoryOrchestratorStore();
   const base = { kind: "custom", title: "t", body: "", links: {}, actions: [] };
-  const open = await store.createItem({ ...base, fingerprint: "custom:open" });
-  const expired = await store.createItem({ ...base, fingerprint: "custom:expired", status: "snoozed", snoozedUntil: T0 - 1 });
-  const sleeping = await store.createItem({ ...base, fingerprint: "custom:sleeping", status: "snoozed", snoozedUntil: T0 + 60_000 });
   const snoozedWaiting = await store.createItem({ ...base, kind: "session_waiting", fingerprint: "session_waiting:s2", status: "snoozed", snoozedUntil: T0 + 60_000 });
-  await store.createItem({ ...base, fingerprint: "custom:done", status: "resolved" });
-
   const prev = snap({ sessions: { s1: session(), s2: session({ activity: "waiting" }) } });
   const snapshot = snap({ at: T0, sessions: { s1: session({ activity: "waiting" }), s2: session() } });
-  const digest = await buildDigest({ store, snapshot, prevSnapshot: prev, now: T0 });
-
-  assert.equal(digest.at, T0);
-  assert.equal(digest.since, prev.at);
-  assert.deepEqual(digest.openItems.map((entry) => entry.id).sort(), [expired.id, open.id].sort());
-  assert.deepEqual(digest.openItems[0], { id: digest.openItems[0].id, kind: "custom", title: "t", fingerprint: digest.openItems[0].fingerprint });
-  assert.equal((await store.getItem(expired.id)).status, "open");
-  assert.equal((await store.getItem(sleeping.id)).status, "snoozed");
-  assert.equal("dueWatches" in digest, false, "watches became intents, checked by their own jobs");
-  assert.deepEqual(fingerprints(digest.changes), ["session_waiting:s1", "session_waiting:s2"]);
-  assert.equal(digest.changes[1].resolvesItemId, snoozedWaiting.id, "a snoozed item whose condition cleared is resolved");
-  assert.equal("memory" in digest, false, "curated memory reaches the prompt through CORE.md, not the digest");
-
-  const first = await buildDigest({ store, snapshot, prevSnapshot: null, now: T0 });
-  assert.equal(first.since, null);
+  const changes = diffSnapshots(prev, snapshot, await store.listItems());
+  assert.deepEqual(fingerprints(changes), ["session_waiting:s1", "session_waiting:s2"]);
+  assert.equal(changes[1].resolvesItemId, snoozedWaiting.id);
 });
-
-test("buildDigest with wakeSnoozed false lists an expired snooze as open without touching the store", async () => {
-  const store = createMemoryOrchestratorStore();
-  const expired = await store.createItem({ kind: "custom", title: "t", body: "", links: {}, actions: [], fingerprint: "custom:x", status: "snoozed", snoozedUntil: T0 - 1 });
-  const digest = await buildDigest({ store, snapshot: snap(), prevSnapshot: null, now: T0, wakeSnoozed: false });
-  assert.deepEqual(digest.openItems.map((entry) => entry.id), [expired.id]);
-  assert.equal((await store.getItem(expired.id)).status, "snoozed");
-});
-
 
 test("a dismissed item keeps its condition quiet until it clears, then is released", async () => {
   const store = createMemoryOrchestratorStore();
@@ -573,13 +547,13 @@ test("a dismissed item keeps its condition quiet until it clears, then is releas
   const dismissed = await store.createItem({ ...base, kind: "pr_review_requested", fingerprint: "pr_review_requested:acme/app", status: "dismissed" });
   const one = { "acme/app#1": review(1) };
   const two = { ...one, "acme/app#2": review(2) };
-  const growing = await buildDigest({ store, snapshot: snap({ at: T0, pulls: two }), prevSnapshot: snap({ at: T0 - 1, pulls: one }), now: T0 });
-  assert.deepEqual(growing.changes, []);
+  const growing = { released: [], suppressed: [] };
+  assert.deepEqual(diffSnapshots(snap({ at: T0 - 1, pulls: one }), snap({ at: T0, pulls: two }), await store.listItems(), growing), []);
   assert.deepEqual(growing.suppressed, ["pr_review_requested:acme/app"]);
   assert.deepEqual(growing.released, []);
   // Every review done: the condition cleared, so the dismissal has done its job.
-  const cleared = await buildDigest({ store, snapshot: snap({ at: T0, pulls: {} }), prevSnapshot: snap({ at: T0 - 1, pulls: two }), now: T0 });
-  assert.deepEqual(cleared.changes, []);
+  const cleared = { released: [], suppressed: [] };
+  assert.deepEqual(diffSnapshots(snap({ at: T0 - 1, pulls: two }), snap({ at: T0, pulls: {} }), await store.listItems(), cleared), []);
   assert.deepEqual(cleared.released, [dismissed.id]);
   // A dismissed item whose subject is gone from both snapshots is released too.
   const gone = await store.createItem({ ...base, kind: "worktree_dirty", fingerprint: "worktree_dirty:w9", status: "dismissed" });
@@ -590,7 +564,7 @@ test("a dismissed item keeps its condition quiet until it clears, then is releas
   assert.deepEqual(outcome.released, [gone.id]);
 });
 
-test("a session too short for any tick to see it working still counts as finished", () => {
+test("a session too short for any refresh to see it working still counts as finished", () => {
   const prev = snap({ at: T0 - 600_000, sessions: {} });
   const quick = session({ lastActiveAt: T0 - 300_000, title: "Review acme/app#7" });
   assert.deepEqual(fingerprints(diffSnapshots(prev, snap({ sessions: { s9: quick } }), [])), ["session_finished:s9"]);
@@ -598,5 +572,5 @@ test("a session too short for any tick to see it working still counts as finishe
   assert.deepEqual(diffSnapshots(prev, snap({ sessions: { s9: { ...quick, title: null } } }), []), []);
   assert.deepEqual(diffSnapshots(prev, snap({ sessions: { s9: { ...quick, link: "connecting" } } }), []), []);
   assert.deepEqual(diffSnapshots(prev, snap({ sessions: { s9: { ...quick, lastActiveAt: prev.at - 1 } } }), []), []);
-  assert.deepEqual(diffSnapshots(null, snap({ sessions: { s9: quick } }), []), [], "the first tick reports conditions, not transitions");
+  assert.deepEqual(diffSnapshots(null, snap({ sessions: { s9: quick } }), []), [], "the first snapshot reports conditions, not transitions");
 });

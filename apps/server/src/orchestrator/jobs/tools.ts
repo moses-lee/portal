@@ -1,8 +1,10 @@
 /**
  * The job tools. A chat turn (or a helper that names them) gets the scheduling set: jobs, runs,
  * intents, helpers, and the schedule. An intent check gets only what acts on its own intent
- * (fire_intent, close_intent, update_intent). The tick and other background turns get none: their
- * tool schemas would be paid for on every step.
+ * (fire_intent, close_intent, update_intent). Other background turns get none: their tool schemas
+ * would be paid for on every step. The world refresh job (`TICK_JOB_ID`) is Portal's plumbing and
+ * never shows here: no tool lists it or its runs, and update_job and cancel_job answer that it is
+ * unknown (the jobs core refuses it).
  */
 import { z } from "zod";
 import type { Intent, Job, JobRun, JobSchedule } from "@portal/contracts/jobs";
@@ -10,7 +12,7 @@ import type { DomainToolContext, ToolSet } from "../hub.ts";
 import { httpError } from "../ops.ts";
 import { capped, define } from "../tools/context.ts";
 import { pullRefSchema } from "../tools/items.ts";
-import { TICK_JOB_ID, type JobsCore } from "./core.ts";
+import { type JobsCore, isRefreshJob } from "./core.ts";
 import type { createHelpers } from "./helpers.ts";
 import { resolvePull } from "../world/resolve.ts";
 import { DEFAULT_CHECK_MS, type IntentsPart } from "./intents.ts";
@@ -296,7 +298,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     update_job: define(
-      `Reschedule, rename, pause, or resume a job, including the tick ("${TICK_JOB_ID}") whose cadence is yours to choose.`,
+      "Reschedule, rename, pause, or resume a job.",
       z.object({
         id: z.string().min(1),
         schedule: scheduleSchema.optional(),
@@ -319,16 +321,17 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
     ),
     list_jobs: define(
       "Jobs by status (default active), soonest first.",
-      z.object({ status: z.enum(["active", "paused", "done", "cancelled", "failed"]).optional(), kind: z.enum(["tick", "intent_check", "helper", "consolidate"]).optional() }),
+      z.object({ status: z.enum(["active", "paused", "done", "cancelled", "failed"]).optional(), kind: z.enum(["intent_check", "helper", "consolidate"]).optional() }),
       async ({ status = "active", kind }) => {
-        const { rows, truncated } = capped(await store.listJobs({ status: [status], ...(kind ? { kind: [kind] } : {}) }));
+        const listed = await store.listJobs({ status: [status], ...(kind ? { kind: [kind] } : {}) });
+        const { rows, truncated } = capped(listed.filter((job) => !isRefreshJob(job)));
         return { jobs: rows.map(jobRow), truncated };
       },
     ),
     list_runs: define(
-      "Recent runs (chat turns, ticks, checks, helpers), newest first: status, summary, errors.",
-      z.object({ jobId: z.string().optional(), kind: z.enum(["chat", "tick", "intent_check", "helper", "consolidate"]).optional(), limit: z.number().int().min(1).max(50).optional() }),
-      async ({ jobId, kind, limit = 10 }) => ({ runs: (await store.listRuns({ jobId, kind, limit })).map(runRow) }),
+      "Recent runs (chat turns, checks, helpers, curation), newest first: status, summary, errors.",
+      z.object({ jobId: z.string().optional(), kind: z.enum(["chat", "intent_check", "helper", "consolidate"]).optional(), limit: z.number().int().min(1).max(50).optional() }),
+      async ({ jobId, kind, limit = 10 }) => ({ runs: (await store.listRuns({ jobId, kind, notKinds: ["tick"], limit })).map(runRow) }),
     ),
     run_helper: define(
       "Start a bounded helper turn for a side task (research, summarizing). wait: true (chat only) runs it now and returns its answer; otherwise it runs in the background and posts its answer to this thread.",
@@ -350,15 +353,14 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     get_schedule: define(
-      "Your schedule: the tick's cadence and next run, whether anyone has Portal open, and the next jobs due.",
+      "Your schedule: whether anyone has Portal open, what is running, and the next jobs due.",
       z.object({}),
       async () => {
-        const [tick, upcoming, model] = await Promise.all([store.getJob(TICK_JOB_ID), store.listJobs({ status: ["active"] }), hub.model("bookkeeping")]);
+        const [upcoming, model] = await Promise.all([store.listJobs({ status: ["active"] }), hub.model("bookkeeping")]);
         return {
           ready: !!model, presence: hub.presence.count(),
-          tick: tick ? { ...jobRow(tick), followsSettings: tick.payload.followsSettings !== false } : null,
-          running: runs.running().map(runRow),
-          upcoming: upcoming.slice(0, 10).map(jobRow),
+          running: runs.running().filter((run) => run.kind !== "tick").map(runRow),
+          upcoming: upcoming.filter((job) => !isRefreshJob(job)).slice(0, 10).map(jobRow),
         };
       },
     ),

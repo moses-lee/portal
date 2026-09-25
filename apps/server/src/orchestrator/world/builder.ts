@@ -2,7 +2,7 @@
  * The world builder: one `WorldState` from everything Portal can see (projects and the repos behind
  * them, worktrees, sessions, terminals, the attention pulls, and the orchestrator's own intents,
  * jobs, and open items). A "full" build also asks GitHub and reads worktree state, and carries the
- * digest's `TickSnapshot` (collected by `collectSnapshot`, so one build serves the tick too); a
+ * `TickSnapshot` the diff compares (collected by `collectSnapshot`, so one build serves both); a
  * "local" build refreshes only what the machine answers at once and reuses the rest of the
  * previous build, so a chat turn never waits on the network. A source that fails keeps its
  * previous slice and adds a line to `errors`. Never throws.
@@ -160,7 +160,7 @@ export async function buildWorld({ hub, previous, mode, cache = createWorldCache
   let snapshot = previous?.snapshot ?? emptySnapshot(now);
   if (full) {
     try {
-      // The tick's stored snapshot is the reference: a PR that left the attention list since then is
+      // The stored snapshot (the last full build's) is the reference: a PR that left the attention list since then is
       // carried once more with its final state, whatever builds ran in between.
       const stored = await hub.store.readSnapshot().catch(() => null);
       snapshot = await collectSnapshot({ deps: shared, previous: stored ?? previous?.snapshot ?? null, now, log: errors });

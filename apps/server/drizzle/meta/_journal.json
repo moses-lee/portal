@@ -50,6 +50,13 @@
       "when": 1790219280577,
       "tag": "0006_memory_sightings",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790308017646,
+      "tag": "0007_world_changes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,8 @@
 /**
- * One model turn, however it started: a chat turn in a thread, a tick, a helper sub-turn, an intent
- * check. `prepareTurn` does what every turn needs: resolve the role's model, record a run, compose
- * the system prompt (base prompt, CORE.md, the rendered world, memory retrieved for the turn's
- * scope), and build the tools (the classic set plus each domain's, redacted, gated by approvals,
+ * One model turn, however it started: a chat turn in a thread, a helper sub-turn, an intent check,
+ * a curation pass. `prepareTurn` does what every turn needs: resolve the role's model, record a
+ * run, compose the system prompt (base prompt, CORE.md, the rendered world, for a chat turn the
+ * recent changes that concern its thread, memory retrieved for the turn's scope), and build the tools (the classic set plus each domain's, redacted, gated by approvals,
  * and logged to the activity log call by call). `generateTurn` runs a prepared turn to the end
  * without streaming, for background work.
  */
@@ -12,7 +12,7 @@ import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
 import type { DomainToolContext, OrchestratorHub, ResolvedModel, RunOutcome, ToolSet, TurnInfo } from "./hub.ts";
 import { systemPrompt } from "./prompt.ts";
 import { normalizeScope } from "./store.ts";
-import { READ_ONLY_TOOLS, type ToolContext, createTools } from "./tools/index.ts";
+import { READ_ONLY_TOOLS, createTools } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
 import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
 import { threadTools } from "./tools/threads.ts";
@@ -27,7 +27,7 @@ export type TurnOptions = {
   jobId?: string | null;
   intentId?: string | null;
   parentRunId?: string | null;
-  /** The whole classic tool set (a chat turn) or the tick subset (background bookkeeping). */
+  /** The whole classic tool set (a chat turn) or the background subset (unless `toolNames` says). */
   interactive: boolean;
   /** When given, only these tools (classic and domain) are offered. */
   toolNames?: readonly string[];
@@ -39,7 +39,6 @@ export type TurnOptions = {
   query: string;
   /** Ids of items the turn's tools created or updated. */
   touched: Set<string>;
-  self: ToolContext["self"];
   /** A line for the status bar while the run is going. */
   summary?: string;
 };
@@ -167,7 +166,7 @@ function withJobGuard(hub: OrchestratorHub, turn: TurnInfo, tools: ToolSet): Too
 /** The turn's tools: classic plus domain, redacted, cut to `toolNames`, gated, checked against a cancelled job, and logged. */
 function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: readonly string[] | undefined, extra: ToolSet = {}): ToolSet {
   // An explicit list decides on its own; otherwise each tool family offers what suits the turn
-  // (a background turn gets the tick subset of the classic tools and the domains' background tools).
+  // (a background turn gets the background subset of the classic tools and the domains' background tools).
   const offered: DomainToolContext = toolNames ? { ...ctx, interactive: true } : ctx;
   const domain: ToolSet = { ...threadTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered) };
   const classic = createTools(offered) as unknown as ToolSet;
@@ -208,7 +207,7 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
     };
     const ctx: DomainToolContext = {
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: options.touched, interactive: options.interactive,
-      now: () => hub.timers.now(), self: options.self, hub, turn,
+      now: () => hub.timers.now(), hub, turn,
     };
     let tools = turnTools(hub, ctx, options.toolNames, options.extraTools);
     // A chat turn starts with the common tools and loads the rest by group; background turns name their tools.
@@ -217,8 +216,14 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
     const [login, world] = await Promise.all([hub.deps.github.login().catch(() => null), hub.world.current().catch(() => null)]);
     // Memory is kept per repo as much as per project or session, so retrieval gets the repos behind them too.
     const memory = await hub.memory.promptContext({ scope: world ? widenScope(scope, world) : scope, query: options.query, threadId: options.threadId });
+    // Only a chat turn with the user hears about changes; a failure to read them costs the section, not the turn.
+    const chat = options.kind === "chat" && options.interactive;
+    const changes = chat ? await hub.world.recentChanges({ threadId: options.threadId, scope }).catch((err: unknown) => {
+      console.error(`Could not read the recent changes (${errorMessage(err)}).`);
+      return "";
+    }) : "";
     const system = systemPrompt({
-      login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved,
+      login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved, chat, changes,
       world: world ? hub.world.render(world, { scope }) : "",
       thread: thread && thread.kind === "side" ? { title: thread.title } : null,
       toolGroups: loader ? toolGroupsGuidance(new Set(Object.keys(tools))) : "",

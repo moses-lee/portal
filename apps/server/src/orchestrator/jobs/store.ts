@@ -51,6 +51,8 @@ export type RunFilter = {
   jobId?: string;
   threadId?: string;
   kind?: RunKind;
+  /** Kinds left out (the listings never show the world refresh's runs). */
+  notKinds?: RunKind[];
   status?: RunStatus[];
   /** Runs older than this run (the next page). */
   before?: string;
@@ -92,8 +94,8 @@ export interface JobsStore {
   renewLeases(ids: string[], leaseMs: number): Promise<void>;
   /** Apply `changes` and drop the lease. */
   release(id: string, changes: JobChanges): Promise<Job>;
-  /** The active, unleased job that runs soonest. */
-  nextDue(): Promise<Job | null>;
+  /** The active, unleased job that runs soonest; `notKinds` are passed over. */
+  nextDue(filter?: { notKinds?: JobKind[] }): Promise<Job | null>;
   /** Delete done and cancelled jobs last changed before `before`; answers how many went. */
   pruneJobs(before: number): Promise<number>;
 
@@ -300,10 +302,10 @@ export function createMemoryJobsStore({ now = Date.now }: { now?: () => number }
       entry.lockedUntil = null;
       return entry.job;
     },
-    async nextDue() {
+    async nextDue(filter = {}) {
       const t = now();
       return [...jobs.values()]
-        .filter((entry) => entry.job.status === "active" && entry.job.nextRunAt !== null && free(entry, t))
+        .filter((entry) => entry.job.status === "active" && entry.job.nextRunAt !== null && free(entry, t) && !filter.notKinds?.includes(entry.job.kind))
         .map((entry) => entry.job).sort(compareJobs)[0] ?? null;
     },
     async pruneJobs(before) {
@@ -335,7 +337,7 @@ export function createMemoryJobsStore({ now = Date.now }: { now?: () => number }
       if (filter.before && !cursor) return [];
       return [...runs.values()]
         .filter((run) => (filter.jobId === undefined || run.jobId === filter.jobId) && (filter.threadId === undefined || run.threadId === filter.threadId)
-          && (filter.kind === undefined || run.kind === filter.kind) && (!filter.status || filter.status.includes(run.status))
+          && (filter.kind === undefined || run.kind === filter.kind) && !filter.notKinds?.includes(run.kind) && (!filter.status || filter.status.includes(run.status))
           && (!cursor || compareRuns(cursor, run) < 0))
         .sort(compareRuns)
         .slice(0, clampRunLimit(filter.limit));

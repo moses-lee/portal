@@ -26,7 +26,6 @@ import type {
   OrchestratorMessage,
   OrchestratorStatus,
   Thread,
-  TickReport,
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
 import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
@@ -317,22 +316,18 @@ export const failingGithubSummary: GithubSummary = {
   },
 };
 
-/** Talk to Portal's defaults: ready, idle, one check due in seven minutes (`setupPortal` re-times it per test). */
+/** Talk to Portal's defaults: ready, idle, memory curation due in seven minutes (`setupPortal` re-times it per test). */
 export const portalStatus: OrchestratorStatus = {
   ready: true,
   provider: "openai",
   model: "gpt-5-mini",
   busy: false,
-  intervalMinutes: 10,
-  idleIntervalMinutes: 60,
   presence: 1,
-  lastTick: null,
-  nextTickAt: now + 7 * 60_000,
   busyThreads: [],
   runs: [],
-  nextJob: { id: "tick", title: "Check for changes", at: now + 7 * 60_000 },
+  nextJob: { id: "consolidate", title: "Curate memory", at: now + 7 * 60_000 },
   counts: { needsYou: 1, inbox: 0, approvals: 0, intents: 0 },
-  line: "Idle · next: Check for changes",
+  line: "Idle · next: Curate memory",
 };
 
 /** A failing-checks item on PR #42 with one action of each browser-side kind. */
@@ -385,21 +380,6 @@ export const portalMessages: OrchestratorMessage[] = [
     ],
   },
 ];
-
-export const portalTickReport: TickReport = {
-  id: "t2",
-  reason: "manual",
-  startedAt: now,
-  finishedAt: now + 1500,
-  modelInvoked: true,
-  changes: 2,
-  itemsCreated: ["i2"],
-  itemsUpdated: [],
-  itemsResolved: [],
-  log: ["Considered PR #42: still failing."],
-  error: null,
-  usage: { inputTokens: 1200, outputTokens: 80 },
-};
 
 declare global {
   interface Window {
@@ -490,8 +470,8 @@ export async function setupPortal(
   );
   const currentRemoved = structuredClone(options.removed ?? []);
   const live = {
-    // Timed from now, not from module load, so "next check in 7 min" holds however long the run has been going.
-    status: { ...portalStatus, nextTickAt: Date.now() + 7 * 60_000, ...options.portal?.status },
+    // Timed from now, not from module load, so "next in 7 min" holds however long the run has been going.
+    status: { ...portalStatus, nextJob: { ...portalStatus.nextJob!, at: Date.now() + 7 * 60_000 }, ...options.portal?.status },
     items: structuredClone(options.portal?.items ?? [portalItem]),
     threads: structuredClone(options.portal?.threads ?? [mainThread]),
     intents: structuredClone(options.portal?.intents ?? []),
@@ -641,7 +621,6 @@ export async function setupPortal(
       });
     }
     if (path === "/api/portal/cancel") return route.fulfill({ status: 204 });
-    if (path === "/api/portal/tick") return json({ report: portalTickReport });
     if (path === "/api/portal/items") return json({ items: live.items });
     const orchestratorReply = handleOrchestrator(path, method, url.searchParams, body, live, orch);
     if (orchestratorReply)
@@ -851,7 +830,7 @@ export async function setupPortal(
     failPortalSend: (error: string | null = "Portal is running a check. Try again in a moment.") => {
       failPortalSend = error;
     },
-    /** Adds to the thread `GET /api/portal/messages` answers with, the way a tick does; pair with a `messages` stream event. */
+    /** Adds to the thread `GET /api/portal/messages` answers with, the way a background job does; pair with a `messages` stream event. */
     appendPortalMessage: (message: OrchestratorMessage, threadId = "main") => {
       if (threadId === "main") portalThread.push(structuredClone(message));
       else (orch.threadMessages[threadId] ??= []).push(structuredClone(message));

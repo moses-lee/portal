@@ -9,7 +9,6 @@
 import type { ConsolidationResult, MemoryEntity, MemoryRecord } from "@portal/contracts/memory";
 import type { JobRun, RunTrigger } from "@portal/contracts/jobs";
 import type { OrchestratorHub } from "../hub.ts";
-import type { ToolContext } from "../tools/index.ts";
 import { generateTurn, prepareTurn } from "../turn.ts";
 import { entityLabel } from "./core.ts";
 import {
@@ -99,12 +98,11 @@ export async function syncReconfirmItem(hub: OrchestratorHub, records: MemoryRec
  * Run one pass for `run` (the job's run; the curation turn records into it). Failures of the turn
  * are thrown for the job to record; a refused plan is answered as a failed outcome with its digest.
  */
-export async function runCuration(hub: OrchestratorHub, { run, jobId, trigger, signal, self }: {
+export async function runCuration(hub: OrchestratorHub, { run, jobId, trigger, signal }: {
   run: Pick<JobRun, "id">;
   jobId: string | null;
   trigger: RunTrigger;
   signal: AbortSignal;
-  self: ToolContext["self"];
 }): Promise<CurationOutcome> {
   const log: string[] = [];
   const memory = curatedMemory(hub);
@@ -119,7 +117,7 @@ export async function runCuration(hub: OrchestratorHub, { run, jobId, trigger, s
   if (needsModel(before)) {
     const prepared = await prepareTurn(hub, {
       kind: "consolidate", role: "chat", trigger, threadId: null, jobId, interactive: false, toolNames: CURATION_TOOLS, query: "",
-      touched: new Set(), self, summary: "Curating memory",
+      touched: new Set(), summary: "Curating memory",
     });
     if (!prepared) {
       const line = "No API key is stored; memory was not curated.";

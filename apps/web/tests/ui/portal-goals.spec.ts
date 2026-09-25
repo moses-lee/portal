@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { emitPortal, setupPortal } from "./fixtures";
-import { failedRun, intent, intentJob, mainThread, nightlyJob, reviewThread, tickJob, tickRun } from "./orchestrator-fixtures";
+import { failedRun, helperJob, helperRun, intent, intentJob, mainThread, nightlyJob, reviewThread } from "./orchestrator-fixtures";
 
 const portal = () => ({
   threads: [mainThread, reviewThread],
   intents: [intent],
-  jobs: [tickJob, intentJob, nightlyJob],
-  runs: [tickRun, failedRun],
+  jobs: [helperJob, intentJob, nightlyJob],
+  runs: [helperRun, failedRun],
   status: { counts: { needsYou: 1, inbox: 0, approvals: 0, intents: 1 } },
 });
 
@@ -39,7 +39,7 @@ test("Goals lists the active intents, upcoming jobs by next run, and recent runs
   expect(requested.length).toBeGreaterThanOrEqual(2);
 
   const runs = view.getByRole("list", { name: "Recent runs" }).getByRole("listitem");
-  await expect(runs.nth(0)).toContainText("Check for changes");
+  await expect(runs.nth(0)).toContainText(helperJob.title);
   await expect(runs.nth(0)).toContainText("Succeeded");
   await expect(runs.nth(0)).toContainText("anthropic · claude-haiku-4-5");
   await expect(runs.nth(0)).toContainText("1.2k in · 80 out");
@@ -82,7 +82,7 @@ test("run events update the recent runs live and jobs events refetch the schedul
   await page.goto("/goals");
   const view = page.getByRole("region", { name: "Goals" });
   await expect(view.getByRole("listitem", { name: /^Run:/ })).toHaveCount(2);
-  const started = { ...tickRun, id: "run-live", status: "running" as const, finishedAt: null, usage: null, summary: "Checking for changes" };
+  const started = { ...helperRun, id: "run-live", status: "running" as const, finishedAt: null, usage: null, summary: "Reading review comments" };
   await emitPortal(page, { type: "run", run: started });
   await expect(view.getByRole("listitem", { name: /^Run:/ })).toHaveCount(3);
   await expect(view.getByRole("listitem", { name: /^Run:/ }).first()).toContainText("Running");

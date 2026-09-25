@@ -173,10 +173,10 @@ test("consecutive failures back off and mark a job failed; the tick keeps going 
   assert.equal(resumed.status, "active");
   assert.equal(resumed.failures, 0);
 
-  for (let i = 0; i < MAX_FAILURES + 2; i++) await h.jobs.runTick("manual");
-  const tick = await h.jobs.tickJob();
-  assert.equal(tick.status, "active", "the tick never fails for good");
-  assert.ok(tick.failures >= MAX_FAILURES + 2, "every failure counted (the scheduled ones too)");
+  for (let i = 0; i < MAX_FAILURES + 2; i++) await h.timers.advance(2 * 60 * MIN);
+  const tick = await h.jobsStore.getJob("tick");
+  assert.equal(tick.status, "active", "the world refresh never fails for good");
+  assert.ok(tick.failures >= MAX_FAILURES + 2, "every failure counted");
   assert.ok(tick.nextRunAt > h.timers.now());
 });
 
@@ -239,21 +239,22 @@ test("a run cancelled by the user ends as cancelled and its once-only job with i
   assert.equal(await h.jobs.runNow(recurring.id, "manual"), null, "nothing runs after dispose");
 });
 
-test("the tick is seeded a minute after start, runs through the worker, and appears as the next job", async (t) => {
-  const h = await started(jobsHarness(t, { settings: { intervalMinutes: 10, idleIntervalMinutes: 60 } }));
-  const tick = await h.jobs.tickJob();
+test("the world refresh is seeded a minute after start and runs through the worker, but is never the next job shown", async (t) => {
+  const h = await started(jobsHarness(t));
+  const tick = await h.jobsStore.getJob("tick");
   assert.deepEqual(
     { kind: tick.kind, createdBy: tick.createdBy, schedule: tick.schedule, nextRunAt: tick.nextRunAt, title: tick.title },
-    { kind: "tick", createdBy: "system", schedule: { type: "every", everyMs: 10 * MIN, idleEveryMs: 60 * MIN }, nextRunAt: T0 + FIRST_TICK_DELAY_MS, title: "Check for changes" },
+    { kind: "tick", createdBy: "system", schedule: { type: "every", everyMs: 60 * MIN }, nextRunAt: T0 + FIRST_TICK_DELAY_MS, title: "Refresh the world" },
   );
-  assert.equal((await h.jobs.nextDue()).id, "tick");
+  assert.equal((await h.jobsStore.nextDue()).id, "tick", "the worker still sees it");
+  assert.notEqual((await h.jobs.nextDue())?.id, "tick");
   await h.timers.advance(FIRST_TICK_DELAY_MS);
   assert.equal(h.ticks.length, 1);
-  const [run] = await h.jobs.listRuns({ jobId: "tick" });
-  assert.equal(run.result.id, run.id, "the report carries the run's id");
+  const [run] = await h.jobsStore.listRuns({ jobId: "tick" });
+  assert.deepEqual(run.result, { changes: 0, released: [], woken: [], log: ["Nothing changed."], error: null });
   assert.equal(run.summary, "Nothing changed.");
   assert.equal(run.model, null, "no model was called");
-  assert.ok(h.events.some((event) => event.type === "tick" && event.report.id === run.id));
+  assert.ok(!h.events.some((event) => event.type === "run" && event.run.kind === "tick"));
 });
 
 test("postgres: a job created elsewhere wakes the worker through NOTIFY, without waiting for the poll", async (t) => {

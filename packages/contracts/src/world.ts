@@ -1,9 +1,10 @@
 /**
  * World state: a generated, never curated model of everything the user can see in Portal
  * (projects and the repos behind them, worktrees, sessions, terminals, pull requests, and the
- * orchestrator's own intents, jobs, and open items). It is rebuilt on every tick and on demand,
- * rendered into roughly 1–2k tokens at the top of every prompt, and snapshotted for diffing and
- * auditing. The resolve helpers turn loose references ("PR 2367", "the monorepo", "the review
+ * orchestrator's own intents, jobs, and open items). It is rebuilt in full by the hourly silent
+ * refresh, before a chat turn when the last full build is older than a few minutes, and on demand;
+ * rendered into roughly 1–2k tokens at the top of every prompt; and snapshotted for diffing (each
+ * full build's changes go to the change log chat turns read) and auditing. The resolve helpers turn loose references ("PR 2367", "the monorepo", "the review
  * session") into ids deterministically, so the model never guesses.
  *
  * HTTP surface:
@@ -70,7 +71,7 @@ export type WorldState = {
   items: { id: string; kind: ItemKind; title: string; status: string }[];
   /** Sources that could not be read this time (their previous slice was kept). */
   errors: string[];
-  /** The slice the tick diffs (the digest's input), carried so one build serves both. */
+  /** The slice each full refresh diffs against the previous one (the change log's input), carried so one build serves both. */
   snapshot: TickSnapshot;
 };
 

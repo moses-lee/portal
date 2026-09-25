@@ -60,7 +60,7 @@ test("PATCH /api/settings answers 400 { error } for bad bodies", async (t) => {
   const { app, patch } = await setup(t);
   const cases = [
     [{ gitActions: { prompts: { deploy: "x" } } }, /Unknown git action "deploy"/],
-    [{ orchestrator: { intervalMinutes: 0 } }, /intervalMinutes must be a whole number/],
+    [{ orchestrator: { model: 5 } }, /model must be a string/],
     [{ orchestrator: { apiKeys: { google: "sk" } } }, /Unknown provider "google"/],
     [[1, 2], /Expected a JSON object/],
     ["null", /Expected a JSON object/],

@@ -5,18 +5,8 @@
  */
 import type { FlexibleSchema, Tool } from "ai";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "../deps.ts";
-import type { OrchestratorStore, TickDigest, TickReport } from "../types.ts";
+import type { OrchestratorStore } from "../types.ts";
 import { orchestratorProviders } from "../types.ts";
-
-/** The scheduler's view, for get_schedule. */
-export type Schedule = {
-  ready: boolean;
-  intervalMinutes: number;
-  idleIntervalMinutes: number;
-  presence: number;
-  nextTickAt: number | null;
-  lastTickAt: number | null;
-};
 
 export type ToolContext = {
   store: OrchestratorStore;
@@ -24,15 +14,8 @@ export type ToolContext = {
   deps: OrchestratorDeps;
   /** Ids of items created or updated during this turn; the runtime attaches them to the assistant message. */
   touched: Set<string>;
-  /** A chat turn (every tool) rather than a tick (the item, watch, memory, and read-only session/PR tools). */
+  /** A chat turn (every tool) rather than a background turn (the item and read-only session/PR tools, unless it names its own). */
   interactive: boolean;
-  /** Runtime state the self tools report on. */
-  self: {
-    /** The pre-scan and diff against the stored snapshot, without persisting anything. */
-    digest(): Promise<TickDigest>;
-    schedule(): Promise<Schedule>;
-    lastTick(): Promise<TickReport | null>;
-  };
   now(): number;
 };
 

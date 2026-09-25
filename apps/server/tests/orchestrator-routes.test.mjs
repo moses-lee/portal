@@ -62,7 +62,8 @@ test("status, messages, ticks, and items answer their JSON shapes; watches and t
   assert.equal(status.json().status.counts.needsYou, 0);
 
   assert.deepEqual((await inject(app, "GET", "/api/portal/messages")).json(), { messages: [] });
-  assert.deepEqual((await inject(app, "GET", "/api/portal/ticks")).json(), { ticks: [] });
+  for (const [method, url] of [["GET", "/api/portal/ticks"], ["POST", "/api/portal/tick"]]) assert.equal((await inject(app, method, url)).statusCode, 404, `${url} is gone`);
+  for (const field of ["intervalMinutes", "idleIntervalMinutes", "lastTick", "nextTickAt"]) assert.ok(!(field in status.json().status), `status has no ${field}`);
   assert.deepEqual((await inject(app, "GET", "/api/portal/items")).json(), { items: [] });
   assert.equal((await inject(app, "GET", "/api/portal/watches")).statusCode, 404);
   // The legacy memory document is gone from the API; curated memory lives under /api/portal/memory/**.
@@ -137,7 +138,7 @@ test("cross-origin requests are refused with 403 on every route", async (t) => {
   for (const [method, url] of [
     ["GET", "/api/portal"], ["GET", "/api/portal/items"], ["PATCH", "/api/portal/items/x"], ["POST", "/api/portal/items/x/actions/0"],
     ["GET", "/api/portal/jobs"], ["PATCH", "/api/portal/jobs/x"], ["POST", "/api/portal/jobs/x/run"], ["GET", "/api/portal/runs"], ["GET", "/api/portal/runs/x"],
-    ["POST", "/api/portal/runs/x/cancel"], ["GET", "/api/portal/intents"], ["PATCH", "/api/portal/intents/x"], ["POST", "/api/portal/messages"], ["POST", "/api/portal/tick"],
+    ["POST", "/api/portal/runs/x/cancel"], ["GET", "/api/portal/intents"], ["PATCH", "/api/portal/intents/x"], ["POST", "/api/portal/messages"],
     ["POST", "/api/portal/cancel"], ["GET", "/api/portal/stream"],
   ]) {
     const response = await inject(app, method, url, method === "GET" ? undefined : {}, headers);
@@ -145,18 +146,6 @@ test("cross-origin requests are refused with 403 on every route", async (t) => {
     assert.deepEqual(response.json(), { error: "Cross-origin requests are not allowed." });
   }
   assert.equal((await inject(app, "GET", "/api/portal", undefined, { "sec-fetch-site": "cross-site" })).statusCode, 403);
-});
-
-test("a manual tick answers its report and stores it", async (t) => {
-  const { app, model } = await setup(t, { sessions: [sessionMeta()] });
-  const response = await inject(app, "POST", "/api/portal/tick");
-  assert.equal(response.statusCode, 200);
-  const { report } = response.json();
-  assert.equal(report.reason, "manual");
-  assert.equal(report.modelInvoked, false, "nothing changed, so the model was not called");
-  assert.equal(model.doGenerateCalls.length, 0);
-  assert.deepEqual((await inject(app, "GET", "/api/portal/ticks")).json().ticks.map((tick) => tick.id), [report.id]);
-  assert.equal((await inject(app, "GET", "/api/portal")).json().status.lastTick.id, report.id);
 });
 
 test("POST /api/portal/messages streams the UI message stream and persists both messages; 409 is JSON", async (t) => {
@@ -214,12 +203,12 @@ test("GET /api/portal/stream opens with status, items, threads, forwards events,
   assert.equal((await next()).type, "threads");
   assert.equal(presence.count(), before + 1, "an open stream counts as a present browser");
 
-  // A runtime event reaches the stream: a manual tick emits status and tick events. (No keep-alive,
-  // or closing the app waits for the idle socket to time out.)
-  await fetch(`http://127.0.0.1:${port}/api/portal/tick`, { method: "POST", headers: { connection: "close" } });
+  // A runtime event reaches the stream: a manual world refresh emits `world`. (No keep-alive, or
+  // closing the app waits for the idle socket to time out.)
+  await fetch(`http://127.0.0.1:${port}/api/portal/world/refresh`, { method: "POST", headers: { connection: "close" } });
   let event;
-  do event = await next(); while (event.type !== "tick");
-  assert.equal(event.report.reason, "manual");
+  do event = await next(); while (event.type !== "world");
+  assert.equal(typeof event.at, "number");
 
   controller.abort();
   for (let i = 0; i < 50 && presence.count() !== before; i++) await new Promise((resolve) => setTimeout(resolve, 10));

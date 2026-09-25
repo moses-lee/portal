@@ -151,9 +151,12 @@ export function createPgJobsStore({ db, now = Date.now }: { db: Db; now?: () => 
       await db.update(jobs).set({ ...jobColumns(job), lockedUntil: null }).where(eq(jobs.id, id));
       return job;
     },
-    async nextDue() {
+    async nextDue(filter = {}) {
       const [row] = await db.select().from(jobs)
-        .where(and(eq(jobs.status, "active"), isNotNull(jobs.nextRunAt), unleased(now())))
+        .where(and(
+          eq(jobs.status, "active"), isNotNull(jobs.nextRunAt), unleased(now()),
+          filter.notKinds?.length ? notInArray(jobs.kind, filter.notKinds) : undefined,
+        ))
         .orderBy(asc(jobs.nextRunAt), asc(jobs.id)).limit(1);
       return row ? jobFromRow(row) : null;
     },
@@ -183,6 +186,7 @@ export function createPgJobsStore({ db, now = Date.now }: { db: Db; now?: () => 
       if (filter.jobId !== undefined) where.push(eq(jobRuns.jobId, filter.jobId));
       if (filter.threadId !== undefined) where.push(eq(jobRuns.threadId, filter.threadId));
       if (filter.kind !== undefined) where.push(eq(jobRuns.kind, filter.kind));
+      if (filter.notKinds?.length) where.push(notInArray(jobRuns.kind, filter.notKinds));
       if (filter.status) where.push(filter.status.length ? inArray(jobRuns.status, filter.status) : sql`false`);
       if (filter.before) {
         const [cursor] = await db.select({ startedAt: jobRuns.startedAt }).from(jobRuns).where(eq(jobRuns.id, filter.before));

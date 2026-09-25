@@ -8,7 +8,6 @@ import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 
 const runKindLabels: Record<string, string> = {
   chat: "Chat turn",
-  tick: "Check for changes",
   intent_check: "Goal check",
   helper: "Helper",
   consolidate: "Memory curation",

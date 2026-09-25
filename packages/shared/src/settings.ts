@@ -40,9 +40,6 @@ export const orchestratorLimits = {
   modelLength: 100,
   /** Longest API key, after trimming. */
   apiKeyLength: 512,
-  /** Tick interval bounds in minutes: up to a day while a browser is open, up to a week while none is. */
-  intervalMinutes: 1440,
-  idleIntervalMinutes: 10080,
   /** Memory curation: an inbox of up to a thousand proposals, at most a day between inbox-started runs. */
   inboxThreshold: 1000,
   minIntervalMinutes: 1440,
@@ -117,10 +114,6 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
     }
     if (typeof model === "string" && model.trim()) next.bookkeeping.model = model;
   }
-  if (Number.isInteger(given.intervalMinutes) && (given.intervalMinutes as number) > 0) next.intervalMinutes = given.intervalMinutes as number;
-  if (Number.isInteger(given.idleIntervalMinutes) && (given.idleIntervalMinutes as number) > 0) {
-    next.idleIntervalMinutes = given.idleIntervalMinutes as number;
-  }
   next.consolidation = mergeConsolidation(base.consolidation, given.consolidation);
   if (given.reviews && typeof given.reviews === "object" && typeof given.reviews.answerReadOnly === "boolean") {
     next.reviews = { answerReadOnly: given.reviews.answerReadOnly };
@@ -171,8 +164,6 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   if (given.bookkeeping.provider !== base.bookkeeping.provider || given.bookkeeping.model !== base.bookkeeping.model) {
     orchestrator.bookkeeping = { ...given.bookkeeping };
   }
-  if (given.intervalMinutes !== base.intervalMinutes) orchestrator.intervalMinutes = given.intervalMinutes;
-  if (given.idleIntervalMinutes !== base.idleIntervalMinutes) orchestrator.idleIntervalMinutes = given.idleIntervalMinutes;
   const consolidation: Partial<ConsolidationSettings> = {};
   for (const field of ["nightlyAt", "inboxThreshold", "minIntervalMinutes"] as const) {
     if (given.consolidation[field] !== base.consolidation[field]) (consolidation as Record<string, unknown>)[field] = given.consolidation[field];

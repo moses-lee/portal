@@ -229,7 +229,7 @@ export function createIntents(core: JobsCore) {
     const threadId = intent.threadId ?? MAIN_THREAD_ID;
     const prepared = await prepareTurn(hub, {
       kind: "intent_check", role: job.payload.role === "chat" ? "chat" : "bookkeeping", trigger, threadId, jobId: job.id, intentId: intent.id,
-      interactive: false, toolNames: INTENT_CHECK_TOOLS, scope: intent.scope, query: `${intent.text}\n${intent.trigger}`, touched, self: core.self(),
+      interactive: false, toolNames: INTENT_CHECK_TOOLS, scope: intent.scope, query: `${intent.text}\n${intent.trigger}`, touched,
       summary: job.title,
     });
     if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the intent was not checked." };

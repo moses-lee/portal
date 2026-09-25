@@ -87,22 +87,18 @@ const baseStatus = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   busy: false,
-  intervalMinutes: 10,
-  idleIntervalMinutes: 60,
   presence: 1,
-  lastTick: null,
-  nextTickAt: null,
   busyThreads: [],
   runs: [],
-  nextJob: { id: "tick", title: "Check for changes", at: now + 6 * min },
+  nextJob: { id: "consolidate", title: "Curate memory", at: now + 6 * min },
   counts: { needsYou: 0, inbox: 0, approvals: 0, intents: 0 },
-  line: "Idle · next: Check for changes",
+  line: "Idle · next: Curate memory",
 };
 
 test("the status line keeps the server's words and adds the countdown", () => {
   assert.deepEqual(describeStatusLine(null, now), { line: "Connecting…", next: null, tone: "connecting" });
   assert.deepEqual(describeStatusLine(baseStatus, now), {
-    line: "Idle · next: Check for changes",
+    line: "Idle · next: Curate memory",
     next: "in 6 min",
     tone: "idle",
   });
@@ -113,7 +109,7 @@ test("the status line keeps the server's words and adds the countdown", () => {
   };
   assert.deepEqual(describeStatusLine(running, now), {
     line: "Reading PR 42…",
-    next: "next: Check for changes in 6 min",
+    next: "next: Curate memory in 6 min",
     tone: "running",
   });
   const overdue = { ...baseStatus, nextJob: { ...baseStatus.nextJob, at: now - 3 * min } };
@@ -135,7 +131,7 @@ test("the aurora follows the user's turn and pending approvals, never background
   const status = (busyThreads, runs = []) => ({ ready: true, busy: runs.length > 0 || busyThreads.length > 0, busyThreads, runs });
   assert.equal(portalActivity(null, []), "idle");
   assert.equal(portalActivity(status([]), []), "idle");
-  assert.equal(portalActivity(status([], [{ id: "r1", kind: "tick" }]), []), "idle", "a job running is not the user waiting");
+  assert.equal(portalActivity(status([], [{ id: "r1", kind: "intent_check" }]), []), "idle", "a job running is not the user waiting");
   assert.equal(portalActivity(status(["main"]), []), "working");
   assert.equal(portalActivity(status(["t-review"]), []), "working", "any thread's turn counts");
   assert.equal(portalActivity(status(["main"]), [{ status: "pending" }]), "waiting", "an approval outranks the turn");

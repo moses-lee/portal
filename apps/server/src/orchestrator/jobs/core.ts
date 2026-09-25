@@ -5,30 +5,32 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Job, JobPatch, JobRun } from "@portal/contracts/jobs";
-import type { TickReport } from "@portal/contracts/orchestrator";
 import type { ActivityActor } from "@portal/contracts/activity";
 import type { OrchestratorHub } from "../hub.ts";
 import { httpError } from "../ops.ts";
-import type { ToolContext } from "../tools/index.ts";
+import type { RefreshReport } from "../tick.ts";
 import { MAIN_THREAD_ID } from "../types.ts";
 import type { Runs } from "./runs.ts";
 import { describeSchedule, parseSchedule, replanned, sameSchedule } from "./schedule.ts";
-import type { JobChanges, JobsStore, NewJob } from "./store.ts";
+import { type JobChanges, type JobsStore, type NewJob, unknownJob } from "./store.ts";
 
 /** The Postgres channel a job change is announced on; every worker LISTENs to it. */
 export const JOBS_CHANNEL = "portal_jobs";
-/** The seeded tick job. */
+/** The seeded world refresh (a job of kind `tick`); hidden from every listing, route, and tool. */
 export const TICK_JOB_ID = "tick";
 
-export type TickRunner = (report: TickReport, ctx: { signal: AbortSignal }) => Promise<void>;
+/** Whether a job or run belongs to the hidden world refresh. */
+export const isRefreshJob = (job: Pick<Job, "id">) => job.id === TICK_JOB_ID;
+export const isRefreshRun = (run: Pick<JobRun, "kind">) => run.kind === "tick";
+
+/** Runs one world refresh into the report (`performRefresh`; tests pass a fake). */
+export type TickRunner = (report: RefreshReport, ctx: { signal: AbortSignal }) => Promise<void>;
 
 export type JobsCore = {
   hub: OrchestratorHub;
   store: JobsStore;
   runs: Runs;
   tick: TickRunner;
-  /** The runtime's self tools, for the turns jobs run. */
-  self(): ToolContext["self"];
   trimThread(threadId: string): Promise<void>;
   /** Whether a browser is connected (the shorter cadences apply). */
   present(): boolean;
@@ -44,7 +46,7 @@ export type JobsCore = {
    * run doing the cancelling); their ids are added to `stopped` when given.
    */
   changeJob(id: string, changes: JobChanges, how: { actor: ActivityActor; summary: string; kind?: string; runId?: string; stopped?: string[] }): Promise<Job>;
-  /** Apply a user's or the agent's patch: status, schedule, title (see `JobPatch`). */
+  /** Apply a user's or the agent's patch: status, schedule, title (see `JobPatch`). The world refresh is unknown here (404). */
   patchJob(id: string, patch: unknown, how: { actor: ActivityActor; runId?: string; stopped?: string[] }): Promise<Job>;
   /** Cancel (or finish) every live job of an intent. */
   endIntentJobs(intentId: string, status: "cancelled" | "done", how: { actor: ActivityActor; runId?: string; stopped?: string[] }): Promise<void>;
@@ -54,7 +56,6 @@ export type JobsCore = {
   onCheckJobCancelled?: (job: Job, how: { actor: ActivityActor; runId?: string; stopped?: string[] }) => Promise<void>;
   /** Post an assistant note to a thread as `run` did. */
   postToThread(threadId: string | null, text: string, run: Pick<JobRun, "id" | "kind">, itemIds?: string[]): Promise<void>;
-  lastTick: TickReport | null;
 };
 
 const settable = new Set(["active", "paused", "cancelled"]);
@@ -80,12 +81,11 @@ export function parseJobPatch(input: unknown): JobPatch {
   return patch;
 }
 
-export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick" | "self" | "trimThread">): JobsCore {
+export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick" | "trimThread">): JobsCore {
   const { hub, store } = base;
 
   const core: JobsCore = {
     ...base,
-    lastTick: null,
     wake: () => {},
     stopJobRuns: () => [],
     present: () => hub.presence.count() > 0,
@@ -130,8 +130,8 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
     async patchJob(id, raw, { actor, runId, stopped }) {
       const patch = parseJobPatch(raw);
       const current = await store.getJob(id);
-      if (!current) throw httpError(`Unknown job "${id}".`, 404);
-      if (current.id === TICK_JOB_ID && patch.status === "cancelled") throw httpError("The tick cannot be cancelled; pause it or change its cadence.", 409);
+      // The world refresh is Portal's plumbing: nobody pauses, reschedules, renames, or cancels it.
+      if (!current || isRefreshJob(current)) throw unknownJob(id);
       if (patch.status && (current.status === "done" || current.status === "cancelled") && patch.status !== current.status) {
         throw httpError(`This job is ${current.status}; schedule a new one instead.`, 409);
       }
@@ -143,8 +143,6 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
       }
       if (patch.schedule && !sameSchedule(patch.schedule, current.schedule)) {
         changes.schedule = patch.schedule;
-        // A tick the agent or the user rescheduled no longer follows the settings' intervals.
-        if (current.id === TICK_JOB_ID) changes.payload = { ...current.payload, followsSettings: false };
         parts.push(`now ${describeSchedule(patch.schedule)}`);
       }
       if (patch.status && patch.status !== current.status) {

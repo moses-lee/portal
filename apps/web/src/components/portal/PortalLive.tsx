@@ -17,7 +17,6 @@ import type {
   OrchestratorEvent,
   OrchestratorStatus,
   Thread,
-  TickReport,
 } from "@/lib/orchestrator/types";
 
 /** What listeners receive: every server event, plus `reconnected` when the stream reopens after a drop (anything may be stale). */
@@ -33,14 +32,10 @@ export type PortalLive = {
   intents: Intent[];
   /** Pending approval requests; the approvals dialog shows them whenever there are any. */
   approvals: Approval[];
-  /** The most recent tick report pushed over the stream, with when it arrived. */
-  lastTick: { report: TickReport; at: number } | null;
   /** Message from the last failed load; the stream's reconnects are silent. */
   error: string | null;
   /** Apply a locally known item (an optimistic PATCH result) before the stream confirms it. */
   putItem: (item: Item) => void;
-  /** Show a tick report that arrived some other way (the `Run now` response). */
-  noteTick: (report: TickReport) => void;
   /** Apply an intent the server just answered with (a cancel drops it from the active list). */
   putIntent: (intent: Intent) => void;
   /** Replace the pending approvals with a fresher list (a REST read), or drop one that was just decided. */
@@ -72,7 +67,6 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [intents, setIntents] = useState<Intent[]>([]);
   const [approvals, setApprovalsState] = useState<Approval[]>([]);
-  const [lastTick, setLastTick] = useState<PortalLive["lastTick"]>(null);
   const [error, setError] = useState<string | null>(null);
   const [requestedApproval, setRequestedApproval] = useState<PortalLive["requestedApproval"]>(null);
   const listeners = useRef(new Set<(event: PortalLiveEvent) => void>());
@@ -148,9 +142,6 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
           case "approvals":
             setApprovalsState(event.approvals);
             break;
-          case "tick":
-            setLastTick({ report: event.report, at: Date.now() });
-            break;
         }
         notify(event);
       };
@@ -178,9 +169,6 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
         : [...prev, item],
     );
   }, []);
-  const noteTick = useCallback((report: TickReport) => {
-    setLastTick((prev) => (prev?.report.id === report.id ? prev : { report, at: Date.now() }));
-  }, []);
   const putIntent = useCallback((intent: Intent) => {
     setIntents((prev) =>
       intent.status === "active"
@@ -206,17 +194,15 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
       threads,
       intents,
       approvals,
-      lastTick,
       error,
       putItem,
-      noteTick,
       putIntent,
       setApprovals,
       subscribe,
       requestApproval,
       requestedApproval,
     }),
-    [status, items, threads, intents, approvals, lastTick, error, putItem, noteTick, putIntent, setApprovals, subscribe, requestApproval, requestedApproval],
+    [status, items, threads, intents, approvals, error, putItem, putIntent, setApprovals, subscribe, requestApproval, requestedApproval],
   );
   return <PortalLiveContext.Provider value={value}>{children}</PortalLiveContext.Provider>;
 }

@@ -55,7 +55,7 @@ export function createHelpers(core: JobsCore) {
     const prepared = await prepareTurn(hub, {
       kind: "helper", role: request.role ?? "chat", trigger: "agent", threadId: ctx.turn.threadId, parentRunId: ctx.turn.runId,
       interactive: false, toolNames: request.tools ?? HELPER_TOOLS, scope: ctx.turn.scope, query: request.prompt, touched: ctx.touched,
-      self: ctx.self, summary: helperTitle(request.prompt),
+      summary: helperTitle(request.prompt),
     });
     if (!prepared) throw httpError("No API key is stored for the helper's model.", 409);
     const controller = new AbortController();
@@ -107,7 +107,7 @@ export function createHelpers(core: JobsCore) {
     const threadId = job.threadId ?? MAIN_THREAD_ID;
     const prepared = await prepareTurn(hub, {
       kind: "helper", role: payload.role === "bookkeeping" ? "bookkeeping" : "chat", trigger, threadId, jobId: job.id, parentRunId: jobRun.parentRunId,
-      interactive: false, toolNames: Array.isArray(payload.tools) ? payload.tools : HELPER_TOOLS, query: payload.prompt, touched, self: core.self(),
+      interactive: false, toolNames: Array.isArray(payload.tools) ? payload.tools : HELPER_TOOLS, query: payload.prompt, touched,
       summary: job.title,
     });
     if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the helper did not run." };

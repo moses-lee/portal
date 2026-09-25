@@ -41,7 +41,7 @@ function toolsFor(hub, turn = {}) {
   const info = { runId: "run1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: emptyScope(), ...turn };
   const ctx = {
     store: hub.store, settings: hub.settings, deps: hub.deps, touched: new Set(), interactive: true, now: () => hub.timers.now(),
-    self: { digest: async () => null, schedule: async () => ({}), lastTick: async () => null }, hub, turn: info,
+    hub, turn: info,
   };
   return hub.approvals.gate(createTools(ctx), ctx);
 }

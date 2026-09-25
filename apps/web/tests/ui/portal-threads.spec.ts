@@ -141,6 +141,6 @@ test("the status line lists running work and links to its thread", async ({ page
   await expect(page).toHaveURL(/\/threads\/t-review$/);
 
   // Idle again: the line shows what comes next with its countdown.
-  await emitPortal(page, { type: "status", status: { ...portalStatus, nextJob: { id: "tick", title: "Check for changes", at: Date.now() + 3 * 60_000 } } });
-  await expect(page.getByTestId("portal-status-line")).toContainText(/Idle · next: Check for changes· in [23] min/);
+  await emitPortal(page, { type: "status", status: { ...portalStatus, nextJob: { id: "consolidate", title: "Curate memory", at: Date.now() + 3 * 60_000 } } });
+  await expect(page.getByTestId("portal-status-line")).toContainText(/Idle · next: Curate memory· in [23] min/);
 });

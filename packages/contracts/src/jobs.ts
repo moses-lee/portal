@@ -2,9 +2,10 @@
  * Jobs, runs, and intents: the orchestrator's scheduled background work.
  *
  * A **job** is a row with a schedule; a worker claims due jobs from Postgres (`FOR UPDATE SKIP
- * LOCKED`, woken by LISTEN/NOTIFY, with a polling fallback) and executes them. The old 10-minute
- * tick is the seeded `tick` job; the agent creates the rest (a PR check every two minutes, a helper
- * turn now, a nightly curation pass). Cadence is entirely the agent's to choose.
+ * LOCKED`, woken by LISTEN/NOTIFY, with a polling fallback) and executes them. The seeded `tick`
+ * job is Portal's own hourly world refresh: no model, never listed, never changed by anyone. The
+ * agent creates the rest (a PR check every two minutes, a helper turn now) and picks their cadence;
+ * the nightly curation pass is seeded too.
  *
  * A **run** is one execution of anything that calls a model or does background work: a chat turn,
  * a job firing, a helper sub-turn. Every run records its model and token usage.
@@ -14,17 +15,17 @@
  * times with `cooldownMs` between firings, expires at `expiresAt`, and is cancelled explicitly.
  *
  * HTTP surface:
- *   GET    /api/portal/jobs?status=<s>          { jobs }      (Upcoming: active jobs by nextRunAt)
- *   PATCH  /api/portal/jobs/:id                 body JobPatch -> { job }
- *   POST   /api/portal/jobs/:id/run             -> { run }    (run now; the job's schedule is unchanged)
- *   GET    /api/portal/runs?jobId=&threadId=&kind=&before=&limit=   { runs } (newest first)
+ *   GET    /api/portal/jobs?status=<s>          { jobs }      (Upcoming: active jobs by nextRunAt; never the world refresh)
+ *   PATCH  /api/portal/jobs/:id                 body JobPatch -> { job }   (404 for the world refresh)
+ *   POST   /api/portal/jobs/:id/run             -> { run }    (run now; the job's schedule is unchanged; 404 for the world refresh)
+ *   GET    /api/portal/runs?jobId=&threadId=&kind=&before=&limit=   { runs } (newest first; the world refresh's runs are left out)
  *   GET    /api/portal/runs/:id                 { run }
  *   POST   /api/portal/runs/:id/cancel          -> 204
  *   GET    /api/portal/intents?status=<s>       { intents }
  *   PATCH  /api/portal/intents/:id              body IntentPatch -> { intent }
- * Live: `jobs` (invalidate), `intents` (full list of active ones), and `run` events.
+ * Live: `jobs` (invalidate), `intents` (full list of active ones), and `run` events (none for the world refresh).
  */
-import type { ModelChoice, Scope, TickReport } from "./orchestrator.ts";
+import type { ModelChoice, Scope } from "./orchestrator.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Jobs
@@ -39,7 +40,9 @@ export type JobSchedule =
   | { type: "at"; at: number };
 
 /**
- * - `tick`: refresh the world, diff it, and let the bookkeeping model turn changes into items.
+ * - `tick`: the silent world refresh, hourly: rebuild the world (GitHub included), diff it against
+ *   the previous snapshot into the change log, release dismissals whose condition cleared, and wake
+ *   expired snoozes. No model, no thread post, no items. Hidden from every listing and tool.
  * - `intent_check`: evaluate one intent (`payload.intentId`) and act on it when its trigger holds.
  * - `helper`: a bounded sub-turn (`payload` is a `HelperPayload`), e.g. research or summarizing.
  * - `consolidate`: the memory curation pass (phase 3).
@@ -115,13 +118,13 @@ export type JobRun = {
   trigger: RunTrigger;
   startedAt: number;
   finishedAt: number | null;
-  /** Null when no model was called (a tick that found nothing new). */
+  /** Null when no model was called (the world refresh, a deterministic check). */
   model: ModelChoice | null;
   usage: RunUsage | null;
   /** One line per step worth auditing, capped. */
   log: string[];
-  /** Kind-specific outcome; a tick's is its `TickReport`. */
-  result: TickReport | Record<string, unknown> | null;
+  /** Kind-specific outcome, e.g. the world refresh's report of what it diffed. */
+  result: Record<string, unknown> | null;
   /** One or two sentences for the Activity and Upcoming views. */
   summary: string | null;
   error: string | null;
