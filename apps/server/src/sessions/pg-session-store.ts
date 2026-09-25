@@ -32,6 +32,7 @@ function toRecord(row: Row): SessionRecord {
     title: row.title,
     upstreamId: row.upstreamId,
     state: row.state,
+    lost: row.lost ?? null,
   };
 }
 

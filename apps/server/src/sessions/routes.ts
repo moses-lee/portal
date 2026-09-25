@@ -131,6 +131,8 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     await ready();
     const session = ctx.sessions.getSession(req.params.id);
     if (!session) return reply.code(404).send({ error: "Unknown session." });
+    // A fresh look at the agent's processes, so the liveness served is current.
+    await ctx.sessions.probeSession(session.id).catch(() => {});
     return summarizeSession(toMeta(session), projectOf(session.projectId));
   });
 

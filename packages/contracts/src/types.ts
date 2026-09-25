@@ -138,6 +138,84 @@ export type SessionLink =
   | { status: "connecting" }
   | { status: "offline"; error: string | null };
 
+/**
+ * Why a session's agent went away. Recorded when the link drops (and at boot for a turn the
+ * restart cut off), persisted with the session, and cleared once the agent is attached again.
+ */
+export type SessionLoss = {
+  reason: "portal_restarted" | "process_exited" | "process_error" | "connection_closed" | "start_failed" | "reconnect_failed";
+  /** One sentence for people: "Claude Code exited with code 1", "Portal restarted while the turn was running". */
+  detail: string;
+  at: number;
+  /** For `process_exited`: the exit code, or the signal that killed it. */
+  exitCode?: number | null;
+  signal?: string | null;
+};
+
+/** A tool call the agent started in the current turn and has not reported finished. */
+export type OpenToolCall = {
+  id: string;
+  title: string;
+  /** ACP tool kind ("execute", "read", "edit", ...), when the agent gave one. */
+  kind: string | null;
+  startedAt: number;
+  /** The last update that carried output or a new title; progress heartbeats do not count. */
+  lastOutputAt: number | null;
+};
+
+/** One process under the agent, as `ps` reported it. */
+export type ProbedProcess = { pid: number; command: string; elapsedMs: number; cpuMs: number };
+
+/** What the process probe last saw of a session's agent. */
+export type SessionProcessProbe = {
+  /** The agent process Portal spawned (the ACP adapter). */
+  agentPid: number;
+  alive: boolean;
+  /**
+   * "session" when the probe found the process that runs only this session (Claude Code starts one
+   * per session under the adapter); "agent" when it could not, and the tree is the whole agent's,
+   * shared with its other sessions.
+   */
+  scope: "session" | "agent";
+  /** The root of the tree measured: the session's own process, or the agent process. */
+  rootPid: number | null;
+  /** Processes under the root that started during the current turn (the tools' processes), oldest first. */
+  children: ProbedProcess[];
+  /** CPU time the whole tree used over the last `windowMs`, or null until two samples exist. */
+  cpuMs: number | null;
+  /** CPU time the turn's child processes used over the last `windowMs`, or null until two samples exist. */
+  childCpuMs: number | null;
+  windowMs: number;
+  sampledAt: number;
+};
+
+/**
+ * Whether a session's agent is doing anything. Only `dead` and `hung` count as stalls:
+ * - dead: the agent process or its connection is gone (see `lost`).
+ * - blocked: waiting on a permission answer.
+ * - busy: a turn is open and something is moving (tool processes use CPU, or the agent sent output recently).
+ * - hung: a turn is open but nothing used CPU or produced output for `hungAfterMs`.
+ * - idle: no turn is open.
+ */
+export type LivenessState = "dead" | "blocked" | "busy" | "hung" | "idle";
+
+export type SessionLiveness = {
+  state: LivenessState;
+  /** "running tool: bazel test //... for 45m", "waiting on a permission: Bash", "hung: no CPU or output for 20m". */
+  summary: string;
+  turnOpen: boolean;
+  turnStartedAt: number | null;
+  openTools: OpenToolCall[];
+  /** The last agent output of the open turn (messages, thoughts, tool output), heartbeats excluded. */
+  lastOutputAt: number | null;
+  /** The last time the probe saw the turn's processes use CPU or start and stop. */
+  lastCpuAt: number | null;
+  /** Null when the agent is not attached or the platform cannot be probed. */
+  process: SessionProcessProbe | null;
+  lost: SessionLoss | null;
+  hungAfterMs: number;
+};
+
 export type SessionMeta = {
   id: string;
   agentId: string;
@@ -155,6 +233,8 @@ export type SessionMeta = {
   awaitingPermission: boolean;
   link: SessionLink;
   state: SessionState;
+  /** Derived when read, from the open turn, its tool calls, and the process probe. */
+  liveness: SessionLiveness;
 };
 
 /** The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`. */

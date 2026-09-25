@@ -5,7 +5,7 @@
  */
 import { sql } from "drizzle-orm";
 import { bigint, bigserial, boolean, customType, index, integer, jsonb, pgTable, primaryKey, real, text, uniqueIndex } from "drizzle-orm/pg-core";
-import type { SessionState, StoredEvent, WorktreeMeta } from "@portal/contracts/types";
+import type { SessionLoss, SessionState, StoredEvent, WorktreeMeta } from "@portal/contracts/types";
 
 /** Milliseconds since the epoch, as JavaScript numbers. */
 const epochMs = (name: string) => bigint(name, { mode: "number" });
@@ -23,6 +23,8 @@ export const sessions = pgTable("sessions", {
   title: text("title"),
   upstreamId: text("upstream_id").notNull(),
   state: jsonb("state").$type<SessionState>().notNull(),
+  /** Why the agent was lost (null while it is attached or was never lost). */
+  lost: jsonb("lost").$type<SessionLoss>(),
 });
 
 export const sessionEvents = pgTable(

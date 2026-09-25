@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { createAcpRuntime } from "../src/lib/acp-runtime.ts";
+import { createAcpRuntime, toMeta } from "../src/lib/acp-runtime.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/store.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
@@ -781,6 +781,13 @@ test("only a turn that was really cut off is closed on restart", async (t) => {
   assert.equal(await store.eventCount("failed"), 3);
   assert.equal(await store.eventCount("empty"), 0);
   assert.deepEqual(runtime.listSessions().map(({ link }) => link.status), ["offline", "offline", "offline", "offline"]);
+  // The cut-off turn's agent counts as lost to the restart, and says so; the rest are merely not attached.
+  const byId = Object.fromEntries(runtime.listSessions().map((meta) => [meta.id, meta.liveness]));
+  assert.equal(byId.cut.state, "dead");
+  assert.equal(byId.cut.lost.reason, "portal_restarted");
+  assert.equal(byId.cut.summary, "dead: Portal restarted while the turn was running");
+  assert.equal((await store.getSession("cut")).lost.reason, "portal_restarted");
+  for (const id of ["finished", "failed", "empty"]) assert.deepEqual([byId[id].state, byId[id].lost], ["idle", null], id);
 });
 
 test("deleting a session while it reconnects does not bring it back", async (t) => {
@@ -981,4 +988,91 @@ test("a permission advisor answers as Portal, with its reason; a viewer's answer
   assert.equal(responses().length, 4);
   assert.deepEqual(responses().slice(2).map((event) => event.by), ["user", "user"]);
   runtime.setPermissionAdvisor(null);
+});
+
+test("a running tool reads as busy with its processes; a turn with no CPU and no output turns hung", { skip: process.platform === "win32" }, async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  assert.equal(toMeta(session).liveness.state, "idle");
+
+  await runtime.sendPrompt(session.id, "spawn");
+  await until(() => session.openTools.size === 1, "the tool call");
+  // The shell starts its child a moment later; sample until it shows.
+  let liveness = null;
+  for (let tries = 0; tries < 40; tries++) {
+    await runtime.probe([session]);
+    liveness = toMeta(session).liveness;
+    if (liveness.process?.children.some((child) => child.command.startsWith("sleep 30"))) break;
+    await delay(50);
+  }
+  assert.equal(liveness.state, "busy");
+  assert.match(liveness.summary, /^running tool: sleep 30 for \d+s$/);
+  assert.equal(liveness.turnOpen, true);
+  assert.deepEqual(liveness.openTools.map(({ title, kind }) => ({ title, kind })), [{ title: "sleep 30", kind: "execute" }]);
+  assert.equal(liveness.process.alive, true);
+  assert.equal(liveness.process.scope, "session", "the process naming the agent session is the session's own");
+  assert.ok(liveness.process.children.some((child) => child.command.startsWith("sleep 30")));
+  assert.equal((await runtime.probeSession(session.id)).state, "busy");
+
+  await runtime.cancel(session.id);
+  await until(() => !session.busy, "the cancelled turn");
+  liveness = toMeta(session).liveness;
+  assert.equal(liveness.state, "idle");
+  assert.deepEqual(liveness.openTools, []);
+
+  // A tool with no process under it and no output: hung once the threshold passes.
+  await runtime.sendPrompt(session.id, "tool");
+  await until(() => session.openTools.size === 1, "the second tool call");
+  await runtime.probe([session]);
+  assert.equal(toMeta(session).liveness.state, "busy");
+  runtime.setLivenessOptions({ hungAfterMs: 300 });
+  await delay(350);
+  await runtime.probe([session]);
+  liveness = toMeta(session).liveness;
+  assert.equal(liveness.state, "hung");
+  assert.match(liveness.summary, /^hung: no CPU or output for \d+s \(tool: bazel test \/\/\.\.\., started \d+s ago\)$/);
+  assert.equal(liveness.hungAfterMs, 300);
+  await runtime.cancel(session.id);
+  await until(() => !session.busy, "the hung turn stopped");
+
+  // A tool that finishes within its turn leaves nothing open.
+  await runtime.sendPrompt(session.id, "finish-tool");
+  await until(() => !session.busy, "the short turn");
+  assert.equal(session.openTools.size, 0);
+  assert.equal(toMeta(session).liveness.state, "idle");
+});
+
+test("a lost agent records why: the exit code on every session of the process, persisted, and cleared on reconnect", async (t) => {
+  const { runtime, cwd, store, setModes } = await persistentSetup(t);
+  setModes({ claude: "resume" });
+  const session = await runtime.createSession(cwd, "claude");
+  const sibling = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "exit");
+  await until(() => session.lost?.reason === "process_exited", "the exit to be recorded");
+  assert.equal(session.lost.exitCode, 17);
+  assert.equal(session.lost.signal, null);
+  assert.equal(session.lost.detail, "Claude Code exited with code 17");
+  assert.equal(sibling.lost, session.lost);
+  const liveness = toMeta(session).liveness;
+  assert.equal(liveness.state, "dead");
+  assert.equal(liveness.summary, "dead: Claude Code exited with code 17");
+  await session.writes;
+  await sibling.writes;
+  assert.equal((await store.getSession(session.id)).lost.reason, "process_exited");
+
+  await runtime.attach(sibling.id);
+  assert.equal(sibling.lost, null);
+  assert.equal(toMeta(sibling).liveness.state, "idle");
+  await sibling.writes;
+  assert.equal((await store.getSession(sibling.id)).lost, null);
+});
+
+test("a closed connection is recorded as such, not as Portal's own kill that follows it", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "disconnect");
+  await until(() => session.link.status === "offline", "offline after the connection closed");
+  await delay(100);
+  assert.equal(session.lost.reason, "connection_closed");
+  assert.equal(session.lost.detail, "Claude Code closed its connection to Portal");
 });
