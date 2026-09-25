@@ -243,6 +243,7 @@ export const intents = pgTable(
     fires: integer("fires").notNull().default(0),
     cooldownMs: epochMs("cooldown_ms").notNull(),
     lastFiredAt: epochMs("last_fired_at"),
+    lastFiredTitle: text("last_fired_title"),
     lastCheckedAt: epochMs("last_checked_at"),
     threadId: text("thread_id"),
     createdAt: epochMs("created_at").notNull(),

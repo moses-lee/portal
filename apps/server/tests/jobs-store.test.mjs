@@ -195,7 +195,7 @@ for (const [label, open] of backends) {
     assert.deepEqual(intent, {
       id: intent.id, text: "Tell me when #42 merges", trigger: "acme/app#42 is merged", action: "Tell me", notes: "",
       scope: { projectIds: [], sessionIds: [], pulls: [{ repo: "acme/app", number: 42, url: "u" }], repos: [], people: [], taskTypes: [] },
-      status: "active", expiresAt: null, fireBudget: 1, fires: 0, cooldownMs: 0, lastFiredAt: null, lastCheckedAt: null, threadId: null,
+      status: "active", expiresAt: null, fireBudget: 1, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: null, threadId: null,
       createdAt: T0, updatedAt: T0,
     });
     clock.add(5);
