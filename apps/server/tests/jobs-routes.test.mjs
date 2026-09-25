@@ -76,7 +76,8 @@ test("jobs: listing by status, patching (pause, reschedule, cancel), run now, an
   assert.equal(ran.statusCode, 200);
   assert.equal(ran.json().run.kind, "intent_check");
   assert.equal(ran.json().run.trigger, "manual");
-  await flush();
+  // Let that check finish (its model fails) before the job is cancelled below.
+  for (let i = 0; i < 200 && (await jobs.getRun(ran.json().run.id))?.status === "running"; i++) await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal((await inject(app, "POST", "/api/portal/jobs/nope/run")).statusCode, 404);
 
   const cancelled = await inject(app, "PATCH", `/api/portal/jobs/${job.id}`, { status: "cancelled" });
