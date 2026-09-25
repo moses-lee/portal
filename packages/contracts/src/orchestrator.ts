@@ -1,8 +1,9 @@
 /**
  * Wire types for "Talk to Portal", the orchestrator: a coordinator that lives outside every project
- * and session. It chats in threads, runs background jobs (the tick among them) that turn changes in
- * sessions, pull requests, and worktrees into Needs-you items, keeps curated memory, and asks before
- * anything irreversible. The server owns the runtime and its stores; the browser reads these shapes
+ * and session. It chats in threads, knows the user's world (refreshed quietly in the background and
+ * diffed into a change log its chat turns read), runs the background jobs the agent schedules
+ * (intent checks, helpers, memory curation), keeps curated memory, and asks before anything
+ * irreversible. The server owns the runtime and its stores; the browser reads these shapes
  * over `/api/portal/**`. The other domains' shapes and routes are in activity.ts, jobs.ts, world.ts,
  * memory.ts, and approvals.ts.
  *
@@ -17,8 +18,6 @@
  *   POST   /api/portal/threads/:id/messages          body { message } -> UI message stream
  *   POST   /api/portal/threads/:id/cancel            -> 204
  *   POST   /api/portal/cancel          -> 204 (the main thread's turn)
- *   POST   /api/portal/tick            -> { report }  (runs the tick job now)
- *   GET    /api/portal/ticks           { ticks }      (the tick job's recent reports)
  *   GET    /api/portal/items           { items }
  *   PATCH  /api/portal/items/:id       body ItemPatch -> { item }
  *   POST   /api/portal/items/:id/actions/:index -> { sessionId?, promptError?, approvalId? }
@@ -223,7 +222,7 @@ export type Item = {
   body: string;
   links: ItemLinks;
   actions: ItemAction[];
-  /** Stable identity of the underlying condition, e.g. "pr_checks_failing:owner/repo#42". Dedupes across ticks. */
+  /** Stable identity of the underlying condition, e.g. "pr:owner/repo#42". Dedupes items; a dismissal holds for it until the condition clears. */
   fingerprint: string;
   status: ItemStatus;
   createdAt: number;
@@ -242,9 +241,12 @@ export type ItemPatch = Partial<Pick<Item, "kind" | "title" | "body" | "links" |
 export type OrchestratorMessageMetadata = {
   /** Epoch ms when the message was created. */
   at: number;
-  /** Set on assistant messages produced by a scheduled or manual tick rather than a user prompt. */
+  /**
+   * Set on the "Scheduled check" notes the tick posted before it became a silent world refresh. No
+   * new message carries it; old ones keep it so the thread still labels them.
+   */
   tick?: { id: string; reason: TickReason };
-  /** The run that produced an assistant message (chat turn, tick, helper, intent check). */
+  /** The run that produced an assistant message (chat turn, helper, intent check, curation). */
   run?: { id: string; kind: JobRun["kind"] };
   /** Items created or updated by this message. The thread does not show them (they live in Needs you); the audit trail does. */
   itemIds?: string[];
@@ -253,12 +255,13 @@ export type OrchestratorMessageMetadata = {
 export type OrchestratorMessage = UIMessage<OrchestratorMessageMetadata>;
 
 // ---------------------------------------------------------------------------------------------
-// Ticks
+// Snapshots (what each full world refresh diffs against the previous one)
 // ---------------------------------------------------------------------------------------------
 
+/** Why an old tick ran; only old "Scheduled check" notes still carry it (see `OrchestratorMessageMetadata.tick`). */
 export type TickReason = "schedule" | "manual";
 
-/** Everything the pre-scan compares between ticks. Kept small: ids and states, no bodies. */
+/** Everything a full world refresh compares with the previous one. Kept small: ids and states, no bodies. */
 export type TickSnapshot = {
   at: number;
   sessions: Record<string, {
@@ -293,63 +296,17 @@ export type PullAttention = PullRef & {
   reviewDecision: "approved" | "changes_requested" | "review_required" | null;
   mergeable: "mergeable" | "conflicting" | "unknown";
   updatedAt: number;
+  /** When the PR was opened. Absent in snapshots and builds from before this field. */
+  createdAt?: number | null;
+  /**
+   * When its head commit was made: the cheap stand-in for the last push that the search can give
+   * (GitHub no longer reports push times). Absent in snapshots and builds from before this field.
+   */
+  pushedAt?: number | null;
   /** The Portal project (main checkout) for this repo when one exists, else null. */
   localProjectId: string | null;
   /** The Portal worktree project already on this PR's head branch, when one exists. */
   worktreeProjectId: string | null;
-};
-
-/** One line of the digest: something that changed since the previous snapshot. */
-export type DigestChange = {
-  kind: ItemKind;
-  /** One sentence, ready to become an item title. */
-  summary: string;
-  /** Compact Markdown for the item body of an aggregated change (one bullet per PR); absent otherwise. */
-  detail?: string;
-  links: ItemLinks;
-  /** The fingerprint an item for this change should carry, so the model never invents one. */
-  fingerprint: string;
-  /** Set when an open item with this fingerprint already exists: the model should update, not create. */
-  existingItemId: string | null;
-  /** Set when the condition behind an open item cleared: the model should resolve that item. */
-  resolvesItemId?: string | null;
-};
-
-/** What `get_tick_digest` returns. Built deterministically; the model sees nothing else about the world unless it asks. */
-export type TickDigest = {
-  at: number;
-  /** Timestamp of the snapshot this was diffed against; null on the very first tick. */
-  since: number | null;
-  changes: DigestChange[];
-  /** Open and snoozed-but-expired items, briefly. */
-  openItems: Pick<Item, "id" | "kind" | "title" | "fingerprint">[];
-  /** Dismissed items whose condition cleared; the tick resolves them without the model. */
-  released: string[];
-  /** Fingerprints left out of `changes` because the user dismissed their item. */
-  suppressed: string[];
-};
-
-export type TickReport = {
-  id: string;
-  reason: TickReason;
-  startedAt: number;
-  finishedAt: number;
-  /** False when the pre-scan found nothing new and the model was not invoked. */
-  modelInvoked: boolean;
-  changes: number;
-  itemsCreated: string[];
-  itemsUpdated: string[];
-  itemsResolved: string[];
-  /** One line per thing considered and decided, for the activity log. */
-  log: string[];
-  error: string | null;
-  usage: { inputTokens: number; outputTokens: number } | null;
-  /**
-   * The model stopped at its step cap before it was done. The snapshot is then kept, so the next
-   * tick offers the same changes again (items already made are matched by fingerprint); a second
-   * capped tick in a row advances it anyway rather than loop.
-   */
-  capped?: boolean;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -361,19 +318,15 @@ export type OrchestratorStatus = {
   ready: boolean;
   provider: OrchestratorProvider;
   model: string;
-  /** True while a chat turn or a tick is running. */
+  /** True while a chat turn is running. */
   busy: boolean;
-  intervalMinutes: number;
-  idleIntervalMinutes: number;
-  /** How many browsers currently hold a Portal event stream open. Drives which interval applies. */
+  /** How many browsers currently hold a Portal event stream open. Jobs with an idle cadence follow it. */
   presence: number;
-  lastTick: TickReport | null;
-  nextTickAt: number | null;
   /** Threads with a chat turn running; each thread has its own lock, and jobs never take one. */
   busyThreads: string[];
-  /** Runs in progress right now (chat turns and background jobs), oldest first. */
+  /** Runs in progress right now (chat turns and background jobs), oldest first. The world refresh is not listed. */
   runs: Pick<JobRun, "id" | "kind" | "jobId" | "threadId" | "startedAt" | "summary">[];
-  /** The next job due, for the status line. */
+  /** The next job due, for the status line (never the world refresh). */
   nextJob: { id: string; title: string; at: number } | null;
   counts: { needsYou: number; inbox: number; approvals: number; intents: number };
   /** One line for the live status bar: what is running, else what comes next. */
@@ -397,5 +350,4 @@ export type OrchestratorEvent =
   | { type: "memory"; recordIds: string[] }
   /** The world state was rebuilt. */
   | { type: "world"; at: number }
-  | { type: "items"; items: Item[] }
-  | { type: "tick"; report: TickReport };
+  | { type: "items"; items: Item[] };

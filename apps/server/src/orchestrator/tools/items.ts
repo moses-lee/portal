@@ -29,7 +29,7 @@ const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ask_portal"), text: z.string().min(1), label }),
 ]);
 
-/** "<kind>:<key>": a digest kind or the per-PR "pr" prefix, then a key without whitespace. */
+/** "<kind>:<key>": a change kind or the per-PR "pr" prefix, then a key without whitespace. */
 const FINGERPRINT = /^[a-z_]+:\S+$/;
 
 const kindSchema = z.enum(itemKinds);
@@ -46,19 +46,19 @@ export function itemTools({ store, touched, now }: ToolContext) {
   }
   return {
     create_item: define(
-      "Create a Needs-you item: something that needs the user's decision or action. fingerprint is the digest's, verbatim (\"<kind>:<key>\", e.g. pr:owner/name#7); when an open item already carries it, that item is updated instead of duplicated, and while the user has dismissed an item with it nothing is created.",
+      "Create a Needs-you item: something that needs the user's decision or action. fingerprint: for a change, get_changes's verbatim; else \"<kind>:<key>\" (e.g. pr:owner/name#7, custom:<slug>); when an open item already carries it, that item is updated instead of duplicated, and while the user has dismissed an item with it nothing is created.",
       z.object({
         kind: kindSchema, title: z.string().min(1).max(200), body: z.string().max(2000),
         links: linksSchema.optional(), actions: z.array(actionSchema).max(4).optional(), fingerprint: z.string().min(3),
       }),
       async ({ kind, title, body, links = {}, actions = [], fingerprint }) => {
-        if (!FINGERPRINT.test(fingerprint)) throw httpError('fingerprint must look like "<kind>:<key>" without spaces; copy it from the digest.', 400);
+        if (!FINGERPRINT.test(fingerprint)) throw httpError('fingerprint must look like "<kind>:<key>" without spaces; copy it from get_changes.', 400);
         const existing = await store.findItemByFingerprint(fingerprint);
         if (existing) {
           const row = await change(existing.id, { kind, title, body, links, actions });
           return { ...row, updated: true, note: "An item with this fingerprint already existed; it was updated instead of creating a duplicate." };
         }
-        // A dismissal holds until the condition clears (the tick then releases it): the user said not to show this again.
+        // A dismissal holds until the condition clears (the next full world refresh then releases it): the user said not to show this again.
         const dismissed = (await store.listItems()).find((item) => item.fingerprint === fingerprint && item.status === "dismissed");
         if (dismissed) return { suppressed: true, dismissedItemId: dismissed.id, note: "The user dismissed this; nothing was created. Do not mention it again while the condition lasts." };
         const item = await store.createItem({ kind, title, body, links, actions, fingerprint });

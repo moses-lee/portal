@@ -1,5 +1,5 @@
 /**
- * What the orchestrator's tick records about a worktree project: whether its branch has landed on
+ * What the orchestrator's world snapshot records about a worktree project: whether its branch has landed on
  * the default branch and whether the tree has uncommitted changes. Local reads only; never fetches.
  */
 import { stat } from "node:fs/promises";

@@ -1,6 +1,7 @@
 /**
- * The orchestrator runtime: threads the user chats in (each with its own lock), the tick (a job the
- * jobs service runs) that turns changes into items, and the events the page follows. It builds the
+ * The orchestrator runtime: threads the user chats in (each with its own lock), the background jobs
+ * (the jobs service runs them, the silent hourly world refresh among them), and the events the page
+ * follows. It builds the
  * hub (see `hub.ts`) over whatever store, settings, deps, clock, and model it is given (tests pass
  * fakes) and attaches the domain services; `createOrchestratorService` in `service.ts` wires the
  * live server into it.
@@ -17,19 +18,15 @@ import { createApprovalsService } from "./approvals/service.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import { settleReviewWorktree } from "./jobs/review-cleanup.ts";
 import { createReviewPermissionAdvisor } from "./jobs/review-permissions.ts";
-import { buildDigest, collectSnapshot } from "./digest.ts";
 import type { ApprovalsService, JobsService, MemoryService, OrchestratorHub, PresenceSource, WorldService } from "./hub.ts";
 import { createJobsService } from "./jobs/service.ts";
 import { createMemoryService } from "./memory/service.ts";
 import { buildLanguageModel, providerOptionsFor, roleChoice } from "./model.ts";
 import { httpError } from "./ops.ts";
 import { type SchedulerTimers, realTimers } from "./jobs/timers.ts";
-import { performTick } from "./tick.ts";
-import type { ToolContext } from "./tools/index.ts";
 import { prepareTurn, runUsage } from "./turn.ts";
 import type {
   Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings, OrchestratorStatus, OrchestratorStore,
-  TickReason,
 } from "./types.ts";
 import { MAIN_THREAD_ID } from "./types.ts";
 import { createWorldService } from "./world/service.ts";
@@ -42,6 +39,8 @@ export const HISTORY_BUDGET_TOKENS = 12_000;
 export const MAX_THREAD_MESSAGES = 200;
 /** What a tool part's input and output become once the message left the history window. */
 export const TRIMMED_TOOL_IO = "[trimmed from history]";
+/** A user's chat turn runs a full world refresh first when the newest full build is older than this. */
+export const CHAT_REFRESH_AFTER_MS = 5 * 60_000;
 export type { PresenceSource } from "./hub.ts";
 
 /** Builders for the domain services; tests and the live server swap in their own. */
@@ -102,6 +101,15 @@ function trimToolPart(part: Part): Part | null {
   const trimmed: Record<string, unknown> = { ...record };
   for (const field of fields) trimmed[field] = TRIMMED_TOOL_IO;
   return trimmed as unknown as Part;
+}
+
+/**
+ * Whether a user's chat turn should refresh the world (GitHub included) before it starts: when no
+ * full build exists yet, or the newest is older than `maxAgeMs`. The refresh also brings the change
+ * log up to date, so the turn's Recent changes section is current.
+ */
+export function needsChatRefresh(lastFullAt: number | null, now: number, maxAgeMs = CHAT_REFRESH_AFTER_MS): boolean {
+  return lastFullAt === null || now - lastFullAt > maxAgeMs;
 }
 
 /**
@@ -197,11 +205,7 @@ export function createOrchestratorRuntime({
     },
   } as OrchestratorHub;
   hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
-  hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, {
-    tick: (report, { signal }) => performTick(hub, report, { self, signal, trimThread: trimStoredThread }),
-    self: () => self,
-    trimThread: trimStoredThread,
-  })))(hub);
+  hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, { trimThread: trimStoredThread })))(hub);
   hub.world = (domains.world ?? createWorldService)(hub);
   hub.memory = (domains.memory ?? createMemoryService)(hub);
   hub.approvals = (domains.approvals ?? createApprovalsService)(hub);
@@ -218,7 +222,7 @@ export function createOrchestratorRuntime({
     return { settings, apiKey: await settingsStore.apiKey(settings.provider) };
   }
 
-  // The jobs service replans the tick (and every presence-aware job) itself; the page needs the new status.
+  // The jobs service replans every presence-aware job itself; the page needs the new status.
   const unsubscribePresence = presence.subscribe(() => { void emitStatus(); });
   const unsubscribeSettings = settingsStore.subscribe(() => { void emitStatus(); });
   void ready.then(() => {
@@ -227,28 +231,6 @@ export function createOrchestratorRuntime({
     // Review sessions run unattended: Portal answers their read-only permission requests itself.
     deps.sessions.setPermissionAdvisor(createReviewPermissionAdvisor(hub));
   });
-
-  /** The digest as get_tick_digest reports it: a look, not a tick, so snoozes are left alone. */
-  async function digestNow() {
-    const previous = await store.readSnapshot();
-    const now = timers.now();
-    const snapshot = await collectSnapshot({ deps, previous, now, log: [] });
-    return buildDigest({ store, snapshot, prevSnapshot: previous, now, wakeSnoozed: false });
-  }
-
-  const self: ToolContext["self"] = {
-    digest: digestNow,
-    schedule: async () => {
-      const [{ settings }, tick, model] = await Promise.all([settingsAndKey(), hub.jobs.tickJob(), hub.model("bookkeeping")]);
-      const every = tick?.schedule.type === "every" ? tick.schedule : null;
-      return {
-        ready: !!model, intervalMinutes: every ? every.everyMs / 60_000 : settings.intervalMinutes,
-        idleIntervalMinutes: every ? (every.idleEveryMs ?? every.everyMs) / 60_000 : settings.idleIntervalMinutes,
-        presence: presence.count(), nextTickAt: tick?.nextRunAt ?? null, lastTickAt: hub.jobs.lastTick()?.finishedAt ?? null,
-      };
-    },
-    lastTick: async () => hub.jobs.lastTick(),
-  };
 
   /** Keep a stored thread bounded; runs after every persisted turn. */
   async function trimStoredThread(threadId: string) {
@@ -260,11 +242,23 @@ export function createOrchestratorRuntime({
     }
   }
 
+  /**
+   * Before a user's chat turn builds its context: a full world refresh when the last one is stale,
+   * sharing any refresh already in flight. Never throws; a turn goes ahead on the world it has.
+   */
+  async function refreshBeforeChat(): Promise<void> {
+    try {
+      if (needsChatRefresh(await hub.world.lastFullAt(), timers.now())) await hub.world.refresh("chat");
+    } catch (err) {
+      console.error(`Could not refresh the world before a chat turn (${errorMessage(err)}).`);
+    }
+  }
+
   function releaseChat(threadId: string, controller: AbortController) {
     if (chatTurns.get(threadId) === controller) chatTurns.delete(threadId);
   }
 
-  /** The status bar's line: what is running, else what comes next. */
+  /** The status bar's line: what is running, else what comes next (the world refresh is never either). */
   function statusLine(runs: OrchestratorStatus["runs"], nextJob: OrchestratorStatus["nextJob"], ready: boolean): string {
     if (!ready) return "Add an API key in Settings to start Portal.";
     if (runs.length > 0) {
@@ -277,18 +271,15 @@ export function createOrchestratorRuntime({
   async function status(): Promise<OrchestratorStatus> {
     await ready;
     const { settings, apiKey } = await settingsAndKey();
-    const [items, nextDue, tick, inbox, approvals, intents] = await Promise.all([
-      store.listItems(), hub.jobs.nextDue(), hub.jobs.tickJob(), hub.memory.inboxCount(), hub.approvals.pending(),
-      hub.jobs.listIntents({ status: ["active"] }),
+    const [items, nextDue, inbox, approvals, intents] = await Promise.all([
+      store.listItems(), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(), hub.jobs.listIntents({ status: ["active"] }),
     ]);
     const needsYou = items.filter((item) => item.status === "open").length;
     const running = hub.jobs.running();
     const runs = running.map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
     const nextJob = nextDue?.nextRunAt != null ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt } : null;
     return {
-      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0 || running.some((run) => run.kind === "tick"),
-      intervalMinutes: settings.intervalMinutes, idleIntervalMinutes: settings.idleIntervalMinutes, presence: presence.count(),
-      lastTick: hub.jobs.lastTick(), nextTickAt: tick?.status === "active" ? tick.nextRunAt : null,
+      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0, presence: presence.count(),
       busyThreads: [...chatTurns.keys()], runs, nextJob,
       counts: { needsYou, inbox, approvals: approvals.length, intents: intents.length },
       line: statusLine(runs, nextJob, !!apiKey),
@@ -316,10 +307,11 @@ export function createOrchestratorRuntime({
       const id = userMessage.id && !taken.has(userMessage.id) ? userMessage.id : randomUUID();
       const message: OrchestratorMessage = { ...userMessage, id, role: "user", metadata: { ...userMessage.metadata, at } };
       await store.appendMessages([message], threadId);
+      await refreshBeforeChat();
       const recent = historyWindow(await store.readMessages(threadId));
       const text = messageText(message);
       prepared = await prepareTurn(hub, {
-        kind: "chat", role: "chat", trigger: "user", threadId, interactive: true, query: text, touched, self,
+        kind: "chat", role: "chat", trigger: "user", threadId, interactive: true, query: text, touched,
         summary: threadId === MAIN_THREAD_ID ? "Answering" : `Answering in ${thread.title}`,
       });
       if (!prepared) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
@@ -378,12 +370,6 @@ export function createOrchestratorRuntime({
     }
   }
 
-  /** A tick now, through the tick job: its run is recorded and the next tick counts from its end. */
-  async function runTick(reason: TickReason) {
-    await ready;
-    return hub.jobs.runTick(reason);
-  }
-
   async function performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string; approvalId?: string }> {
     await ready;
     const item = await store.getItem(itemId);
@@ -425,10 +411,8 @@ export function createOrchestratorRuntime({
     cancel(threadId = MAIN_THREAD_ID) {
       chatTurns.get(threadId)?.abort();
     },
-    runTick,
     listItems: () => store.listItems(),
     updateItem,
-    listTicks: () => hub.jobs.listTicks(),
     performAction,
     subscribe(listener) {
       listeners.add(listener);

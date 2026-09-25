@@ -51,9 +51,10 @@ function node(overrides = {}) {
     baseRefName: "main",
     headRefName: "feat/thing",
     updatedAt: "2026-09-18T10:00:00Z",
+    createdAt: "2026-09-17T09:00:00Z",
     author: { login: "moses-lee" },
     repository: { nameWithOwner: "acme/app" },
-    commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
+    commits: { nodes: [{ commit: { committedDate: "2026-09-18T08:30:00Z", statusCheckRollup: { state: "SUCCESS" } } }] },
     ...overrides,
   };
 }
@@ -158,7 +159,8 @@ test("searchAttentionPulls makes one aliased GraphQL call and merges roles acros
   ]);
   assert.match(ATTENTION_QUERY, /authored: search\(type: ISSUE, query: \$authored, first: 50\)\{ issueCount pageInfo \{ hasNextPage endCursor \} nodes/);
   assert.match(ATTENTION_QUERY, /requested: search\(type: ISSUE, query: \$requested, first: 50\)\{ issueCount pageInfo/);
-  assert.match(ATTENTION_QUERY, /commits\(last: 1\) \{ nodes \{ commit \{ statusCheckRollup \{ state \} \} \} \}/);
+  assert.match(ATTENTION_QUERY, /commits\(last: 1\) \{ nodes \{ commit \{ committedDate statusCheckRollup \{ state \} \} \} \}/);
+  assert.match(ATTENTION_QUERY, /updatedAt createdAt\n/);
   assert.match(ATTENTION_PAGE_QUERY, /page: search\(type: ISSUE, query: \$search, first: 50, after: \$after\)\{ issueCount pageInfo/);
   assert.ok(!/\$query\b/.test(ATTENTION_PAGE_QUERY), "a variable named `query` would collide with gh's -f query=<document>");
   assert.equal(AUTHORED_SEARCH, "is:pr is:open author:@me sort:updated-desc");
@@ -173,7 +175,7 @@ test("searchAttentionPulls makes one aliased GraphQL call and merges roles acros
     repo: "acme/app", number: 1, url: "https://github.com/acme/app/pull/1", title: "Add a thing", author: "moses-lee",
     roles: ["author"], state: "open", draft: false, baseBranch: "main", headBranch: "feat/thing", checks: "passing",
     reviewDecision: "review_required", mergeable: "mergeable", updatedAt: Date.parse("2026-09-18T10:00:00Z"),
-    localProjectId: null, worktreeProjectId: null,
+    createdAt: Date.parse("2026-09-17T09:00:00Z"), pushedAt: Date.parse("2026-09-18T08:30:00Z"), localProjectId: null, worktreeProjectId: null,
   });
   assert.equal(byKey["other/lib#7"].author, "someone");
 });
@@ -188,6 +190,11 @@ test("searchAttentionPulls maps every GitHub enum onto the contract's values", a
   assert.equal((await mapOne({ commits: rollup(null) })).checks, null, "no checks configured");
   assert.equal((await mapOne({ commits: { nodes: [] } })).checks, null, "no commits");
   assert.equal((await mapOne({ commits: undefined })).checks, null);
+  // Freshness: when it was opened and when its head commit was made; null when GitHub says nothing usable.
+  assert.equal((await mapOne({ createdAt: undefined })).createdAt, null);
+  assert.equal((await mapOne({ createdAt: "not a date" })).createdAt, null);
+  assert.equal((await mapOne({ commits: rollup("SUCCESS") })).pushedAt, null, "no committedDate");
+  assert.equal((await mapOne({ commits: { nodes: [{ commit: { committedDate: "2026-09-18T08:30:00Z" } }] } })).pushedAt, Date.parse("2026-09-18T08:30:00Z"));
 
   assert.equal((await mapOne({ mergeable: "MERGEABLE" })).mergeable, "mergeable");
   assert.equal((await mapOne({ mergeable: "CONFLICTING" })).mergeable, "conflicting");

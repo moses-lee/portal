@@ -262,6 +262,31 @@ export const worldSnapshots = pgTable(
   (table) => [index("world_snapshots_at_idx").on(table.at)],
 );
 
+/**
+ * The change log: what each full world refresh found changed since the one before, one row per
+ * subject holding its latest state (see `orchestrator/world/changes.ts`). Chat turns read it.
+ */
+export const worldChanges = pgTable(
+  "world_changes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** What the change is about ("pr:owner/name#7", "review:owner/name#7", "session:<id>", "worktree:<id>", "folder:<id>"). */
+    subject: text("subject").notNull(),
+    /** When the refresh detected the latest state. */
+    at: epochMs("at").notNull(),
+    kind: text("kind").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    summary: text("summary").notNull(),
+    detail: text("detail"),
+    refs: jsonb("refs").$type<Json>().notNull(),
+    /** The user's own subject: a PR they authored, a session. */
+    mine: boolean("mine").notNull().default(false),
+    /** When the user last acted on the subject (opened or pushed the PR, started or prompted the session). */
+    activeAt: epochMs("active_at"),
+  },
+  (table) => [uniqueIndex("world_changes_subject_idx").on(table.subject), index("world_changes_at_idx").on(table.at)],
+);
+
 export const memoryEntities = pgTable(
   "memory_entities",
   {

@@ -323,7 +323,6 @@ export const portalStatus: OrchestratorStatus = {
   model: "gpt-5-mini",
   busy: false,
   presence: 1,
-  intervalMinutes: 10, idleIntervalMinutes: 60, lastTick: null, nextTickAt: null, // TEMP
   busyThreads: [],
   runs: [],
   nextJob: { id: "consolidate", title: "Curate memory", at: now + 7 * 60_000 },

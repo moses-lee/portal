@@ -263,10 +263,8 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
 
   /** The classic tools over the hub alone; what an approved call replays through, whether or not its turn is still around. */
   function replayTools(): ToolSet {
-    const unavailable = async () => { throw new Error("Not available when replaying an approved call."); };
     const ctx: ToolContext = {
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: new Set(), interactive: true, now,
-      self: { digest: unavailable, schedule: unavailable, lastTick: unavailable },
     };
     return createTools(ctx) as unknown as ToolSet;
   }

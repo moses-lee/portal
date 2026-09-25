@@ -23,7 +23,7 @@ function threadRow(thread: Thread) {
   return { id: thread.id, title: thread.title, status: thread.status, scope: thread.scope, intentId: thread.intentId };
 }
 
-/** Chat turns only (or a turn that names them): a tick has no business opening threads. */
+/** Chat turns only (or a turn that names them): a background turn has no business opening threads. */
 export function threadTools(ctx: DomainToolContext): ToolSet {
   return ctx.interactive ? chatThreadTools(ctx) : {};
 }

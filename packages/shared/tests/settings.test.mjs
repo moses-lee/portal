@@ -25,8 +25,7 @@ test("defaults carry the orchestrator contract's defaults, with no key stored", 
   assert.deepEqual(defaultSettings.orchestrator, orchestratorDefaults);
   assert.deepEqual(Object.keys(defaultSettings.orchestrator.apiKeys).sort(), [...orchestratorProviders].sort());
   for (const provider of orchestratorProviders) assert.equal(defaultSettings.orchestrator.apiKeys[provider], false);
-  assert.ok(orchestratorDefaults.intervalMinutes <= orchestratorLimits.intervalMinutes);
-  assert.ok(orchestratorDefaults.idleIntervalMinutes <= orchestratorLimits.idleIntervalMinutes);
+  assert.ok(!("intervalMinutes" in orchestratorDefaults) && !("idleIntervalMinutes" in orchestratorDefaults), "the old tick intervals are gone");
   assert.ok(orchestratorDefaults.model.length <= orchestratorLimits.modelLength);
 });
 
@@ -63,18 +62,18 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
       model: "gpt-x",
       intervalMinutes: 5,
       idleIntervalMinutes: 120,
+      reviews: { answerReadOnly: false },
       apiKeys: { anthropic: "sk-ant-secret" },
     },
   });
   assert.deepEqual(merged.gitActions, defaultSettings.gitActions);
+  // Stored files from before the tick became a silent refresh may still carry its intervals: they are dropped.
   assert.deepEqual(merged.orchestrator, {
     provider: "openai",
     model: "gpt-x",
     bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
-    intervalMinutes: 5,
-    idleIntervalMinutes: 120,
     consolidation: orchestratorDefaults.consolidation,
-    reviews: { answerReadOnly: true },
+    reviews: { answerReadOnly: false },
     apiKeys: { openai: false, anthropic: true },
   });
   assert.ok(!JSON.stringify(merged).includes("sk-ant-secret"), "the key text never reaches the wire form");
@@ -87,11 +86,9 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
 
   // Ill-typed values leave the default in place, field by field.
   const lenient = mergeSettings({
-    orchestrator: { provider: "google", model: "   ", intervalMinutes: 2.5, idleIntervalMinutes: "60", apiKeys: { openai: 42 } },
+    orchestrator: { provider: "google", model: "   ", reviews: { answerReadOnly: "no" }, apiKeys: { openai: 42 } },
   });
   assert.deepEqual(lenient.orchestrator, orchestratorDefaults);
-  assert.deepEqual(mergeSettings({ orchestrator: { intervalMinutes: 0 } }).orchestrator.intervalMinutes, orchestratorDefaults.intervalMinutes);
-  assert.deepEqual(mergeSettings({ orchestrator: { intervalMinutes: -3 } }).orchestrator.intervalMinutes, orchestratorDefaults.intervalMinutes);
 });
 
 test("settingsOverrides keeps only what differs, and round-trips through mergeSettings", () => {
@@ -110,10 +107,10 @@ test("settingsOverrides writes only the orchestrator fields that differ, and nev
   assert.deepEqual(mergeSettings(settingsOverrides(one)), one);
 
   const all = mergeSettings({
-    orchestrator: { provider: "openai", model: "gpt-x", bookkeeping: { provider: "openai", model: "gpt-mini" }, intervalMinutes: 1, idleIntervalMinutes: 10080 },
+    orchestrator: { provider: "openai", model: "gpt-x", bookkeeping: { provider: "openai", model: "gpt-mini" }, reviews: { answerReadOnly: false } },
   });
   assert.deepEqual(settingsOverrides(all), {
-    orchestrator: { provider: "openai", model: "gpt-x", bookkeeping: { provider: "openai", model: "gpt-mini" }, intervalMinutes: 1, idleIntervalMinutes: 10080 },
+    orchestrator: { provider: "openai", model: "gpt-x", bookkeeping: { provider: "openai", model: "gpt-mini" }, reviews: { answerReadOnly: false } },
   });
   assert.deepEqual(mergeSettings(settingsOverrides(all)), all);
 
@@ -126,8 +123,8 @@ test("settingsOverrides writes only the orchestrator fields that differ, and nev
   assert.deepEqual(settingsOverrides(keyed), {});
 
   // Both sections at once.
-  const both = mergeSettings({ gitActions: { prompts: { checks: "A" } }, orchestrator: { intervalMinutes: 3 } });
-  assert.deepEqual(settingsOverrides(both), { gitActions: { prompts: { checks: "A" } }, orchestrator: { intervalMinutes: 3 } });
+  const both = mergeSettings({ gitActions: { prompts: { checks: "A" } }, orchestrator: { model: "gpt-y", intervalMinutes: 3 } });
+  assert.deepEqual(settingsOverrides(both), { gitActions: { prompts: { checks: "A" } }, orchestrator: { model: "gpt-y" } });
 });
 
 test("consolidation settings merge field by field, null turns a trigger off, and only differences are written", () => {
@@ -160,20 +157,18 @@ test("applySettingsPatch layers a patch on top and resets blank prompts to defau
 test("applySettingsPatch touches only the section a patch names", () => {
   const start = mergeSettings({
     gitActions: { prompts: { checks: "A" } },
-    orchestrator: { provider: "openai", model: "gpt-x", intervalMinutes: 5, apiKeys: { anthropic: "k" } },
+    orchestrator: { provider: "openai", model: "gpt-x", reviews: { answerReadOnly: false }, apiKeys: { anthropic: "k" } },
   });
 
   // An orchestrator-only patch keeps the prompts.
-  const orchestratorOnly = applySettingsPatch(start, { orchestrator: { model: "gpt-y", idleIntervalMinutes: 30 } });
+  const orchestratorOnly = applySettingsPatch(start, { orchestrator: { model: "gpt-y", consolidation: { minIntervalMinutes: 30 } } });
   assert.deepEqual(orchestratorOnly.gitActions, start.gitActions);
   assert.deepEqual(orchestratorOnly.orchestrator, {
     provider: "openai",
     model: "gpt-y",
     bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
-    intervalMinutes: 5,
-    idleIntervalMinutes: 30,
-    consolidation: orchestratorDefaults.consolidation,
-    reviews: { answerReadOnly: true },
+    consolidation: { ...orchestratorDefaults.consolidation, minIntervalMinutes: 30 },
+    reviews: { answerReadOnly: false },
     apiKeys: { openai: false, anthropic: true },
   });
 

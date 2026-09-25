@@ -1,6 +1,6 @@
 /**
- * The slice of Portal the orchestrator acts through, as one injectable object. Tools and the tick
- * only ever reach Portal via this surface, so tests run them against fakes and the live wiring
+ * The slice of Portal the orchestrator acts through, as one injectable object. Tools and the world
+ * builder only ever reach Portal via this surface, so tests run them against fakes and the live wiring
  * below (over the server's sessions, projects, and settings services) is the only place that
  * touches the real ones.
  */

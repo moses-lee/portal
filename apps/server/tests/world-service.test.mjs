@@ -3,9 +3,11 @@ import test from "node:test";
 import { MockLanguageModelV3 } from "ai/test";
 import { createOrchestratorRuntime } from "../src/orchestrator/runtime.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
+import { emptyRefreshReport, performRefresh } from "../src/orchestrator/tick.ts";
 import { WORLD_STALE_MS, createWorldService } from "../src/orchestrator/world/service.ts";
 import { createMemoryWorldStore } from "../src/orchestrator/world/store.ts";
-import { guidance } from "../src/orchestrator/world/prompt.ts";
+import { changesGuidance, guidance } from "../src/orchestrator/world/prompt.ts";
+import { DEFAULT_CHANGES_SINCE_MS, changeMatches, parseSince } from "../src/orchestrator/world/tools.ts";
 import { T0, attentionPull, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 function setup({ worldStore = createMemoryWorldStore(), ...options } = {}) {
@@ -112,12 +114,12 @@ test("a store that fails does not fail the refresh", async (t) => {
   assert.ok(logged.mock.calls.some((call) => /disk full/.test(call.arguments[0])));
 });
 
-test("chat turns get all four world tools, background turns only resolve_pull and resolve_repo; the tools answer from the world", async () => {
+test("chat turns get all five world tools, background turns only resolve_pull and resolve_repo; the tools answer from the world", async () => {
   const { world, hub } = setup();
   await world.refresh("tick");
   const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
   const chat = world.tools({ interactive: true, deps: hub.deps, hub, turn });
-  assert.deepEqual(Object.keys(chat).sort(), ["get_world", "resolve_pull", "resolve_repo", "resolve_session"]);
+  assert.deepEqual(Object.keys(chat).sort(), ["get_changes", "get_world", "resolve_pull", "resolve_repo", "resolve_session"]);
   const background = world.tools({ interactive: false, deps: hub.deps, hub, turn: { ...turn, origin: "job" } });
   assert.deepEqual(Object.keys(background).sort(), ["resolve_pull", "resolve_repo"]);
 
@@ -139,8 +141,66 @@ test("the guidance tells the model to resolve before asking", () => {
   assert.match(guidance, /several candidates/);
 });
 
+test("the changes guidance: when to mention, what never to, how, and get_changes when asked", () => {
+  assert.match(changesGuidance, /discussed in this thread/);
+  assert.match(changesGuidance, /fresh and the user's own/);
+  assert.match(changesGuidance, /Do not mention old state that merely persists/);
+  assert.match(changesGuidance, /at most one or two short lines at the end/);
+  assert.match(changesGuidance, /say nothing about changes/);
+  assert.match(changesGuidance, /call get_changes/);
+});
+
+test("get_changes: since as relative or ISO time (default a day), about as words or refs, newest first, capped", async () => {
+  const MIN = 60_000;
+  assert.equal(parseSince(undefined, T0), T0 - DEFAULT_CHANGES_SINCE_MS);
+  assert.equal(parseSince("  ", T0), T0 - DEFAULT_CHANGES_SINCE_MS);
+  assert.equal(parseSince("30m", T0), T0 - 30 * MIN);
+  assert.equal(parseSince("2h", T0), T0 - 120 * MIN);
+  assert.equal(parseSince("1.5 hours", T0), T0 - 90 * MIN);
+  assert.equal(parseSince("3d", T0), T0 - 3 * 24 * 60 * MIN);
+  assert.equal(parseSince("1w", T0), T0 - 7 * 24 * 60 * MIN);
+  assert.equal(parseSince("2026-09-24T10:00:00Z", T0), Date.parse("2026-09-24T10:00:00Z"));
+  assert.throws(() => parseSince("yesterday-ish", T0), /neither a relative time/);
+
+  const { world, hub, timers } = setup();
+  await world.refresh("manual");
+  const change = (subject, at, overrides = {}) => ({
+    subject, kind: "pr_checks_failing", fingerprint: subject, summary: `about ${subject}`, detail: null, refs: {}, mine: true, activeAt: null, ...overrides,
+  });
+  await world.changes.record([change("pr:acme/monorepo#2367", 0, { summary: 'PR acme/monorepo#2367 "Speed up CI" needs attention: checks failing', refs: { pull: { repo: "acme/monorepo", number: 2367, url: "u" }, projectId: "p1" } })], T0 - 3 * 60 * MIN);
+  await world.changes.record([change("session:s1", 0, { kind: "session_finished", summary: 'Session "Fix the login bug" finished its turn', refs: { sessionId: "s1", projectId: "p1" } })], T0 - 30 * MIN);
+  await world.changes.record([change("folder:p9", 0, { kind: "folder_missing", summary: "The folder of project old is missing", refs: { projectId: "p9" } })], T0 - 3 * 24 * 60 * MIN);
+  const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
+  const tools = world.tools({ interactive: true, deps: hub.deps, hub, turn, now: () => timers.now() });
+  const run = async (input) => {
+    const parsed = tools.get_changes.inputSchema.safeParse(input);
+    return parsed.success ? tools.get_changes.execute(parsed.data, {}) : { invalidInput: true };
+  };
+
+  const day = await run({});
+  assert.equal(day.since, new Date(T0 - DEFAULT_CHANGES_SINCE_MS).toISOString());
+  assert.deepEqual(day.changes.map((entry) => entry.summary), ['Session "Fix the login bug" finished its turn', 'PR acme/monorepo#2367 "Speed up CI" needs attention: checks failing']);
+  assert.deepEqual(day.changes[1], {
+    at: new Date(T0 - 3 * 60 * MIN).toISOString(), kind: "pr_checks_failing", summary: 'PR acme/monorepo#2367 "Speed up CI" needs attention: checks failing',
+    pull: "acme/monorepo#2367", projectId: "p1", mine: true, fingerprint: "pr:acme/monorepo#2367",
+  });
+  assert.equal(day.truncated, false);
+  assert.equal((await run({ since: "1w" })).changes.length, 3);
+  assert.equal((await run({ since: "1h" })).changes.length, 1);
+  assert.deepEqual((await run({ about: "#2367" })).changes.map((entry) => entry.pull), ["acme/monorepo#2367"]);
+  assert.deepEqual((await run({ about: "login bug" })).changes.map((entry) => entry.sessionId), ["s1"]);
+  assert.equal((await run({ about: "mono", since: "1w" })).changes.length, 2, "a project name matches what happened in it");
+  assert.deepEqual((await run({ about: "nothing like it" })).changes, []);
+  const one = await run({ limit: 1 });
+  assert.equal(one.changes.length, 1);
+  assert.equal(one.truncated, true);
+  assert.equal((await run({ limit: 0 })).invalidInput, true);
+  assert.match((await run({ since: "whenever" })).error, /neither a relative time/);
+  assert.equal(changeMatches(change("x", 0), undefined), true);
+});
+
 // ---------------------------------------------------------------------------------------------
-// The tick and the prompt, through the runtime
+// The refresh and the prompt, through the runtime
 // ---------------------------------------------------------------------------------------------
 
 function runtimeSetup(t, deps) {
@@ -154,18 +214,20 @@ function runtimeSetup(t, deps) {
   return { runtime, store, events, timers };
 }
 
-test("a tick refreshes the world, diffs its snapshot, and carries the build's error lines into its log", async (t) => {
+test("the hourly refresh rebuilds the world, diffs its snapshot, and carries the build's error lines into its log", async (t) => {
   const { deps } = fakeDeps({ sessions: [sessionMeta()], projects: [project()] });
   deps.github.searchAttentionPulls = async () => ({ pulls: [], error: "gh is not logged in" });
   deps.terminals.list = async () => { throw new Error("pty gone"); };
   const { runtime, store, events } = runtimeSetup(t, deps);
-  const report = await runtime.runTick("manual");
+  await runtime.ready;
+  const report = emptyRefreshReport();
+  await performRefresh(runtime.hub, report, { signal: new AbortController().signal });
   assert.equal(report.error, null, report.log.join("\n"));
   assert.ok(report.log.some((line) => /GitHub search failed \(gh is not logged in\)/.test(line)), report.log.join("\n"));
   assert.ok(report.log.some((line) => /Terminals could not be read/.test(line)));
   const builds = await runtime.hub.world.store.list();
   assert.deepEqual(builds.map((b) => b.reason), ["tick"]);
-  assert.deepEqual(await store.readSnapshot(), builds[0].world.snapshot, "the tick stores the world's snapshot");
+  assert.deepEqual(await store.readSnapshot(), builds[0].world.snapshot, "the refresh stores the world's snapshot");
   assert.ok(events.some((event) => event.type === "world"));
 });
 

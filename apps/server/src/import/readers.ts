@@ -10,8 +10,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { StoredEvent } from "@portal/contracts/types";
 import { capMemory, isItem, isOrchestratorMessage, isTickReport, isTickSnapshot } from "../orchestrator/store.ts";
-import type { LegacyItem, LegacyWatch } from "../orchestrator/jobs/legacy.ts";
-import type { OrchestratorMessage, TickReport, TickSnapshot } from "../orchestrator/types.ts";
+import type { LegacyItem, LegacyTickReport, LegacyWatch } from "../orchestrator/jobs/legacy.ts";
+import type { OrchestratorMessage, TickSnapshot } from "../orchestrator/types.ts";
 import { SettingsError, parseSettingsFile, parseSettingsPatch } from "../lib/settings-store.ts";
 import type { Project, RemovedProject } from "../lib/types.ts";
 import { dropLegacyWorktreeNames, legacyProjectsFile, parseLegacyProjectsFile } from "../projects/legacy.ts";
@@ -271,7 +271,7 @@ export type LegacyOrchestrator = {
   items: LegacyItem[];
   watches: LegacyWatch[];
   /** The newest MAX_TICK_REPORTS, oldest first. */
-  ticks: TickReport[];
+  ticks: LegacyTickReport[];
   snapshot: TickSnapshot | null;
   /** Null when there is no memory file. */
   memory: string | null;
@@ -321,7 +321,7 @@ export async function readLegacyOrchestrator(home: string): Promise<LegacyOrches
   const epoch = (value: number | null) => (value === null || !safeEpoch(value) ? null : Math.round(value));
   const isImportableItem = (value: unknown): value is LegacyItem => isItem(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
   const isImportableWatch = (value: unknown): value is LegacyWatch => isWatch(value) && safeEpoch(value.createdAt) && safeEpoch(value.updatedAt);
-  const isImportableTick = (value: unknown): value is TickReport => isTickReport(value) && safeEpoch(value.startedAt) && safeEpoch(value.finishedAt);
+  const isImportableTick = (value: unknown): value is LegacyTickReport => isTickReport(value) && safeEpoch(value.startedAt) && safeEpoch(value.finishedAt);
   const items = list("items.json", isImportableItem)
     .map((item) => ({ ...item, createdAt: Math.round(item.createdAt), updatedAt: Math.round(item.updatedAt), snoozedUntil: epoch(item.snoozedUntil) }));
   const watches = list("watches.json", isImportableWatch)

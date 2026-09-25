@@ -149,22 +149,20 @@ for (const [name, make] of backends) {
     const { open, stored } = await make(t);
     const store = open();
     const result = await store.patch({
-      orchestrator: { provider: "anthropic", model: "  claude-x ", intervalMinutes: 5, apiKeys: { anthropic: " sk-ant-secret " } },
+      orchestrator: { provider: "anthropic", model: "  claude-x ", consolidation: { minIntervalMinutes: 90 }, apiKeys: { anthropic: " sk-ant-secret " } },
     });
     assert.deepEqual(result.orchestrator, {
       provider: "anthropic",
       model: "claude-x",
       bookkeeping: orchestratorDefaults.bookkeeping,
-      intervalMinutes: 5,
-      idleIntervalMinutes: orchestratorDefaults.idleIntervalMinutes,
-      consolidation: orchestratorDefaults.consolidation,
+      consolidation: { ...orchestratorDefaults.consolidation, minIntervalMinutes: 90 },
       reviews: orchestratorDefaults.reviews,
       apiKeys: { openai: false, anthropic: true },
     });
     assert.deepEqual(result.gitActions, defaultSettings.gitActions, "the other section is untouched");
     assert.ok(!JSON.stringify(result).includes("sk-ant"), "the returned settings never contain a key");
     assert.deepEqual(await stored(), {
-      overrides: { orchestrator: { model: "claude-x", intervalMinutes: 5 } },
+      overrides: { orchestrator: { model: "claude-x", consolidation: { minIntervalMinutes: 90 } } },
       keys: { anthropic: "sk-ant-secret" },
       written: true,
     });
@@ -184,15 +182,15 @@ for (const [name, make] of backends) {
     assert.equal(await store.apiKey("anthropic"), "sk-ant-secret");
 
     // A patch to another orchestrator field keeps the key too; the second provider's key sits alongside.
-    const more = await store.patch({ orchestrator: { idleIntervalMinutes: 240, apiKeys: { openai: "sk-openai" } } });
+    const more = await store.patch({ orchestrator: { bookkeeping: { model: "claude-y" }, apiKeys: { openai: "sk-openai" } } });
     assert.deepEqual(more.orchestrator.apiKeys, { openai: true, anthropic: true });
-    assert.equal(more.orchestrator.idleIntervalMinutes, 240);
+    assert.equal(more.orchestrator.bookkeeping.model, "claude-y");
     assert.deepEqual((await stored()).keys, { anthropic: "sk-ant-secret", openai: "sk-openai" });
     assert.equal(await store.apiKey("openai"), "sk-openai");
 
     // Fields set back to their defaults leave the overrides; keys stay.
     const reset = await store.patch({
-      orchestrator: { provider: orchestratorDefaults.provider, model: orchestratorDefaults.model, intervalMinutes: orchestratorDefaults.intervalMinutes, idleIntervalMinutes: orchestratorDefaults.idleIntervalMinutes },
+      orchestrator: { provider: orchestratorDefaults.provider, model: orchestratorDefaults.model, bookkeeping: orchestratorDefaults.bookkeeping, consolidation: orchestratorDefaults.consolidation },
     });
     assert.deepEqual(reset.orchestrator, { ...orchestratorDefaults, apiKeys: { openai: true, anthropic: true } });
     assert.deepEqual(await stored(), {
@@ -244,12 +242,6 @@ for (const [name, make] of backends) {
     await rejects400(store.patch({ orchestrator: { model: 5 } }), /model must be a string/);
     await rejects400(store.patch({ orchestrator: { model: "m".repeat(101) } }), /model is too long \(101 characters; the limit is 100\)/);
 
-    for (const bad of [0, -1, 1.5, "10", null, 1441, Number.NaN, Number.POSITIVE_INFINITY]) {
-      await rejects400(store.patch({ orchestrator: { intervalMinutes: bad } }), /intervalMinutes must be a whole number of minutes between 1 and 1440/);
-    }
-    for (const bad of [0, 2.5, "60", 10081]) {
-      await rejects400(store.patch({ orchestrator: { idleIntervalMinutes: bad } }), /idleIntervalMinutes must be a whole number of minutes between 1 and 10080/);
-    }
 
     await rejects400(store.patch({ orchestrator: { apiKeys: [] } }), /apiKeys must be an object/);
     await rejects400(store.patch({ orchestrator: { apiKeys: "sk" } }), /apiKeys must be an object/);
@@ -260,17 +252,15 @@ for (const [name, make] of backends) {
 
     // One bad field rejects the whole patch, even when the others are fine.
     await rejects400(store.patch({ orchestrator: { model: "ok", provider: "nope" } }), /Unknown provider/);
-    await rejects400(store.patch({ gitActions: { prompts: { checks: "ok" } }, orchestrator: { intervalMinutes: 0 } }), /intervalMinutes/);
+    await rejects400(store.patch({ gitActions: { prompts: { checks: "ok" } }, orchestrator: { model: "" } }), /model must not be empty/);
     await rejects400(store.patch({ orchestrator: { apiKeys: { openai: "sk-ok", anthropic: 7 } } }), /anthropic API key/);
     assert.equal((await stored()).written, false, "nothing written for rejected patches");
 
     // Boundaries are inclusive, and lengths apply after trimming.
     const result = await store.patch({
-      orchestrator: { model: ` ${"m".repeat(100)} `, intervalMinutes: 1440, idleIntervalMinutes: 1, apiKeys: { openai: ` ${"k".repeat(512)} ` } },
+      orchestrator: { model: ` ${"m".repeat(100)} `, apiKeys: { openai: ` ${"k".repeat(512)} ` } },
     });
     assert.equal(result.orchestrator.model, "m".repeat(100));
-    assert.equal(result.orchestrator.intervalMinutes, 1440);
-    assert.equal(result.orchestrator.idleIntervalMinutes, 1);
     assert.equal(await store.apiKey("openai"), "k".repeat(512));
   });
 
@@ -301,14 +291,14 @@ for (const [name, make] of backends) {
     const seen = [];
     const unsubscribe = store.subscribe((settings) => seen.push(settings));
     const other = [];
-    store.subscribe((settings) => other.push(settings.orchestrator.intervalMinutes));
+    store.subscribe((settings) => other.push(settings.orchestrator.model));
 
-    const first = await store.patch({ orchestrator: { intervalMinutes: 3 } });
+    const first = await store.patch({ orchestrator: { model: "claude-3" } });
     assert.equal(seen.length, 1);
     assert.deepEqual(seen[0], first);
-    assert.equal(seen[0].orchestrator.intervalMinutes, 3);
+    assert.equal(seen[0].orchestrator.model, "claude-3");
 
-    await rejects400(store.patch({ orchestrator: { intervalMinutes: 0 } }));
+    await rejects400(store.patch({ orchestrator: { model: "" } }));
     assert.equal(seen.length, 1, "a rejected patch does not notify");
 
     // A patch that changes nothing still notifies: the caller wrote, and listeners are cheap.
@@ -323,7 +313,7 @@ for (const [name, make] of backends) {
     unsubscribe();
     await store.patch({ gitActions: { prompts: { checks: "A" } } });
     assert.equal(seen.length, 3, "unsubscribed listeners are not called");
-    assert.deepEqual(other, [3, 3, 3, 3], "the other listener kept receiving");
+    assert.deepEqual(other, ["claude-3", "claude-3", "claude-3", "claude-3"], "the other listener kept receiving");
 
     // A throwing listener does not fail the patch or starve later listeners.
     const error = t.mock.method(console, "error", () => {});
@@ -486,7 +476,7 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
       version: 2,
       gitActions: { prompts: { checks: "ok", deploy: "x", review: 5 } },
       orchestrator: {
-        provider: "google", model: " claude-x ", intervalMinutes: 0, idleIntervalMinutes: 30, consolidation: { nightlyAt: "3am", inboxThreshold: null },
+        provider: "google", model: " claude-x ", intervalMinutes: 0, idleIntervalMinutes: 30, reviews: { answerReadOnly: "no" }, consolidation: { nightlyAt: "3am", inboxThreshold: null },
         apiKeys: { openai: "sk-in-the-row" },
       },
       scripts: { preWorktreeDelete: { command: " make clean ", abortOnFailure: "yes" } },
@@ -497,16 +487,17 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
   const settings = await store.read();
   assert.deepEqual(settings.gitActions.prompts, { ...defaults, checks: "ok" });
   assert.deepEqual(settings.orchestrator, {
-    ...orchestratorDefaults, model: "claude-x", idleIntervalMinutes: 30, consolidation: { ...orchestratorDefaults.consolidation, inboxThreshold: null },
+    ...orchestratorDefaults, model: "claude-x", consolidation: { ...orchestratorDefaults.consolidation, inboxThreshold: null },
   });
+  assert.ok(!("intervalMinutes" in settings.orchestrator) && !("idleIntervalMinutes" in settings.orchestrator), "the old tick intervals are dropped");
   assert.deepEqual(settings.scripts.preWorktreeDelete, { ...defaultScriptSettings, command: "make clean" });
   assert.equal(await store.apiKey("openai"), null, "a key in the overrides row is never used");
 
   // The next change rewrites the row without the bad values.
-  await store.patch({ orchestrator: { intervalMinutes: 15 } });
+  await store.patch({ orchestrator: { consolidation: { minIntervalMinutes: 90 } } });
   assert.deepEqual((await stored()).overrides, {
     gitActions: { prompts: { checks: "ok" } },
-    orchestrator: { model: "claude-x", intervalMinutes: 15, idleIntervalMinutes: 30, consolidation: { inboxThreshold: null } },
+    orchestrator: { model: "claude-x", consolidation: { inboxThreshold: null, minIntervalMinutes: 90 } },
     scripts: { preWorktreeDelete: { command: "make clean" } },
   });
 });

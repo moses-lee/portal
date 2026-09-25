@@ -1,10 +1,12 @@
 /**
  * Run bookkeeping: every chat turn, job firing, and helper sub-turn is a row in `job_runs`, started
  * and finished here, announced as a `run` event, and (for background runs) written to the activity
- * log. `running()` answers from an in-process map so the status line never waits on Postgres.
+ * log. `running()` answers from an in-process map so the status line never waits on Postgres. The
+ * world refresh's runs (kind `tick`) are recorded like any other but announced nowhere: no `run`
+ * event, no activity entry.
  *
- * A job's run is started by the worker before it knows whether a model will be called (a tick
- * that finds nothing new still counts). When the job then prepares a turn, `prepareTurn` asks for
+ * A job's run is started by the worker before it knows whether a model will be called (a
+ * deterministic check that finds nothing still counts). When the job then prepares a turn, `prepareTurn` asks for
  * a run of its own: inside `adopting()` that request is answered with the job's run instead, and
  * the turn's outcome (model, usage, summary) is kept for the worker to merge into the final record.
  * So one firing is one run, whatever the job did.
@@ -43,7 +45,7 @@ export function createRuns(hub: OrchestratorHub, store: JobsStore) {
     };
     const run = await store.insertRun(draft);
     running.set(run.id, run);
-    hub.emit({ type: "run", run });
+    if (run.kind !== "tick") hub.emit({ type: "run", run });
     return run;
   }
 
@@ -64,12 +66,12 @@ export function createRuns(hub: OrchestratorHub, store: JobsStore) {
       await store.updateRun(run);
     } finally {
       running.delete(id);
-      hub.emit({ type: "run", run });
+      if (run.kind !== "tick") hub.emit({ type: "run", run });
     }
-    if (run.kind !== "chat") {
+    if (run.kind !== "chat" && run.kind !== "tick") {
       void hub.activity.log({
         actor: "system", kind: "run.finished",
-        summary: `${run.kind === "tick" ? "Tick" : run.kind === "intent_check" ? "Intent check" : run.kind === "helper" ? "Helper" : "Job"} ${run.status.replace("_", " ")}${run.summary ? `: ${run.summary}` : ""}`,
+        summary: `${run.kind === "intent_check" ? "Intent check" : run.kind === "helper" ? "Helper" : "Job"} ${run.status.replace("_", " ")}${run.summary ? `: ${run.summary}` : ""}`,
         refs: { runId: run.id, ...(run.jobId ? { jobId: run.jobId } : {}), ...(run.threadId ? { threadId: run.threadId } : {}) },
         detail: { status: run.status, trigger: run.trigger, ...(run.error ? { error: run.error } : {}), ...(run.usage ? { usage: run.usage } : {}) },
       });

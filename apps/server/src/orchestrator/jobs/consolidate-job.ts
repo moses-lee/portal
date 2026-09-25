@@ -128,7 +128,7 @@ export function createConsolidation(core: JobsCore) {
     const { nightlyAt } = await settings().catch(() => ({ nightlyAt: FALLBACK_NIGHTLY_AT }));
     const unscheduled: Pick<KindResult, "nextRunAt"> = nightlyAt ? {} : { nextRunAt: null };
     try {
-      const outcome = await runCuration(hub, { run: jobRun, jobId: job.id, trigger, signal, self: core.self() });
+      const outcome = await runCuration(hub, { run: jobRun, jobId: job.id, trigger, signal });
       if (!outcome.skipped && worthPosting(outcome.result)) {
         await core.postToThread(null, outcome.result.line, jobRun).catch((err: unknown) => console.error("Could not post the curation digest:", err));
       }

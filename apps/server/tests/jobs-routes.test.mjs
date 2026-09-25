@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { MockLanguageModelV3 } from "ai/test";
+import { eq } from "drizzle-orm";
+import { jobRuns } from "../src/db/schema.ts";
 import { T0, fakeDeps, fakeSettings, fakeTimers, flush } from "./fixtures/orchestrator-fakes.mjs";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
@@ -33,11 +35,10 @@ const inject = (app, method, url, payload) => app.inject({ method, url, payload 
 test("jobs: listing by status, patching (pause, reschedule, cancel), run now, and their errors", async (t) => {
   const { app, jobs } = await setup(t);
   const listed = (await inject(app, "GET", "/api/portal/jobs")).json().jobs;
-  assert.deepEqual(listed.map((job) => [job.id, job.kind, job.status]), [["tick", "tick", "active"], ["consolidate", "consolidate", "active"]]);
-  assert.equal(listed[0].nextRunAt, T0 + MIN);
+  assert.deepEqual(listed.map((job) => [job.id, job.kind, job.status]), [["consolidate", "consolidate", "active"]], "never the world refresh");
 
   const { intent, job } = await jobs.createIntent({ text: "tell me when #7 merges", trigger: "acme/app#7 merged", action: "tell me", check: { type: "every", everyMs: 5 * MIN } }, { actor: "agent" });
-  assert.deepEqual((await inject(app, "GET", "/api/portal/jobs?status=active,paused")).json().jobs.map((entry) => entry.id), ["tick", job.id, "consolidate"]);
+  assert.deepEqual((await inject(app, "GET", "/api/portal/jobs?status=active,paused")).json().jobs.map((entry) => entry.id), [job.id, "consolidate"]);
   assert.deepEqual((await inject(app, "GET", "/api/portal/jobs?status=done")).json(), { jobs: [] });
   assert.equal((await inject(app, "GET", "/api/portal/jobs?status=bogus")).statusCode, 400);
 
@@ -64,13 +65,18 @@ test("jobs: listing by status, patching (pause, reschedule, cancel), run now, an
   }
   assert.deepEqual((await inject(app, "PATCH", `/api/portal/jobs/${job.id}`, ["x"])).json(), { error: "Expected a JSON object body." });
   assert.equal((await inject(app, "PATCH", "/api/portal/jobs/nope", { status: "paused" })).statusCode, 404);
-  assert.equal((await inject(app, "PATCH", "/api/portal/jobs/tick", { status: "cancelled" })).statusCode, 409);
+  // The world refresh is nobody's to change or run: it is unknown here.
+  for (const body of [{ status: "cancelled" }, { status: "paused" }, { schedule: { type: "every", everyMs: 5 * MIN } }]) {
+    assert.equal((await inject(app, "PATCH", "/api/portal/jobs/tick", body)).statusCode, 404, JSON.stringify(body));
+  }
+  assert.equal((await inject(app, "POST", "/api/portal/jobs/tick/run")).statusCode, 404);
 
-  // Run now: the tick through the job, answered with its run; an unknown or finished job is a 404.
-  const ran = await inject(app, "POST", "/api/portal/jobs/tick/run");
+  // Run now: answered with its run; an unknown or finished job is a 404.
+  const ran = await inject(app, "POST", `/api/portal/jobs/${job.id}/run`);
   assert.equal(ran.statusCode, 200);
-  assert.equal(ran.json().run.kind, "tick");
+  assert.equal(ran.json().run.kind, "intent_check");
   assert.equal(ran.json().run.trigger, "manual");
+  await flush();
   assert.equal((await inject(app, "POST", "/api/portal/jobs/nope/run")).statusCode, 404);
 
   const cancelled = await inject(app, "PATCH", `/api/portal/jobs/${job.id}`, { status: "cancelled" });
@@ -82,30 +88,45 @@ test("jobs: listing by status, patching (pause, reschedule, cancel), run now, an
 
 test("runs and intents: history with filters and paging, one run, cancel, and the intent patch", async (t) => {
   const { app, runtime, jobs, timers } = await setup(t);
-  const reports = [];
+  const helpers = [];
   for (let i = 0; i < 3; i++) {
     timers.tick(1_000);
-    reports.push(await runtime.runTick("manual"));
+    const run = await jobs.startRun({ kind: "helper", trigger: "agent", summary: `helper ${i}` });
+    helpers.push(await jobs.finishRun(run.id, { status: "succeeded", result: { n: i } }));
   }
-  await flush();
+  // The world refresh runs too; its runs are stored but never listed or found.
+  await timers.advance(MIN);
+  // The Postgres worker answers in real time: wait for the refresh's run to finish.
+  let refreshRun;
+  for (let i = 0; i < 200 && refreshRun?.status !== "succeeded"; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    [refreshRun] = await runtime.hub.db.select().from(jobRuns).where(eq(jobRuns.kind, "tick"));
+  }
+  assert.equal(refreshRun?.status, "succeeded");
+  assert.deepEqual((await runtime.hub.world.store.list()).map((build) => build.reason), ["tick"]);
   timers.tick(1_000);
   const chat = await jobs.startRun({ kind: "chat", trigger: "user", threadId: "main" });
 
   const all = (await inject(app, "GET", "/api/portal/runs")).json().runs;
-  assert.equal(all.length, 4);
-  assert.equal(all[0].id, chat.id, "newest first");
-  const ticks = (await inject(app, "GET", "/api/portal/runs?kind=tick&jobId=tick")).json().runs;
-  assert.deepEqual(ticks.map((run) => run.id), reports.map((report) => report.id).reverse());
-  const page = (await inject(app, "GET", `/api/portal/runs?kind=tick&limit=2&before=${ticks[0].id}`)).json().runs;
-  assert.deepEqual(page.map((run) => run.id), ticks.slice(1).map((run) => run.id));
+  assert.deepEqual(all.map((run) => run.kind), ["chat", "helper", "helper", "helper"], "newest first, no world refresh");
+  assert.equal(all[0].id, chat.id);
+  assert.deepEqual((await inject(app, "GET", "/api/portal/runs?kind=tick")).json(), { runs: [] });
+  assert.deepEqual((await inject(app, "GET", "/api/portal/runs?jobId=tick")).json(), { runs: [] });
+  const listed = (await inject(app, "GET", "/api/portal/runs?kind=helper")).json().runs;
+  assert.deepEqual(listed.map((run) => run.id), helpers.map((run) => run.id).reverse());
+  const page = (await inject(app, "GET", `/api/portal/runs?kind=helper&limit=2&before=${listed[0].id}`)).json().runs;
+  assert.deepEqual(page.map((run) => run.id), listed.slice(1).map((run) => run.id));
   assert.deepEqual((await inject(app, "GET", "/api/portal/runs?threadId=elsewhere")).json(), { runs: [] });
   assert.equal((await inject(app, "GET", "/api/portal/runs?kind=bogus")).statusCode, 400);
-  assert.deepEqual((await inject(app, "GET", `/api/portal/runs/${reports[0].id}`)).json().run.result, reports[0]);
+  assert.deepEqual((await inject(app, "GET", `/api/portal/runs/${helpers[0].id}`)).json().run.result, { n: 0 });
   assert.equal((await inject(app, "GET", "/api/portal/runs/nope")).statusCode, 404);
-  // The old routes answer from the tick job's runs, newest last.
-  assert.deepEqual((await inject(app, "GET", "/api/portal/ticks")).json().ticks.map((tick) => tick.id), reports.map((report) => report.id));
+  assert.equal((await inject(app, "GET", `/api/portal/runs/${refreshRun.id}`)).statusCode, 404);
+  assert.equal((await inject(app, "POST", `/api/portal/runs/${refreshRun.id}/cancel`)).statusCode, 404);
+  for (const route of ["/api/portal/tick", "/api/portal/ticks"]) {
+    assert.equal((await inject(app, route.endsWith("s") ? "GET" : "POST", route)).statusCode, 404, `${route} is gone`);
+  }
 
-  assert.equal((await inject(app, "POST", `/api/portal/runs/${reports[0].id}/cancel`)).statusCode, 204, "already finished: nothing to do");
+  assert.equal((await inject(app, "POST", `/api/portal/runs/${helpers[0].id}/cancel`)).statusCode, 204, "already finished: nothing to do");
   assert.equal((await inject(app, "POST", `/api/portal/runs/${chat.id}/cancel`)).statusCode, 409, "a chat turn is stopped from its thread");
   assert.equal((await inject(app, "POST", "/api/portal/runs/nope/cancel")).statusCode, 404);
 

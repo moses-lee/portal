@@ -7,12 +7,32 @@
  */
 import type { Intent, Job, JobRun } from "@portal/contracts/jobs";
 import { normalizeScope } from "../store.ts";
-import type { Item, PullRef, TickReport } from "../types.ts";
+import type { Item, PullRef, TickReason } from "../types.ts";
 import { TICK_JOB_ID } from "./core.ts";
 import { DEFAULT_CHECK_MS, checkTitle } from "./intents.ts";
 
 export const LEGACY_TRIGGER = "Something the notes are waiting for has happened: the user is needed, or the request is fulfilled.";
 export const LEGACY_ACTION = "Tell the user what changed and what they need to do; close the intent once the request is fulfilled.";
+
+/**
+ * A tick report as the old orchestrator stored it, from when the tick called the bookkeeping model
+ * on changes (the refresh that replaced it reports a `RefreshReport`, see `tick.ts`).
+ */
+export type LegacyTickReport = {
+  id: string;
+  reason: TickReason;
+  startedAt: number;
+  finishedAt: number;
+  modelInvoked?: boolean;
+  changes?: number;
+  itemsCreated?: string[];
+  itemsUpdated?: string[];
+  itemsResolved?: string[];
+  log: string[];
+  error: string | null;
+  usage?: { inputTokens: number; outputTokens: number } | null;
+  capped?: boolean;
+};
 
 /** A watch as the old orchestrator stored it: a tracked request that every tick followed up on. */
 export type LegacyWatch = {
@@ -64,12 +84,12 @@ export function itemFromLegacy(legacy: LegacyItem): Item {
   };
 }
 
-export function runFromTick(report: TickReport): JobRun {
+export function runFromTick(report: LegacyTickReport): JobRun {
   const failed = !!report.error && report.error !== "not ready" && report.error !== "busy";
   return {
     id: report.id, jobId: TICK_JOB_ID, kind: "tick", threadId: null, parentRunId: null, status: failed ? "failed" : "succeeded",
     trigger: report.reason === "manual" ? "manual" : "schedule", startedAt: report.startedAt, finishedAt: report.finishedAt, model: null,
-    usage: report.usage, log: report.log, result: report,
+    usage: report.usage ?? null, log: report.log, result: report,
     summary: failed ? `Failed: ${report.error}` : report.modelInvoked ? `${report.changes} change(s) considered` : "Nothing changed.",
     error: failed ? report.error : null,
   };

@@ -6,9 +6,9 @@
  */
 import { randomBytes } from "node:crypto";
 import type {
-  Item, ItemAction, ItemKind, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickReport,
-  TickSnapshot,
+  Item, ItemAction, ItemKind, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickSnapshot,
 } from "./types.ts";
+import type { LegacyTickReport } from "./jobs/legacy.ts";
 import { MAIN_THREAD_ID, emptyScope } from "./types.ts";
 
 /** A store operation the caller got wrong; `status` is the HTTP status to answer with. */
@@ -158,7 +158,7 @@ export function parseItemPatch(input: unknown): ItemPatch {
   });
 }
 
-export function isTickReport(value: unknown): value is TickReport {
+export function isTickReport(value: unknown): value is LegacyTickReport {
   return isRecord(value) && typeof value.id === "string" && typeof value.reason === "string"
     && typeof value.startedAt === "number" && typeof value.finishedAt === "number" && Array.isArray(value.log);
 }
@@ -270,7 +270,7 @@ export function sortThreads(threads: Thread[]): Thread[] {
   return [...threads].sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : activity(b) - activity(a)));
 }
 
-/** Whether an item still stands for its condition, so a tick with the same fingerprint updates it rather than creating another. */
+/** Whether an item still stands for its condition, so a new one with the same fingerprint updates it rather than creating another. */
 export const isLive = (item: Item) => item.status === "open" || item.status === "snoozed";
 
 // ---------------------------------------------------------------------------------------------

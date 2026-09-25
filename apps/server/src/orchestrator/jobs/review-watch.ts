@@ -227,9 +227,9 @@ export type ReviewCheckParts = {
 };
 
 /**
- * A review blocked on a permission prompt reaches the user at this check, not at the next tick
- * (hourly while nobody has Portal open). The item is the tick's own `session_waiting` one, same
- * fingerprint, so neither duplicates the other; a dismissed one stays dismissed, and it is resolved
+ * A review blocked on a permission prompt reaches the user at this check: the hourly world refresh
+ * creates no items. The item carries the `session_waiting` fingerprint the snapshot diff uses, so a
+ * dismissed one stays dismissed (and is released once the session moves on), and it is resolved
  * here once the session moves on.
  */
 async function flagWaiting(core: JobsCore, intent: Intent, watch: ReviewWatch, progress: Map<string, SessionProgress>): Promise<void> {
@@ -297,7 +297,7 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
   const threadId = intent.threadId ?? MAIN_THREAD_ID;
   const prepared = await prepareTurn(hub, {
     kind: "helper", role: "chat", trigger, threadId, jobId: job.id, intentId: intent.id, parentRunId: run.id, interactive: false,
-    toolNames: SUMMARIZER_TOOLS, extraTools: { report_review }, scope: intent.scope, query: `code review ${watch.repo}`, touched: new Set(), self: core.self(),
+    toolNames: SUMMARIZER_TOOLS, extraTools: { report_review }, scope: intent.scope, query: `code review ${watch.repo}`, touched: new Set(),
     summary: `Summarizing the reviews of ${watch.repo} ${watch.sessions.map((session) => `#${session.pr}`).join(", ")}`,
   });
   if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the reviews were not summarized." };

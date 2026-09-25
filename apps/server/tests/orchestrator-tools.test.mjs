@@ -8,14 +8,13 @@ import { execCommand, readFileCapped } from "../src/orchestrator/deps.ts";
 import { STALE_PULL_MS } from "../src/orchestrator/digest.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { REDACTED } from "../src/orchestrator/tools/context.ts";
-import { TICK_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
+import { BACKGROUND_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
 import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
 import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
 import { T0, attentionPull, fakeDeps, fakeSettings, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const options = { toolCallId: "call", messages: [] };
 
-const digest = { at: T0, since: null, changes: [], openItems: [], memory: "secret notes" };
 
 function setup({ interactive = true, settings = fakeSettings(), memory = [], ...overrides } = {}) {
   const store = createMemoryOrchestratorStore();
@@ -38,7 +37,6 @@ function setup({ interactive = true, settings = fakeSettings(), memory = [], ...
   };
   const ctx = {
     store, deps, touched, settings, interactive, now: () => T0,
-    self: { digest: async () => digest, schedule: async () => ({}), lastTick: async () => null },
     hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job" },
   };
   return { tools: createTools(ctx), store, deps, state, touched, intents };
@@ -51,20 +49,20 @@ async function run(tool, input) {
   return tool.execute(parsed.data, options);
 }
 
-test("every tool has a description and an input schema; a tick gets the fixed subset", () => {
+test("every tool has a description and an input schema; a background turn gets the fixed subset", () => {
   const { tools } = setup();
   for (const [name, tool] of Object.entries(tools)) {
     assert.ok(tool.description && tool.description.length > 10, `${name} has a description`);
     assert.ok(tool.inputSchema, `${name} has an input schema`);
     assert.equal(typeof tool.execute, "function", `${name} executes`);
   }
-  assert.ok(Object.keys(tools).length >= 45);
-  for (const name of TICK_TOOLS) assert.ok(tools[name], `${name} exists`);
+  assert.ok(Object.keys(tools).length >= 43);
+  for (const name of BACKGROUND_TOOLS) assert.ok(tools[name], `${name} exists`);
 
-  const { tools: tick } = setup({ interactive: false });
-  assert.deepEqual(Object.keys(tick).sort(), [...TICK_TOOLS].sort());
+  const { tools: background } = setup({ interactive: false });
+  assert.deepEqual(Object.keys(background).sort(), [...BACKGROUND_TOOLS].sort());
   for (const name of ["run_command", "read_file", "delete_session", "remove_project", "send_prompt", "create_session", "setup_pr_reviews", "write_memory", "answer_permission"]) {
-    assert.equal(tick[name], undefined, `${name} is not a tick tool`);
+    assert.equal(background[name], undefined, `${name} is not a background tool`);
   }
 });
 
@@ -458,12 +456,9 @@ test("get_settings masks keys and returns the prompts", async () => {
   assert.ok(!JSON.stringify(settings).includes("sk-test"));
 });
 
-test("the legacy memory-file tools are gone; get_tick_digest leaves memory out", async () => {
+test("the legacy memory-file tools and the tick's self tools are gone", async () => {
   const { tools } = setup();
-  for (const name of ["read_memory", "write_memory", "append_memory"]) assert.equal(tools[name], undefined, name);
-  const digestOut = await run(tools.get_tick_digest, {});
-  assert.deepEqual(digestOut, { at: T0, since: null, changes: [], openItems: [] });
-  assert.equal("memory" in digestOut, false);
+  for (const name of ["read_memory", "write_memory", "append_memory", "get_tick_digest", "get_last_tick"]) assert.equal(tools[name], undefined, name);
 });
 
 test("remove_project runs the pre-deletion script in the worktree before git removes it, and a failure keeps the worktree", async (t) => {

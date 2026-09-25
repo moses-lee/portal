@@ -4,18 +4,20 @@
  * executor, and answers the `JobsService` surface the runtime, the routes, and the tools use.
  *
  * One firing of a job: the worker claims it (with a lease), a run starts, the kind's executor runs
- * (the tick, an intent check, a helper), the run finishes with whatever model and usage its turn
- * recorded, and the job is released with its next run time. Consecutive failures back off and, past
- * `MAX_FAILURES`, mark the job failed (never the tick or memory curation).
+ * (the world refresh, an intent check, a helper), the run finishes with whatever model and usage its
+ * turn recorded, and the job is released with its next run time. Consecutive failures back off and,
+ * past `MAX_FAILURES`, mark the job failed (never the world refresh or memory curation).
+ *
+ * The world refresh (`TICK_JOB_ID`, see `tick-job.ts`) runs like any job but is hidden from the
+ * surface below: it is not listed, found, changed, run, or cancelled, and its runs appear in no
+ * listing, event, or status line.
  */
 import type { ActivityActor } from "@portal/contracts/activity";
 import type { IntentPatch, Job, JobKind, JobRun, RunTrigger } from "@portal/contracts/jobs";
 import type { JobsService, OrchestratorHub } from "../hub.ts";
 import { httpError } from "../ops.ts";
-import { performTick } from "../tick.ts";
-import type { ToolContext } from "../tools/index.ts";
-import type { TickReason, TickReport } from "../types.ts";
-import { TICK_JOB_ID, type TickRunner, createCore, jobRefs } from "./core.ts";
+import { performRefresh } from "../tick.ts";
+import { type TickRunner, createCore, isRefreshJob, isRefreshRun, jobRefs } from "./core.ts";
 import { createHelpers } from "./helpers.ts";
 import { createIntents } from "./intents.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
@@ -24,17 +26,15 @@ import { createRuns } from "./runs.ts";
 import { followsPresence, nextRunAt, replanned } from "./schedule.ts";
 import { type JobChanges, type JobFilter, type JobsStore, type RunFilter, createMemoryJobsStore } from "./store.ts";
 import { createConsolidation } from "./consolidate-job.ts";
-import { ensureTickJob, runTickJob, skippedReport, syncTickSchedule } from "./tick-job.ts";
+import { ensureTickJob, runTickJob } from "./tick-job.ts";
 import { jobTools } from "./tools.ts";
 import { type Execution, type WorkerOptions, createWorker } from "./worker.ts";
 
-/** Consecutive failed runs after which a job is marked failed (the tick keeps going). */
+/** Consecutive failed runs after which a job is marked failed (the world refresh keeps going). */
 export const MAX_FAILURES = 5;
 /** Delay after the first failure; it doubles with each further one, up to `MAX_BACKOFF_MS`. */
 export const BACKOFF_BASE_MS = 60_000;
 export const MAX_BACKOFF_MS = 60 * 60_000;
-/** Tick reports `listTicks` answers. */
-export const TICK_HISTORY = 50;
 /** Finished (done or cancelled) jobs are kept this long, then deleted; their runs stay until pruned. */
 export const FINISHED_JOB_RETENTION_MS = 30 * 24 * 60 * 60_000;
 /** How often the worker looks for finished jobs to delete. */
@@ -47,10 +47,8 @@ export function backoff(failures: number): number {
 export type JobsOptions = {
   /** Replaces the store the hub's database implies. */
   store?: JobsStore;
-  /** Runs one tick into the report; the runtime supplies `performTick` with its self tools and thread trimming. */
+  /** Runs one world refresh into the report (default `performRefresh`); tests pass a fake. */
   tick?: TickRunner;
-  /** The runtime's self tools, for the turns jobs run. */
-  self?: () => ToolContext["self"];
   /** Keeps a thread bounded after a job posted to it. */
   trimThread?: (threadId: string) => Promise<void>;
   worker?: WorkerOptions;
@@ -60,25 +58,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function isTickReport(value: unknown): value is TickReport {
-  return !!value && typeof value === "object" && typeof (value as TickReport).id === "string" && Array.isArray((value as TickReport).log)
-    && typeof (value as TickReport).startedAt === "number";
-}
-
 export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {}): JobsService {
   const now = () => hub.timers.now();
   const store = options.store ?? (hub.db ? createPgJobsStore({ db: hub.db, now }) : createMemoryJobsStore({ now }));
   const runs = createRuns(hub, store);
   const trimThread = options.trimThread ?? (async () => {});
-  const fallbackSelf: ToolContext["self"] = {
-    digest: async () => { throw new Error("The tick digest is not available in this turn."); },
-    schedule: async () => ({ ready: false, intervalMinutes: 0, idleIntervalMinutes: 0, presence: hub.presence.count(), nextTickAt: null, lastTickAt: null }),
-    lastTick: async () => core.lastTick,
-  };
-  const self = () => options.self?.() ?? fallbackSelf;
   const core = createCore({
-    hub, store, runs, self, trimThread,
-    tick: options.tick ?? ((report, { signal }) => performTick(hub, report, { self: self(), signal, trimThread })),
+    hub, store, runs, trimThread,
+    tick: options.tick ?? ((report, { signal }) => performRefresh(hub, report, { signal })),
   });
   const intents = createIntents(core);
   const helpers = createHelpers(core);
@@ -120,7 +107,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   let disposed = false;
   const unsubscribers: (() => void)[] = [];
 
-  // Never rejects: the runtime waits on it. Without the tick job the worker still runs the others.
+  // Never rejects: the runtime waits on it. Without the refresh job the worker still runs the others.
   const ready = store.ready
     .then(() => ensureTickJob(core))
     .then(() => consolidation.ensure())
@@ -130,8 +117,6 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
         if (runs.get(stale.id)) continue;
         await store.updateRun({ ...stale, status: "cancelled", finishedAt: now(), error: "Portal stopped while this ran." });
       }
-      const [last] = await store.listRuns({ jobId: TICK_JOB_ID, status: ["succeeded", "failed", "cancelled", "awaiting_approval"], limit: 1 });
-      if (!core.lastTick && isTickReport(last?.result)) core.lastTick = last.result;
     })
     .catch((err: unknown) => { console.error("Could not prepare the job store:", err); });
 
@@ -234,7 +219,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
 
   async function runNow(jobId: string, trigger: RunTrigger): Promise<JobRun | null> {
     await ready;
-    if (disposed) return null;
+    if (disposed || isRefreshJob({ id: jobId })) return null;
     const current = () => runs.running().find((run) => run.jobId === jobId) ?? null;
     if (worker.isRunning(jobId)) return current();
     const job = await store.claimJob(jobId, worker.leaseMs);
@@ -274,30 +259,16 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     core.notify();
   }
 
-  async function runTick(reason: TickReason): Promise<TickReport> {
-    await ready;
-    const trigger: RunTrigger = reason === "manual" ? "manual" : "schedule";
-    if (disposed) return skippedReport(trigger, now(), "Portal is shutting down.");
-    if (worker.isRunning(TICK_JOB_ID)) return skippedReport(trigger, now(), "Skipped: a tick is already running.");
-    const job = await store.claimJob(TICK_JOB_ID, worker.leaseMs);
-    if (!job) {
-      const existing = await store.getJob(TICK_JOB_ID);
-      return skippedReport(trigger, now(), existing && existing.status !== "active" ? `Skipped: the tick is ${existing.status}.` : "Skipped: a tick is already running.");
-    }
-    const run = await worker.launch(job, trigger).done;
-    return isTickReport(run.result) ? run.result : skippedReport(trigger, now(), run.error ?? "The tick did not report.");
-  }
-
   async function cancelRun(id: string): Promise<boolean> {
     const entry = controllers.get(id);
-    if (entry) {
+    if (entry && !isRefreshJob({ id: entry.jobId })) {
       entry.byUser = true;
       entry.controller.abort();
       return true;
     }
     if (helpers.cancel(id)) return true;
     const run = runs.get(id) ?? (await store.getRun(id));
-    if (!run) throw httpError(`Unknown run "${id}".`, 404);
+    if (!run || isRefreshRun(run)) throw httpError(`Unknown run "${id}".`, 404);
     if (run.status === "running" && run.kind === "chat") throw httpError("A chat turn is stopped from its thread.", 409);
     return false;
   }
@@ -315,7 +286,6 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
       if (disposed) return;
       unsubscribers.push(
         hub.presence.subscribe(() => { void replanForPresence().catch((err: unknown) => console.error("Could not replan jobs for presence:", err)); }),
-        hub.settings.subscribe(() => { void syncTickSchedule(core).catch((err: unknown) => console.error("Could not update the tick's schedule:", err)); }),
         hub.settings.subscribe(() => { void consolidation.sync().catch((err: unknown) => console.error("Could not update memory curation's schedule:", err)); }),
         hub.memory.subscribe(() => { void consolidation.inboxChanged().catch((err: unknown) => console.error("Could not check the memory inbox:", err)); }),
       );
@@ -330,29 +300,25 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     },
     startRun: (input) => runs.start(input),
     finishRun: (id, outcome) => runs.finish(id, outcome),
-    running: () => runs.running(),
-    nextDue: () => store.nextDue(),
+    running: () => runs.running().filter((run) => !isRefreshRun(run)),
+    nextDue: () => store.nextDue({ notKinds: ["tick"] }),
     runNow,
     resumeAfterApproval,
     listIntents: (filter) => store.listIntents(filter),
     tools: (ctx) => jobTools(core, intents, helpers, ctx),
 
-    listJobs: (filter?: JobFilter) => store.listJobs(filter),
-    getJob: (id) => store.getJob(id),
+    listJobs: async (filter?: JobFilter) => (await store.listJobs(filter)).filter((job) => !isRefreshJob(job)),
+    getJob: async (id) => (isRefreshJob({ id }) ? null : store.getJob(id)),
     updateJob: (id, patch, actor) => core.patchJob(id, patch, { actor }),
-    listRuns: (filter?: RunFilter) => store.listRuns(filter),
-    getRun: async (id) => runs.get(id) ?? store.getRun(id),
-    stopJobRuns: (jobId) => core.stopJobRuns(jobId),
+    listRuns: (filter?: RunFilter) => store.listRuns({ ...filter, notKinds: ["tick"] }),
+    getRun: async (id) => {
+      const run = runs.get(id) ?? (await store.getRun(id));
+      return run && !isRefreshRun(run) ? run : null;
+    },
+    stopJobRuns: (jobId) => (isRefreshJob({ id: jobId }) ? [] : core.stopJobRuns(jobId)),
     cancelRun,
     getIntent: (id) => store.getIntent(id),
     createIntent: (input, how) => intents.create(input, how),
     updateIntent,
-    runTick,
-    lastTick: () => core.lastTick,
-    async listTicks(limit = TICK_HISTORY) {
-      const done = await store.listRuns({ jobId: TICK_JOB_ID, status: ["succeeded", "failed", "cancelled", "awaiting_approval"], limit });
-      return done.map((run) => run.result).filter(isTickReport).reverse();
-    },
-    tickJob: () => store.getJob(TICK_JOB_ID),
   };
 }

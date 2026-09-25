@@ -20,7 +20,7 @@ import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import type { ProviderOptions } from "./model.ts";
 import type { SchedulerTimers } from "./jobs/timers.ts";
 import type { ToolContext } from "./tools/context.ts";
-import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, OrchestratorStore, Scope, TickReason, TickReport } from "./types.ts";
+import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, OrchestratorStore, Scope } from "./types.ts";
 
 export type ToolSet = Record<string, Tool>;
 
@@ -93,13 +93,14 @@ export interface JobsService {
   /** Record the start of a run of any kind (chat turns included); emits a `run` event. */
   startRun(input: RunStart): Promise<JobRun>;
   finishRun(id: string, outcome: RunOutcome): Promise<JobRun>;
-  /** Runs in progress in this process, oldest first; synchronous for the status line. */
+  /** Runs in progress in this process, oldest first, the world refresh's left out; synchronous for the status line. */
   running(): JobRun[];
-  /** The next active job due, for the status line. */
+  /** The next active job due, for the status line; never the world refresh. */
   nextDue(): Promise<Job | null>;
   /**
    * Run a job now, outside its schedule (the Upcoming view's "Run now", or an approved call
-   * resuming the job that asked for it). Null when the job does not exist or is not active.
+   * resuming the job that asked for it). Null when the job does not exist, is not active, or is
+   * the world refresh (which nobody runs by hand).
    */
   runNow(jobId: string, trigger: RunTrigger): Promise<JobRun | null>;
   /** A job's approval was decided or expired: run it again, put it back on its schedule, or end it. */
@@ -108,10 +109,13 @@ export interface JobsService {
   /** The job tools (schedule_job, cancel_job, create_intent, cancel_intent, run_helper, ...). */
   tools(ctx: DomainToolContext): ToolSet;
 
-  /** By next run (unscheduled last), then newest first. */
+  /**
+   * By next run (unscheduled last), then newest first. Here and below, the seeded world refresh
+   * (`TICK_JOB_ID`) and its runs are hidden: nobody lists, changes, runs, or cancels them.
+   */
   listJobs(filter?: { status?: JobStatus[]; kind?: JobKind[]; intentId?: string }): Promise<Job[]>;
   getJob(id: string): Promise<Job | null>;
-  /** Apply a `JobPatch` (validated here: 400 for a bad one, 404 unknown, 409 when it cannot apply). */
+  /** Apply a `JobPatch` (validated here: 400 for a bad one, 404 unknown or the world refresh, 409 when it cannot apply). */
   updateJob(id: string, patch: unknown, actor: "user" | "agent" | "system"): Promise<Job>;
   /** Newest first; `before` is a run id (the next page). */
   listRuns(filter?: { jobId?: string; threadId?: string; kind?: RunKind; status?: RunStatus[]; before?: string; limit?: number }): Promise<JobRun[]>;
@@ -125,22 +129,35 @@ export interface JobsService {
   createIntent(input: IntentInput, how: { actor: "user" | "agent" | "system"; runId?: string; threadId?: string | null }): Promise<{ intent: Intent; job: Job }>;
   /** The UI's intent patch: cancel it, or re-activate it. */
   updateIntent(id: string, patch: IntentPatch, actor: "user" | "agent" | "system"): Promise<Intent>;
-  /** Run the tick job now and answer its report (a skipped report when a tick is already running). */
-  runTick(reason: TickReason): Promise<TickReport>;
-  /** The newest tick report (in memory, so synchronous). */
-  lastTick(): TickReport | null;
-  /** The newest tick reports, newest last. */
-  listTicks(limit?: number): Promise<TickReport[]>;
-  /** The seeded tick job. */
-  tickJob(): Promise<Job | null>;
 }
+
+/** What a full refresh did beside building the world: its diff against the previous snapshot. */
+export type WorldRefresh = {
+  world: WorldState;
+  /** Changes the diff found. */
+  changes: number;
+  /** Dismissed items released (resolved) because their condition cleared. */
+  released: string[];
+  /** Sources that could not be read and what the diff did, one line each. */
+  log: string[];
+};
 
 export interface WorldService {
   ready: Promise<void>;
   /** The latest built world, or null before the first build. */
   current(): Promise<WorldState | null>;
-  /** Build the world now, store it as the newest snapshot, and emit `world`. */
+  /** Build the world now (GitHub included), diff it against the previous snapshot, store it, and emit `world`. */
   refresh(reason: string): Promise<WorldState>;
+  /** `refresh`, answering what its diff did too; overlapping calls share one build. */
+  update(reason: string): Promise<WorldRefresh>;
+  /** When the newest full build (GitHub included) was made, here or stored before a restart; null before the first. */
+  lastFullAt(): Promise<number | null>;
+  /**
+   * The "Recent changes" section for a chat turn in `threadId`: change-log rows detected since the
+   * thread's previous answer that concern this thread or the user (see `world/recent.ts`); "" when
+   * none do.
+   */
+  recentChanges(input: { threadId: string | null; scope: Scope }): Promise<string>;
   /** The world as prompt text within a token budget, the parts about `scope` first. */
   render(world: WorldState, opts?: { budgetTokens?: number; scope?: Scope }): string;
   /** resolve_pull, resolve_repo, resolve_session, get_world, ... */

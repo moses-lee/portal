@@ -78,7 +78,7 @@ test("helpers nest at most two levels; a background turn cannot wait and schedul
 });
 
 test("schedule_job, update_job, cancel_job, list_jobs, list_runs, and get_schedule cover the agent's own scheduling", async (t) => {
-  const h = await started(jobsHarness(t, { presence: 1, settings: { intervalMinutes: 10, idleIntervalMinutes: 60 } }));
+  const h = await started(jobsHarness(t, { presence: 1 }));
   const tools = h.jobs.tools(toolContext(h));
 
   const nightly = await call(tools, "schedule_job", { title: "Nightly digest", prompt: "Summarize today's sessions.", schedule: { cron: "0 22 * * *", tz: "UTC" } });
@@ -98,8 +98,8 @@ test("schedule_job, update_job, cancel_job, list_jobs, list_runs, and get_schedu
 
   // The seeded curation job's place depends on the machine's time zone; it has its own tests.
   const listed = await call(tools, "list_jobs", {});
-  assert.deepEqual(listed.jobs.filter((job) => job.id !== "consolidate").map((job) => job.title), ["Check for changes", "Often", "Check back", "At noon", "Nightly digest"]);
-  assert.deepEqual((await call(tools, "list_jobs", { kind: "tick" })).jobs.map((job) => job.id), ["tick"]);
+  assert.deepEqual(listed.jobs.filter((job) => job.id !== "consolidate").map((job) => job.title), ["Often", "Check back", "At noon", "Nightly digest"], "never the world refresh");
+  assert.deepEqual((await call(tools, "list_jobs", { kind: "helper" })).jobs.map((job) => job.id), [often.id, later.id, at.id, nightly.id]);
 
   const moved = await call(tools, "update_job", { id: later.id, schedule: { inMinutes: 10 }, title: "Check back soon" });
   assert.equal(moved.title, "Check back soon");
@@ -116,18 +116,16 @@ test("schedule_job, update_job, cancel_job, list_jobs, list_runs, and get_schedu
   const kinds = (await h.hub.activity.list({ kind: "job." })).map((entry) => entry.kind);
   assert.ok(kinds.includes("job.scheduled") && kinds.includes("job.updated") && kinds.includes("job.cancelled"));
 
-  await h.runtime.runTick("manual");
-  const runs = await call(tools, "list_runs", { kind: "tick" });
-  assert.equal(runs.runs.length, 1);
-  assert.equal(runs.runs[0].jobId, "tick");
-  assert.equal(runs.runs[0].summary, "Nothing changed.");
+  await h.timers.advance(5 * MIN);
+  const runs = await call(tools, "list_runs", {});
+  assert.deepEqual(runs.runs.map((run) => [run.kind, run.jobId]), [["helper", often.id]], "the world refresh ran too, but is not listed");
 
   const schedule = await call(tools, "get_schedule", {});
   assert.equal(schedule.ready, true);
   assert.equal(schedule.presence, 1);
-  assert.equal(schedule.tick.schedule, "every 10 min (1 h idle)");
-  assert.equal(schedule.tick.followsSettings, true);
-  assert.equal(schedule.upcoming[0].title, "Often");
+  assert.equal(schedule.tick, undefined);
+  assert.ok(!schedule.upcoming.some((job) => job.id === "tick"));
+  assert.deepEqual(schedule.upcoming.slice(0, 2).map((job) => job.title).sort(), ["Check back soon", "Often"]);
   assert.deepEqual(schedule.running, []);
 });
 
@@ -138,7 +136,7 @@ test("only the turns that should see them get the job tools", async (t) => {
     "cancel_intent", "cancel_job", "create_intent", "get_schedule", "list_intents", "list_jobs", "list_runs", "monitor_pull", "run_helper", "schedule_job", "update_intent",
     "update_job",
   ]);
-  assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "tick", origin: "job", interactive: false })), {}, "the tick pays for no job schemas");
+  assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "consolidate", origin: "job", interactive: false })), {}, "a background turn pays for no job schemas");
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "intent_check", origin: "job", interactive: false })), {}, "a check without an intent gets nothing");
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "helper", origin: "job", interactive: false })), {});
 });

@@ -86,7 +86,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return ctx.orchestrator;
   }
 
-  /** `GET /api/portal` — `{ status }`: readiness, model, busy flag, presence, last and next tick. */
+  /** `GET /api/portal` — `{ status }`: readiness, model, busy flag, presence, runs, next job, counts. */
   app.get("/api/portal", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
@@ -166,20 +166,6 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return reply.code(204).send();
   });
 
-  /** `POST /api/portal/tick` — runs the tick job now and answers `{ report }` when it finishes (a skipped report while a tick runs). */
-  app.post("/api/portal/tick", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    return { report: await runtime.runTick("manual") };
-  });
-
-  /** `GET /api/portal/ticks` — the last tick reports (the tick job's runs), newest last `{ ticks }`. */
-  app.get("/api/portal/ticks", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    return { ticks: await runtime.listTicks() };
-  });
-
   /** `GET /api/portal/items` — every item, in every status `{ items }`. */
   app.get("/api/portal/items", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
@@ -213,7 +199,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
    * `items`, `threads`, `approvals`, and `intents`, then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
-   * the shorter tick interval.
+   * the shorter cadence of jobs that have an idle one.
    */
   app.get("/api/portal/stream", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);

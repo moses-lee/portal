@@ -27,7 +27,7 @@ export const TOOL_GROUPS = {
   jobs: { about: "inspect and change jobs, runs, intents", tools: ["list_jobs", "update_job", "list_runs", "update_intent"] },
   memory: { about: "propose, explain, forget memory records", tools: ["propose_memory", "explain_memory", "forget"] },
   threads: { about: "list and archive side threads", tools: ["list_threads", "archive_thread"] },
-  settings: { about: "the tick schedule, the last tick, the digest, stored settings", tools: ["get_schedule", "get_last_tick", "get_tick_digest", "get_settings"] },
+  settings: { about: "your schedule of jobs, stored settings", tools: ["get_schedule", "get_settings"] },
 } as const satisfies Record<string, { about: string; tools: readonly string[] }>;
 
 export type ToolGroup = keyof typeof TOOL_GROUPS;

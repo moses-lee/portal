@@ -1,6 +1,6 @@
 /**
  * A runtime for the jobs tests: in-memory stores, fake deps, settings, presence, and clock, a
- * scripted model, and a jobs service built with the options a test needs (a fake tick, worker
+ * scripted model, and a jobs service built with the options a test needs (a fake world refresh, worker
  * tuning, a store the test can reach). Also the scripted model steps and a tool context for calling
  * the job tools directly, as a chat turn or an intent check would.
  */
@@ -38,7 +38,8 @@ export function deferred() {
 
 /**
  * `jobs` options go to `createJobsService` (tick, worker, store); `approvals` replaces the approvals
- * service. The default tick is a fake that reports nothing changed without touching the world.
+ * service. The default world refresh (`tick`) is a fake that reports nothing changed without touching
+ * the world; `ticks` counts its runs.
  */
 export function jobsHarness(t, {
   key = "sk-test", doGenerate, presence = 0, settings = {}, sessions, projects, events: sessionEvents, github, pulls, jobs = {}, approvals, store: jobsStore,
@@ -52,8 +53,8 @@ export function jobsHarness(t, {
   const events = [];
   const ticks = [];
   const tick = jobs.tick ?? (async (report) => {
-    ticks.push(report.id);
-    report.log.push("Nothing changed; the model was not invoked.");
+    ticks.push(report);
+    report.log.push("Nothing changed.");
   });
   const memoryJobs = jobsStore ?? createMemoryJobsStore({ now: () => timers.now() });
   const runtime = createOrchestratorRuntime({
@@ -69,7 +70,7 @@ export function jobsHarness(t, {
   return { runtime, hub, jobs: hub.jobs, jobsStore: memoryJobs, store, settings: settingsStore, timers, presence: presenceSource, deps, state, model, events, ticks };
 }
 
-/** Wait for the runtime (the tick is seeded) and let the worker take its first look. */
+/** Wait for the runtime (the world refresh is seeded) and let the worker take its first look. */
 export async function started(harness) {
   await harness.runtime.ready;
   await flush();
@@ -85,7 +86,6 @@ export function toolContext(harness, { runId = "run-chat", kind = "chat", origin
   const { hub } = harness;
   return {
     store: hub.store, settings: hub.settings, deps: hub.deps, touched: new Set(), interactive, now: () => hub.timers.now(),
-    self: { digest: async () => ({ at: 0, since: null, changes: [], openItems: [], memory: "" }), schedule: async () => ({}), lastTick: async () => null },
     hub, turn: { runId, kind, role: "chat", origin, threadId, jobId, intentId, scope: emptyScope() },
   };
 }

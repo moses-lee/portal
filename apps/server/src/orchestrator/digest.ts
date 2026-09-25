@@ -1,13 +1,30 @@
 /**
- * The deterministic half of a tick: read the world into a `TickSnapshot`, diff it against the
- * previous one, and hand the model only what changed. No model call happens here, so the tick
- * costs nothing when nothing moved and every rule below is unit-testable.
+ * Snapshots and their diff: read the world into a `TickSnapshot` (the full world build does this)
+ * and say what changed against the previous one. Every full refresh runs the diff (see
+ * `world/changes.ts`): its changes feed the change log chat turns read, and dismissed items whose
+ * condition cleared are released. No model is involved, so every rule below is unit-testable.
  */
 import { agentActivity } from "@portal/shared/agent-activity";
 import type { PortalEvent, Project, SessionMeta, WorktreeMeta } from "../lib/types.ts";
 import type { AttentionSearch, OrchestratorDeps } from "./deps.ts";
 import { type LocalProject, attachLocalProjects, attentionReasons, pullKey } from "./github-attention.ts";
-import type { DigestChange, Item, ItemKind, ItemLinks, OrchestratorStore, PullAttention, TickDigest, TickSnapshot } from "./types.ts";
+import type { Item, ItemKind, ItemLinks, PullAttention, TickSnapshot } from "./types.ts";
+
+/** One change between two snapshots. */
+export type DigestChange = {
+  kind: ItemKind;
+  /** One sentence, ready to be an item title or a change-log line. */
+  summary: string;
+  /** Compact Markdown for an aggregated change (one bullet per PR); absent otherwise. */
+  detail?: string;
+  links: ItemLinks;
+  /** The fingerprint an item for this change carries (and a dismissal matches). */
+  fingerprint: string;
+  /** Set when a live item with this fingerprint already exists. */
+  existingItemId: string | null;
+  /** Set when the condition behind a live item cleared. */
+  resolvesItemId?: string | null;
+};
 
 /** A dirty worktree is only worth mentioning once no session has touched it for this long. */
 export const DIRTY_IDLE_MS = 24 * 60 * 60 * 1000;
@@ -172,7 +189,7 @@ async function collectPulls(snapshot: TickSnapshot, { deps, previous, now, log, 
   }
   for (const pull of pulls) snapshot.pulls[pullKey(pull)] = pull;
   // The search only returns open PRs. One that left it is carried once more with its final state,
-  // so the diff can tell merged from closed; the tick after that drops it.
+  // so the diff can tell merged from closed; the refresh after that drops it.
   for (const [key, pull] of Object.entries(previous?.pulls ?? {})) {
     if (snapshot.pulls[key] || pull.state !== "open") continue;
     const state = await deps.github.pullState(pull.url);
@@ -237,7 +254,7 @@ function idle(snapshot: TickSnapshot, projectId: string): boolean {
 }
 
 /** True when the worktree is dirty and no session in it has been active for `DIRTY_IDLE_MS`. */
-function dirtyAndIdle(snapshot: TickSnapshot, projectId: string): boolean {
+export function dirtyAndIdle(snapshot: TickSnapshot, projectId: string): boolean {
   return !!snapshot.worktrees[projectId]?.dirty && idle(snapshot, projectId);
 }
 
@@ -246,7 +263,7 @@ function dirtyAndIdle(snapshot: TickSnapshot, projectId: string): boolean {
  * worked there for a day. The idle wait matters: a branch just created off the default branch is an
  * ancestor of it too, so without it Portal suggested removing a worktree minutes after making it.
  */
-function mergedAndIdle(snapshot: TickSnapshot, projectId: string): boolean {
+export function mergedAndIdle(snapshot: TickSnapshot, projectId: string): boolean {
   const worktree = snapshot.worktrees[projectId];
   return !!worktree?.merged && !worktree.dirty && idle(snapshot, projectId);
 }
@@ -318,8 +335,8 @@ export type DismissalOutcome = {
 };
 
 /**
- * What changed between two snapshots, as lines the model turns into items. Pure. With `prev`
- * null (the first tick) only conditions that hold now are reported, never transitions such as
+ * What changed between two snapshots, one line per change. Pure. With `prev`
+ * null (the first snapshot) only conditions that hold now are reported, never transitions such as
  * "finished". `items` are the open and snoozed items, and the dismissed ones: live items supply
  * `existingItemId` and a condition that cleared names the item it resolves; a dismissed item keeps
  * its condition quiet until it clears (then it is `released` into `dismissals`), so a dismissal
@@ -369,7 +386,7 @@ export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, ite
     // Finished only counts while the user has not come back to the session (a prompt moves lastActiveAt)
     // and while the agent is attached: a session read as idle because Portal restarted did not finish anything.
     if (before?.activity === "working" && session.activity === "idle" && session.link === "live" && session.lastActiveAt <= before.lastActiveAt) ended();
-    // A session too short for any tick to see it working: new since the last snapshot, prompted since
+    // A session too short for any refresh to see it working: new since the last snapshot, prompted since
     // then (it has a title), and now idle with its agent attached, so its turn ran and ended in between.
     if (prev && !before && session.activity === "idle" && session.link === "live" && session.title !== null && session.lastActiveAt > prev.at) ended();
     if (session.activity === "waiting" && before?.activity !== "waiting") condition("session_waiting", id, `Session ${name} is waiting for your permission`, links);
@@ -478,44 +495,4 @@ export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, ite
   }
 
   return changes;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Digest
-// ---------------------------------------------------------------------------------------------
-
-export type BuildDigestOptions = {
-  store: OrchestratorStore;
-  snapshot: TickSnapshot;
-  prevSnapshot: TickSnapshot | null;
-  now: number;
-  /** Flip expired snoozes back to open in the store (a tick); false only looks (get_tick_digest). */
-  wakeSnoozed?: boolean;
-};
-
-/**
- * Everything the tick prompt is built from. Snoozed items whose time has passed are flipped back
- * to open here (and count as open), so the model sees them again without a separate pass.
- */
-export async function buildDigest({ store, snapshot, prevSnapshot, now, wakeSnoozed = true }: BuildDigestOptions): Promise<TickDigest> {
-  const open: Item[] = [];
-  const snoozed: Item[] = [];
-  const items = await store.listItems();
-  for (const item of items) {
-    if (item.status === "open") open.push(item);
-    else if (item.status !== "snoozed") continue;
-    else if (item.snoozedUntil !== null && item.snoozedUntil <= now) {
-      open.push(wakeSnoozed ? await store.updateItem(item.id, { status: "open", snoozedUntil: null }) : item);
-    } else snoozed.push(item);
-  }
-  const dismissed = items.filter((item) => item.status === "dismissed");
-  const dismissals: DismissalOutcome = { released: [], suppressed: [] };
-  const changes = diffSnapshots(prevSnapshot, snapshot, [...open, ...snoozed, ...dismissed], dismissals);
-  return {
-    at: now,
-    since: prevSnapshot?.at ?? null,
-    changes,
-    openItems: open.map(({ id, kind, title, fingerprint }) => ({ id, kind, title, fingerprint })),
-    ...dismissals,
-  };
 }

@@ -1,11 +1,11 @@
 /**
  * Server-side contract for the orchestrator: the store and runtime interfaces. The wire types
- * (items, watches, messages, ticks, status, events, settings shapes) live in
+ * (items, messages, snapshots, status, events, settings shapes) live in
  * `@portal/contracts/orchestrator`, shared with the browser, and are re-exported here so the
  * server's modules keep importing everything from one place.
  */
 import type {
-  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickReason, TickReport, TickSnapshot,
+  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
 } from "@portal/contracts/orchestrator";
 
 import type { OrchestratorHub } from "./hub.ts";
@@ -78,8 +78,6 @@ export interface OrchestratorRuntime {
   chat(userMessage: OrchestratorMessage, threadId?: string): Promise<Response>;
   /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
   cancel(threadId?: string): void;
-  /** Runs the tick job now and answers its report (a skipped report when a tick is already running). */
-  runTick(reason: TickReason): Promise<TickReport>;
 
   listItems(): Promise<Item[]>;
   updateItem(id: string, patch: ItemPatch): Promise<Item>;
@@ -89,10 +87,8 @@ export interface OrchestratorRuntime {
    * answers `{ approvalId }` and runs once approved.
    */
   performAction(itemId: string, actionIndex: number): Promise<{ sessionId?: string; promptError?: string; approvalId?: string }>;
-  /** The newest tick reports (the tick job's runs), newest last. */
-  listTicks(): Promise<TickReport[]>;
 
-  // Browser presence (which interval applies) comes from the presence counter in the context, which
+  // Browser presence (which cadence presence-aware jobs follow) comes from the presence counter in the context, which
   // every SSE route opens/closes; the runtime subscribes to it rather than being told.
 
   subscribe(listener: (event: OrchestratorEvent) => void): () => void;
