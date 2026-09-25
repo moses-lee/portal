@@ -134,11 +134,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       process.stdout.end();
       return;
     }
-    if (text === "tool" || text === "spawn" || text === "quiet") {
+    if (text === "tool" || text === "spawn") {
       // A turn that stays open on a running tool until cancelled. "spawn" also runs a child process
-      // the way an agent's shell tool would; "quiet" starts no tool at all.
+      // the way an agent's shell tool would.
       prompts.set(params.sessionId, id);
-      if (text === "quiet") return;
       const title = text === "spawn" ? "sleep 30" : "bazel test //...";
       update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "call-1", title, kind: "execute", status: "pending" });
       update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "in_progress" });

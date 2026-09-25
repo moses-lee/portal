@@ -1064,7 +1064,7 @@ test("a lost agent records why: the exit code on every session of the process, p
   assert.equal(sibling.lost, null);
   assert.equal(toMeta(sibling).liveness.state, "idle");
   await sibling.writes;
-  assert.equal((await store.getSession(sibling.id)).lost, null);
+  assert.equal((await store.getSession(sibling.id)).lost ?? null, null);
 });
 
 test("a closed connection is recorded as such, not as Portal's own kill that follows it", async (t) => {
