@@ -32,7 +32,7 @@ export function projectTools({ deps }: ToolContext) {
       async ({ id }) => {
         const project = await requireProject(deps, id);
         const summary = await deps.projects.summarize(project);
-        const sessions = (await deps.sessions.list()).filter((session) => session.projectId === id).length;
+        const sessions = (await deps.sessions.list()).filter((session) => session.projectId === project.id).length;
         const repo = summary.exists ? await repoOf(deps, project) : null;
         return {
           ...row(project), fullPath: project.path, exists: summary.exists,
@@ -59,12 +59,15 @@ export function projectTools({ deps }: ToolContext) {
     rename_project: define(
       "Rename a project.",
       z.object({ id, name: z.string().min(1) }),
-      async ({ id, name }) => row(await deps.projects.rename(id, name)),
+      async ({ id, name }) => row(await deps.projects.rename((await requireProject(deps, id)).id, name)),
     ),
     remove_project: define(
       "Remove a project from Portal. deleteWorktree also removes a worktree project's folder (force discards uncommitted changes). Its sessions keep running; the project is kept restorable while they exist.",
       z.object({ id, deleteWorktree: z.boolean().optional(), force: z.boolean().optional() }),
-      async (input) => ({ id: input.id, removed: true, ...(await removeProject(deps, input)) }),
+      async (input) => {
+        const { id } = await requireProject(deps, input.id);
+        return { id, removed: true, ...(await removeProject(deps, { ...input, id })) };
+      },
     ),
     list_removed_projects: define(
       "Projects removed from Portal whose conversations still exist, most recently removed first.",

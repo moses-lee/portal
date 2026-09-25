@@ -61,8 +61,15 @@
     {
       "idx": 8,
       "version": "7",
-      "when": 1790361197281,
-      "tag": "0008_session_lost",
+      "when": 1790375999059,
+      "tag": "0008_intent_last_fired_title",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790378348942,
+      "tag": "0009_session_lost",
       "breakpoints": true
     }
   ]

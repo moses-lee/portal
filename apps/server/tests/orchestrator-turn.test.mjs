@@ -17,3 +17,11 @@ test("widenScope adds the projects behind sessions and the repos behind projects
   assert.deepEqual(wide.people, ["someone"]);
   assert.deepEqual(widenScope(emptyScope(), world), emptyScope());
 });
+
+test("widenScope expands a unique id prefix (as older scopes stored) and adds what is behind it", () => {
+  const full = { sessions: [{ id: "17329ac6-0c1e", projectId: "9b1d4e7a-5c6d" }, { id: "5e0f1b2c-1", projectId: "" }, { id: "5e0f9d8e-2", projectId: "" }], projects: [{ id: "9b1d4e7a-5c6d", repo: "acme/portal" }] };
+  const wide = widenScope({ ...emptyScope(), sessionIds: ["17329ac6", "5e0f"] }, full);
+  assert.deepEqual(wide.sessionIds, ["17329ac6-0c1e", "5e0f"], "an ambiguous prefix stays as it is");
+  assert.deepEqual(wide.projectIds, ["9b1d4e7a-5c6d"]);
+  assert.deepEqual(wide.repos, ["acme/portal"]);
+});

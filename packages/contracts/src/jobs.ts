@@ -156,6 +156,8 @@ export type Intent = {
   /** Least time between two firings. */
   cooldownMs: number;
   lastFiredAt: number | null;
+  /** The last firing's title: the server refuses a firing that only repeats it. */
+  lastFiredTitle: string | null;
   lastCheckedAt: number | null;
   /** The thread it was created from and reports to. */
   threadId: string | null;

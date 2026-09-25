@@ -1,6 +1,6 @@
 {
-  "id": "8903bf37-5c29-4098-b591-84c798c551d7",
-  "prevId": "8acd1185-21c1-46e2-98f4-788c88f71e1e",
+  "id": "b3a913dd-3d5b-4a04-a1db-f5fecee17ef2",
+  "prevId": "8903bf37-5c29-4098-b591-84c798c551d7",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1615,6 +1615,12 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
+        },
+        "lost": {
+          "name": "lost",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},

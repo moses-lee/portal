@@ -101,6 +101,7 @@ export const intent: Intent = {
   fires: 0,
   cooldownMs: 0,
   lastFiredAt: null,
+  lastFiredTitle: null,
   lastCheckedAt: now - 4 * min,
   threadId: "t-review",
   createdAt: now - 3 * 60 * min,

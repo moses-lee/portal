@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fullId, knownIds, mapRefs } from "../ids.ts";
 import { httpError } from "../ops.ts";
 import { itemKinds } from "../store.ts";
 import type { Item } from "../types.ts";
@@ -38,11 +39,16 @@ function itemRow(item: Item) {
   return { id: item.id, kind: item.kind, title: item.title, status: item.status, fingerprint: item.fingerprint, updatedAt: item.updatedAt };
 }
 
-export function itemTools({ store, touched, now }: ToolContext) {
+export function itemTools({ store, deps, touched, now }: ToolContext) {
   async function change(id: string, patch: Parameters<typeof store.updateItem>[1]) {
     const item = await store.updateItem(id, patch);
     touched.add(item.id);
     return itemRow(item);
+  }
+  /** Links and buttons with full ids; an id that names no session or project, or several, is refused. */
+  async function strictRefs(refs: Parameters<typeof mapRefs>[0]) {
+    const known = await knownIds(deps);
+    return mapRefs(refs, (kind, id, where) => fullId(known, kind, id, where));
   }
   return {
     create_item: define(
@@ -51,8 +57,10 @@ export function itemTools({ store, touched, now }: ToolContext) {
         kind: kindSchema, title: z.string().min(1).max(200), body: z.string().max(2000),
         links: linksSchema.optional(), actions: z.array(actionSchema).max(4).optional(), fingerprint: z.string().min(3),
       }),
-      async ({ kind, title, body, links = {}, actions = [], fingerprint }) => {
+      async ({ kind, title, body, fingerprint, ...refs }) => {
         if (!FINGERPRINT.test(fingerprint)) throw httpError('fingerprint must look like "<kind>:<key>" without spaces; copy it from get_changes.', 400);
+        // Stored links and buttons carry full ids, whatever prefix the model passed.
+        const { links = {}, actions = [] } = await strictRefs(refs);
         const existing = await store.findItemByFingerprint(fingerprint);
         if (existing) {
           const row = await change(existing.id, { kind, title, body, links, actions });
@@ -69,7 +77,10 @@ export function itemTools({ store, touched, now }: ToolContext) {
     update_item: define(
       "Change an item's kind, title, body, links, or actions (the kind follows its condition, e.g. conflicts that became failing checks).",
       z.object({ id, kind: kindSchema.optional(), title: z.string().min(1).max(200).optional(), body: z.string().max(2000).optional(), links: linksSchema.optional(), actions: z.array(actionSchema).max(4).optional() }),
-      async ({ id, ...patch }) => change(id, Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined))),
+      async ({ id, links, actions, ...patch }) => {
+        const refs = links || actions ? await strictRefs({ links, actions }) : {};
+        return change(id, Object.fromEntries(Object.entries({ ...patch, ...refs }).filter(([, value]) => value !== undefined)));
+      },
     ),
     resolve_item: define("Mark an item resolved: its condition no longer holds.", z.object({ id }), ({ id }) => change(id, { status: "resolved", snoozedUntil: null })),
     snooze_item: define(

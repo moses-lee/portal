@@ -93,10 +93,79 @@ test("list tools cap their rows and flag the cut; limits are enforced by the sch
 
 test("a failing tool returns { error } instead of throwing", async () => {
   const { tools } = setup();
-  assert.deepEqual(await run(tools.get_project, { id: "missing" }), { error: "Unknown project." });
-  assert.deepEqual(await run(tools.get_session, { sessionId: "missing" }), { error: "Unknown session." });
+  assert.match((await run(tools.get_project, { id: "missing" })).error, /^No project has id "missing"\./);
+  assert.match((await run(tools.get_session, { sessionId: "missing" })).error, /^No session has id "missing"\./);
   const status = await run(tools.get_github_status, { projectId: "missing" });
-  assert.equal(status.error, "Unknown project.");
+  assert.match(status.error, /^No project has id "missing"\./);
+});
+
+// Ids as the World section shows them: 8-char prefixes of uuids. Two sessions share the prefix "5e0f".
+const REVIEW = "17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01";
+const FIRST = "5e0f1b2c-7d3e-4a1b-8c2d-000000000002";
+const SECOND = "5e0f9d8e-1a2b-4c3d-9e8f-000000000003";
+const PORTAL = "9b1d4e7a-5c6d-4e7f-8a9b-00000000000p";
+
+function prefixed() {
+  return setup({
+    projects: [project({ id: PORTAL, name: "portal" })],
+    sessions: [
+      sessionMeta({ id: REVIEW, projectId: PORTAL, title: "Review auth" }), sessionMeta({ id: FIRST, projectId: PORTAL, title: "First" }),
+      sessionMeta({ id: SECOND, projectId: "", title: "Second" }),
+    ],
+    events: { [REVIEW]: [{ seq: 1, kind: "user", text: "Review the auth change", at: T0 }] },
+  });
+}
+
+test("session tools take a unique id prefix and answer with the full id", async () => {
+  const { tools, state } = prefixed();
+  assert.equal((await run(tools.get_session, { sessionId: "17329ac6" })).id, REVIEW);
+  assert.equal((await run(tools.get_session, { sessionId: "17329AC6-0c1e" })).id, REVIEW, "case-insensitive");
+  const transcript = await run(tools.read_transcript, { sessionId: "17329ac6" });
+  assert.equal(transcript.sessionId, REVIEW);
+  assert.equal(transcript.error, undefined);
+  assert.deepEqual((await run(tools.send_prompt, { sessionId: "17329ac6", text: "Go on" })), { sessionId: REVIEW, sent: true });
+  assert.deepEqual(state.prompts, [{ id: REVIEW, text: "Go on" }]);
+  assert.deepEqual((await run(tools.cancel_turn, { sessionId: "5e0f1b2c" })), { sessionId: FIRST, cancelled: true });
+  const listed = await run(tools.list_sessions, { projectId: "9b1d4e7a" });
+  assert.deepEqual(listed.sessions.map((row) => row.id).sort(), [REVIEW, FIRST].sort(), "a project prefix filters, instead of matching nothing");
+  assert.equal((await run(tools.get_project, { id: "9b1d4e7a" })).sessions, 2);
+  assert.equal((await run(tools.rename_project, { id: "9b1d4e7a", name: "portal-2" })).id, PORTAL);
+});
+
+test("an ambiguous or unknown id is an error that says so, never one that reads like a deletion", async () => {
+  const { tools, state } = prefixed();
+  const ambiguous = await run(tools.get_session, { sessionId: "5e0f" });
+  assert.match(ambiguous.error, /^Id "5e0f" is ambiguous: 2 sessions start with it: /);
+  assert.ok(ambiguous.error.includes(`${FIRST} ("First")`) && ambiguous.error.includes(`${SECOND} ("Second")`), ambiguous.error);
+  assert.match((await run(tools.send_prompt, { sessionId: "5e0f", text: "x" })).error, /ambiguous/);
+  assert.deepEqual(state.prompts, [], "nothing was sent to either");
+
+  const unknown = await run(tools.read_transcript, { sessionId: "deadbeef" });
+  assert.equal(unknown.error, 'No session has id "deadbeef". Ids in the World section are prefixes; pass one that is unique or the full id, or use resolve_session.');
+  assert.doesNotMatch(unknown.error, /delet|No such session/);
+  assert.match((await run(tools.get_session, { sessionId: "173" })).error, /pass one of at least 4 characters/, "too short to be a prefix");
+  assert.match((await run(tools.list_sessions, { projectId: "deadbeef" })).error, /^No project has id "deadbeef"\. .*resolve_repo/);
+  assert.match((await run(tools.get_github_status, { projectId: "deadbeef" })).error, /^No project has id "deadbeef"/);
+});
+
+test("create_item and update_item store full ids in links and actions, and refuse ids that name nothing or several", async () => {
+  const { tools, store } = prefixed();
+  const input = {
+    kind: "session_waiting", title: "Review waits", body: "It asks.", fingerprint: "session_waiting:review",
+    links: { sessionId: "17329ac6", projectId: "9b1d4e7a" },
+    actions: [{ type: "open_session", sessionId: "17329ac6" }, { type: "start_session", projectId: "9b1d4e7a", prompt: "Go" }, { type: "open_url", url: "https://x" }],
+  };
+  const created = await run(tools.create_item, input);
+  assert.equal(created.created, true, created.error);
+  const [item] = await store.listItems();
+  assert.deepEqual(item.links, { sessionId: REVIEW, projectId: PORTAL });
+  assert.deepEqual(item.actions, [{ type: "open_session", sessionId: REVIEW }, { type: "start_session", projectId: PORTAL, prompt: "Go" }, { type: "open_url", url: "https://x" }]);
+
+  assert.match((await run(tools.create_item, { ...input, fingerprint: "custom:other", links: { sessionId: "deadbeef" } })).error, /^links\.sessionId: No session has id "deadbeef"/);
+  assert.match((await run(tools.update_item, { id: item.id, actions: [{ type: "send_prompt", sessionId: "5e0f", prompt: "x" }] })).error, /^actions\[0\]\.sessionId: Id "5e0f" is ambiguous/);
+  await run(tools.update_item, { id: item.id, links: { sessionId: "5e0f1b2c" } });
+  assert.deepEqual((await store.getItem(item.id)).links, { sessionId: FIRST });
+  assert.equal((await store.listItems()).length, 1, "the refused ones stored nothing");
 });
 
 test("create_item dedupes by fingerprint, accepts the digest's shapes, rejects others, and records touched ids", async () => {
@@ -337,7 +406,7 @@ test("stop_session cancels a busy session's turn, waits until it is idle, and an
   // Nothing to stop: no cancel is sent.
   assert.deepEqual(await run(tools.stop_session, { sessionId: "s1" }), { sessionId: "s1", stopped: false, activity: "idle", note: "The session had no turn to stop." });
   assert.deepEqual(cancels, ["s1"]);
-  assert.match((await run(tools.stop_session, { sessionId: "nope" })).error, /Unknown session/);
+  assert.match((await run(tools.stop_session, { sessionId: "nope" })).error, /No session has id "nope"/);
 });
 
 test("stop_session reports a session that stays busy past the timeout as not stopped", async () => {
@@ -353,7 +422,7 @@ test("create_session mirrors the sessions route, sends the first prompt, and rep
   assert.deepEqual(state.prompts, [{ id: "s1", text: "Say hi" }]);
   assert.equal(state.created[0].agentId, "claude");
   assert.match((await run(tools.create_session, { projectId: "p1", agentId: "nope" })).error, /Unknown agent/);
-  assert.match((await run(tools.create_session, { projectId: "zzz" })).error, /Unknown project/);
+  assert.match((await run(tools.create_session, { projectId: "zzz" })).error, /No project has id "zzz"/);
 
   state.promptFailure = "agent not ready";
   const half = await run(tools.create_session, { projectId: "p1", prompt: "Try" });
@@ -539,6 +608,13 @@ test("session tools report liveness: rows carry the state and its line, get_sess
   assert.equal(one.liveness.process.cpuSeconds, 12.5);
   assert.equal(one.liveness.process.scope, "session");
   assert.equal(one.liveness.hungAfterMinutes, 15);
+
+  // A prefix (as the world shows ids) is resolved before the probe, which only knows full ids.
+  sessions.push(sessionMeta({ id: "abcdef12-full-id", busy: true, liveness: liveness("busy", "stale") }));
+  deps.sessions.liveness = async (id) => { probed.push(id); return id === "abcdef12-full-id" ? detail : null; };
+  assert.equal((await run(tools.get_session, { sessionId: "abcdef12" })).status, "running tool: bazel test //... for 45m");
+  assert.equal(probed.at(-1), "abcdef12-full-id");
+  sessions.pop();
 
   const hung = await run(tools.list_sessions, { liveness: "hung" });
   assert.deepEqual(hung.sessions.map((row) => [row.id, row.liveness, row.status]), [["s2", "hung", "hung: no CPU or output for 20m"]]);

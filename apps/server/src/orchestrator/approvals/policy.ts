@@ -16,6 +16,7 @@ import { githubRepoUrl } from "../../lib/github-summary.ts";
 import { defaultSettingsFile } from "../../lib/settings-store.ts";
 import type { Project, SessionMeta } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
+import { findById } from "../ids.ts";
 import type { ItemAction } from "../types.ts";
 import { classifyCommand } from "./shell.ts";
 
@@ -78,13 +79,14 @@ async function repoOfDir(deps: OrchestratorDeps, dir: string): Promise<string | 
   return url ? url.slice("https://github.com/".length) : null;
 }
 
+// By id or unique prefix, as the tools resolve them: a prefix must not slip past the gate as "unknown".
 async function projectOf(deps: OrchestratorDeps, id: string | undefined | null): Promise<Project | null> {
   if (!id) return null;
-  return (await deps.projects.get(id).catch(() => undefined)) ?? null;
+  return (await deps.projects.get(id).catch(() => undefined)) ?? findById(await deps.projects.list().catch(() => []), id) ?? null;
 }
 
 async function sessionOf(deps: OrchestratorDeps, id: string): Promise<SessionMeta | null> {
-  return deps.sessions.get(id).catch(() => null);
+  return (await deps.sessions.get(id).catch(() => null)) ?? findById(await deps.sessions.list().catch(() => []), id) ?? null;
 }
 
 const sessionName = (meta: SessionMeta | null, id: string) => (meta?.title ? `${code(meta.title)} (${code(id)})` : code(id));
@@ -177,7 +179,7 @@ async function assessAnswerPermission(deps: OrchestratorDeps, input: Input): Pro
   // Cancelling (null) grants nothing.
   if (!id || !requestId || typeof optionId !== "string") return null;
   const meta = await sessionOf(deps, id);
-  const events = await deps.sessions.readEvents(id, { limit: 300 }).then((page) => page.events, () => null);
+  const events = await deps.sessions.readEvents(meta?.id ?? id, { limit: 300 }).then((page) => page.events, () => null);
   const request = events
     ? reduce(events).find((entry) => entry.kind === "permission" && entry.requestId === requestId)
     : undefined;
