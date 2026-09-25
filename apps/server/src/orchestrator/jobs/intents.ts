@@ -9,6 +9,7 @@
 import type { ActivityActor } from "@portal/contracts/activity";
 import type { Intent, IntentStatus, Job, JobSchedule } from "@portal/contracts/jobs";
 import type { IntentInput } from "../hub.ts";
+import { expandId, expandScope, knownIds, mapRefs } from "../ids.ts";
 import { httpError } from "../ops.ts";
 import { generateTurn, prepareTurn } from "../turn.ts";
 import type { Item, ItemAction, ItemLinks } from "../types.ts";
@@ -156,8 +157,9 @@ export function createIntents(core: JobsCore) {
     return null;
   }
 
-  /** The Needs-you item for a firing: one per intent, updated on each firing. */
-  async function raiseItem(intent: Intent, title: string, body: string): Promise<Item> {
+  /** The Needs-you item for a firing: one per intent, updated on each firing. Its links carry full ids, even from a scope stored with prefixes. */
+  async function raiseItem(stored: Intent, title: string, body: string): Promise<Item> {
+    const intent = { ...stored, scope: expandScope(stored.scope, await knownIds(hub.deps)).scope };
     const links: ItemLinks = { intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) };
     const actions: ItemAction[] = [];
     if (intent.scope.pulls.length === 1) {
@@ -209,10 +211,27 @@ export function createIntents(core: JobsCore) {
     }
   }
 
+  /**
+   * An active intent stored before scopes held full ids, with each prefix that names one known
+   * session or project expanded and saved, and its live item's links too. Every check runs it rather
+   * than boot: a check is where a prefix does harm (a lookup that reads like a deletion), the
+   * sessions are all known by then, and a full scope writes nothing. A prefix that names nothing or
+   * several is left as it is.
+   */
+  async function repaired(intent: Intent | null): Promise<Intent | null> {
+    if (intent?.status !== "active") return intent;
+    const known = await knownIds(hub.deps);
+    const { scope, changed } = expandScope(intent.scope, known);
+    if (!changed) return intent;
+    const item = await hub.store.findItemByFingerprint(`intent_update:${intent.id}`);
+    if (item) await hub.store.updateItem(item.id, mapRefs(item, (kind, id) => expandId(known, kind, id)));
+    return store.updateIntent(intent.id, { scope });
+  }
+
   /** One check: a bookkeeping turn over the intent that may fire it. */
   async function check({ job, run, trigger, signal }: KindContext): Promise<KindResult> {
     const intentId = typeof job.payload.intentId === "string" ? job.payload.intentId : job.intentId;
-    const intent = intentId ? await store.getIntent(intentId) : null;
+    const intent = await repaired(intentId ? await store.getIntent(intentId) : null);
     if (!intent) return { summary: "Its intent no longer exists.", jobStatus: "cancelled" };
     if (intent.status !== "active") return { summary: `The intent is ${intent.status}.`, jobStatus: intent.status === "cancelled" ? "cancelled" : "done" };
     const now = hub.timers.now();

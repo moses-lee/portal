@@ -9,6 +9,7 @@
 import { z } from "zod";
 import { entityTypes, recordTypes, type MemoryEntity, type MemoryRecord } from "@portal/contracts/memory";
 import type { DomainToolContext, ToolSet } from "../hub.ts";
+import { type KnownIds, expandId, knownIds } from "../ids.ts";
 import { define } from "../tools/context.ts";
 import { pullRefSchema } from "../tools/items.ts";
 import type { OrchestratorMessage } from "../types.ts";
@@ -63,6 +64,18 @@ async function requireQuote({ hub, turn }: DomainToolContext, quote: string): Pr
   return { messageId: latest.id, quote: trimmed };
 }
 
+/** `id` made full when it uniquely prefixes a known session or project; else as given (memory may outlive what it is about). */
+const fuller = (known: KnownIds, type: string, id: string) => (type === "session" || type === "project" ? expandId(known, type, id) : id);
+
+/** A claim whose project or session entity key and scope ids are made full where they can be: keys and retrieval match full ids only. */
+function canonicalClaim<C extends { entity: { type: string; key: string }; scope?: { projectIds?: string[]; sessionIds?: string[] } }>(known: KnownIds, claim: C): C {
+  const scope = claim.scope && {
+    ...claim.scope, ...(claim.scope.projectIds ? { projectIds: claim.scope.projectIds.map((id) => fuller(known, "project", id)) } : {}),
+    ...(claim.scope.sessionIds ? { sessionIds: claim.scope.sessionIds.map((id) => fuller(known, "session", id)) } : {}),
+  };
+  return { ...claim, entity: { ...claim.entity, key: fuller(known, claim.entity.type, claim.entity.key) }, ...(scope ? { scope } : {}) };
+}
+
 function recordRow(record: MemoryRecord, entity?: MemoryEntity | null) {
   const body = record.body.length > 300 ? `${record.body.slice(0, 299)}…` : record.body;
   return {
@@ -89,7 +102,10 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
           quote: z.string().min(1).describe("The words the claim rests on, verbatim and short."),
         }),
       }),
-      async ({ source, ...input }) => {
+      async ({ source: given, ...claim }) => {
+        const known = await knownIds(ctx.hub.deps);
+        const input = canonicalClaim(known, claim);
+        const source = given.sessionId ? { ...given, sessionId: fuller(known, "session", given.sessionId) } : given;
         const result = await memory.propose({
           ...input, type: input.type as MemoryRecord["type"], entity: { ...input.entity, type: input.entity.type as MemoryEntity["type"] },
           source: { ...source, runId: turn.runId, ...(turn.threadId && source.kind === "message" ? { threadId: turn.threadId } : {}) },
@@ -109,7 +125,8 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
         limit: z.number().int().min(1).max(MAX_ROWS).optional(),
       }),
       async ({ query, entity, status, limit }) => {
-        const found = entity ? await memory.findEntity(entity.type as MemoryEntity["type"], entity.key) : null;
+        // A prefix of a project or session id finds its entity too; anything else is looked up as given.
+        const found = entity ? await memory.findEntity(entity.type as MemoryEntity["type"], fuller(await knownIds(ctx.hub.deps), entity.type, entity.key)) : null;
         if (entity && !found) return { records: [] };
         const hits = await memory.search(query, {
           entityIds: found ? [found.id] : undefined, limit: (limit ?? 10) + 1,
@@ -147,8 +164,9 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
         quote: z.string().min(1).describe("The user's words from their latest message that state this claim, verbatim."),
         pinned: z.boolean().optional().describe("Pin as a standing directive in CORE.md; only when the user asks for an always-on rule."),
       }),
-      async ({ quote, ...input }) => {
+      async ({ quote, ...claim }) => {
         const excerpt = await requireQuote(ctx, quote);
+        const input = canonicalClaim(await knownIds(ctx.hub.deps), claim);
         const result = await memory.remember({
           ...input, type: input.type as MemoryRecord["type"], entity: { ...input.entity, type: input.entity.type as MemoryEntity["type"] },
           source: { kind: "message", threadId: turn.threadId ?? undefined, messageId: excerpt.messageId, runId: turn.runId, quote: excerpt.quote },

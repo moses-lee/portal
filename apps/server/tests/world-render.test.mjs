@@ -128,3 +128,18 @@ test("projects without a GitHub repo are listed apart, and an empty world still 
   assert.match(text, /- no GitHub repo: notes \[p9\], gone \[p8\] \(missing\)/);
   assert.equal(renderWorld(world()).split("\n").length, 1);
 });
+
+test("a scope stored with an id prefix still finds its rows in focus, and a missing id says so without implying a deletion", () => {
+  const input = world({
+    projects: [worldProject({ id: "9b1d4e7a-5c6d-4e7f-8a9b-000000000001", name: "portal" })],
+    sessions: [worldSession({ id: "17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01", title: "Review auth", projectId: "9b1d4e7a-5c6d-4e7f-8a9b-000000000001" })],
+  });
+  const scope = { projectIds: ["9b1d4e7a"], sessionIds: ["17329ac6", "deadbeef"], pulls: [], repos: [], people: [], taskTypes: [] };
+  const text = renderWorld(input, { scope });
+  const focus = text.slice(text.indexOf("In focus for this turn:"), text.indexOf("Repos and their Portal projects"));
+  assert.match(focus, /- project portal \[9b1d4e7a\] on main/);
+  assert.match(focus, /- "Review auth" \[17329ac6\] in portal \[9b1d4e7a\]/);
+  assert.match(focus, /- session deadbeef \(no session with this id in Portal\)/);
+  assert.doesNotMatch(text, /not found|deleted/);
+  assert.equal(text.split('"Review auth"').length, 2, "shown once, in focus");
+});

@@ -15,12 +15,14 @@
  *
  * What a thread "named or acted on" is read pragmatically from what is stored: its scope, the links
  * of the items its turns touched (`itemIds`), and the text of its messages with the inputs of its
- * tool calls (ids appear there verbatim; a PR as owner/name#n, its URL, "#n", "PR n", or a tool's
+ * tool calls (ids appear there verbatim or as the World section's prefix; a PR as owner/name#n, its URL, "#n", "PR n", or a tool's
  * `"number": n`). A bare PR number counts even without its repo: a collision between two of the
  * user's repos is rarer than a thread that says "#123" and means the obvious one.
  */
+import { idMatches } from "../ids.ts";
 import type { Item, OrchestratorMessage, PullRef, Scope } from "../types.ts";
 import type { WorldChange } from "./changes.ts";
+import { shortId } from "./render.ts";
 
 /** Lines the section shows before "+N more (get_changes)". */
 export const RECENT_CHANGE_LINES = 10;
@@ -96,16 +98,19 @@ export function threadRefs({ scope, messages, items }: { scope: Scope; messages:
   return refs;
 }
 
-const named = (text: string, id: string | undefined) => !!id && text.includes(id.toLowerCase());
+/** Whether the thread's text names `id`, in full or by the prefix the World section shows. */
+const named = (text: string, id: string | undefined) => !!id && text.includes(shortId(id).toLowerCase());
+/** Whether `ids` (a scope's or links', maybe prefixes stored before ids were kept full) hold the full id `id`. */
+const holds = (ids: Iterable<string>, id: string) => [...ids].some((ref) => idMatches(ref, id));
 
 /** Whether a change is about something the thread named or acted on. */
 export function touchesThread(change: Pick<WorldChange, "subject" | "refs">, refs: ThreadRefs): boolean {
   const { pull, sessionId, projectId } = change.refs;
   if (pull && (refs.pulls.has(pullName(pull)) || refs.repos.has(pull.repo.toLowerCase()) || refs.numbers.has(pull.number))) return true;
-  if (sessionId && (refs.sessionIds.has(sessionId) || named(refs.text, sessionId))) return true;
+  if (sessionId && (holds(refs.sessionIds, sessionId) || named(refs.text, sessionId))) return true;
   // A project only speaks for changes about the project itself (its worktree, its folder), not for every session in it.
   const aboutProject = change.subject.startsWith("worktree:") || change.subject.startsWith("folder:");
-  return aboutProject && !!projectId && (refs.projectIds.has(projectId) || named(refs.text, projectId));
+  return aboutProject && !!projectId && (holds(refs.projectIds, projectId) || named(refs.text, projectId));
 }
 
 /** The user's own subject, acted on within `FRESH_MS` of `now`. */
@@ -120,8 +125,8 @@ export function coveredByIntent(change: Pick<WorldChange, "subject" | "refs">, i
   const { pull, sessionId, projectId } = change.refs;
   const aboutProject = change.subject.startsWith("worktree:") || change.subject.startsWith("folder:");
   return intents.some(({ scope }) => (!!pull && scope.pulls.some((ref) => pullName(ref) === pullName(pull)))
-    || (!!sessionId && scope.sessionIds.includes(sessionId))
-    || (aboutProject && !!projectId && scope.projectIds.includes(projectId)));
+    || (!!sessionId && holds(scope.sessionIds, sessionId))
+    || (aboutProject && !!projectId && holds(scope.projectIds, projectId)));
 }
 
 export type RecentChangesInput = {

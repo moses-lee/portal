@@ -11,6 +11,7 @@ import type { LanguageModelUsage, Tool } from "ai";
 import { CALL_TIMEOUT_MS, createOrchestratorAgent } from "./agent.ts";
 import type { DomainToolContext, OrchestratorHub, ResolvedModel, RunOutcome, ToolSet, TurnInfo } from "./hub.ts";
 import { systemPrompt } from "./prompt.ts";
+import { expandScope } from "./ids.ts";
 import { normalizeScope } from "./store.ts";
 import { READ_ONLY_TOOLS, createTools } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
@@ -84,9 +85,11 @@ function loggedInput(input: unknown): unknown {
 
 /**
  * `scope` plus what the world knows is behind it: a session's project, and the repo of every
- * project and pull request named. Only additions; nothing named is dropped.
+ * project and pull request named. Only additions; nothing named is dropped, though a unique
+ * prefix (scopes stored before ids were kept full may hold one) becomes the full id it names.
  */
-export function widenScope(scope: Scope, world: WorldState): Scope {
+export function widenScope(given: Scope, world: WorldState): Scope {
+  const { scope } = expandScope(given, world);
   const projects = new Set(scope.projectIds);
   for (const id of scope.sessionIds) {
     const session = world.sessions.find((entry) => entry.id === id);
