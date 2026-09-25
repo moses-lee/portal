@@ -14,6 +14,7 @@ import { errorMessage, errorStatus } from "./http/errors.ts";
 import { closeEventStreams } from "./http/sse.ts";
 import { importLegacyAtBoot } from "./import/boot.ts";
 import { createPresence } from "./lib/presence.ts";
+import type { Settings } from "@portal/shared/settings";
 import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
 import { createProjectsService } from "./projects/service.ts";
@@ -74,6 +75,10 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     ctx.settings = createSettingsService(ctx);
     // A missing or broken server key fails the boot here rather than the first settings request.
     await ctx.settings.ready;
+    // The hung threshold is the user's; later changes reach the running sessions too.
+    const applyStalls = (settings: Settings) => ctx.sessions.setLivenessOptions({ hungAfterMs: settings.orchestrator.stalls.hungAfterMinutes * 60_000 });
+    applyStalls(await ctx.settings.read());
+    ctx.settings.subscribe(applyStalls);
   } catch (err) {
     // A failed boot hands the database back, so the next attempt (or another app) can take it.
     await ctx.sessions?.dispose().catch(() => {});

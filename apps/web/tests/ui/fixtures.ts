@@ -146,6 +146,10 @@ export function makeSession(
     busy: false,
     awaitingPermission: false,
     link: { status: "live" },
+    liveness: {
+      state: "idle", summary: "idle", turnOpen: false, turnStartedAt: null, openTools: [], lastOutputAt: null,
+      lastCpuAt: null, process: null, lost: null, hungAfterMs: 15 * 60_000,
+    },
   };
 }
 export const sessions = [

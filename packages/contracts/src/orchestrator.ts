@@ -48,6 +48,8 @@ export type OrchestratorSettings = {
   consolidation: ConsolidationSettings;
   /** How Portal treats the review sessions it starts. */
   reviews: ReviewSettings;
+  /** When a session counts as stalled. */
+  stalls: StallSettings;
   /** True when a key is stored for the provider. The key itself never leaves the server. */
   apiKeys: Record<OrchestratorProvider, boolean>;
 };
@@ -60,6 +62,14 @@ export type OrchestratorSettings = {
  */
 export type ReviewSettings = {
   answerReadOnly: boolean;
+};
+
+/**
+ * A session with an open turn is hung once neither its processes used CPU nor the agent produced
+ * output for `hungAfterMinutes`. Hung and dead sessions are the only ones Portal calls stalled.
+ */
+export type StallSettings = {
+  hungAfterMinutes: number;
 };
 
 /**
@@ -86,6 +96,7 @@ export type OrchestratorSettingsPatch = {
   bookkeeping?: Partial<ModelChoice>;
   consolidation?: Partial<ConsolidationSettings>;
   reviews?: Partial<ReviewSettings>;
+  stalls?: Partial<StallSettings>;
   apiKeys?: Partial<Record<OrchestratorProvider, string>>;
 };
 
@@ -95,6 +106,7 @@ export const defaultOrchestratorSettings: OrchestratorSettings = {
   bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
   consolidation: { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 },
   reviews: { answerReadOnly: true },
+  stalls: { hungAfterMinutes: 15 },
   apiKeys: { openai: false, anthropic: false },
 };
 
@@ -165,6 +177,7 @@ export type ItemKind =
   | "session_stopped"
   | "session_waiting"
   | "session_offline"
+  | "session_hung"
   | "pr_checks_failing"
   | "pr_changes_requested"
   | "pr_conflicts"
@@ -273,6 +286,10 @@ export type TickSnapshot = {
     link?: "live" | "connecting" | "offline";
     /** Set when the session went idle since the previous snapshot because its turn was cancelled. */
     stopped?: true;
+    /** The derived liveness state (see `SessionLiveness`). Absent in snapshots from before this field. */
+    liveness?: "dead" | "blocked" | "busy" | "hung" | "idle";
+    /** For a dead or hung session, what its liveness summary said (why the agent was lost, or how long it has been quiet). */
+    stall?: string;
   }>;
   /** Keyed by "owner/name#number". */
   pulls: Record<string, PullAttention>;

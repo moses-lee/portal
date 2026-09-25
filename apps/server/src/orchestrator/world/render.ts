@@ -66,9 +66,25 @@ const activityText: Record<WorldSession["activity"], string> = {
   waiting: "waiting on a permission", working: "working", error: "agent lost", connecting: "connecting", idle: "idle",
 };
 
-function sessionLine(session: WorldSession, lookup: Lookup, now: number): string {
+/** What the session is doing: its liveness line when the world has one, else the older activity word. */
+function sessionStatus(session: WorldSession): string {
+  if (session.status) return clip(session.status, 120);
   const offline = session.link === "offline" && session.activity === "idle" ? ", offline" : "";
-  return `- ${quoted(session.title)} [${shortId(session.id)}] in ${projectRef(lookup, session.projectId)} · ${session.agentName} · ${activityText[session.activity]}${offline} · ${ago(session.lastActiveAt, now)}`;
+  return `${activityText[session.activity]}${offline}`;
+}
+
+/** Sessions that need someone or are doing something: anything not idle. */
+function sessionActive(session: WorldSession): boolean {
+  return session.liveness ? session.liveness !== "idle" : session.activity !== "idle";
+}
+
+// Stalls first: blocked on the user, then hung, then dead, then the ones getting on with it.
+const livenessOrder: Record<string, number> = { blocked: 0, hung: 1, dead: 2, busy: 3 };
+const activityOrder: Record<string, number> = { waiting: 0, error: 2, working: 3, connecting: 4 };
+const activeOrder = (session: WorldSession) => (session.liveness ? livenessOrder[session.liveness] : activityOrder[session.activity]) ?? 5;
+
+function sessionLine(session: WorldSession, lookup: Lookup, now: number): string {
+  return `- ${quoted(session.title)} [${shortId(session.id)}] in ${projectRef(lookup, session.projectId)} · ${session.agentName} · ${sessionStatus(session)} · last prompt ${ago(session.lastActiveAt, now)}`;
 }
 
 function pullLine(pull: PullAttention, lookup: Lookup): string {
@@ -197,10 +213,9 @@ export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_T
     out.section("In focus for this turn:", rows, { reserve });
   }
 
-  const order: Record<string, number> = { waiting: 0, error: 1, working: 2, connecting: 3 };
   const active = world.sessions
-    .filter((s) => s.activity !== "idle" && !shownSessions.has(s.id))
-    .sort((a, b) => order[a.activity] - order[b.activity] || b.lastActiveAt - a.lastActiveAt || a.id.localeCompare(b.id));
+    .filter((s) => sessionActive(s) && !shownSessions.has(s.id))
+    .sort((a, b) => activeOrder(a) - activeOrder(b) || b.lastActiveAt - a.lastActiveAt || a.id.localeCompare(b.id));
   active.forEach((s) => shownSessions.add(s.id));
   out.section("Sessions needing you or working:", active.map((s) => sessionLine(s, lookup, now)), { reserve });
 

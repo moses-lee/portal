@@ -109,7 +109,7 @@ test("sessions waiting on the user come before PRs, the repo map, and recent ses
   assert.ok(at("Recent sessions") < at("Active intents"));
   assert.ok(at("Next jobs") < at("Open items"));
   assert.match(text, /acme\/monorepo#2367 "Big change" by moses-lee — review requested · checkout mono \[p1\]/);
-  assert.match(text, /"Needs approval" \[waiting-\] in mono \[p1\] · Claude Code · waiting on a permission · 1m ago/);
+  assert.match(text, /"Needs approval" \[waiting-\] in mono \[p1\] · Claude Code · waiting on a permission · last prompt 1m ago/);
   assert.match(text, /- \[j1\] Tick \(tick\) · in 5m/);
   assert.match(text, /Review requested \(snoozed\)/);
   assert.match(text, /Stale sources: GitHub search failed/);
@@ -127,4 +127,22 @@ test("projects without a GitHub repo are listed apart, and an empty world still 
   const text = renderWorld(input);
   assert.match(text, /- no GitHub repo: notes \[p9\], gone \[p8\] \(missing\)/);
   assert.equal(renderWorld(world()).split("\n").length, 1);
+});
+
+test("session lines say what the agent is doing, from its liveness; stalls come first and the last prompt is named as such", () => {
+  const text = renderWorld(world({
+    projects: [worldProject()],
+    sessions: [
+      worldSession({ id: "busy-001", title: "Bazel run", activity: "working", liveness: "busy", status: "running tool: bazel test //... for 45m", lastActiveAt: T0 - 39 * MIN }),
+      worldSession({ id: "hung-001", title: "Stuck one", activity: "working", liveness: "hung", status: "hung: no CPU or output for 20m", lastActiveAt: T0 - 60 * MIN }),
+      worldSession({ id: "dead-001", title: "Crashed", link: "offline", liveness: "dead", status: "dead: Portal restarted while the turn was running", lastActiveAt: T0 - 90 * MIN }),
+      worldSession({ id: "idle-001", title: "Done", liveness: "idle", status: "idle" }),
+    ],
+  }));
+  assert.match(text, /"Bazel run" \[busy-001\] in app \[p1\] · Claude Code · running tool: bazel test \/\/\.\.\. for 45m · last prompt 39m ago/);
+  const active = text.slice(text.indexOf("Sessions needing you or working:"), text.indexOf("Recent sessions:"));
+  assert.ok(active.indexOf("Stuck one") < active.indexOf("Crashed") && active.indexOf("Crashed") < active.indexOf("Bazel run"), active);
+  assert.match(active, /"Crashed" .* · dead: Portal restarted while the turn was running · /);
+  assert.doesNotMatch(active, /Done/, "an idle session is not active");
+  assert.match(text, /"Done" \[idle-001\] .* · idle · last prompt 5m ago/);
 });

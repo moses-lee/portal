@@ -130,7 +130,16 @@ export type SessionMatch = {
   projectId: string;
   projectName: string | null;
   activity: WorldSession["activity"];
+  /** The liveness state and its line, when the world has them. */
+  liveness?: WorldSession["liveness"];
+  status?: string;
   lastActiveAt: number;
+};
+
+/** Words that name liveness states; "stalled" and "stuck" mean either stall. */
+const livenessWords: Record<string, (s: WorldSession) => boolean> = {
+  hung: (s) => s.liveness === "hung", dead: (s) => s.liveness === "dead",
+  stalled: (s) => s.liveness === "hung" || s.liveness === "dead", stuck: (s) => s.liveness === "hung" || s.liveness === "dead",
 };
 
 const activities: Record<string, WorldSession["activity"]> = {
@@ -148,18 +157,21 @@ export function resolveSession(world: WorldState, query: string): Resolution<Ses
   const project = (s: WorldSession) => projects.get(s.projectId);
   const words = q.split(/\s+/).filter((w) => w.length >= 3);
   const activity = activities[q];
+  const stateTest = livenessWords[q];
   const hits = firstTier([
     sessions.filter((s) => s.id === query.trim()),
     q.length >= 4 ? sessions.filter((s) => s.id.toLowerCase().startsWith(q)) : [],
     sessions.filter((s) => title(s) === q),
     activity ? sessions.filter((s) => s.activity === activity) : [],
+    stateTest ? sessions.filter(stateTest) : [],
     sessions.filter((s) => s.title && title(s).includes(q)),
     sessions.filter((s) => { const p = project(s); return !!p && (lower(p.name) === q || squash(p.name) === squash(q) || lower(p.repo ?? "") === q); }),
     words.length ? sessions.filter((s) => words.every((w) => title(s).includes(w))) : [],
     words.length ? sessions.filter((s) => words.some((w) => title(s).includes(w))) : [],
   ], (s) => s.id);
   return resolution(hits.map((s) => ({
-    id: s.id, title: s.title, projectId: s.projectId, projectName: project(s)?.name ?? null, activity: s.activity, lastActiveAt: s.lastActiveAt,
+    id: s.id, title: s.title, projectId: s.projectId, projectName: project(s)?.name ?? null, activity: s.activity,
+    ...(s.liveness ? { liveness: s.liveness, status: s.status } : {}), lastActiveAt: s.lastActiveAt,
   })), "session");
 }
 

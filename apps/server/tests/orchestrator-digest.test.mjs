@@ -5,7 +5,7 @@ import {
   reviewDetail, snapshotActivity,
 } from "../src/orchestrator/digest.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
-import { T0, attentionPull, fakeDeps, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
+import { T0, attentionPull, fakeDeps, liveness, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const DAY = 86_400_000;
 
@@ -573,4 +573,42 @@ test("a session too short for any refresh to see it working still counts as fini
   assert.deepEqual(diffSnapshots(prev, snap({ sessions: { s9: { ...quick, link: "connecting" } } }), []), []);
   assert.deepEqual(diffSnapshots(prev, snap({ sessions: { s9: { ...quick, lastActiveAt: prev.at - 1 } } }), []), []);
   assert.deepEqual(diffSnapshots(null, snap({ sessions: { s9: quick } }), []), [], "the first snapshot reports conditions, not transitions");
+});
+
+test("stalls go by liveness: a hung turn and a dead agent are reported with what the liveness said, once", () => {
+  const busy = snap({ sessions: { s1: session({ activity: "working", liveness: "busy" }) } });
+  const hung = snap({ at: T0 + 1, sessions: { s1: session({ activity: "working", liveness: "hung", stall: "no CPU or output for 20m (tool: bazel test //..., started 1h ago)" }) } });
+  const [report] = diffSnapshots(busy, hung, []);
+  assert.equal(report.kind, "session_hung");
+  assert.equal(report.fingerprint, "session_hung:s1");
+  assert.equal(report.summary, 'Session "Fix login" is hung: no CPU or output for 20m (tool: bazel test //..., started 1h ago)');
+  assert.deepEqual(diffSnapshots(hung, { ...hung, at: T0 + 2 }, []), [], "still hung is not news");
+  // A long tool run that keeps moving never reports anything, however old the last prompt is.
+  assert.deepEqual(diffSnapshots(busy, snap({ at: T0 + 1, sessions: { s1: session({ activity: "working", liveness: "busy", lastActiveAt: T0 - 5 * DAY }) } }), []), []);
+  const [moving] = diffSnapshots(hung, snap({ at: T0 + 2, sessions: { s1: session({ activity: "working", liveness: "busy" }) } }), [item("session_hung:s1")]);
+  assert.equal(moving.resolvesItemId, "item-session_hung:s1");
+
+  // Portal restarted under a turn: the link has no error, so the activity reads idle, but the agent is dead.
+  const dead = snap({ at: T0 + 1, sessions: { s1: session({ link: "offline", liveness: "dead", stall: "Portal restarted while the turn was running" }) } });
+  const [lost] = diffSnapshots(busy, dead, []);
+  assert.equal(lost.kind, "session_offline");
+  assert.equal(lost.summary, 'Session "Fix login" lost its agent: Portal restarted while the turn was running');
+  const [back] = diffSnapshots(dead, snap({ at: T0 + 2, sessions: { s1: session({ liveness: "idle" }) } }), [item("session_offline:s1")]);
+  assert.equal(back.resolvesItemId, "item-session_offline:s1");
+});
+
+test("the snapshot carries each session's liveness, and the stall text only for stalls", async () => {
+  const { deps } = fakeDeps({
+    sessions: [
+      sessionMeta({ id: "s1", busy: true, liveness: liveness("busy", "running tool: bazel test //... for 45m") }),
+      sessionMeta({ id: "s2", busy: true, liveness: liveness("hung", "hung: no CPU or output for 20m") }),
+      sessionMeta({ id: "s3", link: { status: "offline", error: "Claude Code disconnected" }, liveness: liveness("dead", "dead: Claude Code was killed by SIGKILL") }),
+      sessionMeta({ id: "s4" }),
+    ],
+  });
+  const snapshot = await collectSnapshot({ deps, previous: null, now: T0, log: [] });
+  assert.deepEqual([snapshot.sessions.s1.liveness, snapshot.sessions.s1.stall], ["busy", undefined]);
+  assert.deepEqual([snapshot.sessions.s2.liveness, snapshot.sessions.s2.stall], ["hung", "no CPU or output for 20m"]);
+  assert.deepEqual([snapshot.sessions.s3.liveness, snapshot.sessions.s3.stall], ["dead", "Claude Code was killed by SIGKILL"]);
+  assert.equal(snapshot.sessions.s4.liveness, undefined, "a session without liveness (an old fake) keeps the old fields");
 });

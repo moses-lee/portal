@@ -16,7 +16,7 @@
  */
 import type { WorldState } from "@portal/contracts/world";
 import { stripNul } from "../../db/sanitize.ts";
-import { authoredReasons, diffSnapshots, dirtyAndIdle, mergedAndIdle } from "../digest.ts";
+import { authoredReasons, diffSnapshots, dirtyAndIdle, mergedAndIdle, sessionDead } from "../digest.ts";
 import { attentionReasons } from "../github-attention.ts";
 import type { ItemKind, PullAttention, PullRef, TickSnapshot } from "../types.ts";
 
@@ -135,7 +135,8 @@ export function changeEntries(prev: TickSnapshot | null, world: Pick<WorldState,
       case "session_finished":
       case "session_stopped":
       case "session_waiting":
-      case "session_offline": {
+      case "session_offline":
+      case "session_hung": {
         const session = next.sessions[key];
         const createdAt = world.sessions.find((entry) => entry.id === key)?.createdAt;
         entries.push({
@@ -184,7 +185,8 @@ export function stillHolds(change: Pick<WorldChange, "subject" | "kind">, snapsh
       const session = snapshot.sessions[key];
       if (!session) return false;
       if (change.kind === "session_waiting") return session.activity === "waiting";
-      if (change.kind === "session_offline") return session.activity === "error";
+      if (change.kind === "session_offline") return sessionDead(session);
+      if (change.kind === "session_hung") return session.liveness === "hung";
       return session.activity !== "working";
     }
     case "pr": {

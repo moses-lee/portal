@@ -2,7 +2,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import { displayPath } from "../../lib/git-info.ts";
 import { type Block, reduce, segment } from "@portal/shared/transcript";
-import type { SessionMeta, SessionState } from "../../lib/types.ts";
+import { isStall } from "../../lib/liveness.ts";
+import type { SessionLiveness, SessionMeta, SessionState } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
 import { lastTurnEnd, snapshotActivity } from "../digest.ts";
 import { httpError, startSession } from "../ops.ts";
@@ -21,10 +22,43 @@ export const STOP_WAIT_SECONDS = 30;
 /** Events read to find how the last turn ended; its end is the last event of the turn. */
 const TURN_END_WINDOW = 20;
 
+const livenessStates = ["dead", "blocked", "busy", "hung", "idle"] as const;
+
 function sessionRow(meta: SessionMeta) {
   return {
     id: meta.id, title: meta.title, projectId: meta.projectId || null, agent: meta.agentId,
-    activity: snapshotActivity(meta), lastActiveAt: meta.lastActiveAt,
+    activity: snapshotActivity(meta),
+    ...(meta.liveness ? { liveness: meta.liveness.state, status: meta.liveness.summary } : {}),
+    lastActiveAt: meta.lastActiveAt,
+  };
+}
+
+/** Seconds from `at` to `now`, or null. */
+const secondsSince = (at: number | null, now: number) => (at === null ? null : Math.max(0, Math.round((now - at) / 1000)));
+
+/** Liveness for the model: durations in seconds rather than timestamps, and whether it counts as a stall. */
+export function livenessDetail(liveness: SessionLiveness, now = Date.now()) {
+  const { process: probe, lost } = liveness;
+  return {
+    state: liveness.state,
+    summary: liveness.summary,
+    stall: isStall(liveness.state),
+    turnOpenForSeconds: liveness.turnOpen ? secondsSince(liveness.turnStartedAt, now) : null,
+    openTools: liveness.openTools.map((call) => ({
+      title: call.title, kind: call.kind, runningForSeconds: secondsSince(call.startedAt, now), secondsSinceOutput: secondsSince(call.lastOutputAt, now),
+    })),
+    secondsSinceOutput: secondsSince(liveness.lastOutputAt, now),
+    secondsSinceCpu: secondsSince(liveness.lastCpuAt, now),
+    process: probe ? {
+      alive: probe.alive, agentPid: probe.agentPid, scope: probe.scope,
+      children: probe.children.map((child) => ({ pid: child.pid, command: child.command, runningForSeconds: Math.round(child.elapsedMs / 1000) })),
+      cpuSeconds: probe.cpuMs === null ? null : probe.cpuMs / 1000,
+      childCpuSeconds: probe.childCpuMs === null ? null : probe.childCpuMs / 1000,
+      windowSeconds: Math.round(probe.windowMs / 1000),
+      sampledSecondsAgo: secondsSince(probe.sampledAt, now),
+    } : null,
+    lost: lost ? { reason: lost.reason, detail: lost.detail, secondsAgo: secondsSince(lost.at, now), exitCode: lost.exitCode ?? null, signal: lost.signal ?? null } : null,
+    hungAfterMinutes: Math.round(liveness.hungAfterMs / 60_000),
   };
 }
 
@@ -69,37 +103,43 @@ export function sessionTools({ deps }: ToolContext) {
   }
   return {
     list_sessions: define(
-      "Sessions (conversations with a coding agent), most recently active first. Filter by project or activity: idle, working, waiting (on a permission), connecting, error.",
+      "Sessions (conversations with a coding agent), most recently prompted first. Filter by project, activity (idle, working, waiting on a permission, connecting, error), or liveness: dead (agent process or connection gone), blocked (on a permission), busy (turn open and moving), hung (turn open, no CPU and no output for a while), idle. Only dead and hung are stalls; lastActiveAt is when the user last prompted, not when the agent last did anything.",
       z.object({
         projectId: z.string().optional(),
         status: z.enum(["idle", "working", "waiting", "connecting", "error"]).optional(),
+        liveness: z.enum(livenessStates).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
-      async ({ projectId, status, limit = DEFAULT_LIMIT }) => {
+      async ({ projectId, status, liveness, limit = DEFAULT_LIMIT }) => {
         const all = (await deps.sessions.list())
-          .filter((meta) => (!projectId || meta.projectId === projectId) && (!status || snapshotActivity(meta) === status));
+          .filter((meta) => (!projectId || meta.projectId === projectId) && (!status || snapshotActivity(meta) === status)
+            && (!liveness || meta.liveness?.state === liveness));
         const { rows, truncated } = capped(all, limit);
         return { sessions: rows.map(sessionRow), truncated, total: all.length };
       },
     ),
     list_active_sessions: define(
-      "Sessions that are working or waiting for a permission right now.",
+      "Sessions with a turn open right now: busy, blocked on a permission, or hung.",
       z.object({}),
       async () => {
-        const active = (await deps.sessions.list()).filter((meta) => ["working", "waiting"].includes(snapshotActivity(meta)));
+        const active = (await deps.sessions.list()).filter((meta) => (meta.liveness
+          ? ["busy", "blocked", "hung"].includes(meta.liveness.state)
+          : ["working", "waiting"].includes(snapshotActivity(meta))));
         const { rows, truncated } = capped(active);
         return { sessions: rows.map(sessionRow), truncated };
       },
     ),
     get_session: define(
-      "One session: agent, project, folder, activity, connection, and current mode.",
+      "One session: agent, project, folder, activity, connection, current mode, and liveness: the state (dead, blocked, busy, hung, idle; only dead and hung are stalls), the tool calls still running and for how long, the agent's process (alive, the child processes the turn started with their commands and run times, CPU over the last minutes), seconds since the last output and CPU, and why the agent was lost.",
       z.object({ sessionId }),
       async ({ sessionId }) => {
         const meta = await requireSession(sessionId);
         const project = meta.projectId ? await deps.projects.get(meta.projectId) : undefined;
+        const liveness = (await deps.sessions.liveness?.(sessionId)) ?? meta.liveness;
         return {
           ...sessionRow(meta), cwd: displayPath(meta.cwd), project: project?.name ?? null, createdAt: meta.createdAt,
           link: meta.link.status, linkError: meta.link.status === "offline" ? meta.link.error : null, ...compactState(meta.state),
+          ...(liveness ? { liveness: livenessDetail(liveness), status: liveness.summary } : {}),
         };
       },
     ),

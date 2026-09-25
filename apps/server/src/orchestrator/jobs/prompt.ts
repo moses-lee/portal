@@ -3,6 +3,7 @@
  * by `prompt.ts`, and the prompts of the turns jobs run (an intent check, a helper).
  */
 import type { HelperPayload, Intent } from "@portal/contracts/jobs";
+import { livenessGuidance } from "../world/prompt.ts";
 
 export const guidance = `Background work is yours to schedule, at the cadence you judge right:
 - "Monitor PR N" or "tell me when N merges": monitor_pull (no model runs its checks; it reports state changes only and ends when the PR merges or closes). "Stop monitoring N": cancel_intent with pull.
@@ -34,6 +35,7 @@ export function intentCheckPrompt(intent: Intent, now: number): string {
     "",
     "Do this:",
     "1. Check the trigger with the read-only tools (get_pull, list_sessions, read_transcript, ...). Look only at what the trigger needs.",
+    `   ${livenessGuidance}`,
     "2. If the trigger holds, call fire_intent with a title and a short body for the user; the server may refuse (cooldown, budget, expiry), and then you stop. After it fired, carry out the action (send_prompt to a session, update an item) as far as the tools allow.",
     "3. Rewrite the notes with update_intent when your understanding changed (what you saw, what is left). Call close_intent when the intent is fulfilled or can never fire.",
     "4. Reply with one or two sentences for the user's thread when the intent fired, else with exactly NO_UPDATE.",

@@ -74,6 +74,7 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
     bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
     consolidation: orchestratorDefaults.consolidation,
     reviews: { answerReadOnly: false },
+    stalls: orchestratorDefaults.stalls,
     apiKeys: { openai: false, anthropic: true },
   });
   assert.ok(!JSON.stringify(merged).includes("sk-ant-secret"), "the key text never reaches the wire form");
@@ -169,6 +170,7 @@ test("applySettingsPatch touches only the section a patch names", () => {
     bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
     consolidation: { ...orchestratorDefaults.consolidation, minIntervalMinutes: 30 },
     reviews: { answerReadOnly: false },
+    stalls: orchestratorDefaults.stalls,
     apiKeys: { openai: false, anthropic: true },
   });
 
@@ -268,4 +270,17 @@ test("the review toggle defaults to on, merges only a boolean, and is written on
   const off = mergeSettings({ orchestrator: { reviews: { answerReadOnly: false } } });
   assert.deepEqual(settingsOverrides(off).orchestrator, { reviews: { answerReadOnly: false } });
   assert.equal(settingsOverrides(mergeSettings({})).orchestrator, undefined);
+});
+
+test("the hung threshold defaults to 15 minutes, merges only whole minutes in range, and is written only when it differs", () => {
+  assert.deepEqual(orchestratorDefaults.stalls, { hungAfterMinutes: 15 });
+  assert.equal(mergeSettings({ orchestrator: { stalls: { hungAfterMinutes: 45 } } }).orchestrator.stalls.hungAfterMinutes, 45);
+  for (const bad of [0, -5, 1.5, "30", 100_000, null]) {
+    assert.equal(mergeSettings({ orchestrator: { stalls: { hungAfterMinutes: bad } } }).orchestrator.stalls.hungAfterMinutes, 15, String(bad));
+  }
+  const longer = applySettingsPatch(defaultSettings, { orchestrator: { stalls: { hungAfterMinutes: 60 } } });
+  assert.deepEqual(settingsOverrides(longer).orchestrator, { stalls: { hungAfterMinutes: 60 } });
+  assert.deepEqual(mergeSettings(settingsOverrides(longer)), longer);
+  // A patch about something else keeps it.
+  assert.equal(applySettingsPatch(longer, { orchestrator: { model: "claude-x" } }).orchestrator.stalls.hungAfterMinutes, 60);
 });

@@ -951,30 +951,31 @@ export function createAcpRuntime(
     return !!session.process && !session.process.failure && session.link.status === "live" && typeof session.process.proc.pid === "number";
   }
 
-  let probing: Promise<void> | null = null;
+  let reading: Promise<ProcessTable | null> | null = null;
+
+  /** One `ps` read at a time; callers that arrive meanwhile share it. */
+  function readTable(): Promise<ProcessTable | null> {
+    reading ??= readProcesses().catch(() => null).finally(() => { reading = null; });
+    return reading;
+  }
 
   /**
-   * Sample the process tree of `targets` with one `ps` read. Concurrent callers share a read; a
-   * platform without `ps` leaves the probes empty, so no session is ever called hung there.
+   * Sample the process tree of `targets`. Concurrent callers share the `ps` read; a platform
+   * without `ps` leaves the probes empty, so no session is ever called hung there.
    */
-  function probe(targets: Session[]): Promise<void> {
-    if (probing) return probing;
-    const live = targets.filter(probeable);
-    if (live.length === 0) return Promise.resolve();
-    probing = (async () => {
-      const table = await readProcesses().catch(() => null);
-      if (!table) return;
-      for (const session of live) {
-        // The process may have gone while `ps` ran; its sessions were reset then.
-        if (!probeable(session) || !current(session)) continue;
-        sampleProbe(session.probe, table, {
-          agentPid: session.process.proc.pid!,
-          marker: session.upstreamId,
-          turnStartedAt: session.busy ? session.turnStartedAt : null,
-        });
-      }
-    })().finally(() => { probing = null; });
-    return probing;
+  async function probe(targets: Session[]): Promise<void> {
+    if (!targets.some(probeable)) return;
+    const table = await readTable();
+    if (!table) return;
+    for (const session of targets) {
+      // The process may have gone while `ps` ran (its sessions were reset then), or another caller sampled this read already.
+      if (!probeable(session) || !current(session) || session.probe.last?.sampledAt === table.at) continue;
+      sampleProbe(session.probe, table, {
+        agentPid: session.process.proc.pid!,
+        marker: session.upstreamId,
+        turnStartedAt: session.busy ? session.turnStartedAt : null,
+      });
+    }
   }
 
   /**

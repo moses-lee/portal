@@ -13,6 +13,7 @@
  * Live: `{ type: "world", at }` after each rebuild.
  */
 import type { ItemKind, PullAttention, PullRef, TickSnapshot } from "./orchestrator.ts";
+import type { LivenessState } from "./types.ts";
 
 export type WorldProject = {
   id: string;
@@ -38,7 +39,11 @@ export type WorldSession = {
   activity: "idle" | "working" | "waiting" | "connecting" | "error";
   link: "live" | "connecting" | "offline";
   createdAt: number;
+  /** When the user last prompted it (or it was created); not when the agent last did anything. */
   lastActiveAt: number;
+  /** Whether the agent is dead, blocked, busy, hung, or idle, and a line saying so ("running tool: bazel test for 45m"). Absent in worlds from before this field. */
+  liveness?: LivenessState;
+  status?: string;
 };
 
 export type WorldTerminal = {

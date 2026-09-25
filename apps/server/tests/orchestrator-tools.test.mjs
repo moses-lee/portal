@@ -11,7 +11,7 @@ import { REDACTED } from "../src/orchestrator/tools/context.ts";
 import { BACKGROUND_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
 import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
 import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
-import { T0, attentionPull, fakeDeps, fakeSettings, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
+import { T0, attentionPull, fakeDeps, fakeSettings, liveness, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const options = { toolCallId: "call", messages: [] };
 
@@ -507,4 +507,42 @@ test("list_attention_pulls narrows the search to the stale window unless include
   const everything = await run(tools.list_attention_pulls, { includeStale: true });
   assert.deepEqual(everything.pulls.map((row) => row.key), ["acme/app#1", "acme/app#99"]);
   assert.deepEqual(state.searches, [{ updatedSince: T0 - STALE_PULL_MS }, {}]);
+});
+
+test("session tools report liveness: rows carry the state and its line, get_session the detail from a fresh probe", async () => {
+  const now = Date.now();
+  const detail = liveness("busy", "running tool: bazel test //... for 45m", {
+    turnStartedAt: now - 46 * 60_000, lastOutputAt: now - 45 * 60_000, lastCpuAt: now - 20_000,
+    openTools: [{ id: "c1", title: "bazel test //...", kind: "execute", startedAt: now - 45 * 60_000, lastOutputAt: null }],
+    process: {
+      agentPid: 10, alive: true, scope: "session", rootPid: 20, sampledAt: now - 3_000, windowMs: 300_000, cpuMs: 12_500, childCpuMs: 9_000,
+      children: [{ pid: 30, command: "bazel test //...", elapsedMs: 45 * 60_000, cpuMs: 9_000 }],
+    },
+  });
+  const sessions = [
+    sessionMeta({ id: "s1", busy: true, liveness: liveness("busy", "stale line") }),
+    sessionMeta({ id: "s2", busy: true, liveness: liveness("hung", "hung: no CPU or output for 20m") }),
+    sessionMeta({ id: "s3", liveness: liveness("idle") }),
+  ];
+  const { tools, deps } = setup({ sessions });
+  const probed = [];
+  deps.sessions.liveness = async (id) => { probed.push(id); return id === "s1" ? detail : null; };
+
+  const one = await run(tools.get_session, { sessionId: "s1" });
+  assert.deepEqual(probed, ["s1"]);
+  assert.equal(one.status, "running tool: bazel test //... for 45m");
+  assert.equal(one.liveness.state, "busy");
+  assert.equal(one.liveness.stall, false);
+  assert.deepEqual(one.liveness.openTools, [{ title: "bazel test //...", kind: "execute", runningForSeconds: 2700, secondsSinceOutput: null }]);
+  assert.equal(one.liveness.secondsSinceCpu, 20);
+  assert.deepEqual(one.liveness.process.children, [{ pid: 30, command: "bazel test //...", runningForSeconds: 2700 }]);
+  assert.equal(one.liveness.process.cpuSeconds, 12.5);
+  assert.equal(one.liveness.process.scope, "session");
+  assert.equal(one.liveness.hungAfterMinutes, 15);
+
+  const hung = await run(tools.list_sessions, { liveness: "hung" });
+  assert.deepEqual(hung.sessions.map((row) => [row.id, row.liveness, row.status]), [["s2", "hung", "hung: no CPU or output for 20m"]]);
+  assert.equal((await run(tools.list_sessions, { liveness: "asleep" })).invalidInput, true);
+  const active = await run(tools.list_active_sessions, {});
+  assert.deepEqual(active.sessions.map((row) => row.id).sort(), ["s1", "s2"]);
 });

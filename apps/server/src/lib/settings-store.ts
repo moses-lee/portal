@@ -3,7 +3,7 @@ import path from "node:path";
 import { orchestratorProviders } from "../orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "../orchestrator/types.ts";
 import type { ConsolidationSettings } from "@portal/contracts/orchestrator";
-import { gitActionKinds, isClockTime, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
+import { gitActionKinds, isClockTime, isHungAfterMinutes, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
 import type { GitActionKind, Settings, SettingsPatch } from "@portal/shared/settings";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";
 import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "@portal/shared/scripts";
@@ -59,6 +59,7 @@ export type SettingsFile = {
     bookkeeping?: { provider?: OrchestratorProvider; model?: string };
     consolidation?: Partial<ConsolidationSettings>;
     reviews?: { answerReadOnly?: boolean };
+    stalls?: { hungAfterMinutes?: number };
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
   };
   scripts?: ScriptsPatch;
@@ -215,6 +216,15 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
     if (given.reviews.answerReadOnly !== undefined) {
       if (typeof given.reviews.answerReadOnly !== "boolean") throw new SettingsError("orchestrator.reviews.answerReadOnly must be true or false.", 400);
       patch.reviews = { answerReadOnly: given.reviews.answerReadOnly };
+    }
+  }
+  if (given.stalls !== undefined) {
+    if (!isPlainObject(given.stalls)) throw new SettingsError("orchestrator.stalls must be an object.", 400);
+    if (given.stalls.hungAfterMinutes !== undefined) {
+      if (!isHungAfterMinutes(given.stalls.hungAfterMinutes)) {
+        throw new SettingsError(`orchestrator.stalls.hungAfterMinutes must be a whole number of minutes between 1 and ${orchestratorLimits.hungAfterMinutes}.`, 400);
+      }
+      patch.stalls = { hungAfterMinutes: given.stalls.hungAfterMinutes };
     }
   }
   if (given.apiKeys !== undefined) {

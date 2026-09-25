@@ -79,6 +79,7 @@ function worldSession(meta: SessionMeta): WorldSession {
   return {
     id: meta.id, title: meta.title, projectId: meta.projectId, agentId: meta.agentId, agentName: meta.agentName,
     activity: snapshotActivity(meta), link: meta.link.status, createdAt: meta.createdAt, lastActiveAt: meta.lastActiveAt,
+    ...(meta.liveness ? { liveness: meta.liveness.state, status: meta.liveness.summary } : {}),
   };
 }
 
