@@ -11,8 +11,9 @@ import { displayPath } from "../lib/git-info.ts";
 import { githubRepoUrl } from "../lib/github-summary.ts";
 import { parentOf } from "../lib/removed-projects.ts";
 import { preWorktreeDeleteRun } from "../lib/script-runner.ts";
-import type { Project, RemovedProject, WorktreeMeta } from "../lib/types.ts";
+import type { Project, RemovedProject, SessionMeta, WorktreeMeta } from "../lib/types.ts";
 import type { OrchestratorDeps } from "./deps.ts";
+import { matchId, pickById } from "./ids.ts";
 
 export function httpError(message: string, status: number): Error & { status: number } {
   return Object.assign(new Error(message), { status });
@@ -20,10 +21,14 @@ export function httpError(message: string, status: number): Error & { status: nu
 
 const exists = (dir: string) => stat(dir).then((info) => info.isDirectory(), () => false);
 
+/** The project with id `id` or a unique prefix of it (see `pickById`); callers go on with `project.id`. */
 export async function requireProject(deps: OrchestratorDeps, id: string): Promise<Project> {
-  const project = await deps.projects.get(id);
-  if (!project) throw httpError("Unknown project.", 404);
-  return project;
+  return (await deps.projects.get(id)) ?? pickById(await deps.projects.list(), id, "project", (project) => project.name);
+}
+
+/** The session with id `id` or a unique prefix of it (see `pickById`); callers go on with `meta.id`. */
+export async function requireSession(deps: OrchestratorDeps, id: string): Promise<SessionMeta> {
+  return (await deps.sessions.get(id)) ?? pickById(await deps.sessions.list(), id, "session", (meta) => meta.title);
 }
 
 /** The project's folder as it is now; the stored realpath may have been deleted or renamed since. */
@@ -114,15 +119,15 @@ export async function removeProject(deps: OrchestratorDeps, { id, deleteWorktree
     if (!project.worktree) throw httpError("This project is not a worktree.", 400);
     ({ branchDeleted } = await deleteWorktreeFolder(deps, { ...project, worktree: project.worktree }, force, deleteBranch));
   }
-  const keep = (await deps.sessions.list()).some((session) => session.projectId === id);
-  await deps.projects.remove(id, { keep });
+  const keep = (await deps.sessions.list()).some((session) => session.projectId === project.id);
+  await deps.projects.remove(project.id, { keep });
   return { kept: keep, branchDeleted };
 }
 
 /** Bring a removed project back, recreating its worktree first when the folder is gone (POST /api/projects/removed/[id]/restore). */
 export async function restoreProject(deps: OrchestratorDeps, id: string): Promise<Project> {
-  const record = await deps.projects.getRemoved(id);
-  if (!record) throw httpError("Unknown removed project.", 404);
+  const record = (await deps.projects.getRemoved(id)) ?? await deps.projects.listRemoved().then((removed) => matchId(removed, id).match);
+  if (!record) throw httpError(`No removed project has id "${id}"; list_removed_projects gives their ids.`, 404);
   const listed = new Map((await deps.projects.list()).map((project) => [project.id, project]));
   const removed = new Map((await deps.projects.listRemoved()).map((project) => [project.id, project]));
   const lookup = {
@@ -144,7 +149,7 @@ export async function restoreProject(deps: OrchestratorDeps, id: string): Promis
   } else if (!present) {
     throw httpError(`Project folder is missing: ${displayPath(record.path)}`, 409);
   }
-  return deps.projects.restore(id, worktree && worktree !== record.worktree ? { worktree } : {});
+  return deps.projects.restore(record.id, worktree && worktree !== record.worktree ? { worktree } : {});
 }
 
 async function recreateWorktree(deps: OrchestratorDeps, record: RemovedProject & { worktree: WorktreeMeta }, parent: Project) {

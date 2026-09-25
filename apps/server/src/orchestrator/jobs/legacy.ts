@@ -58,7 +58,7 @@ export function intentFromWatch(watch: LegacyWatch, now: number): { intent: Inte
   const intent: Intent = {
     id: watch.id, text: watch.intent.trim() || "(no description)", trigger: LEGACY_TRIGGER, action: LEGACY_ACTION, notes: watch.notes,
     scope: normalizeScope({ projectIds: watch.links?.projectIds, sessionIds: watch.links?.sessionIds, pulls, repos: pulls.map((pull) => pull.repo) }),
-    status, expiresAt: null, fireBudget: null, fires: 0, cooldownMs: 0, lastFiredAt: null, lastCheckedAt: watch.lastCheckedAt, threadId: null,
+    status, expiresAt: null, fireBudget: null, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: watch.lastCheckedAt, threadId: null,
     createdAt: watch.createdAt, updatedAt: watch.updatedAt,
   };
   const job: Job | null = status !== "active" ? null : {

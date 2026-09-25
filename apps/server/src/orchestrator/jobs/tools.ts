@@ -9,6 +9,7 @@
 import { z } from "zod";
 import type { Intent, Job, JobRun, JobSchedule } from "@portal/contracts/jobs";
 import type { DomainToolContext, ToolSet } from "../hub.ts";
+import { canonicalScope, knownIds } from "../ids.ts";
 import { httpError } from "../ops.ts";
 import { capped, define } from "../tools/context.ts";
 import { pullRefSchema } from "../tools/items.ts";
@@ -105,7 +106,7 @@ function intentCheckTools(intents: IntentsPart, ctx: DomainToolContext, intentId
   const how = { actor: "agent" as const, runId: ctx.turn.runId };
   return {
     fire_intent: define(
-      "The intent's trigger holds: record the firing and put a Needs-you item in front of the user. The server refuses during the cooldown, past the budget, or after expiry; then stop.",
+      "Something new happened that the intent's trigger names: record the firing and put a Needs-you item in front of the user. The server refuses a repeat of the last firing's title, during the cooldown, past the budget, or after expiry; then stop.",
       z.object({ title: z.string().min(1).max(200).describe("One line for the user: what happened."), body: z.string().max(2000).describe("One to three sentences: what you saw, what to do.") }),
       async ({ title, body }) => intents.fire(intentId, { title, body }, { ...how, touched: ctx.touched }),
     ),
@@ -230,8 +231,10 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       }),
       async (input) => {
         const check = checkSchedule(input) ?? { type: "every", everyMs: DEFAULT_CHECK_MS };
+        // Stored scopes hold full ids: a prefix is expanded, and one that names nothing or several is refused.
+        const scope = input.scope && canonicalScope(input.scope, await knownIds(hub.deps));
         const { intent, job } = await intents.create({
-          text: input.text, trigger: input.trigger, action: input.action, scope: input.scope, notes: input.notes,
+          text: input.text, trigger: input.trigger, action: input.action, scope, notes: input.notes,
           expiresAt: parseTime(input.expiresAt, "expiresAt") ?? null, fireBudget: input.fireBudget, cooldownMs: Math.round((input.cooldownMinutes ?? 0) * 60_000),
           threadId: turn.threadId, check, checkNow: input.checkNow, role: input.role,
         }, how);
@@ -253,9 +256,11 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         ...cadence,
       }),
       async ({ id, text, trigger, action, notes, scope, expiresAt, fireBudget, cooldownMinutes, ...rest }) => {
+        // Ids already stored pass even when they no longer resolve; new ones must name one session or project.
+        const current = scope !== undefined ? (await intents.requireIntent(id)).scope : null;
         const changes = {
           ...(text !== undefined ? { text } : {}), ...(trigger !== undefined ? { trigger } : {}), ...(action !== undefined ? { action } : {}),
-          ...(notes !== undefined ? { notes } : {}), ...(scope !== undefined ? { scope: { ...(await intents.requireIntent(id)).scope, ...scope } } : {}),
+          ...(notes !== undefined ? { notes } : {}), ...(current ? { scope: canonicalScope({ ...current, ...scope }, await knownIds(hub.deps), current) } : {}),
           ...(expiresAt !== undefined ? { expiresAt: parseTime(expiresAt, "expiresAt") ?? null } : {}), ...(fireBudget !== undefined ? { fireBudget } : {}),
           ...(cooldownMinutes !== undefined ? { cooldownMs: Math.round(cooldownMinutes * 60_000) } : {}),
         };

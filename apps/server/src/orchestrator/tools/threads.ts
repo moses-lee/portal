@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { DomainToolContext, ToolSet } from "../hub.ts";
+import { canonicalScope, knownIds } from "../ids.ts";
 import type { Thread } from "../types.ts";
 import { define } from "./context.ts";
 import { pullRefSchema } from "./items.ts";
@@ -36,7 +37,7 @@ function chatThreadTools({ hub, turn }: DomainToolContext) {
       "Open a side thread for one task (a PR review, a long investigation) so its updates stay out of the main thread. scope names what it is about. message is the first note posted there. Tell the user in the main thread that you opened it.",
       z.object({ title: z.string().min(1).max(120), message: z.string().min(1).max(4000), scope: scopeSchema.optional(), intentId: z.string().optional() }),
       async ({ title, message, scope, intentId }) => {
-        const thread = await store.createThread({ title, scope, intentId: intentId ?? null });
+        const thread = await store.createThread({ title, scope: scope && canonicalScope(scope, await knownIds(hub.deps)), intentId: intentId ?? null });
         await store.appendMessages([{
           id: randomUUID(), role: "assistant", parts: [{ type: "text", text: message }],
           metadata: { at: hub.timers.now(), run: { id: turn.runId, kind: turn.kind } },

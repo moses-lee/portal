@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyScope } from "../src/orchestrator/types.ts";
 import {
-  FRESH_MS, RECENT_CHANGE_LINES, freshAndMine, previousAnswerAt, renderRecentChanges, selectRecentChanges, threadRefs, touchesThread,
+  FRESH_MS, RECENT_CHANGE_LINES, coveredByIntent, freshAndMine, previousAnswerAt, renderRecentChanges, selectRecentChanges, threadRefs, touchesThread,
 } from "../src/orchestrator/world/recent.ts";
 import { T0 } from "./fixtures/orchestrator-fakes.mjs";
 
@@ -104,4 +104,16 @@ test("previousAnswerAt is the thread's last chat answer before the newest user m
   ];
   assert.equal(previousAnswerAt(messages), T0 - 4 * HOUR);
   assert.equal(previousAnswerAt([message("assistant", "from before runs", { at: T0 - HOUR }), message("user", "x")]), T0 - HOUR);
+});
+
+test("a scope's id prefix and the World section's short id in the thread's text both name the full id of a change", () => {
+  const id = "17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01";
+  const change = { subject: `session:${id}`, refs: { sessionId: id } };
+  const scoped = threadRefs({ scope: { ...emptyScope(), sessionIds: ["17329ac6"] }, messages: [], items: [] });
+  assert.ok(touchesThread(change, scoped), "a prefix stored in the scope");
+  const said = threadRefs({ scope: emptyScope(), messages: [message("assistant", "The review [17329ac6] is still working.")], items: [] });
+  assert.ok(touchesThread(change, said), "the short id the model saw and repeated");
+  assert.ok(!touchesThread(change, threadRefs({ scope: { ...emptyScope(), sessionIds: ["173"] }, messages: [], items: [] })), "too short to count");
+  assert.ok(coveredByIntent(change, [{ scope: { ...emptyScope(), sessionIds: ["17329ac6"] } }]));
+  assert.ok(!coveredByIntent(change, [{ scope: { ...emptyScope(), sessionIds: ["5e0f1b2c"] } }]));
 });

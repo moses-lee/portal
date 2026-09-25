@@ -5,7 +5,7 @@
  * unguarded one would have.
  */
 import type { OrchestratorHub } from "../hub.ts";
-import { removeProject, startSession } from "../ops.ts";
+import { removeProject, requireSession, startSession } from "../ops.ts";
 import type { Item, ItemAction } from "../types.ts";
 
 export type ServerAction = Extract<ItemAction, { type: "start_session" | "send_prompt" | "remove_worktree" }>;
@@ -33,7 +33,8 @@ export async function runItemAction(
       outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt });
       break;
     case "send_prompt":
-      await deps.sessions.prompt(action.sessionId, action.prompt);
+      // Cards stored before ids were kept full may carry a prefix.
+      await deps.sessions.prompt((await requireSession(deps, action.sessionId)).id, action.prompt);
       break;
     case "remove_worktree":
       await removeProject(deps, { id: action.projectId, deleteWorktree: true });

@@ -1,0 +1,1 @@
+ALTER TABLE "intents" ADD COLUMN "last_fired_title" text;

@@ -335,6 +335,18 @@ test("set_session_config asks when it loosens permissions, not when it tightens 
   assert.equal(await assessToolCall(d, "set_session_config", { sessionId: "s2", modeId: "plan" }), null);
 });
 
+test("an id prefix is gated like the full id: the tools accept prefixes, so the gate must not take one for unknown", async () => {
+  const id = "17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01";
+  const { deps: d } = fakeDeps({
+    projects: [project({ id: "9b1d4e7a-5c6d-4e7f-8a9b-000000000001" })],
+    sessions: [sessionMeta({ id, title: "Review", state: { modes: { currentModeId: "default", availableModes: [] }, configOptions: [], commands: [] } })],
+  });
+  const loosen = await assessToolCall(d, "set_session_config", { sessionId: "17329ac6", modeId: "bypassPermissions" });
+  assert.match(loosen.summary, /from `default` to `bypassPermissions`/);
+  assert.equal((await assessToolCall(d, "remove_project", { id: "9b1d4e7a" })).risk, "write");
+  assert.ok(await assessToolCall(d, "pull_fast_forward", { projectId: "9b1d4e7a" }));
+});
+
 test("pull_fast_forward and run_command name what they touch", async () => {
   const d = deps();
   const pull = await assessToolCall(d, "pull_fast_forward", { projectId: "p1" });
