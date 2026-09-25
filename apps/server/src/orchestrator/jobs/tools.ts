@@ -106,7 +106,7 @@ function intentCheckTools(intents: IntentsPart, ctx: DomainToolContext, intentId
   const how = { actor: "agent" as const, runId: ctx.turn.runId };
   return {
     fire_intent: define(
-      "The intent's trigger holds: record the firing and put a Needs-you item in front of the user. The server refuses during the cooldown, past the budget, or after expiry; then stop.",
+      "Something new happened that the intent's trigger names: record the firing and put a Needs-you item in front of the user. The server refuses a repeat of the last firing's title, during the cooldown, past the budget, or after expiry; then stop.",
       z.object({ title: z.string().min(1).max(200).describe("One line for the user: what happened."), body: z.string().max(2000).describe("One to three sentences: what you saw, what to do.") }),
       async ({ title, body }) => intents.fire(intentId, { title, body }, { ...how, touched: ctx.touched }),
     ),

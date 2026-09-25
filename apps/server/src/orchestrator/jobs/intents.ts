@@ -1,7 +1,7 @@
 /**
  * Intents: standing "when X, do Y" requests the user gave, each checked by an `intent_check` job at
  * the cadence the agent chose. The server, not the model, enforces the rules: a firing is refused
- * during the cooldown, past the budget, or after expiry; spending the budget finishes the intent;
+ * during the cooldown, past the budget, after expiry, or when it repeats the last one; spending the budget finishes the intent;
  * closing or expiring one ends its jobs. A check is a small bookkeeping turn over the intent and
  * its notes; when it fires, the user hears of it through an `intent_update` Needs-you item (made
  * here, so its links are always right) and, if the turn says something, a note in the thread.
@@ -45,6 +45,13 @@ const intentRefs = (intent: Pick<Intent, "id" | "threadId">, runId?: string) =>
   ({ intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}), ...(runId ? { runId } : {}) });
 
 const short = (text: string, max = 80) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/**
+ * A title compared for repeats: case, spacing, and punctuation ignored. Titles, not bodies: a model
+ * rewords its body at every check ("still gone at 18:52"), while its one-line "what happened" stays
+ * the same when nothing did; a real change earns a new title.
+ */
+const repeatKey = (title: string) => title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 export function checkTitle(text: string): string {
   return `Check: ${short(text.trim().replace(/\s+/g, " "), 100)}`;
@@ -188,7 +195,12 @@ export function createIntents(core: JobsCore) {
     const now = hub.timers.now();
     const refused = await refusal(intent, now);
     if (refused) return { fired: false as const, reason: refused };
-    const fired = await store.updateIntent(id, { fires: intent.fires + 1, lastFiredAt: now });
+    // Only the model's firings: the server's watches fire on changes they compute themselves. The
+    // title is kept on the intent, not read back from its item, which the user may have dismissed.
+    if (how.actor !== "system" && intent.lastFiredTitle !== null && intent.lastFiredAt !== null && repeatKey(intent.lastFiredTitle) === repeatKey(title)) {
+      return { fired: false as const, reason: `this repeats the last firing at ${new Date(intent.lastFiredAt).toISOString()} ("${short(intent.lastFiredTitle, 120)}"); fire only when something changed since then` };
+    }
+    const fired = await store.updateIntent(id, { fires: intent.fires + 1, lastFiredAt: now, lastFiredTitle: short(title, 200) });
     const raised = item ? await raiseItem(fired, title, body) : null;
     if (raised) how.touched?.add(raised.id);
     void hub.activity.log({
@@ -246,13 +258,15 @@ export function createIntents(core: JobsCore) {
     if (pull) return checkPull({ core, fire, close }, { job, run, trigger, signal }, intent, pull);
     const touched = new Set<string>();
     const threadId = intent.threadId ?? MAIN_THREAD_ID;
+    // The scoped sessions' live state goes into the prompt (`repaired` already made their ids full).
+    const sessions = intent.scope.sessionIds.length ? await hub.deps.sessions.list().catch(() => null) : null;
     const prepared = await prepareTurn(hub, {
       kind: "intent_check", role: job.payload.role === "chat" ? "chat" : "bookkeeping", trigger, threadId, jobId: job.id, intentId: intent.id,
       interactive: false, toolNames: INTENT_CHECK_TOOLS, scope: intent.scope, query: `${intent.text}\n${intent.trigger}`, touched,
       summary: job.title,
     });
     if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the intent was not checked." };
-    const result = await generateTurn(prepared, { prompt: intentCheckPrompt(intent, now), signal, maxSteps: INTENT_CHECK_STEPS });
+    const result = await generateTurn(prepared, { prompt: intentCheckPrompt(intent, now, sessions), signal, maxSteps: INTENT_CHECK_STEPS });
     const after = (await store.getIntent(intent.id)) ?? intent;
     const fired = after.fires > intent.fires;
     if (after.status === "active") await store.updateIntent(intent.id, { lastCheckedAt: hub.timers.now() });

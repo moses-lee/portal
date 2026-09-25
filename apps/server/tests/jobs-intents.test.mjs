@@ -148,6 +148,51 @@ test("the server enforces cooldown and fire budget, whatever the model asks", as
   assert.equal((await h.jobs.getIntent(open.id)).status, "active");
 });
 
+test("a firing that repeats the last one's title is refused whatever the cooldown; a changed one fires", async (t) => {
+  const h = await started(jobsHarness(t));
+  const { created } = await withIntent(h, { fireBudget: 3, cooldownMinutes: 5 });
+  const check = h.jobs.tools(toolContext(h, { kind: "intent_check", intentId: created.id }));
+  assert.equal((await call(check, "fire_intent", { title: "Session 17329ac6 has been deleted", body: "It is gone." })).fired, true);
+  assert.equal((await h.jobs.getIntent(created.id)).lastFiredTitle, "Session 17329ac6 has been deleted");
+
+  h.timers.tick(7 * MIN);
+  const again = await call(check, "fire_intent", { title: "session 17329ac6 has been deleted.", body: "Still gone at 18:52; it no longer exists." });
+  assert.equal(again.fired, false);
+  assert.match(again.reason, new RegExp(`repeats the last firing at ${new Date(T0).toISOString()}.*fire only when something changed`));
+  assert.equal((await h.jobs.getIntent(created.id)).fires, 1, "a refused repeat spends nothing");
+
+  const changed = await call(check, "fire_intent", { title: "Session 17329ac6 is back and working", body: "It reappeared." });
+  assert.equal(changed.fired, true);
+  const intent = await h.jobs.getIntent(created.id);
+  assert.equal(intent.fires, 2);
+  assert.equal(intent.lastFiredTitle, "Session 17329ac6 is back and working");
+});
+
+test("a check is handed each scoped session's live state, prefix ids included, and told to fire on change and confirm a missing session", async (t) => {
+  const full = "17329ac6-0000-4000-8000-000000000001";
+  const h = await started(jobsHarness(t, {
+    sessions: [sessionMeta({ id: full, title: "Refactor the parser", busy: true }), sessionMeta({ id: "s2", title: "Other" })],
+    doGenerate: [textStep("NO_UPDATE")],
+  }));
+  const { created } = await withIntent(h, { scope: {} });
+  // Set behind the tools, as old data holds it: one 8-char prefix and one id Portal has no session for.
+  const intent = await h.jobs.getIntent(created.id);
+  await h.jobsStore.updateIntent(created.id, { scope: { ...intent.scope, sessionIds: ["17329ac6", "deadbeef"] } });
+  await h.timers.advance(2 * MIN);
+  await flush();
+
+  const [system, user] = h.model.doGenerateCalls[0].prompt;
+  const prompt = user.content[0].text;
+  assert.match(prompt, /Scoped sessions as Portal sees them now/);
+  assert.ok(prompt.includes(`- ${full} "Refactor the parser" · Claude Code · working · link live`), prompt);
+  assert.match(prompt, /- deadbeef: not among Portal's 2 sessions right now/);
+  assert.match(prompt, /Fire on change, not on state/);
+  assert.match(prompt, /A failed lookup is not proof something is gone/);
+  assert.match(system.content, /When the user corrects what an intent reported/, "the jobs guidance reaches every turn");
+  assert.match(system.content, /In focus for this turn:\n- "Refactor the parser" \[17329ac6\]/, "the prefix is focused as its full session");
+  assert.equal((await h.jobs.getIntent(created.id)).fires, 0);
+});
+
 test("an intent past its expiry is expired by the worker, its job ends, and a late firing is refused", async (t) => {
   const h = await started(jobsHarness(t));
   const { created } = await withIntent(h, { expiresAt: new Date(T0 + 10 * MIN).toISOString(), checkEveryMinutes: 60 });

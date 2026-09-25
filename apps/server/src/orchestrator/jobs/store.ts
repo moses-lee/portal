@@ -178,7 +178,7 @@ export function buildIntent(input: NewIntent, id: string, at: number): Intent {
   return checkIntent({
     id, text: text(input.text, "text", 2000), trigger: text(input.trigger, "trigger", 1000), action: text(input.action, "action", 1000),
     notes: input.notes ?? "", scope: normalizeScope(input.scope), status: input.status ?? "active", expiresAt: input.expiresAt ?? null,
-    fireBudget: input.fireBudget === undefined ? 1 : input.fireBudget, fires: 0, cooldownMs: input.cooldownMs ?? 0, lastFiredAt: null,
+    fireBudget: input.fireBudget === undefined ? 1 : input.fireBudget, fires: 0, cooldownMs: input.cooldownMs ?? 0, lastFiredAt: null, lastFiredTitle: null,
     lastCheckedAt: input.lastCheckedAt ?? null, threadId: input.threadId ?? null, createdAt: at, updatedAt: at,
   });
 }
