@@ -1,23 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { LoaderCircle, PanelLeft, Play } from "lucide-react";
+import { LoaderCircle, PanelLeft } from "lucide-react";
 import AuroraBackground from "./AuroraBackground";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
-import { formatTime } from "./PortalMessage";
 import ResponsiveDialog from "./ResponsiveDialog";
 import PortalStatusLine from "./portal/PortalStatusLine";
 import PortalThread from "./portal/PortalThread";
 import ThreadSwitcher from "./portal/ThreadSwitcher";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
-import { Button } from "@/components/ui/button";
 import { readDraft, writeDraft } from "@/lib/drafts";
-import { portalJson } from "@/lib/orchestrator/api";
 import { portalActivity } from "@/lib/orchestrator/format";
-import { MAIN_THREAD_ID, type TickReport } from "@/lib/orchestrator/types";
+import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import { portalLocation, portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
 
 /** Stands in for a view while its chunk loads: the views mount only when opened. */
@@ -38,21 +35,9 @@ const ActivityView = dynamic(() => import("./portal/ActivityView"), { loading: V
 const MemoryView = dynamic(() => import("./portal/MemoryView"), { loading: ViewLoading });
 const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewLoading });
 
-/** "Checked at 10:42 · 2 changes, 1 new item" for the inline tick line. */
-function describeTick(report: TickReport): string {
-  const when = `Checked at ${formatTime(report.finishedAt)}`;
-  if (report.error) return `${when} · failed: ${report.error}`;
-  if (!report.modelInvoked) return `${when} · nothing new`;
-  const parts = [`${report.changes} ${report.changes === 1 ? "change" : "changes"}`];
-  if (report.itemsCreated.length) parts.push(`${report.itemsCreated.length} new`);
-  if (report.itemsUpdated.length) parts.push(`${report.itemsUpdated.length} updated`);
-  if (report.itemsResolved.length) parts.push(`${report.itemsResolved.length} resolved`);
-  return `${when} · ${parts.join(", ")}`;
-}
-
 /**
  * Portal's pages: the orchestrator is the app's home. Chat (`/`) holds the main thread and the side
- * threads Portal opened (each its own conversation), and carries the live status line and Run now;
+ * threads Portal opened (each its own conversation), and carries the live status line;
  * Goals the intents, upcoming jobs, and recent runs, Activity the audit log, Memory the curated
  * records, and System what the model is shown (CORE.md, the world) plus approval grants. The
  * sidebar switches between them and the URL says which, so reloads and links land in place. The
@@ -73,7 +58,7 @@ export default function PortalPage({
   onOpenSession: (sessionId: string) => void;
 }) {
   const live = usePortalLive();
-  const { status, threads, lastTick, putItem, noteTick, requestApproval, items, approvals } = live;
+  const { status, threads, putItem, requestApproval, items, approvals } = live;
   const location = useMemo(() => portalLocation(pathname), [pathname]);
   const view = location.view;
   const go = useCallback((to: PortalLocation | PortalView) => onNavigate(portalPath(to)), [onNavigate]);
@@ -97,36 +82,6 @@ export default function PortalPage({
     if (id === currentThread) return;
     setUnread((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   });
-
-  const ready = status?.ready ?? false;
-
-  // The inline tick line shows for a few seconds, then leaves the header alone.
-  const [expiredTickAt, setExpiredTickAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (!lastTick) return;
-    const timer = setTimeout(() => setExpiredTickAt(lastTick.at), 8000);
-    return () => clearTimeout(timer);
-  }, [lastTick]);
-  const tickNotice = lastTick && expiredTickAt !== lastTick.at ? lastTick.report : null;
-
-  const [ticking, setTicking] = useState(false);
-  const [tickError, setTickError] = useState<string | null>(null);
-  const runNow = async () => {
-    setTicking(true);
-    setTickError(null);
-    try {
-      const { report } = await portalJson<{ report: TickReport }>(
-        "/api/portal/tick",
-        { method: "POST" },
-        "Could not run a check. Try again.",
-      );
-      noteTick(report);
-    } catch (e) {
-      setTickError(e instanceof Error ? e.message : "Could not run a check. Try again.");
-    } finally {
-      setTicking(false);
-    }
-  };
 
   const handlers: Omit<ItemCardHandlers, "onAsk"> = useMemo(
     () => ({
@@ -181,26 +136,10 @@ export default function PortalPage({
           <h1 className="text-[13px] font-medium leading-snug tracking-[-.01em]">{viewMeta[view].title}</h1>
           {view === "chat" && <PortalStatusLine onOpenThread={links.openThread} />}
         </div>
-        {view === "chat" && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={!ready || ticking}
-            onClick={() => void runNow()}
-            className="mt-1.5 text-xs text-foreground/80 max-sm:mt-0"
-          >
-            {ticking ? <LoaderCircle className="animate-spin" /> : <Play />}
-            Run now
-          </Button>
-        )}
       </header>
-      {(tickNotice || tickError || live.error) && (
-        <p
-          role={tickError || live.error ? "alert" : "status"}
-          className={`border-b border-white/5 px-5 py-1.5 text-[11px] ${tickError || live.error ? "text-destructive" : "text-muted-foreground"}`}
-        >
-          {tickError ?? live.error ?? (tickNotice && describeTick(tickNotice))}
+      {live.error && (
+        <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
+          {live.error}
         </p>
       )}
       <section hidden={view !== "chat"} aria-label="Chat" className="flex min-h-0 flex-1 flex-col">

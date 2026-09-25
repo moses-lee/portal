@@ -27,8 +27,7 @@ import { portalJson, portalSend, query } from "@/lib/orchestrator/api";
 import { describeSchedule, describeUsage, formatDuration, runDuration } from "@/lib/orchestrator/format";
 import type { Intent, Job, JobKind, JobRun, RunStatus } from "@/lib/orchestrator/types";
 
-const jobKindLabels: Record<JobKind | "chat", string> = {
-  tick: "Check",
+const jobKindLabels: Partial<Record<JobKind | "chat", string>> = {
   intent_check: "Goal check",
   helper: "Helper",
   consolidate: "Curation",
@@ -229,7 +228,7 @@ function JobRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="truncate text-[13px] font-medium">{job.title}</span>
-          <Badge>{jobKindLabels[job.kind]}</Badge>
+          <Badge>{jobKindLabels[job.kind] ?? job.kind}</Badge>
           {paused && <Badge tone="amber">Paused</Badge>}
           {job.failures > 0 && <Badge tone="rose">{job.failures} failed</Badge>}
         </div>

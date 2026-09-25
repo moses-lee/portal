@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { setupPortal } from "./fixtures";
-import { approval, globalEntity, intent, intentJob, mainThread, memoryRecords, repoEntity, reviewThread, tickJob } from "./orchestrator-fixtures";
+import { approval, globalEntity, helperJob, intent, intentJob, mainThread, memoryRecords, repoEntity, reviewThread } from "./orchestrator-fixtures";
 
 test.use({ viewport: { width: 390, height: 844 } });
 
@@ -9,7 +9,7 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
     portal: {
       threads: [mainThread, reviewThread],
       intents: [intent],
-      jobs: [tickJob, intentJob],
+      jobs: [helperJob, intentJob],
       entities: [globalEntity, repoEntity],
       records: memoryRecords,
     },

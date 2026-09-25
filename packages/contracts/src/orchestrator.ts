@@ -43,12 +43,8 @@ export type OrchestratorSettings = {
   provider: OrchestratorProvider;
   /** The chat role's model id, e.g. "claude-opus-5-5". */
   model: string;
-  /** The bookkeeping role (tick bookkeeping): a cheap model, possibly on another provider. */
+  /** The bookkeeping role (intent checks and other cheap background turns): a cheap model, possibly on another provider. */
   bookkeeping: ModelChoice;
-  /** Tick interval while at least one browser has Portal open. */
-  intervalMinutes: number;
-  /** Tick interval while no browser is connected. */
-  idleIntervalMinutes: number;
   /** When the memory curation pass runs. */
   consolidation: ConsolidationSettings;
   /** How Portal treats the review sessions it starts. */
@@ -89,8 +85,6 @@ export type OrchestratorSettingsPatch = {
   provider?: OrchestratorProvider;
   model?: string;
   bookkeeping?: Partial<ModelChoice>;
-  intervalMinutes?: number;
-  idleIntervalMinutes?: number;
   consolidation?: Partial<ConsolidationSettings>;
   reviews?: Partial<ReviewSettings>;
   apiKeys?: Partial<Record<OrchestratorProvider, string>>;
@@ -100,14 +94,12 @@ export const defaultOrchestratorSettings: OrchestratorSettings = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
-  intervalMinutes: 10,
-  idleIntervalMinutes: 60,
   consolidation: { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 },
   reviews: { answerReadOnly: true },
   apiKeys: { openai: false, anthropic: false },
 };
 
-/** The two jobs a model does: talking with the user and curating (frontier), and tick bookkeeping (cheap). */
+/** The two jobs a model does: talking with the user and curating (frontier), and background bookkeeping such as intent checks (cheap). */
 export type ModelRole = "chat" | "bookkeeping";
 export const modelRoles: readonly ModelRole[] = ["chat", "bookkeeping"];
 

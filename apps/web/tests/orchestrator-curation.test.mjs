@@ -25,7 +25,7 @@ test("curation results are read defensively and their changes grouped in the con
   const result = { digest: "d", line: "Memory curation promoted 1.", counts: {}, changes: [change("left", "m3"), change("promoted", "m1"), change("left", "m4")], refused: null, considered: {}, note: null };
   assert.equal(consolidationResult({ result }), result);
   assert.equal(consolidationResult({ result: null }), null);
-  assert.equal(consolidationResult({ result: { id: "tick-report", log: [] } }), null);
+  assert.equal(consolidationResult({ result: { id: "helper-result", log: [] } }), null);
   assert.deepEqual(groupChanges(result.changes).map((group) => [group.label, group.changes.map((entry) => entry.recordId)]), [
     ["Promoted", ["m1"]], ["Left for you", ["m3", "m4"]],
   ]);
