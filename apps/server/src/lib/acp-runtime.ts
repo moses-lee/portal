@@ -5,9 +5,13 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentDefinition } from "./agents.ts";
 import { childEnv } from "./child-env.ts";
+import { DEFAULT_HUNG_AFTER_MS, type ProbeState, createProbeState, deriveLiveness, resetProbe, sampleProbe, trackToolCall } from "./liveness.ts";
+import { type ProcessTable, readProcessTable } from "./process-probe.ts";
 import { coalesceTextChunks, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
-import type { EventPage, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionMeta, SessionState, StoredEvent } from "./types.ts";
+import type {
+  EventPage, OpenToolCall, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionLiveness, SessionLoss, SessionMeta, SessionState, StoredEvent,
+} from "./types.ts";
 
 /** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
 export type SessionListChange =
@@ -15,7 +19,7 @@ export type SessionListChange =
   | { type: "updated"; id: string; patch: SessionListPatch }
   | { type: "deleted"; id: string };
 
-export type Session = Omit<SessionMeta, "awaitingPermission"> & {
+export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
   /** The most recent events, oldest first; `eventBase` is the seq of `events[0]`. Older events live in the store. */
   events: PortalEvent[];
   /** Epoch ms timestamps parallel to `events`. */
@@ -40,7 +44,23 @@ export type Session = Omit<SessionMeta, "awaitingPermission"> & {
   replaying: boolean;
   process: AgentProcess | null;
   attaching: Promise<void> | null;
+  /** The title of the tool the oldest open permission request is about. */
+  permissionTitle: string | null;
+  /** When the open turn started; null between turns. */
+  turnStartedAt: number | null;
+  /** Tool calls of the open turn that have not finished, by tool call ID. */
+  openTools: Map<string, OpenToolCall>;
+  /** The last output of the open turn (heartbeats excluded). */
+  lastOutputAt: number | null;
+  probe: ProbeState;
+  /** Why the agent was lost; persisted, and cleared once it is attached again. */
+  lost: SessionLoss | null;
+  /** The runtime's liveness settings, shared by all its sessions. */
+  livenessConfig: LivenessConfig;
 };
+
+/** Liveness settings; `setLivenessOptions` changes them for every session at once. */
+export type LivenessConfig = { hungAfterMs: number };
 
 type AgentProcess = {
   agent: AgentDefinition;
@@ -50,12 +70,15 @@ type AgentProcess = {
   initialized: boolean;
   capabilities: acp.AgentCapabilities;
   failure: Error | null;
+  /** The loss recorded on the sessions this process dropped, so a later exit status can refine it. */
+  loss: SessionLoss | null;
   /** By upstream (agent-side) session ID. */
   sessions: Map<string, Session>;
 };
 
 type PendingPermission = {
   session: Session;
+  title: string | null;
   options: acp.PermissionOption[];
   resolve: (response: acp.RequestPermissionResponse) => void;
 };
@@ -105,10 +128,30 @@ function agentError(agent: AgentDefinition, action: string, error: unknown) {
   return new Error(`${agent.name} ${action}: ${detail}${hint ? `. ${hint}` : ""}`);
 }
 
+/** Whether the session's agent is dead, blocked, busy, hung, or idle, as of `now`. */
+export function livenessOf(session: Session, now = Date.now()): SessionLiveness {
+  return deriveLiveness({
+    now,
+    link: session.link.status,
+    awaitingPermission: session.pendingPermissions.size > 0,
+    permissionTitle: session.permissionTitle,
+    turnOpen: session.busy,
+    turnStartedAt: session.turnStartedAt,
+    openTools: [...session.openTools.values()].map((call) => ({ ...call })),
+    lastOutputAt: session.lastOutputAt,
+    probe: session.process && !session.process.failure ? session.probe : null,
+    lost: session.lost,
+    hungAfterMs: session.livenessConfig.hungAfterMs,
+  });
+}
+
 /** The session's browser-facing metadata, without the runtime's own bookkeeping. */
 export function toMeta(session: Session): SessionMeta {
   const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, link, state } = session;
-  return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, awaitingPermission: session.pendingPermissions.size > 0, link, state };
+  return {
+    id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, awaitingPermission: session.pendingPermissions.size > 0, link, state,
+    liveness: livenessOf(session),
+  };
 }
 
 /**
@@ -145,12 +188,27 @@ export type AcpRuntimeOptions = {
   store?: SessionStore;
   /** How many recent events each session keeps in memory for live streams. */
   recentEvents?: number;
+  /** How long an open turn may show no CPU and no output before it counts as hung. */
+  hungAfterMs?: number;
+  /** How often the process probe samples while a turn is open; 0 turns the timer off (tests sample by hand). */
+  probeEveryMs?: number;
+  /** Reads the process table; tests pass a fake. */
+  readProcesses?: () => Promise<ProcessTable | null>;
 };
+
+/** How often the probe samples while any turn is open. */
+export const PROBE_EVERY_MS = 30_000;
+/** An on-demand probe reuses a sample this fresh. */
+const PROBE_FRESH_MS = 5_000;
 
 export function createAcpRuntime(
   agentDefinitions: readonly AgentDefinition[],
-  { initializeTimeoutMs = 30_000, agentCallTimeoutMs = 5_000, store = createMemorySessionStore(), recentEvents = 2_000 }: AcpRuntimeOptions = {},
+  {
+    initializeTimeoutMs = 30_000, agentCallTimeoutMs = 5_000, store = createMemorySessionStore(), recentEvents = 2_000,
+    hungAfterMs = DEFAULT_HUNG_AFTER_MS, probeEveryMs = PROBE_EVERY_MS, readProcesses = readProcessTable,
+  }: AcpRuntimeOptions = {},
 ) {
+  const livenessConfig: LivenessConfig = { hungAfterMs };
   const definitions = new Map(agentDefinitions.map((agent) => [agent.id, agent]));
   const processes = new Map<string, AgentProcess>();
   let advisor: PermissionAdvisor | null = null;
@@ -185,8 +243,29 @@ export function createAcpRuntime(
   }
 
   function toRecord(session: Session): SessionRecord {
-    const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state } = session;
-    return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state };
+    const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost } = session;
+    return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost };
+  }
+
+  /** Record (or, with null, clear) why the session's agent was lost. */
+  function setLost(session: Session, lost: SessionLoss | null) {
+    if (session.lost === lost) return;
+    session.lost = lost;
+    persistMeta(session);
+  }
+
+  function startTurn(session: Session) {
+    session.turnStartedAt = Date.now();
+    session.openTools.clear();
+    session.lastOutputAt = null;
+    resetProbe(session.probe);
+  }
+
+  function endTurn(session: Session) {
+    session.turnStartedAt = null;
+    session.openTools.clear();
+    session.lastOutputAt = null;
+    resetProbe(session.probe);
   }
 
   /** False once the session has been deleted; nothing about it is written or registered after that. */
@@ -241,6 +320,8 @@ export function createAcpRuntime(
     if (!request) return;
     pending.delete(requestId);
     request.session.pendingPermissions.delete(requestId);
+    const [next] = request.session.pendingPermissions;
+    request.session.permissionTitle = next ? pending.get(next)?.title ?? null : null;
     announce(request.session);
     if (outcome.outcome === "selected") {
       const option = request.options.find((option) => option.optionId === outcome.optionId);
@@ -273,14 +354,21 @@ export function createAcpRuntime(
     setLink(session, { status: "offline", error });
   }
 
-  function fail(instance: AgentProcess, error: Error) {
+  /**
+   * Stop using a process: its sessions go offline, each with `loss` recorded as why (nothing is
+   * recorded when Portal itself is stopping; the next start marks a cut-off turn instead).
+   */
+  function fail(instance: AgentProcess, error: Error, loss: Omit<SessionLoss, "at"> | null = null) {
     if (instance.failure) return;
     instance.failure = error;
+    instance.loss = loss && !disposed ? { ...loss, at: Date.now() } : null;
     if (processes.get(instance.agent.id) === instance) processes.delete(instance.agent.id);
     for (const session of [...instance.sessions.values()]) {
       const wasBusy = session.busy;
       session.busy = false;
+      endTurn(session);
       cancelPermissions(session);
+      if (instance.loss) setLost(session, instance.loss);
       detach(session, error.message);
       // On shutdown the log is left as it is; the next start marks the cut-off turn instead.
       if (wasBusy && !disposed) emit(session, { type: "error", message: `${error.message} Send a message to reconnect.` });
@@ -316,7 +404,9 @@ export function createAcpRuntime(
         // Hold the agent's request open until a viewer (or the advisor) answers or the turn is cancelled.
         return new Promise<acp.RequestPermissionResponse>((resolve) => {
           const requestId = randomUUID();
-          pending.set(requestId, { session, options: params.options, resolve });
+          const title = params.toolCall.title ?? null;
+          pending.set(requestId, { session, title, options: params.options, resolve });
+          if (session.pendingPermissions.size === 0) session.permissionTitle = title;
           session.pendingPermissions.add(requestId);
           emit(session, { type: "permission_request", requestId, toolCall: params.toolCall, options: params.options });
           announce(session);
@@ -351,7 +441,13 @@ export function createAcpRuntime(
             return;
           default:
             // `session/load` replays history Portal already logged; only live updates are appended.
-            if (!session.replaying) emit(session, { type: "update", update });
+            if (session.replaying) return;
+            if (session.busy) {
+              const tool = update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update";
+              // Tool heartbeats say the agent is alive, not that the tool gets anywhere; everything else is output.
+              if (!tool || trackToolCall(session.openTools, update, Date.now())) session.lastOutputAt = Date.now();
+            }
+            emit(session, { type: "update", update });
         }
       })
       .connect(stream);
@@ -364,22 +460,41 @@ export function createAcpRuntime(
       initialized: false,
       capabilities: {},
       failure: null,
+      loss: null,
       sessions: new Map(),
     };
     processes.set(agent.id, instance);
 
     proc.stderr.on("data", (data) => process.stderr.write(`[${agent.id}] ${data}`));
-    proc.on("error", (error) => fail(instance, agentError(agent, "could not start", error)));
+    proc.on("error", (error) => {
+      const failure = agentError(agent, "could not start", error);
+      fail(instance, failure, { reason: instance.initialized ? "process_error" : "start_failed", detail: failure.message });
+    });
     proc.on("exit", (code, signal) => {
       const error = new Error(`process exited (${signal ?? `code ${code}`})`);
-      fail(instance, agentError(agent, instance.initialized ? "disconnected" : "could not start", error));
+      const exited: Omit<SessionLoss, "at"> = {
+        reason: "process_exited",
+        detail: signal ? `${agent.name} was killed by ${signal}` : `${agent.name} exited with code ${code}`,
+        exitCode: code, signal,
+      };
+      // The connection usually closes before the exit is reported; the exit says more, so it replaces
+      // that loss, unless the exit is only Portal's own SIGTERM after the connection went.
+      const previous = instance.loss;
+      if (previous?.reason === "connection_closed" && !(proc.killed && signal === "SIGTERM")) {
+        const refined = { ...exited, at: previous.at };
+        instance.loss = refined;
+        for (const session of sessions.values()) if (session.lost === previous) setLost(session, refined);
+      }
+      fail(instance, agentError(agent, instance.initialized ? "disconnected" : "could not start", error), exited);
     });
     conn.signal.addEventListener("abort", () => {
-      fail(instance, agentError(agent, instance.initialized ? "disconnected" : "could not initialize", conn.signal.reason));
+      const failure = agentError(agent, instance.initialized ? "disconnected" : "could not initialize", conn.signal.reason);
+      fail(instance, failure, { reason: "connection_closed", detail: `${agent.name} closed its connection to Portal` });
     }, { once: true });
 
     const timeout = setTimeout(() => {
-      fail(instance, agentError(agent, "could not initialize", "startup timed out"));
+      const failure = agentError(agent, "could not initialize", "startup timed out");
+      fail(instance, failure, { reason: "start_failed", detail: failure.message });
     }, initializeTimeoutMs);
     instance.ready = conn.agent.request(acp.methods.agent.initialize, {
       protocolVersion: acp.PROTOCOL_VERSION,
@@ -396,7 +511,7 @@ export function createAcpRuntime(
       knownCapabilities.set(agent.id, instance.capabilities);
     }).catch((error: unknown) => {
       const failure = instance.failure ?? agentError(agent, "could not initialize", error);
-      fail(instance, failure);
+      fail(instance, failure, { reason: "start_failed", detail: failure.message });
       throw failure;
     }).finally(() => clearTimeout(timeout));
     return instance;
@@ -448,6 +563,13 @@ export function createAcpRuntime(
       replaying: false,
       process: null,
       attaching: null,
+      permissionTitle: null,
+      turnStartedAt: null,
+      openTools: new Map(),
+      lastOutputAt: null,
+      probe: createProbeState(),
+      lost: record.lost ?? null,
+      livenessConfig,
     };
     sessions.set(session.id, session);
     return session;
@@ -472,6 +594,7 @@ export function createAcpRuntime(
       }
       if (open) {
         emit(session, { type: "error", message: "Portal restarted while this turn was running. Send a message to continue." });
+        setLost(session, { reason: "portal_restarted", detail: "Portal restarted while the turn was running", at: Date.now() });
       }
     }));
   }
@@ -600,11 +723,13 @@ export function createAcpRuntime(
           // The new upstream session announces its own commands.
           ...(replaced ? { commands: [] } : {}),
         });
+        setLost(session, null);
         setLink(session, { status: "live" });
       } catch (error) {
         // Startup failures already name the agent; only wrap errors from the resume itself.
         const failure = instance?.failure
           ?? (error instanceof Error && error.message.startsWith(agent.name) ? error : agentError(agent, "could not reconnect", error));
+        setLost(session, { reason: "reconnect_failed", detail: failure.message, at: Date.now() });
         detach(session, failure.message);
         throw failure;
       } finally {
@@ -625,6 +750,7 @@ export function createAcpRuntime(
     session.busy = true;
     session.lastActiveAt = Date.now();
     if (session.title === null) session.title = titleFrom(text) || null;
+    startTurn(session);
     persistMeta(session);
     announce(session);
     emit(session, { type: "user", text });
@@ -637,12 +763,14 @@ export function createAcpRuntime(
     }).then((response) => {
       if (instance.failure) return;
       session.busy = false;
+      endTurn(session);
       cancelPermissions(session);
       emit(session, { type: "turn_end", stopReason: response.stopReason });
       announce(session);
     }).catch((error: unknown) => {
       if (instance.failure) return; // fail() already ended this session's turn.
       session.busy = false;
+      endTurn(session);
       cancelPermissions(session);
       emit(session, { type: "error", message: agentError(instance.agent, "prompt failed", error).message });
       announce(session);
@@ -810,6 +938,7 @@ export function createAcpRuntime(
     }
     detach(session, null);
     session.busy = false;
+    endTurn(session);
     for (const listener of session.closeListeners) listener();
     notifyList({ type: "deleted", id });
     await session.writes;
@@ -817,8 +946,67 @@ export function createAcpRuntime(
     return true;
   }
 
+  /** Sessions whose agent process is attached; only those have a tree to probe. */
+  function probeable(session: Session): session is Session & { process: AgentProcess } {
+    return !!session.process && !session.process.failure && session.link.status === "live" && typeof session.process.proc.pid === "number";
+  }
+
+  let reading: Promise<ProcessTable | null> | null = null;
+
+  /** One `ps` read at a time; callers that arrive meanwhile share it. */
+  function readTable(): Promise<ProcessTable | null> {
+    reading ??= readProcesses().catch(() => null).finally(() => { reading = null; });
+    return reading;
+  }
+
+  /**
+   * Sample the process tree of `targets`. Concurrent callers share the `ps` read; a platform
+   * without `ps` leaves the probes empty, so no session is ever called hung there.
+   */
+  async function probe(targets: Session[]): Promise<void> {
+    if (!targets.some(probeable)) return;
+    const table = await readTable();
+    if (!table) return;
+    for (const session of targets) {
+      // The process may have gone while `ps` ran (its sessions were reset then), or another caller sampled this read already.
+      if (!probeable(session) || !current(session) || session.probe.last?.sampledAt === table.at) continue;
+      sampleProbe(session.probe, table, {
+        agentPid: session.process.proc.pid!,
+        marker: session.upstreamId,
+        turnStartedAt: session.busy ? session.turnStartedAt : null,
+      });
+    }
+  }
+
+  /**
+   * The session's liveness with a fresh probe (one taken in the last few seconds is reused).
+   * Throws for an unknown session.
+   */
+  async function probeSession(id: string): Promise<SessionLiveness> {
+    const session = requireSession(id);
+    const last = session.probe.last?.sampledAt ?? 0;
+    if (Date.now() - last > PROBE_FRESH_MS) await probe([session]);
+    return livenessOf(session);
+  }
+
+  // While any turn is open, sample every session with one: CPU and child processes are only
+  // measurable as a change between samples.
+  const probeTimer = probeEveryMs > 0
+    ? setInterval(() => {
+      const busy = [...sessions.values()].filter((session) => session.busy);
+      if (busy.length) void probe(busy);
+    }, probeEveryMs)
+    : null;
+  probeTimer?.unref();
+
+  /** Change the liveness settings of every session (the hung threshold comes from the user's settings). */
+  function setLivenessOptions(options: Partial<LivenessConfig>): void {
+    if (typeof options.hungAfterMs === "number" && options.hungAfterMs > 0) livenessConfig.hungAfterMs = options.hungAfterMs;
+  }
+
   async function dispose() {
     disposed = true;
+    if (probeTimer) clearInterval(probeTimer);
     for (const instance of processes.values()) fail(instance, new Error("ACP runtime is stopped."));
     await Promise.all([...sessions.values()].map((session) => session.writes));
     await store.dispose().catch(() => {});
@@ -827,6 +1015,7 @@ export function createAcpRuntime(
   return {
     ready, listSessions, getSession, createSession, attach, sendPrompt, cancel,
     respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
+    probe, probeSession, setLivenessOptions,
   };
 }
 

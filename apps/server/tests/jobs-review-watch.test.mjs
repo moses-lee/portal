@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { REVIEW_CHECK_MS, findingsItem, reviewProse, reviewWatchOf, sessionProgress } from "../src/orchestrator/jobs/review-watch.ts";
 import { POLL_MS } from "../src/orchestrator/jobs/worker.ts";
-import { fakeDeps, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
+import { fakeDeps, liveness, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 import { T0, flush, jobsHarness, started, textStep, toolStep } from "./fixtures/jobs-harness.mjs";
 
 const url = (n) => `https://github.com/acme/app/pull/${n}`;
@@ -181,6 +181,47 @@ test("a review waiting for a permission raises a waiting item at once and resolv
   await h.timers.advance(REVIEW_CHECK_MS);
   await flush();
   [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_waiting");
+  assert.equal(item.status, "resolved");
+});
+
+test("sessionProgress goes by liveness: a busy long run keeps working, a hung one is stalled, a dead one failed with why", async () => {
+  const lost = { reason: "process_exited", detail: "Claude Code was killed by SIGKILL", at: T0, exitCode: null, signal: "SIGKILL" };
+  const sessions = [
+    sessionMeta({ id: "long", busy: true, liveness: liveness("busy", "running tool: bazel test //... for 45m") }),
+    sessionMeta({ id: "hung", busy: true, liveness: liveness("hung", "hung: no CPU or output for 20m") }),
+    sessionMeta({ id: "killed", link: { status: "offline", error: "Claude Code disconnected" }, liveness: liveness("dead", "dead: Claude Code was killed by SIGKILL", { lost }) }),
+    // Portal restarted under the turn: no link error, but the loss says what happened.
+    sessionMeta({ id: "restarted", link: { status: "offline", error: null }, liveness: liveness("dead", "dead: Portal restarted", { lost: { ...lost, reason: "portal_restarted", detail: "Portal restarted while the turn was running" } }) }),
+  ];
+  const { deps } = fakeDeps({ sessions, events: {} });
+  assert.deepEqual(await sessionProgress(deps, "long"), { state: "working" });
+  assert.deepEqual(await sessionProgress(deps, "hung"), { state: "stalled", note: "hung: no CPU or output for 20m" });
+  assert.deepEqual(await sessionProgress(deps, "killed"), { state: "failed", note: "the agent was lost: Claude Code was killed by SIGKILL" });
+  assert.deepEqual(await sessionProgress(deps, "restarted"), { state: "failed", note: "the agent was lost: Portal restarted while the turn was running" });
+});
+
+test("a hung review keeps the goal open, raises a hung item at once, and resolves it when the session moves again", async (t) => {
+  const sessions = [
+    sessionMeta({ id: "s1", busy: true, liveness: liveness("hung", "hung: no CPU or output for 20m (tool: npm test, started 40m ago)") }),
+    sessionMeta({ id: "s2", busy: true, liveness: liveness("busy", "running tool: bazel test //... for 45m") }),
+  ];
+  const h = await started(jobsHarness(t, { sessions, events: { s1: [], s2: [] } }));
+  const { job } = await reviewGoal(h);
+  await h.timers.advance(POLL_MS);
+  await flush();
+  let [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_hung");
+  assert.equal(item.fingerprint, "session_hung:s1");
+  assert.equal(item.title, "The review of acme/app#1 is hung");
+  assert.equal(item.body, "Hung: no CPU or output for 20m (tool: npm test, started 40m ago). Look at the session; stop it or nudge it on.");
+  assert.deepEqual(item.actions, [{ type: "open_session", sessionId: "s1", label: "Open session" }]);
+  const [run] = await h.jobs.listRuns({ jobId: job.id });
+  assert.match(run.summary, /Waiting for 2 of 2 review session\(s\) \(1 hung\)/);
+  assert.equal(run.result.fired, false);
+
+  sessions[0].liveness = liveness("busy", "running tool: npm test for 41m");
+  await h.timers.advance(REVIEW_CHECK_MS);
+  await flush();
+  [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_hung");
   assert.equal(item.status, "resolved");
 });
 

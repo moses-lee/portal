@@ -6,6 +6,7 @@ import type { HelperPayload, Intent } from "@portal/contracts/jobs";
 import type { SessionMeta } from "../../lib/types.ts";
 import { snapshotActivity } from "../digest.ts";
 import { matchId } from "../ids.ts";
+import { livenessGuidance } from "../world/prompt.ts";
 
 export const guidance = `Background work is yours to schedule, at the cadence you judge right:
 - "Monitor PR N" or "tell me when N merges": monitor_pull (no model runs its checks; it reports state changes only and ends when the PR merges or closes). "Stop monitoring N": cancel_intent with pull.
@@ -24,7 +25,9 @@ function sessionRows(ids: string[], sessions: SessionMeta[] | null): string[] {
     if (found.length > 1) return `- ${id}: matches ${found.length} sessions; resolve_session tells which.`;
     if (found.length === 0) return `- ${id}: not among Portal's ${sessions.length} sessions right now.`;
     const [session] = found;
-    return `- ${session.id} "${session.title ?? "untitled"}" · ${session.agentName} · ${snapshotActivity(session)} · link ${session.link.status} · last active ${when(session.lastActiveAt)}`;
+    // Liveness says whether the agent is moving; lastActiveAt is only the user's last prompt.
+    const liveness = session.liveness ? ` · ${session.liveness.summary}` : "";
+    return `- ${session.id} "${session.title ?? "untitled"}" · ${session.agentName} · ${snapshotActivity(session)} · link ${session.link.status}${liveness} · last prompt ${when(session.lastActiveAt)}`;
   });
 }
 
@@ -51,6 +54,7 @@ export function intentCheckPrompt(intent: Intent, now: number, sessions: Session
     "",
     "Do this:",
     "1. Check the trigger with the read-only tools (get_pull, list_sessions, read_transcript, ...). Look only at what the trigger needs. A failed lookup is not proof something is gone: before reporting a session deleted or missing, confirm it with the list above and resolve_session or list_sessions.",
+    `   ${livenessGuidance}`,
     "2. Fire on change, not on state: call fire_intent only when something new happened since the last firing (the notes say what was reported). A condition already reported that still holds is not news: reply NO_UPDATE. The server refuses a repeat of the last firing, and during the cooldown, past the budget, or after expiry; then you stop. After it fired, carry out the action (send_prompt to a session, update an item) as far as the tools allow.",
     "3. Rewrite the notes with update_intent when your understanding changed: what you saw (observations, not guesses), what you reported and when, what is left. Call close_intent when the intent is fulfilled or can never fire.",
     "4. Reply with one or two sentences for the user's thread when the intent fired, else with exactly NO_UPDATE.",

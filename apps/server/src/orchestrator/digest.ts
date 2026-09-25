@@ -34,7 +34,7 @@ export const STALE_PULL_MS = 14 * 24 * 60 * 60 * 1000;
 export const REVIEW_LIST_ROWS = 15;
 const WORKTREE_CONCURRENCY = 4;
 
-const sessionKinds: ItemKind[] = ["session_finished", "session_stopped", "session_waiting", "session_offline"];
+const sessionKinds: ItemKind[] = ["session_finished", "session_stopped", "session_waiting", "session_offline", "session_hung"];
 /** Events read to learn how a session's last turn ended; the end is the turn's last event. */
 const TURN_END_WINDOW = 20;
 /** The kinds a PR the user authored can warrant, most severe first; the item takes the first one that applies. */
@@ -88,6 +88,20 @@ export function snapshotActivity(meta: Pick<SessionMeta, "busy" | "awaitingPermi
   return agentActivity({ busy: meta.busy, awaitingPermission: meta.awaitingPermission, link: quiet ? null : meta.link });
 }
 
+type SnapshotSession = TickSnapshot["sessions"][string];
+
+/** Whether the session's agent is gone; snapshots from before liveness go by the link error. */
+export function sessionDead(session: Pick<SnapshotSession, "activity" | "liveness">): boolean {
+  return session.liveness ? session.liveness === "dead" : session.activity === "error";
+}
+
+/** The snapshot's liveness fields: the state, and for a stall what the summary said. */
+export function snapshotLiveness(meta: Partial<Pick<SessionMeta, "liveness">>): Pick<SnapshotSession, "liveness" | "stall"> {
+  if (!meta.liveness) return {};
+  const { state, summary } = meta.liveness;
+  return state === "dead" || state === "hung" ? { liveness: state, stall: summary.replace(/^(dead|hung): /, "") } : { liveness: state };
+}
+
 /** How the last turn in `events` ended: its stop reason ("cancelled" when stopped), "error", or null while it is open or none is in view. */
 export function lastTurnEnd(events: PortalEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
@@ -116,6 +130,7 @@ export async function collectSnapshot({ deps, previous, now, log }: CollectOptio
     for (const meta of await deps.sessions.list()) {
       snapshot.sessions[meta.id] = {
         activity: snapshotActivity(meta), lastActiveAt: meta.lastActiveAt, title: meta.title, projectId: meta.projectId, link: meta.link.status,
+        ...snapshotLiveness(meta),
       };
     }
     // A session that went idle since the last snapshot: a stopped turn is reported as stopped, not finished.
@@ -306,6 +321,7 @@ function subjectPresent(snapshot: TickSnapshot, kind: string, key: string): bool
     case "session_stopped":
     case "session_waiting":
     case "session_offline":
+    case "session_hung":
       return key in snapshot.sessions;
     case "pr":
     case "pr_checks_failing":
@@ -390,9 +406,13 @@ export function diffSnapshots(prev: TickSnapshot | null, next: TickSnapshot, ite
     // then (it has a title), and now idle with its agent attached, so its turn ran and ended in between.
     if (prev && !before && session.activity === "idle" && session.link === "live" && session.title !== null && session.lastActiveAt > prev.at) ended();
     if (session.activity === "waiting" && before?.activity !== "waiting") condition("session_waiting", id, `Session ${name} is waiting for your permission`, links);
-    if (session.activity === "error" && before?.activity !== "error") condition("session_offline", id, `Session ${name} lost its agent`, links);
+    // Stalls go by liveness: a dead agent (with why it was lost), or an open turn with no CPU and no output.
+    const dead = sessionDead(session);
+    if (dead && !(before && sessionDead(before))) condition("session_offline", id, `Session ${name} lost its agent${session.stall ? `: ${session.stall}` : ""}`, links);
+    if (session.liveness === "hung" && before?.liveness !== "hung") condition("session_hung", id, `Session ${name} is hung${session.stall ? `: ${session.stall}` : ""}`, links);
     if (session.activity !== "waiting") cleared("session_waiting", id, `Session ${name} is no longer waiting`, links);
-    if (session.activity !== "error") cleared("session_offline", id, `Session ${name} is connected again`, links);
+    if (!dead) cleared("session_offline", id, `Session ${name} is connected again`, links);
+    if (session.liveness !== "hung") cleared("session_hung", id, `Session ${name} is no longer hung`, links);
     if (session.activity === "working") {
       cleared("session_finished", id, `Session ${name} is working again`, links);
       cleared("session_stopped", id, `Session ${name} is working again`, links);

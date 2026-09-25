@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -7,6 +8,12 @@ const [agentId, logPath, configPath] = process.argv.slice(2);
 const prompts = new Map();
 const permissions = new Map();
 const configs = new Map();
+/** Child processes a "spawn" prompt started, by session; killed on cancel and when this process exits. */
+const children = new Map();
+const killGroup = (child) => {
+  try { if (child) process.kill(-child.pid, "SIGKILL"); } catch {}
+};
+process.on("exit", () => { for (const child of children.values()) killGroup(child); });
 let sessionCount = 0;
 let permissionCount = 0;
 
@@ -127,6 +134,27 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       process.stdout.end();
       return;
     }
+    if (text === "tool" || text === "spawn") {
+      // A turn that stays open on a running tool until cancelled. "spawn" also runs a child process
+      // the way an agent's shell tool would.
+      prompts.set(params.sessionId, id);
+      const title = text === "spawn" ? "sleep 30" : "bazel test //...";
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "call-1", title, kind: "execute", status: "pending" });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "in_progress" });
+      if (text === "spawn") {
+        // Like Claude Code's per-session process: its command line names the session, and the tool runs below it.
+        const child = spawn("sh", ["-c", `sleep 30; : ${params.sessionId}`], { stdio: "ignore", detached: true });
+        log({ event: "child", childPid: child.pid });
+        children.set(params.sessionId, child);
+      }
+      return;
+    }
+    if (text === "finish-tool") {
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "call-2", title: "ls", kind: "execute", status: "pending" });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call-2", status: "completed", content: [{ type: "content", content: { type: "text", text: "a b" } }] });
+      respond(id, { stopReason: "end_turn" });
+      return;
+    }
     if (text === "commands") {
       update(params.sessionId, {
         sessionUpdate: "available_commands_update",
@@ -157,6 +185,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     });
   } else if (method === "session/cancel") {
     const promptId = prompts.get(params.sessionId);
+    killGroup(children.get(params.sessionId));
+    children.delete(params.sessionId);
     if (promptId !== undefined) {
       prompts.delete(params.sessionId);
       respond(promptId, { stopReason: "cancelled" });

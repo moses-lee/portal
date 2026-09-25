@@ -35,7 +35,7 @@ export type ReviewWatch = {
   answerPermissions?: boolean;
 };
 
-export type SessionProgress = { state: "working" | "waiting" | "finished" | "failed" | "gone"; note?: string };
+export type SessionProgress = { state: "working" | "waiting" | "stalled" | "finished" | "failed" | "gone"; note?: string };
 
 export type ReviewFinding = { severity: "blocking" | "should_fix" | "nit"; title: string; where?: string; detail?: string };
 
@@ -69,13 +69,19 @@ export function reviewWatchOf(payload: Record<string, unknown>): ReviewWatch | n
 }
 
 /**
- * Where a review session is. Idle counts as finished only when its last turn ended; idle with a turn
- * that never ended (Portal restarted under it) or with no turn at all (the prompt never arrived) is
- * a failure, since nothing will move it on.
+ * Where a review session is, by its liveness. A dead agent is a failure, with why it was lost; a
+ * hung turn is stalled (still open, so the review may yet finish, but the user hears of it). Idle
+ * counts as finished only when its last turn ended; idle with a turn that never ended or with no
+ * turn at all (the prompt never arrived) is a failure, since nothing will move it on.
  */
 export async function sessionProgress(deps: OrchestratorDeps, sessionId: string): Promise<SessionProgress> {
   const meta = await deps.sessions.get(sessionId);
   if (!meta) return { state: "gone", note: "the session was deleted" };
+  if (meta.liveness?.state === "dead") {
+    const reason = meta.liveness.lost?.detail ?? ("error" in meta.link ? meta.link.error : null);
+    return { state: "failed", note: reason ? `the agent was lost: ${reason}` : "the agent was lost" };
+  }
+  if (meta.liveness?.state === "hung") return { state: "stalled", note: meta.liveness.summary };
   const activity = snapshotActivity(meta);
   if (activity === "working" || activity === "connecting") return { state: "working" };
   if (activity === "waiting") return { state: "waiting", note: "waiting for a permission" };
@@ -227,30 +233,44 @@ export type ReviewCheckParts = {
 };
 
 /**
- * A review blocked on a permission prompt reaches the user at this check: the hourly world refresh
- * creates no items. The item carries the `session_waiting` fingerprint the snapshot diff uses, so a
- * dismissed one stays dismissed (and is released once the session moves on), and it is resolved
- * here once the session moves on.
+ * A review blocked on a permission prompt, or hung, reaches the user at this check: the hourly world
+ * refresh is too slow for it. Each item carries the fingerprint the snapshot diff uses
+ * (`session_waiting` or `session_hung`), so a dismissed one stays dismissed (and is released once
+ * the session moves on), and it is resolved here once the session moves on.
  */
-async function flagWaiting(core: JobsCore, intent: Intent, watch: ReviewWatch, progress: Map<string, SessionProgress>): Promise<void> {
+async function flagStuck(core: JobsCore, intent: Intent, watch: ReviewWatch, progress: Map<string, SessionProgress>): Promise<void> {
   const { hub } = core;
   let changed = false;
   const items = await hub.store.listItems();
+  const flags = [
+    {
+      state: "waiting", kind: "session_waiting" as const, label: "Answer",
+      title: (pr: number) => `The review of ${watch.repo}#${pr} is waiting for your permission`,
+      body: () => "The review session asked to run a command. Answer it in the session; the review goes on from there.",
+    },
+    {
+      state: "stalled", kind: "session_hung" as const, label: "Open session",
+      title: (pr: number) => `The review of ${watch.repo}#${pr} is hung`,
+      body: (note?: string) => `${note ? `${note[0].toUpperCase()}${note.slice(1)}.` : "Nothing in the review session has moved for a while."} Look at the session; stop it or nudge it on.`,
+    },
+  ];
   for (const session of watch.sessions) {
-    const fingerprint = `session_waiting:${session.sessionId}`;
-    const live = items.find((item) => item.fingerprint === fingerprint && (item.status === "open" || item.status === "snoozed"));
-    if (progress.get(session.sessionId)?.state === "waiting") {
-      if (live || items.some((item) => item.fingerprint === fingerprint && item.status === "dismissed")) continue;
-      await hub.store.createItem({
-        kind: "session_waiting", title: `The review of ${watch.repo}#${session.pr} is waiting for your permission`,
-        body: "The review session asked to run a command. Answer it in the session; the review goes on from there.", fingerprint,
-        links: { sessionId: session.sessionId, projectId: session.projectId, pull: { repo: watch.repo, number: session.pr, url: session.url }, intentId: intent.id },
-        actions: [{ type: "open_session", sessionId: session.sessionId, label: "Answer" }],
-      });
-      changed = true;
-    } else if (live?.status === "open") {
-      await hub.store.updateItem(live.id, { status: "resolved" });
-      changed = true;
+    const current = progress.get(session.sessionId);
+    for (const flag of flags) {
+      const fingerprint = `${flag.kind}:${session.sessionId}`;
+      const live = items.find((item) => item.fingerprint === fingerprint && (item.status === "open" || item.status === "snoozed"));
+      if (current?.state === flag.state) {
+        if (live || items.some((item) => item.fingerprint === fingerprint && item.status === "dismissed")) continue;
+        await hub.store.createItem({
+          kind: flag.kind, title: flag.title(session.pr), body: flag.body(current.note), fingerprint,
+          links: { sessionId: session.sessionId, projectId: session.projectId, pull: { repo: watch.repo, number: session.pr, url: session.url }, intentId: intent.id },
+          actions: [{ type: "open_session", sessionId: session.sessionId, label: flag.label }],
+        });
+        changed = true;
+      } else if (live?.status === "open") {
+        await hub.store.updateItem(live.id, { status: "resolved" });
+        changed = true;
+      }
     }
   }
   if (changed) hub.emit({ type: "items", items: await hub.store.listItems() });
@@ -262,12 +282,13 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
   const progress = new Map<string, SessionProgress>();
   for (const session of watch.sessions) progress.set(session.sessionId, await sessionProgress(hub.deps, session.sessionId));
   await core.store.updateIntent(intent.id, { lastCheckedAt: hub.timers.now() });
-  await flagWaiting(core, intent, watch, progress);
-  const open = watch.sessions.filter((session) => ["working", "waiting"].includes(progress.get(session.sessionId)!.state));
+  await flagStuck(core, intent, watch, progress);
+  const open = watch.sessions.filter((session) => ["working", "waiting", "stalled"].includes(progress.get(session.sessionId)!.state));
   if (open.length) {
-    const waiting = open.filter((session) => progress.get(session.sessionId)!.state === "waiting").length;
+    const count = (state: SessionProgress["state"]) => open.filter((session) => progress.get(session.sessionId)!.state === state).length;
+    const notes = [count("waiting") ? `${count("waiting")} waiting for a permission` : "", count("stalled") ? `${count("stalled")} hung` : ""].filter(Boolean);
     return {
-      summary: `Waiting for ${open.length} of ${watch.sessions.length} review session(s)${waiting ? ` (${waiting} waiting for a permission)` : ""}.`,
+      summary: `Waiting for ${open.length} of ${watch.sessions.length} review session(s)${notes.length ? ` (${notes.join(", ")})` : ""}.`,
       result: { intentId: intent.id, fired: false, sessions: Object.fromEntries(progress) },
     };
   }

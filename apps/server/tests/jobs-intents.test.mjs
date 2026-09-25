@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { POLL_MS } from "../src/orchestrator/jobs/worker.ts";
 import { T0, call, flush, jobsHarness, started, textStep, toolContext, toolStep } from "./fixtures/jobs-harness.mjs";
-import { project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
+import { liveness, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const MIN = 60_000;
 const pull = { repo: "acme/app", number: 42, url: "https://github.com/acme/app/pull/42" };
@@ -191,6 +191,22 @@ test("a check is handed each scoped session's live state, prefix ids included, a
   assert.match(system.content, /When the user corrects what an intent reported/, "the jobs guidance reaches every turn");
   assert.match(system.content, /In focus for this turn:\n- "Refactor the parser" \[17329ac6\]/, "the prefix is focused as its full session");
   assert.equal((await h.jobs.getIntent(created.id)).fires, 0);
+});
+
+test("a check sees each scoped session's liveness and when it was last prompted, and is told how to judge a stall", async (t) => {
+  const h = await started(jobsHarness(t, {
+    sessions: [sessionMeta({ id: "s1", title: "Bazel run", busy: true, lastActiveAt: T0 - 39 * MIN, liveness: liveness("busy", "running tool: bazel test //... for 45m") })],
+    doGenerate: [textStep("NO_UPDATE")],
+  }));
+  const { created } = await withIntent(h, { scope: {} });
+  const intent = await h.jobs.getIntent(created.id);
+  await h.jobsStore.updateIntent(created.id, { scope: { ...intent.scope, sessionIds: ["s1"] } });
+  await h.timers.advance(2 * MIN);
+  await flush();
+  const prompt = h.model.doGenerateCalls[0].prompt[1].content[0].text;
+  assert.ok(prompt.includes(`- s1 "Bazel run" · Claude Code · working · link live · running tool: bazel test //... for 45m · last prompt ${new Date(T0 - 39 * MIN).toISOString()}`), prompt);
+  assert.doesNotMatch(prompt, /last active/);
+  assert.match(prompt, /Judge whether a session is stuck only by its liveness/);
 });
 
 test("an intent past its expiry is expired by the worker, its job ends, and a late firing is refused", async (t) => {

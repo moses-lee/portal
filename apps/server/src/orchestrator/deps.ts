@@ -21,7 +21,7 @@ import { summarizeProject } from "../projects/store.ts";
 import { loadServerKey } from "../settings/crypto.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
-  SessionMeta, SessionState, WorktreeMeta,
+  SessionLiveness, SessionMeta, SessionState, WorktreeMeta,
 } from "../lib/types.ts";
 import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../lib/worktrees.ts";
 import { type PullStatus, cloneRepo, getGithubLogin, readOriginUrl, readPullStatus, searchAttentionPulls } from "./github-attention.ts";
@@ -66,6 +66,8 @@ export type OrchestratorDeps = {
     readEvents(id: string, opts?: { before?: number; limit?: number }): Promise<EventPage>;
     attach(id: string): Promise<void>;
     remove(id: string): Promise<boolean>;
+    /** The session's liveness after a fresh look at its agent's processes; null for an unknown session. Fakes may leave it out (then `get` answers). */
+    liveness?(id: string): Promise<SessionLiveness | null>;
   };
   agents: {
     list(): Promise<AgentInfo[]>;
@@ -199,6 +201,10 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       readEvents: async (id, opts) => (await acp()).readEvents(id, opts),
       attach: async (id) => (await acp()).attach(id),
       remove: async (id) => (await acp()).deleteSession(id),
+      liveness: async (id) => {
+        const runtime = await acp();
+        return runtime.getSession(id) ? runtime.probeSession(id) : null;
+      },
     },
     // The sessions service's agents, not the built-in list: the orchestrator must offer only agents it can start.
     agents: {

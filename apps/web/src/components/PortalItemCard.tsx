@@ -34,6 +34,7 @@ export const kindLabels: Record<ItemKind, string> = {
   session_stopped: "Session stopped",
   session_waiting: "Session waiting",
   session_offline: "Session offline",
+  session_hung: "Session hung",
   pr_checks_failing: "Checks failing",
   pr_changes_requested: "Changes requested",
   pr_conflicts: "Merge conflicts",

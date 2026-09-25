@@ -67,6 +67,7 @@ import {
 import {
   defaultSettings,
   gitActionKinds,
+  isHungAfterMinutes,
   orchestratorLimits,
   type GitActionKind,
   type SettingsPatch,
@@ -125,11 +126,13 @@ const providerLabels: Record<OrchestratorProvider, string> = {
 type OrchestratorTextField =
   | "model"
   | "bookkeepingModel"
-  | ConsolidationField;
+  | ConsolidationField
+  | "hungAfterMinutes";
 const orchestratorTextFields: readonly OrchestratorTextField[] = [
   "model",
   "bookkeepingModel",
   ...consolidationFields,
+  "hungAfterMinutes",
 ];
 const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
   model: "Chat model",
@@ -137,6 +140,7 @@ const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
   nightlyAt: "Curate every night at",
   inboxThreshold: "Also curate when the inbox holds … proposals",
   minIntervalMinutes: "At most one inbox-started run every … minutes",
+  hungAfterMinutes: "Call a session hung after … minutes with no CPU or output",
 };
 
 const isConsolidationField = (
@@ -397,6 +401,20 @@ export default function SettingsDialog({
         return;
       }
       patch = { consolidation: { [field]: parsed.value } };
+    } else if (field === "hungAfterMinutes") {
+      const minutes = Number(trimmed);
+      if (!trimmed || !isHungAfterMinutes(minutes)) {
+        setStatusFor(field, {
+          kind: "error",
+          message: `Enter a whole number of minutes from 1 to ${orchestratorLimits.hungAfterMinutes}.`,
+        });
+        return;
+      }
+      if (minutes === settings.orchestrator.stalls.hungAfterMinutes) {
+        clearOrchestratorDraft(field);
+        return;
+      }
+      patch = { stalls: { hungAfterMinutes: minutes } };
     } else {
       if (!trimmed) {
         setStatusFor(field, { kind: "error", message: "Enter a model id." });
@@ -753,6 +771,38 @@ export default function SettingsDialog({
                         : ""}
                   </span>
                 </div>
+              </div>
+              <div className="space-y-3 rounded-xl border border-border/60 p-4">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium">Stalled sessions</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    A session is hung when its turn is open but neither its processes used CPU nor
+                    the agent produced output for this long. A long build or test run that keeps
+                    working is busy, not hung. Portal tells you about hung sessions and ones whose
+                    agent died.
+                  </p>
+                </div>
+                <OrchestratorTextInput
+                  field="hungAfterMinutes"
+                  value={
+                    orchestratorDrafts.hungAfterMinutes ??
+                    String(settings.orchestrator.stalls.hungAfterMinutes)
+                  }
+                  dirty={orchestratorDrafts.hungAfterMinutes !== undefined}
+                  saving={!!saving.hungAfterMinutes}
+                  status={status.hungAfterMinutes ?? null}
+                  onChange={(value) =>
+                    setOrchestratorDrafts((prev) => ({
+                      ...prev,
+                      hungAfterMinutes: value,
+                    }))
+                  }
+                  onBlur={() => {
+                    const draft = orchestratorDrafts.hungAfterMinutes;
+                    if (draft !== undefined)
+                      void saveOrchestratorField("hungAfterMinutes", draft);
+                  }}
+                />
               </div>
               <div className="space-y-3">
                 <p className="text-xs font-medium">API keys</p>
@@ -1297,7 +1347,10 @@ function OrchestratorTextInput({
 }) {
   const id = useId();
   const statusId = `${id}-status`;
-  const numeric = field === "inboxThreshold" || field === "minIntervalMinutes";
+  const numeric =
+    field === "inboxThreshold" ||
+    field === "minIntervalMinutes" ||
+    field === "hungAfterMinutes";
   const time = field === "nightlyAt";
   return (
     <div className="space-y-2">
@@ -1311,7 +1364,13 @@ function OrchestratorTextInput({
         type={numeric ? "number" : time ? "time" : "text"}
         inputMode={numeric ? "numeric" : undefined}
         min={numeric ? 1 : undefined}
-        max={numeric ? orchestratorLimits[field as "inboxThreshold"] : undefined}
+        max={
+          numeric
+            ? orchestratorLimits[
+                field as "inboxThreshold" | "minIntervalMinutes" | "hungAfterMinutes"
+              ]
+            : undefined
+        }
         step={numeric ? 1 : undefined}
         maxLength={numeric || time ? undefined : orchestratorLimits.modelLength}
         autoComplete="off"

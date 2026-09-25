@@ -20,6 +20,14 @@ export function sessionMeta(overrides = {}) {
   };
 }
 
+/** A session's liveness as the runtime derives it, for fakes: `state` with its summary, the rest at rest. */
+export function liveness(state, summary = state, overrides = {}) {
+  return {
+    state, summary, turnOpen: state === "busy" || state === "hung" || state === "blocked", turnStartedAt: null, openTools: [],
+    lastOutputAt: null, lastCpuAt: null, process: null, lost: null, hungAfterMs: 15 * 60_000, ...overrides,
+  };
+}
+
 export function project(overrides = {}) {
   return { id: "p1", name: "app", path: "/repo", createdAt: T0 - 100_000, ...overrides };
 }

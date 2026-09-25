@@ -4,7 +4,7 @@
  * cloud store. Sequence numbers are assigned by the runtime (the log's only writer) and must be
  * dense from 0, so a store can serve "the page before seq N" without an index.
  */
-import type { SessionState, StoredEvent } from "@portal/contracts/types";
+import type { SessionLoss, SessionState, StoredEvent } from "@portal/contracts/types";
 
 /** The persisted half of a session: what Portal needs to list it and reattach its agent. */
 export type SessionRecord = {
@@ -21,6 +21,8 @@ export type SessionRecord = {
   upstreamId: string;
   /** Last known agent-side state, shown until the agent is reattached. */
   state: SessionState;
+  /** Why the agent was lost, until it is attached again; absent in records from before this field. */
+  lost?: SessionLoss | null;
 };
 
 export type TailQuery = {
@@ -75,7 +77,7 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     && typeof r.agentName === "string" && typeof r.cwd === "string" && typeof r.projectId === "string"
     && typeof r.createdAt === "number" && typeof r.lastActiveAt === "number"
     && (r.title === null || typeof r.title === "string") && typeof r.upstreamId === "string"
-    && isSessionState(r.state);
+    && isSessionState(r.state) && (r.lost === undefined || r.lost === null || (typeof r.lost === "object" && typeof (r.lost as SessionLoss).reason === "string"));
 }
 
 /** Shape check for events read back from storage. */

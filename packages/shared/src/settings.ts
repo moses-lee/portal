@@ -43,7 +43,13 @@ export const orchestratorLimits = {
   /** Memory curation: an inbox of up to a thousand proposals, at most a day between inbox-started runs. */
   inboxThreshold: 1000,
   minIntervalMinutes: 1440,
+  /** A turn may be quiet for up to a day before it counts as hung. */
+  hungAfterMinutes: 1440,
 } as const;
+
+export function isHungAfterMinutes(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= orchestratorLimits.hungAfterMinutes;
+}
 
 /** "HH:MM" on a 24-hour clock, as the nightly curation time is written. */
 export const CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -99,7 +105,7 @@ function mergePrompts(base: GitActionPrompts, given: Partial<Record<GitActionKin
  * else leaves it. Key strings become the wire form's booleans (non-blank means "a key is stored").
  */
 function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettingsPatch | undefined): OrchestratorSettings {
-  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, consolidation: { ...base.consolidation }, reviews: { ...base.reviews }, apiKeys: { ...base.apiKeys } };
+  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, consolidation: { ...base.consolidation }, reviews: { ...base.reviews }, stalls: { ...base.stalls }, apiKeys: { ...base.apiKeys } };
   if (!given) return next;
   // A provider change without a model takes that provider's default: a model id never outlives its provider.
   if (isOrchestratorProvider(given.provider) && given.provider !== base.provider) {
@@ -117,6 +123,9 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
   next.consolidation = mergeConsolidation(base.consolidation, given.consolidation);
   if (given.reviews && typeof given.reviews === "object" && typeof given.reviews.answerReadOnly === "boolean") {
     next.reviews = { answerReadOnly: given.reviews.answerReadOnly };
+  }
+  if (given.stalls && typeof given.stalls === "object" && isHungAfterMinutes(given.stalls.hungAfterMinutes)) {
+    next.stalls = { hungAfterMinutes: given.stalls.hungAfterMinutes };
   }
   if (given.apiKeys) {
     for (const provider of orchestratorProviders) {
@@ -170,6 +179,7 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   }
   if (Object.keys(consolidation).length > 0) orchestrator.consolidation = consolidation;
   if (given.reviews.answerReadOnly !== base.reviews.answerReadOnly) orchestrator.reviews = { answerReadOnly: given.reviews.answerReadOnly };
+  if (given.stalls.hungAfterMinutes !== base.stalls.hungAfterMinutes) orchestrator.stalls = { hungAfterMinutes: given.stalls.hungAfterMinutes };
   if (Object.keys(orchestrator).length > 0) result.orchestrator = orchestrator;
 
   const scripts = scriptsOverrides(settings.scripts);

@@ -95,7 +95,7 @@ export function worldTools(ctx: DomainToolContext, source: WorldToolSource, look
   return {
     ...tools,
     resolve_session: define(
-      "Find a session by id or id prefix, title, words of its title, project name, or activity (waiting, working, idle, error). Returns { match } or { candidates, reason }, most recent first.",
+      "Find a session by id or id prefix, title, words of its title, project name, activity (waiting, working, idle, error), or liveness (hung, dead, stalled for either). Returns { match } or { candidates, reason }, most recent first.",
       z.object({ query: z.string().min(1) }),
       async ({ query }) => resolveSession(await world(), query),
     ),

@@ -157,6 +157,7 @@ for (const [name, make] of backends) {
       bookkeeping: orchestratorDefaults.bookkeeping,
       consolidation: { ...orchestratorDefaults.consolidation, minIntervalMinutes: 90 },
       reviews: orchestratorDefaults.reviews,
+      stalls: orchestratorDefaults.stalls,
       apiKeys: { openai: false, anthropic: true },
     });
     assert.deepEqual(result.gitActions, defaultSettings.gitActions, "the other section is untouched");
@@ -590,4 +591,12 @@ test("parseStoredOverrides reads leniently and never yields API keys", () => {
   assert.deepEqual(parseStoredOverrides({ orchestrator: { apiKeys: { openai: "sk" } } }), {});
   assert.deepEqual(parseStoredOverrides({ orchestrator: { model: "m", apiKeys: { openai: "sk" } } }), { orchestrator: { model: "m" } });
   assert.deepEqual(parseStoredOverrides({ gitActions: { prompts: { checks: "c" } } }), { gitActions: { prompts: { checks: "c" } } });
+});
+
+test("a PATCH checks the hung threshold: whole minutes from 1 to a day", () => {
+  assert.deepEqual(parseSettingsPatch({ orchestrator: { stalls: { hungAfterMinutes: 30 } } }), { orchestrator: { stalls: { hungAfterMinutes: 30 } } });
+  for (const bad of [0, 1441, 2.5, "30", null]) {
+    assert.throws(() => parseSettingsPatch({ orchestrator: { stalls: { hungAfterMinutes: bad } } }), /hungAfterMinutes must be a whole number of minutes between 1 and 1440/, String(bad));
+  }
+  assert.throws(() => parseSettingsPatch({ orchestrator: { stalls: 5 } }), /orchestrator.stalls must be an object/);
 });
