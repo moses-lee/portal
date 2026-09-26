@@ -1,14 +1,11 @@
 "use client";
 
 import {
-  Children,
-  isValidElement,
   memo,
   useEffect,
   useMemo,
   useState,
   type ComponentProps,
-  type ReactNode,
 } from "react";
 import {
   ArrowDown,
@@ -45,43 +42,10 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import AgentLogo from "./AgentLogo";
+import CodeBlock from "./CodeBlock";
 import CopyButton from "./CopyButton";
 import PermissionCard from "./PermissionCard";
 import type { Block, History, ToolBlock, Turn } from "@/lib/transcript";
-
-function textContent(node: ReactNode): string {
-  return Children.toArray(node)
-    .map((child) =>
-      isValidElement<{ children?: ReactNode }>(child)
-        ? textContent(child.props.children)
-        : typeof child === "string" || typeof child === "number"
-          ? String(child)
-          : "",
-    )
-    .join("");
-}
-
-function CodeBlock({ children }: ComponentProps<"pre">) {
-  const child = Children.toArray(children)[0];
-  const language = isValidElement<{ className?: string }>(child)
-    ? /language-([\w+-]+)/.exec(child.props.className ?? "")?.[1]
-    : undefined;
-  return (
-    <div className="code-block">
-      <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {language ?? "Code"}
-        </span>
-        <CopyButton
-          text={textContent(children)}
-          label="Copy code"
-          className="text-muted-foreground"
-        />
-      </div>
-      <pre>{children}</pre>
-    </div>
-  );
-}
 
 const markdownComponents = {
   pre: CodeBlock,

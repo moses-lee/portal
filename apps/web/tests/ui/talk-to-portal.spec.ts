@@ -305,3 +305,32 @@ test("the aurora sits behind every Portal view and follows the user's turn and p
   await emitPortal(page, { type: "status", status: portalStatus });
   await expect(aurora).toHaveAttribute("data-activity", "idle");
 });
+
+test("a long line in a reply's code block scrolls inside the block, not the whole thread", async ({ page }) => {
+  const prompt = `Review this PR: <link>. ${"Rate each finding by severity with file:line evidence. ".repeat(4)}`;
+  await setupPortal(page, {
+    portal: {
+      messages: [
+        {
+          id: "m1",
+          role: "assistant",
+          metadata: { at: Date.now() },
+          parts: [{ type: "text", text: `My draft prompt:\n\n\`\`\`\n${prompt}\n\`\`\`` }],
+        },
+      ],
+    },
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const log = page.getByRole("log", { name: "Messages" });
+  const block = log.locator(".code-block");
+  await expect(block.getByText("Review this PR:")).toBeVisible();
+  // It gets the session pages' code block: a label and a copy button.
+  await expect(block.getByRole("button", { name: "Copy code" })).toBeVisible();
+  const widths = await log.locator("..").evaluate((scroller) => {
+    const pre = scroller.querySelector(".code-block pre")!;
+    return { scroller: [scroller.scrollWidth, scroller.clientWidth], pre: [pre.scrollWidth, pre.clientWidth] };
+  });
+  expect(widths.pre[0]).toBeGreaterThan(widths.pre[1]);
+  expect(widths.scroller[0]).toBe(widths.scroller[1]);
+});

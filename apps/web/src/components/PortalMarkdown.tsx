@@ -4,8 +4,10 @@ import { memo, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import CodeBlock from "./CodeBlock";
 
 const components = {
+  pre: CodeBlock,
   a: ({ children, ...props }: ComponentProps<"a">) => (
     <a {...props} target="_blank" rel="noreferrer">
       {children}
@@ -25,7 +27,7 @@ const compactClassName = [
   "[&_p]:!my-1 [&_ul]:!my-1 [&_ol]:!my-1",
   "[&_ul]:!pl-4 [&_ol]:!pl-4 [&_li]:!my-0.5 [&_li]:!pl-0.5",
   "[&_h1]:!my-1.5 [&_h2]:!my-1.5 [&_h3]:!my-1.5 [&_h1]:!text-[14px] [&_h2]:!text-[14px] [&_h3]:!text-[13px]",
-  "[&_pre]:!my-1.5 [&_table]:!my-1.5 [&_blockquote]:!pl-3",
+  "[&_.code-block]:!my-1.5 [&_table]:!my-1.5 [&_blockquote]:!pl-3",
 ].join(" ");
 
 /**
