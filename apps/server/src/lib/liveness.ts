@@ -75,6 +75,34 @@ export function trackToolCall(open: Map<string, OpenToolCall>, update: acp.Sessi
   return output;
 }
 
+/**
+ * A heartbeat is a `tool_call_update` that repeats `in_progress` for a call already known to be
+ * in progress and carries nothing else: no content, result, input, title, kind, or locations.
+ * Agents send them on a timer while a tool runs. They matter for liveness (`trackToolCall` has
+ * seen them by the time this is asked) but say nothing to a reader of the log, so the runtime
+ * does not log them. `progressing` holds the ids of calls already reported in progress; the
+ * caller maintains it with `trackProgress`.
+ */
+export function isHeartbeat(update: acp.SessionUpdate, progressing: ReadonlySet<string>): boolean {
+  if (update.sessionUpdate !== "tool_call_update") return false;
+  if (update.status !== undefined && update.status !== null && update.status !== "in_progress") return false;
+  if (!progressing.has(update.toolCallId)) return false;
+  if (Array.isArray(update.content) && update.content.length > 0) return false;
+  if (update.rawOutput !== undefined && update.rawOutput !== null) return false;
+  if (update.rawInput !== undefined && update.rawInput !== null) return false;
+  if (update.title) return false;
+  if (update.kind) return false;
+  if (Array.isArray(update.locations) && update.locations.length > 0) return false;
+  return true;
+}
+
+/** Keep `progressing` current: the ids of calls whose latest reported status is `in_progress`. Ask `isHeartbeat` first. */
+export function trackProgress(progressing: Set<string>, update: acp.SessionUpdate): void {
+  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return;
+  if (update.status === "in_progress") progressing.add(update.toolCallId);
+  else if (update.status) progressing.delete(update.toolCallId);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Process probe
 // ---------------------------------------------------------------------------------------------

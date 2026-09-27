@@ -240,8 +240,14 @@ export type SessionMeta = {
 /** The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`. */
 export type SessionListPatch = Pick<SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "lastActiveAt">;
 
-/** Session metadata as served to the browser, with the directory's current git state. */
-export type SessionSummary = SessionMeta & {
+/** `SessionState` without the slash-command list, which only the session's own `meta` event carries (it runs to tens of KB per session). */
+export type SessionListState = Omit<SessionState, "commands">;
+
+/**
+ * A session as served in full to the browser (`GET /api/sessions/[id]`, `POST /api/sessions`):
+ * its metadata with the directory's current git state.
+ */
+export type SessionDetail = SessionMeta & {
   displayCwd: string;
   git: GitInfo;
   /** The owning project, or null when it has since been removed. */
@@ -249,6 +255,13 @@ export type SessionSummary = SessionMeta & {
   /** True when `cwd` no longer exists on the host. */
   cwdMissing: boolean;
 };
+
+/**
+ * One row of `GET /api/sessions` and of the list stream's `created` event: what the sidebar and
+ * the start page need. The slash commands and the liveness detail are left out (the session
+ * page gets them from its own stream), so a list of hundreds of sessions stays small.
+ */
+export type SessionSummary = Omit<SessionDetail, "state" | "liveness"> & { state: SessionListState };
 
 /** Payload of the SSE `meta` event on `/api/sessions/[id]/stream`. */
 export type SessionMetaEvent = {
@@ -293,10 +306,18 @@ export type PortalEvent =
 /** Who answered a permission request: a person in the browser, or Portal on their behalf. */
 export type PermissionAnswerer = "user" | "portal";
 
-/** A logged event with its position in the session's log (dense from 0) and epoch ms timestamp. */
+/**
+ * A logged event with its position in the session's log and epoch ms timestamp. Seqs increase
+ * strictly from 0 but are not dense: a run of streamed text chunks is stored as one event under
+ * the run's last seq, and tool heartbeats are not stored at all.
+ */
 export type StoredEvent = PortalEvent & { seq: number; ts: number };
 
-/** Response of `GET /api/sessions/[id]/events`: one page of the log, oldest first. */
+/**
+ * Response of `GET /api/sessions/[id]/events`: one page of the log, oldest first. Ask for the
+ * last few turns with `?turns=<n>` (the page starts at a turn boundary unless a single turn
+ * exceeds the row cap, in which case it starts inside that turn) or for `?limit=<rows>`.
+ */
 export type EventPage = {
   events: StoredEvent[];
   /** True when events exist before `events[0]`; fetch them with `?before=<events[0].seq>`. */

@@ -4,6 +4,7 @@ import type {
   GithubSummary,
   ProjectSummary,
   RemovedProjectSummary,
+  SessionState,
   SessionSummary,
   StoredEvent,
   SessionMetaEvent,
@@ -73,7 +74,10 @@ export const firstTitle =
   "Improve the chat experience and simplify the agent settings";
 export const secondTitle =
   "Investigate long session titles overlapping the pin icon";
-const state: SessionSummary["state"] = {
+/** A list entry that also carries the slash commands, as the fixture stream's `meta` sends them. */
+export type FixtureSession = SessionSummary & { state: SessionState };
+
+const state: SessionState = {
   modes: null,
   commands: [
     { name: "review", description: "Review the current changes" },
@@ -128,7 +132,7 @@ export function makeSession(
   title: string,
   agentId = "claude",
   p = worktree,
-): SessionSummary {
+): FixtureSession {
   return {
     id,
     title,
@@ -146,10 +150,6 @@ export function makeSession(
     busy: false,
     awaitingPermission: false,
     link: { status: "live" },
-    liveness: {
-      state: "idle", summary: "idle", turnOpen: false, turnStartedAt: null, openTools: [], lastOutputAt: null,
-      lastCpuAt: null, process: null, lost: null, hungAfterMs: 15 * 60_000,
-    },
   };
 }
 export const sessions = [

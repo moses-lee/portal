@@ -25,13 +25,18 @@ export const sessions = pgTable("sessions", {
   state: jsonb("state").$type<SessionState>().notNull(),
   /** Why the agent was lost (null while it is attached or was never lost). */
   lost: jsonb("lost").$type<SessionLoss>(),
+  /** Whether a turn was open at the last write; null for rows from before the column (settled from the log at the next boot). */
+  turnOpen: boolean("turn_open"),
 });
 
 export const sessionEvents = pgTable(
   "session_events",
   {
     sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
-    /** Dense from 0 per session; the runtime is the only writer. */
+    /**
+     * Strictly increasing from 0 per session; the runtime is the only writer. Not dense: a run of
+     * streamed text chunks is one row under the run's last seq, and heartbeats are not stored.
+     */
     seq: integer("seq").notNull(),
     ts: epochMs("ts").notNull(),
     /** The whole event, including `seq` and `ts`, so reads round-trip exactly what was appended. */
@@ -124,7 +129,11 @@ export const orchestratorItems = pgTable(
     /** The whole item, so reads round-trip exactly what was written. */
     body: jsonb("body").$type<Record<string, unknown>>().notNull(),
   },
-  (table) => [index("orchestrator_items_fingerprint_idx").on(table.fingerprint)],
+  (table) => [
+    index("orchestrator_items_fingerprint_idx").on(table.fingerprint),
+    /** The UI and the status line read open and snoozed items only; resolved ones pile up. */
+    index("orchestrator_items_status_idx").on(table.status, table.createdAt),
+  ],
 );
 
 /** Single-value documents: `snapshot` (the last tick's pre-scan) and `memory` (the Markdown notes, as `{ text }`). */

@@ -4,9 +4,10 @@ import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { FIRST_TICK_DELAY_MS } from "../src/orchestrator/jobs/tick-job.ts";
 import {
   CHAT_REFRESH_AFTER_MS, HISTORY_BUDGET_TOKENS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, needsChatRefresh,
-  trimThread,
+  omitToolIO, trimThread,
 } from "../src/orchestrator/runtime.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
+import { TOOL_IO_OMITTED } from "../src/orchestrator/types.ts";
 import { BACKGROUND_TOOLS } from "../src/orchestrator/tools/index.ts";
 import { generateTurn, prepareTurn } from "../src/orchestrator/turn.ts";
 import { TOOL_GROUPS } from "../src/orchestrator/tools/groups.ts";
@@ -98,7 +99,7 @@ test("without an API key the runtime is not ready: chat is refused with 409, and
     assert.match(err.message, /API key/);
     return true;
   });
-  assert.deepEqual(await runtime.history(), [], "the refused message is not stored");
+  assert.deepEqual((await runtime.history()).messages, [], "the refused message is not stored");
 
   await firstRefresh(runtime, timers);
   assert.equal(model.doGenerateCalls.length, 0);
@@ -115,7 +116,7 @@ test("the world refresh is silent: a change is diffed and the snapshot written, 
   await store.writeSnapshot({ ...waitingSnapshot(), sessions: {} });
   await firstRefresh(runtime, timers);
   assert.equal(model.doGenerateCalls.length, 0);
-  assert.deepEqual(await runtime.history(), []);
+  assert.deepEqual((await runtime.history()).messages, []);
   assert.deepEqual(await store.listItems(), []);
   const snapshot = await store.readSnapshot();
   assert.equal(snapshot.sessions.s1.activity, "waiting");
@@ -180,7 +181,7 @@ test("chat persists the user message at once and the assistant message, with its
   assert.match(body, /Hello from Portal\./);
   await flush();
 
-  const messages = await runtime.history();
+  const messages = await runtime.hub.store.readMessages();
   assert.equal(messages.length, 2);
   assert.equal(messages[0].role, "user");
   assert.equal(messages[0].id, "u1");
@@ -238,7 +239,7 @@ test("after a turn the stored thread is capped and older tool traffic is replace
   await response.text();
   await flush();
 
-  const messages = await runtime.history();
+  const messages = await runtime.hub.store.readMessages();
   assert.equal(messages.length, MAX_THREAD_MESSAGES);
   assert.equal(messages.at(-1).role, "assistant");
   assert.equal(messages.at(-2).id, "new");
@@ -305,8 +306,8 @@ test("each thread has its own lock: a side thread answers while main is busy, a 
   await other.text().catch(() => {});
   await flush();
   assert.deepEqual((await runtime.status()).busyThreads, ["main"]);
-  assert.deepEqual((await runtime.history(side.id)).map((message) => message.parts[0].text), ["side work"]);
-  assert.deepEqual((await runtime.history()).map((message) => message.parts[0].text), ["main work"]);
+  assert.deepEqual((await runtime.history(side.id)).messages.map((message) => message.parts[0].text), ["side work"]);
+  assert.deepEqual((await runtime.history()).messages.map((message) => message.parts[0].text), ["main work"]);
   runtime.cancel();
   await main.text().catch(() => {});
   await flush();
@@ -328,7 +329,7 @@ test("chat turns and ticks are recorded as runs and the turn's tool calls land i
   const entries = await runtime.hub.activity.list();
   assert.equal(entries[0].kind, "chat.turn");
   assert.equal(entries[0].refs.runId, runs[0].id);
-  const [assistant] = (await runtime.history()).filter((message) => message.role === "assistant");
+  const [assistant] = (await runtime.hub.store.readMessages()).filter((message) => message.role === "assistant");
   assert.equal(assistant.metadata.run.id, runs[0].id);
 });
 
@@ -388,7 +389,7 @@ test("performAction runs start_session and send_prompt server-side once approved
   assert.deepEqual(await runtime.performAction(item.id, 0), { sessionId: "s3", promptError: "agent is busy" });
 });
 
-test("updateItem emits the full list; dispose stops the job worker", async (t) => {
+test("updateItem emits the live list (open and snoozed items only); dispose stops the job worker", async (t) => {
   const { runtime, store, events, timers } = setup(t);
   await runtime.ready;
   await flush();
@@ -397,7 +398,9 @@ test("updateItem emits the full list; dispose stops the job worker", async (t) =
   assert.equal(updated.status, "dismissed");
   await flush();
   const itemsEvent = events.findLast((event) => event.type === "items");
-  assert.equal(itemsEvent.items[0].status, "dismissed");
+  assert.ok(itemsEvent, "an items event went out");
+  assert.ok(!itemsEvent.items.some((row) => row.id === item.id), "a dismissed item leaves the list the browser sees");
+  assert.equal((await store.getItem(item.id)).status, "dismissed", "but stays in the store");
 
   assert.ok(timers.pending.length > 0, "the worker sleeps on a timer");
   await runtime.dispose();
@@ -431,7 +434,7 @@ test("a chat turn starts with the common tools and loads a group with use_tools 
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.match(system, /use_tools\(\{ groups \}\)/);
   assert.match(system, /- items: change Needs-you items \(create_item, /);
-  const [assistant] = (await runtime.history()).filter((message) => message.role === "assistant");
+  const [assistant] = (await runtime.hub.store.readMessages()).filter((message) => message.role === "assistant");
   const dismiss = assistant.parts.find((part) => part.type === "tool-dismiss_item");
   assert.match(JSON.stringify(dismiss.output), /Unknown item/, "the loaded tool ran");
 });
@@ -483,7 +486,7 @@ test("a user's chat turn refreshes the world (GitHub included) first when the la
   await send(runtime, "three", "u3");
   assert.equal(await chatBuilds(), 2);
   assert.equal(state.searches.length, 2);
-  assert.equal((await runtime.history()).filter((entry) => entry.role === "assistant").length, 3);
+  assert.equal((await runtime.history()).messages.filter((entry) => entry.role === "assistant").length, 3);
 });
 
 test("a failed refresh before a chat turn is logged and the turn goes ahead", async (t) => {
@@ -494,7 +497,7 @@ test("a failed refresh before a chat turn is logged and the turn goes ahead", as
   await send(runtime, "hello");
   assert.equal(model.doStreamCalls.length, 1);
   assert.ok(errors.mock.calls.some((call) => /GitHub melted/.test(String(call.arguments[0]))));
-  assert.equal((await runtime.history()).at(-1).role, "assistant");
+  assert.equal((await runtime.history()).messages.at(-1).role, "assistant");
 });
 
 test("a chat turn's system prompt lists the recent changes that concern the user, and leaves the section out when none do", async (t) => {
@@ -545,9 +548,38 @@ test("calling a tool whose group is not loaded loads the group instead of failin
   assert.doesNotMatch(body, /unavailable tool/);
   assert.equal(model.doStreamCalls.length, 3);
   assert.ok(model.doStreamCalls[1].tools.some((tool) => tool.name === "dismiss_item"));
-  const [assistant] = (await runtime.history()).filter((message) => message.role === "assistant");
+  const [assistant] = (await runtime.hub.store.readMessages()).filter((message) => message.role === "assistant");
   const loaded = assistant.parts.find((part) => part.type === "tool-use_tools");
   assert.deepEqual(loaded.input, { groups: ["items"], forTool: "dismiss_item" });
   assert.match(loaded.output.note, /call dismiss_item again/);
   assert.match(JSON.stringify(assistant.parts.find((part) => part.type === "tool-dismiss_item").output), /Unknown item/);
+});
+
+test("omitToolIO leaves out tool input and output and marks the message; text-only messages are untouched", () => {
+  const text = { id: "t", role: "assistant", parts: [{ type: "text", text: "hi" }], metadata: { at: 1 } };
+  assert.equal(omitToolIO(text), text);
+  const withTool = {
+    id: "a", role: "assistant", metadata: { at: 1 },
+    parts: [{ type: "text", text: "ran" }, { type: "tool-x", toolCallId: "c", state: "output-available", input: { a: 1 }, output: { b: 2 } }, { type: "dynamic-tool", toolName: "y", toolCallId: "d", state: "output-error", input: {}, errorText: "no" }],
+  };
+  const omitted = omitToolIO(withTool);
+  assert.notEqual(omitted, withTool);
+  assert.equal(omitted.metadata.toolIO, "omitted");
+  assert.deepEqual(omitted.parts[0], withTool.parts[0]);
+  assert.deepEqual(omitted.parts[1], { ...withTool.parts[1], input: TOOL_IO_OMITTED, output: TOOL_IO_OMITTED });
+  assert.deepEqual(omitted.parts[2], { ...withTool.parts[2], input: TOOL_IO_OMITTED });
+  assert.equal(withTool.parts[1].input.a, 1, "the stored message is left alone");
+  assert.equal(omitToolIO(omitted), omitted, "already omitted: nothing to do");
+});
+
+test("status is computed once per second for every caller and again after an event changes it", async (t) => {
+  const { runtime, store } = setup(t);
+  await runtime.ready;
+  const first = await runtime.status();
+  assert.equal(first.counts.needsYou, 0);
+  await store.createItem({ kind: "custom", title: "t", body: "", links: {}, actions: [], fingerprint: "custom:memo" });
+  assert.equal((await runtime.status()).counts.needsYou, 0, "within the second the memo answers");
+  // An items event (what every item change emits) drops the memo.
+  runtime.hub.emit({ type: "items", items: [] });
+  assert.equal((await runtime.status()).counts.needsYou, 1);
 });

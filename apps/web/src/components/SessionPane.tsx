@@ -23,15 +23,15 @@ import type {
   SessionState,
   SessionSummary,
   SetConfigRequest,
+  StoredEvent,
 } from "@/lib/types";
 import {
   appendEvent,
   firstSeq,
-  lastSeq,
   segment,
   type History,
 } from "@/lib/transcript";
-import type { HistoryCache } from "@/lib/history-cache";
+import { PAGE_TURNS, type HistoryCache } from "@/lib/history-cache";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ssr: false,
@@ -108,8 +108,9 @@ export default function SessionPane({
   const [notFound, setNotFound] = useState(false);
   const [link, setLink] = useState<SessionLink | null>(session?.link ?? null);
   const [busy, setBusy] = useState(session?.busy ?? false);
+  // The list entry carries modes and config options but not the slash commands; those arrive with the first `meta`.
   const [sessionState, setSessionState] = useState<SessionState | null>(
-    session?.state ?? null,
+    session?.state ? { ...session.state, commands: [] } : null,
   );
   const [configInFlight, setConfigInFlight] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -126,6 +127,24 @@ export default function SessionPane({
     if (!sessionId) return;
     const controller = new AbortController();
     let es: EventSource | null = null;
+    // Streamed events are applied once per animation frame: an agent sends many small chunks a
+    // second, and each `setHistory` is a render of the live turn.
+    let pending: StoredEvent[] = [];
+    let frame: number | null = null;
+    const flushEvents = () => {
+      frame = null;
+      const batch = pending;
+      pending = [];
+      if (batch.length === 0) return;
+      setHistory((prev) => batch.reduce(appendEvent, prev));
+      for (const ev of batch) {
+        if (ev.type === "turn_start") setBusy(true);
+        if (ev.type === "turn_end" || ev.type === "error") {
+          setBusy(false);
+          setStopping(false);
+        }
+      }
+    };
     const applyMeta = (meta: Partial<SessionMetaEvent>) => {
       if (meta.busy !== undefined) {
         setBusy(meta.busy);
@@ -168,17 +187,9 @@ export default function SessionPane({
           const ev = JSON.parse(m.data) as PortalEvent;
           const seq = Number(m.lastEventId);
           cursorRef.current = Math.max(cursorRef.current, seq);
-          setHistory((prev) => {
-            const last = lastSeq(prev);
-            return last !== undefined && last >= seq
-              ? prev
-              : appendEvent(prev, { ...ev, seq, ts: Date.now() });
-          });
-          if (ev.type === "turn_start") setBusy(true);
-          if (ev.type === "turn_end" || ev.type === "error") {
-            setBusy(false);
-            setStopping(false);
-          }
+          // `appendEvent` drops an event the history already holds (a replay after reconnect).
+          pending.push({ ...ev, seq, ts: Date.now() });
+          frame ??= requestAnimationFrame(flushEvents);
         };
         mine.addEventListener("meta", (m) => {
           if (es === mine)
@@ -210,6 +221,8 @@ export default function SessionPane({
       controller.abort();
       es?.close();
       es = null;
+      if (frame !== null) cancelAnimationFrame(frame);
+      pending = [];
     };
   }, [sessionId, onSessionUpdate, onSessionDeleted, historyCache]);
 
@@ -235,7 +248,7 @@ export default function SessionPane({
     setLoadingOlder(true);
     setHistoryError(null);
     try {
-      const r = await fetch(sessionUrl(sessionId, `/events?before=${before}`));
+      const r = await fetch(sessionUrl(sessionId, `/events?turns=${PAGE_TURNS}&before=${before}`));
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const page = (await r.json()) as EventPage;
       setHistory((prev) => {

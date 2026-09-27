@@ -15,8 +15,16 @@ export interface DbHandle {
   close(timeoutSeconds?: number): Promise<void>;
 }
 
-export function connect(url: string, { max = 10 }: { max?: number } = {}): DbHandle {
-  const sql = postgres(url, { max, onnotice: () => {} });
+/** Seconds a single statement may run; the boot migrations and the blob migration script open their own connections. */
+const STATEMENT_TIMEOUT_MS = 30_000;
+
+export function connect(url: string, { max = 25 }: { max?: number } = {}): DbHandle {
+  const sql = postgres(url, {
+    max,
+    connect_timeout: 10,
+    connection: { statement_timeout: STATEMENT_TIMEOUT_MS },
+    onnotice: () => {},
+  });
   const db = drizzle(sql, { schema });
   return {
     sql,

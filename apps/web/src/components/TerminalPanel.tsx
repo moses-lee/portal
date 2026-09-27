@@ -10,6 +10,8 @@ export type TerminalPanelProps = {
   endpoint: string;
   /** Hide the panel; the caller returns focus to the header's Terminal toggle. Omitted where the panel is the page. */
   onHide?: () => void;
+  /** Open a first tab when there is none (the standalone terminal page); a session's panel shows its empty state instead. */
+  autoCreate?: boolean;
 };
 
 /**
@@ -78,7 +80,7 @@ function statusText(view: ShellViewState | undefined) {
 }
 
 /** A collection of terminals as tabs; each tab is its own PTY, started on first attach and kept running while hidden. */
-export default function TerminalPanel({ endpoint, onHide }: TerminalPanelProps) {
+export default function TerminalPanel({ endpoint, onHide, autoCreate = false }: TerminalPanelProps) {
   const [tabs, setTabs] = useState<Tabs>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [views, setViews] = useState<Record<string, ShellViewState>>({});
@@ -109,7 +111,10 @@ export default function TerminalPanel({ endpoint, onHide }: TerminalPanelProps) 
     return (await r.json()) as TerminalInfo;
   }, [endpoint]);
 
-  // Load on open (creating the first tab when there is none) and reconcile with the server on every return to the tab.
+  // Load on open and reconcile with the server on every return to the tab. A session with no
+  // terminal shows the empty state: opening one is the user's click, not a side effect of
+  // switching sessions with the panel showing (each would cost a shell process and a socket).
+  // The standalone terminal page is that click, so it opens its first tab itself (`autoCreate`).
   useEffect(() => {
     const controller = new AbortController();
     const adopt = (terminals: TerminalInfo[]) => {
@@ -121,7 +126,7 @@ export default function TerminalPanel({ endpoint, onHide }: TerminalPanelProps) 
     const load = async () => {
       try {
         let terminals = await fetchTerminals(controller.signal);
-        if (terminals.length === 0) terminals = [await createTerminal(controller.signal)];
+        if (terminals.length === 0 && autoCreate) terminals = [await createTerminal(controller.signal)];
         if (controller.signal.aborted) return;
         adopt(terminals);
         setError(null);
@@ -152,7 +157,7 @@ export default function TerminalPanel({ endpoint, onHide }: TerminalPanelProps) 
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [fetchTerminals, createTerminal]);
+  }, [fetchTerminals, createTerminal, autoCreate]);
 
   const focusTab = (id: string | null) => {
     (id ? document.getElementById(`terminal-tab-${id}`) : document.getElementById("terminal-new-tab"))?.focus();

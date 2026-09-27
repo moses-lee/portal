@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -174,6 +174,12 @@ test("POST /api/sessions validates like the web route and creates a session in t
   const list = await app.inject({ method: "GET", url: "/api/sessions" });
   assert.equal(list.statusCode, 200);
   assert.deepEqual(list.json().sessions.map(({ id }) => id).sort(), [session.id, codex.id].sort());
+  // The list leaves out what only the session page reads: the slash commands and the liveness detail.
+  for (const entry of list.json().sessions) {
+    assert.equal(entry.liveness, undefined);
+    assert.deepEqual(Object.keys(entry.state).sort(), ["configOptions", "modes"]);
+    assert.equal(entry.state.configOptions.length, 3);
+  }
   const one = await app.inject({ method: "GET", url: `/api/sessions/${session.id}` });
   assert.equal(one.statusCode, 200);
   assert.equal(one.json().id, session.id);
@@ -395,4 +401,46 @@ test("opening a persisted session's stream reattaches its agent and reports it t
   await stream.cancel();
   const page = await events(app, session.id);
   assert.equal(page.nextSeq, 6);
+});
+
+test("GET /api/sessions/:id/events pages by turns, and images a tool returned are served from /api/blobs", async (t) => {
+  const { app, scratch } = await setup(t);
+  const { id } = await createSession(app);
+  for (const text of ["hello", "stream", "hello"]) {
+    if (text === "stream") {
+      assert.equal((await app.inject({ method: "POST", url: `/api/sessions/${id}/prompt`, payload: { text } })).statusCode, 202);
+      await until(async () => (await events(app, id)).events.at(-1)?.type === "turn_end", "streamed turn");
+    } else {
+      await runTurn(app, id, text);
+    }
+  }
+  const all = await events(app, id);
+  assert.equal(all.events.filter((e) => e.type === "user").length, 3);
+  const last = await events(app, id, "?turns=1");
+  assert.equal(last.events[0].type, "user");
+  assert.equal(last.events[0].text, "hello");
+  assert.equal(last.events.filter((e) => e.type === "user").length, 1);
+  assert.equal(last.hasMore, true);
+  const two = await events(app, id, `?turns=2&before=${last.events[0].seq}`);
+  assert.deepEqual(two.events.filter((e) => e.type === "user").map((e) => e.text), ["hello", "stream"]);
+  assert.equal(two.hasMore, false);
+  for (const query of ["?turns=0", "?turns=x", "?turns=999", "?turns=1&before=-1"]) {
+    assert.equal((await app.inject({ method: "GET", url: `/api/sessions/${id}/events${query}` })).statusCode, 400, query);
+  }
+
+  const shot = two.events.find((e) => e.type === "update" && e.update.status === "completed");
+  const { uri } = shot.update.content[0].content;
+  assert.match(uri, /^\/api\/blobs\/[a-f0-9]{64}\.png$/);
+  assert.equal(shot.update.rawOutput.image, uri);
+  const name = uri.slice("/api/blobs/".length);
+  await until(() => existsSync(path.join(scratch, "home", "blobs", name)), "blob on disk");
+  const blob = await app.inject({ method: "GET", url: uri, headers: { "accept-encoding": "gzip" } });
+  assert.equal(blob.statusCode, 200);
+  assert.equal(blob.headers["content-type"], "image/png");
+  assert.match(blob.headers["cache-control"], /immutable/);
+  assert.equal(blob.headers["content-encoding"], undefined, "images are not gzipped");
+  assert.equal(blob.rawPayload.length, 5000);
+  for (const bad of ["/api/blobs/../../etc/passwd", `/api/blobs/${"0".repeat(64)}.png`, "/api/blobs/x.png"]) {
+    assert.equal((await app.inject({ method: "GET", url: bad })).statusCode, 404, bad);
+  }
 });

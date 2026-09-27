@@ -15,7 +15,7 @@ import { registerApprovalRoutes } from "./approvals/routes.ts";
 import { registerJobRoutes } from "./jobs/routes.ts";
 import { registerMemoryRoutes } from "./memory/routes.ts";
 import { parseItemPatch } from "./store.ts";
-import type { OrchestratorEvent, OrchestratorMessage } from "./types.ts";
+import type { Item, OrchestratorEvent, OrchestratorMessage } from "./types.ts";
 import { MAIN_THREAD_ID } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
 
@@ -93,11 +93,31 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return { status: await runtime.status() };
   });
 
-  /** `GET /api/portal/messages` — the whole thread `{ messages }`. */
+  /** `?before=&after=&limit=` of the message routes, or null (answer 400) when a value is not a number. */
+  function pageQuery(query: unknown): { before?: number; after?: number; limit?: number } | null {
+    const q = readObject(query) ?? {};
+    const out: { before?: number; after?: number; limit?: number } = {};
+    for (const key of ["before", "after", "limit"] as const) {
+      if (q[key] === undefined) continue;
+      const value = queryInt(q[key]);
+      if (value === undefined) return null;
+      out[key] = value;
+    }
+    return out;
+  }
+  const badPage = (reply: FastifyReply) => reply.code(400).send({ error: "Expected numeric before, after, and limit." });
+
+  /**
+   * `GET /api/portal/messages?before=&after=&limit=` — one page of the main thread (see
+   * `MessagePage`): the newest 30, those before a cursor, or those after one. Tool parts come without
+   * their input and output; `GET /api/portal/threads/main/messages/:messageId` has the whole message.
+   */
   app.get("/api/portal/messages", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
-    return { messages: await runtime.history() };
+    const query = pageQuery(req.query);
+    if (!query) return badPage(reply);
+    return runtime.history(MAIN_THREAD_ID, query);
   });
 
   /** Answers a chat turn in `threadId` for the request's `{ message }` body. */
@@ -126,12 +146,23 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return { threads: await runtime.listThreads() };
   });
 
-  /** `GET /api/portal/threads/:id/messages` — one thread's messages `{ messages }`; 404 for an unknown thread. */
+  /** `GET /api/portal/threads/:id/messages?before=&after=&limit=` — one page of that thread (as the main route); 404 for an unknown thread. */
   app.get<IdParams>("/api/portal/threads/:id/messages", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     if (!(await runtime.hub.store.getThread(req.params.id))) return reply.code(404).send({ error: `Unknown thread "${req.params.id}".` });
-    return { messages: await runtime.history(req.params.id) };
+    const query = pageQuery(req.query);
+    if (!query) return badPage(reply);
+    return runtime.history(req.params.id, query);
+  });
+
+  /** `GET /api/portal/threads/:id/messages/:messageId` — one message in full `{ message }` (tool input and output included); 404 when unknown. */
+  app.get<{ Params: { id: string; messageId: string } }>("/api/portal/threads/:id/messages/:messageId", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    const message = await runtime.message(req.params.id, req.params.messageId);
+    if (!message) return reply.code(404).send({ error: "Unknown message." });
+    return { message };
   });
 
   /** `POST /api/portal/threads/:id/messages` — as `POST /api/portal/messages`, in that thread (each thread has its own lock). */
@@ -166,11 +197,12 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return reply.code(204).send();
   });
 
-  /** `GET /api/portal/items` — every item, in every status `{ items }`. */
-  app.get("/api/portal/items", async (req, reply) => {
+  /** `GET /api/portal/items[?status=open,snoozed]` — items `{ items }`, every status unless filtered. */
+  app.get<{ Querystring: Record<string, string | undefined> }>("/api/portal/items", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
-    return { items: await runtime.listItems() };
+    const statuses = queryString(req.query?.status)?.split(",").filter(Boolean) as Item["status"][] | undefined;
+    return { items: await runtime.listItems(statuses ? { status: statuses } : undefined) };
   });
 
   /** `PATCH /api/portal/items/:id` — body `ItemPatch` (status, snoozedUntil, list, …) -> `{ item }`; 400 for a body that is not one. */
@@ -205,8 +237,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
+    // The browser shows open and snoozed items only; resolved ones stay in the store for the agent.
     const [status, items, threads, approvals, intents] = await Promise.all([
-      runtime.status(), runtime.listItems(), runtime.listThreads(), runtime.hub.approvals.pending(),
+      runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.listThreads(), runtime.hub.approvals.pending(),
       runtime.hub.jobs.listIntents({ status: ["active"] }),
     ]);
     const opening: OrchestratorEvent[] = [

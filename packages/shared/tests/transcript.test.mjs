@@ -35,3 +35,47 @@ test("segment splits at user events and appendEvent re-reduces only the last tur
   assert.equal(lastSeq(another), 5);
   assert.equal(firstSeq({ turns: [], hasMore: false }), undefined);
 });
+
+test("appendEvent updates only the block an event touches and ignores an event it already holds", () => {
+  const call = (seq, extra) => ({ seq, ts: 0, type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "t1", ...extra } });
+  let history = { turns: segment([
+    user(0, "go"),
+    text(1, "one"),
+    { seq: 2, ts: 0, type: "update", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "ls", kind: "execute", status: "pending" } },
+  ]), hasMore: false };
+  const [turn] = history.turns;
+  const before = turn.blocks;
+  history = appendEvent(history, call(3, { status: "in_progress" }));
+  const after = history.turns[0].blocks;
+  assert.notEqual(after, before, "a changed turn gets a new blocks array");
+  assert.equal(after[0], before[0], "untouched blocks keep their identity");
+  assert.equal(after[1], before[1]);
+  assert.notEqual(after[2], before[2]);
+  assert.equal(after[2].status, "in_progress");
+  assert.equal(before[2].status, "pending", "the old snapshot is left alone");
+  assert.equal(history.turns[0].lastSeq, 3);
+  // The same event again (a replay, or React calling an updater twice) changes nothing.
+  const same = appendEvent(history, call(3, { status: "in_progress" }));
+  assert.equal(same.turns, history.turns);
+  const stale = appendEvent(history, text(2, "late"));
+  assert.equal(stale.turns, history.turns);
+  // Streamed text extends the assistant block as a new object; the tool block keeps its identity.
+  const more = appendEvent(history, text(4, "two"));
+  assert.equal(more.turns[0].blocks[2], after[2]);
+  assert.equal(more.turns[0].blocks.length, 4, "text after a tool starts a new block");
+  assert.equal(more.turns[0].blocks.at(-1).kind, "assistant");
+  // Client-only notices (negative seqs) are always applied and never move the cursor.
+  const noticed = appendEvent(more, { seq: -1, ts: 0, type: "error", message: "offline" });
+  assert.equal(noticed.turns[0].blocks.at(-1).message, "offline");
+  assert.equal(lastSeq(noticed), 4);
+  const twice = appendEvent(noticed, { seq: -2, ts: 0, type: "error", message: "still" });
+  assert.equal(twice.turns[0].blocks.length, more.turns[0].blocks.length + 2);
+  assert.deepEqual(reduce([user(0, "go"), text(1, "one"), call(3, { status: "in_progress" })]).map((b) => b.kind), ["user", "assistant"], "an update for an unknown call is dropped");
+});
+
+test("a page that starts inside a turn reduces on its own; the turn is keyed by its first event", () => {
+  const turns = segment([text(40, "tail"), { seq: 41, ts: 0, type: "turn_end", stopReason: "end_turn" }, user(42, "next")]);
+  assert.deepEqual(turns.map((t) => t.key), [40, 42]);
+  assert.deepEqual(turns[0].blocks.map((b) => b.kind), ["assistant", "turn_end"]);
+  assert.equal(firstSeq({ turns, hasMore: true }), 40);
+});

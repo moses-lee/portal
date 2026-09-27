@@ -7,6 +7,21 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 export const SSE_PING_MS = 15_000;
 
+/**
+ * One event object is sent to every open stream (the orchestrator's broadcasts, a session's
+ * viewers); its JSON is made once and remembered for as long as the object lives.
+ */
+const encoded = new WeakMap<object, string>();
+function encode(data: unknown): string {
+  if (typeof data !== "object" || data === null) return JSON.stringify(data);
+  let json = encoded.get(data);
+  if (json === undefined) {
+    json = JSON.stringify(data);
+    encoded.set(data, json);
+  }
+  return json;
+}
+
 export interface EventStream {
   /** False until the client went away or `close()` ran. */
   readonly closed: boolean;
@@ -74,7 +89,7 @@ export function openEventStream(req: FastifyRequest, reply: FastifyReply): Event
       let frame = "";
       if (event) frame += `event: ${event}\n`;
       if (id !== undefined) frame += `id: ${id}\n`;
-      write(`${frame}data: ${JSON.stringify(data)}\n\n`);
+      write(`${frame}data: ${encode(data)}\n\n`);
     },
     close,
     onClose(callback) {

@@ -37,6 +37,17 @@ export function attachTerminalServer(server: HttpServer, terminals: ReturnType<t
     }
     io.in(room(entry.id)).disconnectSockets(true);
   });
+  /** One event object reaches every viewer of a terminal; its size is measured once. */
+  const sizes = new WeakMap<object, number>();
+  const eventSize = (event: ShellEvent) => {
+    let size = sizes.get(event);
+    if (size === undefined) {
+      size = Buffer.byteLength(JSON.stringify(event));
+      sizes.set(event, size);
+    }
+    return size;
+  };
+
   io.on("connection", (socket) => {
     const terminalId = String(socket.handshake.auth.terminalId);
     // The middleware ran earlier; the terminal may have been deleted in between.
@@ -50,7 +61,7 @@ export function attachTerminalServer(server: HttpServer, terminals: ReturnType<t
     let pendingBytes = 0;
     const send = (event: ShellEvent) => {
       // Bound slow-viewer buffering; reconnecting receives a fresh snapshot.
-      const bytes = Buffer.byteLength(JSON.stringify(event));
+      const bytes = eventSize(event);
       pendingBytes += bytes;
       if (pendingBytes > 4 * 1024 * 1024) { socket.conn.close(true); return; }
       socket.emit("shell", event, () => { pendingBytes -= bytes; });

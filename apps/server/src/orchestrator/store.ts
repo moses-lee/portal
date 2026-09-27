@@ -279,7 +279,13 @@ export const isLive = (item: Item) => item.status === "open" || item.status === 
 
 /** In-memory implementation; what tests and disposable runtimes use. Every change is synchronous, so no queueing is needed. */
 export function createMemoryOrchestratorStore(): OrchestratorStore {
-  const messages = new Map<string, OrchestratorMessage[]>();
+  /** Rows with ordinals, as the database numbers them: one counter across every thread. */
+  const messages = new Map<string, { ordinal: number; message: OrchestratorMessage }[]>();
+  let nextOrdinal = 1;
+  const rowsOf = (threadId: string) => messages.get(threadId) ?? [];
+  const insert = (threadId: string, next: OrchestratorMessage[]) => {
+    messages.set(threadId, [...rowsOf(threadId), ...next.map((message) => ({ ordinal: nextOrdinal++, message }))]);
+  };
   const threads = new Map<string, Thread>([[MAIN_THREAD_ID, mainThread()]]);
   /** Newest first. */
   let items: Item[] = [];
@@ -302,16 +308,36 @@ export function createMemoryOrchestratorStore(): OrchestratorStore {
     ready: Promise.resolve(),
 
     async readMessages(threadId = MAIN_THREAD_ID) {
-      return [...(messages.get(threadId) ?? [])];
+      return rowsOf(threadId).map((row) => row.message);
+    },
+    async readMessageRows(threadId = MAIN_THREAD_ID) {
+      return rowsOf(threadId).map((row) => ({ ...row }));
+    },
+    async readMessagePage(threadId, { before, after, limit }) {
+      const rows = rowsOf(threadId).filter((row) => (before === undefined || row.ordinal < before) && (after === undefined || row.ordinal > after));
+      const forwards = after !== undefined && before === undefined;
+      const hasMore = rows.length > limit;
+      const page = forwards ? rows.slice(0, limit) : rows.slice(Math.max(0, rows.length - limit));
+      return { messages: page.map((row) => row.message), hasMore, before: page[0]?.ordinal ?? null, after: page.at(-1)?.ordinal ?? null };
+    },
+    async getMessage(threadId, id) {
+      return rowsOf(threadId).find((row) => row.message.id === id)?.message ?? null;
     },
     async writeMessages(next, threadId = MAIN_THREAD_ID) {
       requireThread(threadId);
-      messages.set(threadId, [...next]);
+      messages.set(threadId, []);
+      insert(threadId, next);
     },
     async appendMessages(next, threadId = MAIN_THREAD_ID) {
       const thread = requireThread(threadId);
-      messages.set(threadId, [...(messages.get(threadId) ?? []), ...next]);
+      insert(threadId, next);
       if (next.length > 0) threads.set(threadId, { ...thread, lastMessageAt: Date.now() });
+    },
+    async deleteMessagesThrough(threadId, ordinal) {
+      messages.set(threadId, rowsOf(threadId).filter((row) => row.ordinal > ordinal));
+    },
+    async replaceMessage(threadId, ordinal, message) {
+      messages.set(threadId, rowsOf(threadId).map((row) => (row.ordinal === ordinal ? { ordinal, message } : row)));
     },
 
     async listThreads() {
@@ -331,8 +357,8 @@ export function createMemoryOrchestratorStore(): OrchestratorStore {
       return thread;
     },
 
-    async listItems() {
-      return [...items];
+    async listItems(filter) {
+      return filter?.status ? items.filter((item) => filter.status!.includes(item.status)) : [...items];
     },
     async getItem(id) {
       return items.find((item) => item.id === id) ?? null;

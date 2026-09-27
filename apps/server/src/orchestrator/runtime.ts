@@ -26,9 +26,10 @@ import { httpError } from "./ops.ts";
 import { type SchedulerTimers, realTimers } from "./jobs/timers.ts";
 import { prepareTurn, runUsage } from "./turn.ts";
 import type {
-  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings, OrchestratorStatus, OrchestratorStore,
+  Item, ItemFilter, ItemPatch, MessagePage, MessagePageQuery, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings,
+  OrchestratorStatus, OrchestratorStore,
 } from "./types.ts";
-import { MAIN_THREAD_ID } from "./types.ts";
+import { MAIN_THREAD_ID, TOOL_IO_OMITTED } from "./types.ts";
 import { createWorldService } from "./world/service.ts";
 
 /** Messages of the thread a chat turn sends to the model, at most. */
@@ -39,8 +40,20 @@ export const HISTORY_BUDGET_TOKENS = 12_000;
 export const MAX_THREAD_MESSAGES = 200;
 /** What a tool part's input and output become once the message left the history window. */
 export const TRIMMED_TOOL_IO = "[trimmed from history]";
-/** A user's chat turn runs a full world refresh first when the newest full build is older than this. */
+/**
+ * How old the newest full world build may be before a chat turn (or a browser being present) starts
+ * a refresh in the background. The turn itself never waits on it: it answers from the world it has.
+ */
 export const CHAT_REFRESH_AFTER_MS = 5 * 60_000;
+/** Messages a page of a thread holds unless the request says otherwise. */
+export const PAGE_LIMIT = 30;
+export const MAX_PAGE_LIMIT = 200;
+/** A computed status answers every caller for this long; every event that changes it recomputes. */
+const STATUS_MEMO_MS = 1_000;
+/** Events that change the status are pushed as one status this long after the first. */
+const STATUS_DEBOUNCE_MS = 250;
+/** Items the browser sees: the open ones and the snoozed ones (the strip hides the latter until due). */
+const LIVE_ITEMS: ItemFilter = { status: ["open", "snoozed"] };
 export type { PresenceSource } from "./hub.ts";
 
 /** Builders for the domain services; tests and the live server swap in their own. */
@@ -137,6 +150,26 @@ export function trimThread(messages: OrchestratorMessage[]): { messages: Orchest
 }
 
 /**
+ * The message as a page serves it: tool parts without their input and output (a thread's bulk),
+ * marked so the browser fetches the whole message when a row is opened. Unchanged when there is
+ * nothing to leave out.
+ */
+export function omitToolIO(message: OrchestratorMessage): OrchestratorMessage {
+  let touched = false;
+  const parts = message.parts.map((part) => {
+    if (!isToolPart(part)) return part;
+    const record = part as unknown as Record<string, unknown>;
+    const fields = ["input", "output"].filter((field) => field in record && record[field] !== undefined && record[field] !== TOOL_IO_OMITTED);
+    if (fields.length === 0) return part;
+    touched = true;
+    const omitted: Record<string, unknown> = { ...record };
+    for (const field of fields) omitted[field] = TOOL_IO_OMITTED;
+    return omitted as unknown as Part;
+  });
+  return touched ? { ...message, parts, metadata: { ...message.metadata, at: message.metadata?.at ?? 0, toolIO: "omitted" } } : message;
+}
+
+/**
  * A message's rough size as the model will see it. Tool traffic before the newest message is pruned
  * from the request, so only text counts there; the newest message counts whole.
  */
@@ -172,16 +205,19 @@ export function createOrchestratorRuntime({
   /** The chat turn running in each thread; a thread takes one turn at a time. */
   const chatTurns = new Map<string, AbortController>();
   let disposed = false;
-  let statusQueued = false;
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
 
   function emit(event: OrchestratorEvent) {
-    // Runs, jobs, intents, items, memory (the inbox), and approvals all feed the status line and its counts.
-    if (statusSources.has(event.type) && !statusQueued) {
-      statusQueued = true;
-      queueMicrotask(() => {
-        statusQueued = false;
-        void emitStatus();
-      });
+    // Runs, jobs, intents, items, memory (the inbox), and approvals all feed the status line and its
+    // counts. A job firing raises several of these within milliseconds: one status goes out for all.
+    if (statusSources.has(event.type)) {
+      statusMemo = null;
+      if (statusTimer === null) {
+        statusTimer = setTimeout(() => {
+          statusTimer = null;
+          void emitStatus();
+        }, STATUS_DEBOUNCE_MS);
+      }
     }
     for (const listener of listeners) {
       try {
@@ -197,9 +233,9 @@ export function createOrchestratorRuntime({
   const hub = {
     store, settings: settingsStore, deps, presence, timers, db, sql, emit,
     async model(role) {
-      const settings = await settingsStore.orchestrator();
+      const settings = await cachedSettings();
       const choice = roleChoice(settings, role);
-      const apiKey = await settingsStore.apiKey(choice.provider);
+      const apiKey = await cachedApiKey(choice.provider);
       if (!apiKey) return null;
       return { role, choice, model: buildModel({ ...settings, ...choice }, apiKey), providerOptions: providerOptionsFor(choice.provider) };
     },
@@ -214,17 +250,65 @@ export function createOrchestratorRuntime({
   const ready = Promise.all([store.ready, hub.jobs.ready, hub.world.ready, hub.memory.ready, hub.approvals.ready]).then(() => {})
     .catch((err) => { console.error("Could not start the Portal orchestrator:", err); });
 
-  const emitStatus = () => status().then((current) => emit({ type: "status", status: current })).catch(() => {});
-  const emitItems = () => store.listItems().then((items) => emit({ type: "items", items })).catch(() => {});
+  // Nobody listening means nothing to push; the next subscriber's stream opens with a fresh status anyway.
+  const emitStatus = () => (listeners.size === 0 ? Promise.resolve() : status().then((current) => emit({ type: "status", status: current })).catch(() => {}));
+  const emitItems = () => (listeners.size === 0 ? Promise.resolve() : store.listItems(LIVE_ITEMS).then((items) => emit({ type: "items", items })).catch(() => {}));
 
+  // Settings and keys are read on every status, every turn, and every tool call; they change only
+  // through the settings store, which says so. Cached until then.
+  let settingsCache: Promise<OrchestratorSettings> | null = null;
+  const keyCache = new Map<string, Promise<string | null>>();
+  const cachedSettings = () => (settingsCache ??= settingsStore.orchestrator().catch((err: unknown) => { settingsCache = null; throw err; }));
+  function cachedApiKey(provider: string): Promise<string | null> {
+    let key = keyCache.get(provider);
+    if (!key) {
+      key = settingsStore.apiKey(provider as OrchestratorSettings["provider"]).catch((err: unknown) => { keyCache.delete(provider); throw err; });
+      keyCache.set(provider, key);
+    }
+    return key;
+  }
   async function settingsAndKey() {
-    const settings = await settingsStore.orchestrator();
-    return { settings, apiKey: await settingsStore.apiKey(settings.provider) };
+    const settings = await cachedSettings();
+    return { settings, apiKey: await cachedApiKey(settings.provider) };
+  }
+
+  /** Start a full world refresh in the background when the newest is stale; never waits, never throws. */
+  async function refreshIfStale(reason: string): Promise<void> {
+    try {
+      if (needsChatRefresh(await hub.world.lastFullAt(), timers.now())) {
+        hub.world.refresh(reason).catch((err: unknown) => console.error(`Could not refresh the world (${reason}): ${errorMessage(err)}`));
+      }
+    } catch (err) {
+      console.error(`Could not check the world's age: ${errorMessage(err)}`);
+    }
+  }
+
+  // While a browser is present the world is kept fresh in the background, so a chat turn finds a
+  // recent one and never has to start a refresh of its own; the timer stops when the last tab goes.
+  let presenceTimer: ReturnType<SchedulerTimers["setTimeout"]> | null = null;
+  function planPresenceRefresh() {
+    if (presenceTimer !== null) timers.clearTimeout(presenceTimer);
+    presenceTimer = null;
+    if (disposed || presence.count() === 0) return;
+    presenceTimer = timers.setTimeout(() => {
+      presenceTimer = null;
+      void refreshIfStale("presence").then(planPresenceRefresh);
+    }, CHAT_REFRESH_AFTER_MS);
   }
 
   // The jobs service replans every presence-aware job itself; the page needs the new status.
-  const unsubscribePresence = presence.subscribe(() => { void emitStatus(); });
-  const unsubscribeSettings = settingsStore.subscribe(() => { void emitStatus(); });
+  const unsubscribePresence = presence.subscribe((count) => {
+    statusMemo = null;
+    void emitStatus();
+    if (count > 0 && presenceTimer === null) void ready.then(() => refreshIfStale("presence")).then(planPresenceRefresh);
+    else if (count === 0) planPresenceRefresh();
+  });
+  const unsubscribeSettings = settingsStore.subscribe(() => {
+    settingsCache = null;
+    keyCache.clear();
+    statusMemo = null;
+    void emitStatus();
+  });
   void ready.then(() => {
     if (disposed) return;
     hub.jobs.start();
@@ -232,25 +316,24 @@ export function createOrchestratorRuntime({
     deps.sessions.setPermissionAdvisor(createReviewPermissionAdvisor(hub));
   });
 
-  /** Keep a stored thread bounded; runs after every persisted turn. */
+  /**
+   * Keep a stored thread bounded; runs after every persisted turn. Trims in place: rows past the
+   * cap are deleted, rows whose tool traffic left the history window are updated, and the rest
+   * (with their ordinals, the paging cursors) are left alone.
+   */
   async function trimStoredThread(threadId: string) {
     try {
-      const { messages, changed } = trimThread(await store.readMessages(threadId));
-      if (changed) await store.writeMessages(messages, threadId);
+      const rows = await store.readMessageRows(threadId);
+      const { messages, changed } = trimThread(rows.map((row) => row.message));
+      if (!changed) return;
+      const dropped = rows.length - messages.length;
+      if (dropped > 0) await store.deleteMessagesThrough(threadId, rows[dropped - 1].ordinal);
+      for (const [index, message] of messages.entries()) {
+        const row = rows[dropped + index];
+        if (row.message !== message) await store.replaceMessage(threadId, row.ordinal, message);
+      }
     } catch (err) {
       console.error("Could not trim a Portal thread:", err);
-    }
-  }
-
-  /**
-   * Before a user's chat turn builds its context: a full world refresh when the last one is stale,
-   * sharing any refresh already in flight. Never throws; a turn goes ahead on the world it has.
-   */
-  async function refreshBeforeChat(): Promise<void> {
-    try {
-      if (needsChatRefresh(await hub.world.lastFullAt(), timers.now())) await hub.world.refresh("chat");
-    } catch (err) {
-      console.error(`Could not refresh the world before a chat turn (${errorMessage(err)}).`);
     }
   }
 
@@ -268,13 +351,27 @@ export function createOrchestratorRuntime({
     return nextJob ? `Idle · next: ${nextJob.title}` : "Idle";
   }
 
-  async function status(): Promise<OrchestratorStatus> {
+  /** The status computed last, answering every caller for `STATUS_MEMO_MS`; dropped by any event that changes it. */
+  let statusMemo: { at: number; value: Promise<OrchestratorStatus> } | null = null;
+
+  function status(): Promise<OrchestratorStatus> {
+    const now = Date.now();
+    if (statusMemo && now - statusMemo.at < STATUS_MEMO_MS) return statusMemo.value;
+    const value = computeStatus().catch((err: unknown) => {
+      if (statusMemo?.value === value) statusMemo = null;
+      throw err;
+    });
+    statusMemo = { at: now, value };
+    return value;
+  }
+
+  async function computeStatus(): Promise<OrchestratorStatus> {
     await ready;
     const { settings, apiKey } = await settingsAndKey();
-    const [items, nextDue, inbox, approvals, intents] = await Promise.all([
-      store.listItems(), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(), hub.jobs.listIntents({ status: ["active"] }),
+    const [open, nextDue, inbox, approvals, intents] = await Promise.all([
+      store.listItems({ status: ["open"] }), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(), hub.jobs.listIntents({ status: ["active"] }),
     ]);
-    const needsYou = items.filter((item) => item.status === "open").length;
+    const needsYou = open.length;
     const running = hub.jobs.running();
     const runs = running.map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
     const nextJob = nextDue?.nextRunAt != null ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt } : null;
@@ -307,7 +404,8 @@ export function createOrchestratorRuntime({
       const id = userMessage.id && !taken.has(userMessage.id) ? userMessage.id : randomUUID();
       const message: OrchestratorMessage = { ...userMessage, id, role: "user", metadata: { ...userMessage.metadata, at } };
       await store.appendMessages([message], threadId);
-      await refreshBeforeChat();
+      // A stale world is refreshed in the background; the turn answers from the one it has (its age is in the prompt).
+      void refreshIfStale("chat");
       const recent = historyWindow(await store.readMessages(threadId));
       const text = messageText(message);
       prepared = await prepareTurn(hub, {
@@ -406,12 +504,16 @@ export function createOrchestratorRuntime({
     hub,
     status,
     listThreads: () => store.listThreads(),
-    history: (threadId = MAIN_THREAD_ID) => store.readMessages(threadId),
+    async history(threadId = MAIN_THREAD_ID, { before, after, limit = PAGE_LIMIT }: Partial<MessagePageQuery> = {}): Promise<MessagePage> {
+      const page = await store.readMessagePage(threadId, { before, after, limit: Math.min(Math.max(1, limit), MAX_PAGE_LIMIT) });
+      return { ...page, messages: page.messages.map(omitToolIO) };
+    },
+    message: (threadId, id) => store.getMessage(threadId, id),
     chat,
     cancel(threadId = MAIN_THREAD_ID) {
       chatTurns.get(threadId)?.abort();
     },
-    listItems: () => store.listItems(),
+    listItems: (filter) => store.listItems(filter),
     updateItem,
     performAction,
     subscribe(listener) {
@@ -425,6 +527,8 @@ export function createOrchestratorRuntime({
       deps.sessions.setPermissionAdvisor(null);
       unsubscribePresence();
       unsubscribeSettings();
+      if (statusTimer !== null) clearTimeout(statusTimer);
+      if (presenceTimer !== null) timers.clearTimeout(presenceTimer);
       for (const controller of chatTurns.values()) controller.abort();
       await hub.jobs.dispose().catch((err: unknown) => console.error("Could not stop the job worker:", err));
     },

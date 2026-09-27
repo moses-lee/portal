@@ -5,7 +5,7 @@
  * server's modules keep importing everything from one place.
  */
 import type {
-  Item, ItemPatch, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
+  Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
 } from "@portal/contracts/orchestrator";
 
 import type { OrchestratorHub } from "./hub.ts";
@@ -18,6 +18,14 @@ export * from "@portal/contracts/orchestrator";
 
 /** A side thread as the agent opens it. */
 export type ThreadInput = { title: string; scope?: Partial<Scope>; intentId?: string | null };
+
+/** A stored message with its position in the thread (the store's ordinal; the paging cursor). */
+export type MessageRow = { ordinal: number; message: OrchestratorMessage };
+
+/** One page of a thread: the newest `limit` messages, those before a cursor, or those after one. */
+export type MessagePageQuery = { before?: number; after?: number; limit: number };
+
+export type ItemFilter = { status?: ItemStatus[] };
 export type ThreadPatch = Partial<Pick<Thread, "title" | "status" | "scope" | "intentId">>;
 
 /**
@@ -31,10 +39,20 @@ export interface OrchestratorStore {
 
   /** A thread's messages in order; `threadId` defaults to the main thread. */
   readMessages(threadId?: string): Promise<OrchestratorMessage[]>;
-  /** Replaces the thread's messages. */
+  /** The thread's messages with their ordinals, oldest first. */
+  readMessageRows(threadId?: string): Promise<MessageRow[]>;
+  /** One page of the thread (see `MessagePage`); ordinals are the cursors. */
+  readMessagePage(threadId: string, query: MessagePageQuery): Promise<MessagePage>;
+  /** One message by its id, or null. */
+  getMessage(threadId: string, id: string): Promise<OrchestratorMessage | null>;
+  /** Replaces the thread's messages (the importer); ordinals are reassigned. */
   writeMessages(messages: OrchestratorMessage[], threadId?: string): Promise<void>;
   /** Appends to the thread and moves its `lastMessageAt`. */
   appendMessages(messages: OrchestratorMessage[], threadId?: string): Promise<void>;
+  /** Drops the messages at or below `ordinal` (trimming the thread's head in place). */
+  deleteMessagesThrough(threadId: string, ordinal: number): Promise<void>;
+  /** Replaces one stored message, keeping its ordinal (trimming tool traffic in place). */
+  replaceMessage(threadId: string, ordinal: number, message: OrchestratorMessage): Promise<void>;
 
   /** Every thread, the main one first, then side threads newest first. */
   listThreads(): Promise<Thread[]>;
@@ -42,7 +60,8 @@ export interface OrchestratorStore {
   createThread(input: ThreadInput): Promise<Thread>;
   updateThread(id: string, patch: ThreadPatch): Promise<Thread>;
 
-  listItems(): Promise<Item[]>;
+  /** Items newest first; all of them, or those in the given statuses. */
+  listItems(filter?: ItemFilter): Promise<Item[]>;
   getItem(id: string): Promise<Item | null>;
   /** Finds the open or snoozed item with this fingerprint, if any. */
   findItemByFingerprint(fingerprint: string): Promise<Item | null>;
@@ -66,8 +85,14 @@ export interface OrchestratorRuntime {
   hub: OrchestratorHub;
   status(): Promise<OrchestratorStatus>;
   listThreads(): Promise<Thread[]>;
-  /** A thread's messages; the main thread when `threadId` is omitted. */
-  history(threadId?: string): Promise<OrchestratorMessage[]>;
+  /**
+   * One page of a thread's messages (the main thread when `threadId` is omitted): the newest
+   * `limit`, or those before/after a cursor. Tool parts come without their input and output
+   * (`toolIO: "omitted"`); `message` has the whole message.
+   */
+  history(threadId?: string, query?: Partial<MessagePageQuery>): Promise<MessagePage>;
+  /** One message in full, or null. */
+  message(threadId: string, id: string): Promise<OrchestratorMessage | null>;
   /**
    * Runs one chat turn in a thread (default: main) for the user's newest message. Returns the AI
    * SDK UI message stream response (`toUIMessageStreamResponse`); the runtime persists the user
@@ -79,7 +104,7 @@ export interface OrchestratorRuntime {
   /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
   cancel(threadId?: string): void;
 
-  listItems(): Promise<Item[]>;
+  listItems(filter?: ItemFilter): Promise<Item[]>;
   updateItem(id: string, patch: ItemPatch): Promise<Item>;
   /**
    * Executes one of an item's actions server-side (open_* actions are browser-only and rejected

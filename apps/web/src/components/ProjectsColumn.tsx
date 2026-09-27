@@ -81,7 +81,11 @@ export type ProjectsColumnProps = {
   onOpenRemoved: () => void;
 };
 
-function SessionRow({
+/** How long the pointer rests on a row before its transcript page is prefetched. */
+const PREFETCH_HOVER_MS = 400;
+
+/** One conversation. Memoised: the list re-renders on every live change to any session, and only the changed row's props differ. */
+const SessionRow = memo(function SessionRow({
   session,
   active,
   pinned,
@@ -119,7 +123,8 @@ function SessionRow({
   const startHover = (event: PointerEvent) => {
     if (event.pointerType === "touch") return;
     cancelHover();
-    hover.current = setTimeout(() => onPrefetch(session.id), 100);
+    // Long enough that mousing down the list does not fetch a page per row; a pause on a row still warms it.
+    hover.current = setTimeout(() => onPrefetch(session.id), PREFETCH_HOVER_MS);
   };
   const remove = async () => {
     setDeleting(true);
@@ -243,7 +248,7 @@ function SessionRow({
       )}
     </div>
   );
-}
+});
 
 /**
  * The Projects column: projects and their conversations, with search, collapsing, and the Removed

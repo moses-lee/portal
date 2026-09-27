@@ -4,7 +4,7 @@ import type {
   SessionConfigSelectOption,
 } from "@agentclientprotocol/sdk";
 import { byRecentActivity } from "./session-groups.ts";
-import type { SessionMeta, SessionState, SetConfigRequest } from "./types.ts";
+import type { SessionListState, SessionMeta, SetConfigRequest } from "./types.ts";
 
 const categoryRank: Record<string, number> = {
   mode: 0,
@@ -37,7 +37,7 @@ function selectValues(option: Extract<SessionConfigOption, { type: "select" }>):
 }
 
 /** True when `state` carries anything a settings control could show. */
-export function hasSettings(state: SessionState): boolean {
+export function hasSettings(state: SessionListState): boolean {
   return state.configOptions.length > 0 || !!state.modes?.availableModes.length;
 }
 
@@ -46,7 +46,10 @@ export function hasSettings(state: SessionState): boolean {
  * exposes any. The start page seeds its controls from this: it is the agent's current option list
  * and the values the user last chose.
  */
-export function latestStateForAgent(sessions: SessionMeta[], agentId: string): SessionState | null {
+export function latestStateForAgent(
+  sessions: (Pick<SessionMeta, "agentId" | "lastActiveAt" | "createdAt"> & { state: SessionListState })[],
+  agentId: string,
+): SessionListState | null {
   return [...sessions]
     .sort(byRecentActivity)
     .find((session) => session.agentId === agentId && hasSettings(session.state))?.state ?? null;
@@ -58,7 +61,7 @@ export function latestStateForAgent(sessions: SessionMeta[], agentId: string): S
  * the choices of later options, is applied before them; the caller re-diffs against the agent's
  * answer. Values `actual` no longer offers are skipped rather than rejected by the agent.
  */
-export function nextConfigChange(desired: SessionState, actual: SessionState): SetConfigRequest | null {
+export function nextConfigChange(desired: SessionListState, actual: SessionListState): SetConfigRequest | null {
   for (const want of orderConfigOptions(desired.configOptions)) {
     const have = actual.configOptions.find((option) => option.id === want.id);
     if (!have || have.type !== want.type || have.currentValue === want.currentValue) continue;
@@ -80,10 +83,10 @@ export function nextConfigChange(desired: SessionState, actual: SessionState): S
 }
 
 /** Apply a change locally before the agent confirms it. */
-export function applyConfigChange(
-  state: SessionState,
+export function applyConfigChange<S extends SessionListState>(
+  state: S,
   request: SetConfigRequest,
-): SessionState {
+): S {
   if ("modeId" in request) {
     return state.modes
       ? { ...state, modes: { ...state.modes, currentModeId: request.modeId } }

@@ -28,7 +28,7 @@ test("run_helper with wait runs a sub-turn inside the chat turn, records it as a
   assert.ok(offered.includes("get_pull") && offered.includes("read_transcript"));
   for (const name of ["run_command", "send_prompt", "delete_session", "create_intent", "run_helper"]) assert.ok(!offered.includes(name), name);
   assert.match(JSON.stringify(h.model.doGenerateCalls[0].prompt), /running as a helper/);
-  assert.deepEqual(await h.runtime.history(), [], "an inline helper posts nothing; the chat turn answers");
+  assert.deepEqual((await h.runtime.history()).messages, [], "an inline helper posts nothing; the chat turn answers");
 });
 
 test("run_helper without wait schedules a helper job now; it runs in the background and posts its answer to the thread", async (t) => {
@@ -49,7 +49,7 @@ test("run_helper without wait schedules a helper job now; it runs in the backgro
   assert.equal(run.parentRunId, parent.id);
   assert.equal(run.status, "succeeded");
   assert.deepEqual(h.model.doGenerateCalls[0].tools.map((tool) => tool.name), ["list_projects"], "only the tools it was given");
-  const [note] = await h.runtime.history(side.id);
+  const [note] = (await h.runtime.history(side.id)).messages;
   assert.equal(note.parts[0].text, "Found three stale worktrees.");
   assert.deepEqual(note.metadata.run, { id: run.id, kind: "helper" });
   const scheduledEntry = (await h.hub.activity.list({ kind: "job.scheduled" })).find((entry) => entry.refs.jobId === job.id);

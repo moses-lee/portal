@@ -33,6 +33,7 @@ function toRecord(row: Row): SessionRecord {
     upstreamId: row.upstreamId,
     state: row.state,
     ...(row.lost ? { lost: row.lost } : {}),
+    ...(row.turnOpen === null ? {} : { turnOpen: row.turnOpen }),
   };
 }
 
@@ -45,20 +46,35 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
     if (closed) throw new Error("Session store is disposed");
   }
 
-  async function append(id: string, raw: StoredEvent) {
+  /** The event as JSON safe for jsonb: only events that actually carry U+0000 pay for the deep copy. */
+  function toJson(raw: StoredEvent): string {
+    const json = JSON.stringify(raw);
+    return json.includes("\\u0000") ? JSON.stringify(stripNul(raw)) : json;
+  }
+
+  async function append(id: string, batch: StoredEvent[]) {
     assertOpen();
-    const event = stripNul(raw);
+    if (batch.length === 0) return;
+    for (let i = 1; i < batch.length; i++) {
+      if (batch[i].seq <= batch[i - 1].seq) throw new Error(`Batch seqs must increase: ${batch[i - 1].seq} then ${batch[i].seq}`);
+    }
+    const first = batch[0].seq;
     // Reject seqs at or below the highest stored one in the same statement that inserts, so two
-    // racing appends cannot both pass a separate check.
+    // racing appends cannot both pass a separate check. One statement for the whole batch: all
+    // rows land or none do.
+    const values = sql.join(
+      batch.map((event) => sql`(${id}, ${event.seq}::integer, ${event.ts}::bigint, ${toJson(event)}::jsonb)`),
+      sql`, `,
+    );
     let inserted: { seq: number }[];
     try {
       inserted = await db
         .insert(sessionEvents)
         .select(
           db
-            .select({ sessionId: sql`${id}`.as("session_id"), seq: sql`${event.seq}::integer`.as("seq"), ts: sql`${event.ts}::bigint`.as("ts"), body: sql`${JSON.stringify(event)}::jsonb`.as("body") })
-            .from(sql`(select 1) as one`)
-            .where(sql`not exists (select 1 from ${sessionEvents} where ${sessionEvents.sessionId} = ${id} and ${sessionEvents.seq} >= ${event.seq})`),
+            .select({ sessionId: sql`v.session_id`.as("session_id"), seq: sql`v.seq`.as("seq"), ts: sql`v.ts`.as("ts"), body: sql`v.body`.as("body") })
+            .from(sql`(values ${values}) as v(session_id, seq, ts, body)`)
+            .where(sql`not exists (select 1 from ${sessionEvents} where ${sessionEvents.sessionId} = ${id} and ${sessionEvents.seq} >= ${first})`),
         )
         .returning({ seq: sessionEvents.seq });
     } catch (err) {
@@ -68,8 +84,18 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
     if (inserted.length === 0) {
       const next = await count(id);
       if (next === 0 && !(await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, id))).length) throw new Error(`No such session: ${id}`);
-      throw new Error(`Out-of-order append: log already holds seq ${event.seq} (next is ${next})`);
+      throw new Error(`Out-of-order append: log already holds seq ${first} (next is ${next})`);
     }
+  }
+
+  function chain(id: string, write: () => Promise<void>) {
+    const previous = chains.get(id) ?? Promise.resolve();
+    const run = previous.then(write);
+    const settled = run.catch(() => {}).then(() => {
+      if (chains.get(id) === settled) chains.delete(id);
+    });
+    chains.set(id, settled);
+    return run;
   }
 
   async function count(id: string): Promise<number> {
@@ -108,13 +134,11 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
     },
 
     appendEvent(id, event) {
-      const previous = chains.get(id) ?? Promise.resolve();
-      const run = previous.then(() => append(id, event));
-      const settled = run.catch(() => {}).then(() => {
-        if (chains.get(id) === settled) chains.delete(id);
-      });
-      chains.set(id, settled);
-      return run;
+      return chain(id, () => append(id, [event]));
+    },
+
+    appendEvents(id, events) {
+      return chain(id, () => append(id, events));
     },
 
     async readTail(id, { beforeSeq, limit }: TailQuery): Promise<TailResult> {

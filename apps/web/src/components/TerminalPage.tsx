@@ -39,7 +39,7 @@ export default function TerminalPage({
         </div>
       </header>
       <div className="min-h-0 flex-1">
-        <TerminalPanel endpoint="/api/terminals" />
+        <TerminalPanel endpoint="/api/terminals" autoCreate />
       </div>
     </main>
   );

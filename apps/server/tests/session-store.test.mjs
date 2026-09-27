@@ -119,3 +119,27 @@ test("postgres store: events are stored as real jsonb, and deleting a session ca
   const [{ n }] = await handle.sql`select count(*)::int as n from session_events`;
   assert.equal(n, 0);
 });
+
+for (const [name, make] of backends) {
+  test(`${name} store: a batch lands as one write, in order, and is refused as a whole when it overlaps the log`, async (t) => {
+    const { store } = await make(t);
+    await store.ready;
+    await store.putSession(record("b"));
+    await store.appendEvents("b", []);
+    assert.equal(await store.eventCount("b"), 0);
+    // Seqs need not be dense: a merged text run carries the run's last seq.
+    await store.appendEvents("b", [event(0, "user", { text: "prompt" }), event(1), event(4), event(5)]);
+    assert.equal(await store.eventCount("b"), 6);
+    assert.deepEqual((await store.readTail("b", { limit: 10 })).events.map(({ seq }) => seq), [0, 1, 4, 5]);
+    await assert.rejects(store.appendEvents("b", [event(5), event(6)]), /out-of-order/i);
+    await assert.rejects(store.appendEvents("b", [event(7), event(7)]), /must increase/i);
+    await assert.rejects(store.appendEvents("b", [event(8), event(6)]), /must increase/i);
+    assert.equal(await store.eventCount("b"), 6, "a refused batch writes nothing");
+    await store.appendEvents("b", [event(6), event(9, "user", { text: "next" })]);
+    assert.deepEqual((await store.readTail("b", { limit: 3 })).events.map(({ seq }) => seq), [5, 6, 9]);
+    await assert.rejects(store.appendEvents("nope", [event(0)]), /no such session/i);
+    // Postgres cannot hold U+0000: it is stripped from a batch as it is from a single event.
+    await store.appendEvents("b", [event(10, "user", { text: "a\u0000b" })]);
+    assert.equal((await store.readTail("b", { limit: 1 })).events[0].text, name === "postgres" ? "ab" : "a\u0000b");
+  });
+}

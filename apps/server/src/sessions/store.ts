@@ -1,8 +1,10 @@
 /**
  * Persistence boundary for chat sessions. The ACP runtime owns live sessions in memory and writes
  * through this interface; nothing above it knows whether the backend is a directory of files or a
- * cloud store. Sequence numbers are assigned by the runtime (the log's only writer) and must be
- * dense from 0, so a store can serve "the page before seq N" without an index.
+ * cloud store. Sequence numbers are assigned by the runtime (the log's only writer) and increase
+ * strictly from 0. They are not dense: a run of streamed text chunks is stored as one row under the
+ * run's last seq, and a heartbeat gets no seq at all. `eventCount` is therefore "one past the
+ * highest stored seq", which is what the runtime resumes numbering from after a restart.
  */
 import type { SessionLoss, SessionState, StoredEvent } from "@portal/contracts/types";
 
@@ -23,6 +25,12 @@ export type SessionRecord = {
   state: SessionState;
   /** Why the agent was lost, until it is attached again; absent in records from before this field. */
   lost?: SessionLoss | null;
+  /**
+   * Whether a turn was open when the record was last written, so a restart knows a cut-off turn
+   * without reading the log. Null or absent in records from before this field: the runtime reads
+   * the tail once and writes the answer back.
+   */
+  turnOpen?: boolean | null;
 };
 
 export type TailQuery = {
@@ -53,6 +61,11 @@ export interface SessionStore {
    * write that failed does not block every later one. Rejects for a deleted or disposed log.
    */
   appendEvent(id: string, event: StoredEvent): Promise<void>;
+  /**
+   * Append several events (strictly increasing seqs, all above the current count) as one write.
+   * All land or none do. Rejects like `appendEvent`.
+   */
+  appendEvents(id: string, events: StoredEvent[]): Promise<void>;
   /** Read backwards from `beforeSeq` (default: the end). `hasMore` is false once nothing readable remains. */
   readTail(id: string, query: TailQuery): Promise<TailResult>;
   /** One past the highest stored seq (the seq the next event should get). */
@@ -77,7 +90,8 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     && typeof r.agentName === "string" && typeof r.cwd === "string" && typeof r.projectId === "string"
     && typeof r.createdAt === "number" && typeof r.lastActiveAt === "number"
     && (r.title === null || typeof r.title === "string") && typeof r.upstreamId === "string"
-    && isSessionState(r.state) && (r.lost === undefined || r.lost === null || (typeof r.lost === "object" && typeof (r.lost as SessionLoss).reason === "string"));
+    && isSessionState(r.state) && (r.lost === undefined || r.lost === null || (typeof r.lost === "object" && typeof (r.lost as SessionLoss).reason === "string"))
+    && (r.turnOpen === undefined || r.turnOpen === null || typeof r.turnOpen === "boolean");
 }
 
 /** Shape check for events read back from storage. */
@@ -116,6 +130,16 @@ export function createMemorySessionStore(): SessionStore {
       const next = events.length ? events[events.length - 1].seq + 1 : 0;
       if (event.seq < next) throw new Error(`Out-of-order append: log already holds seq ${event.seq} (next is ${next})`);
       events.push(event);
+    },
+    async appendEvents(id, batch) {
+      if (batch.length === 0) return;
+      const { events } = entry(id);
+      const next = events.length ? events[events.length - 1].seq + 1 : 0;
+      if (batch[0].seq < next) throw new Error(`Out-of-order append: log already holds seq ${batch[0].seq} (next is ${next})`);
+      for (let i = 1; i < batch.length; i++) {
+        if (batch[i].seq <= batch[i - 1].seq) throw new Error(`Batch seqs must increase: ${batch[i - 1].seq} then ${batch[i].seq}`);
+      }
+      events.push(...batch);
     },
     async readTail(id, { beforeSeq, limit }) {
       const { events } = sessions.get(id) ?? { events: [] };
