@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  fetchRepo, githubRepoUrl, pullFastForward, readCommitPage, readGithubSummary, redactCredentials, resetGithubSummaryCaches,
+  fetchRepo, githubRepoUrl, pullFastForward, readCommitPage, readGithubSummary, redactCredentials, resetGithubSummaryCaches, summaryEtag,
 } from "../src/lib/github-summary.ts";
 import { WorktreeError } from "../src/lib/worktrees.ts";
 
@@ -344,7 +344,46 @@ test("a PR from gh is mapped with its checks and counts, and the log anchors on 
   assert.deepEqual(again.pull, summary.pull);
   assert.deepEqual(again.diff, summary.diff);
   await readGithubSummary(f.main, { gh, fetch: true });
-  assert.equal(calls.length, 6, "fetch bypasses the gh cache");
+  assert.equal(calls.length, 3, "the periodic fetch keeps gh's answer for the minute");
+  await readGithubSummary(f.main, { gh, noPullCache: true });
+  assert.equal(calls.length, 6, "a fresh read (the manual refresh) asks gh again");
+});
+
+test("a read whose refs and PR answer stand still reuses the last summary; a new commit or a new PR answer rebuilds it", async (t) => {
+  const f = fixture(t);
+  git(f.main, ["checkout", "-q", "-b", "feat"]);
+  const tip = commit(f.main, "feat work", 1_000_200);
+  git(f.main, ["push", "-q", "-u", "origin", "feat"]);
+  let prState = "open";
+  const { gh, calls } = fakeGh((args) => {
+    if (args[0] === "pr") return { stdout: JSON.stringify({ ...prView, headRefName: "feat", baseRefName: "main", headRefOid: git(f.main, ["rev-parse", "HEAD"]), state: prState.toUpperCase() }), stderr: "" };
+    return { stdout: JSON.stringify(graphqlCounts([])), stderr: "" };
+  });
+  let clock = 1_000;
+  const now = () => clock;
+  const first = await readGithubSummary(f.main, { gh, now });
+  assert.equal(first.commits[0].sha, tip);
+  clock += 10;
+  const again = await readGithubSummary(f.main, { gh, now });
+  assert.equal(again.at, 1_010, "the clock is live");
+  assert.deepEqual({ ...again, at: 0 }, { ...first, at: 0 }, "the same summary for the same refs");
+  assert.equal(again.commits, first.commits, "the reused summary is the stored one");
+  assert.equal(summaryEtag(again), summaryEtag(first), "and it validates the browser's copy");
+
+  // The PR moves (gh's cached answer expires and differs): rebuilt.
+  prState = "merged";
+  clock += 60_001;
+  const merged = await readGithubSummary(f.main, { gh, now });
+  assert.equal(merged.pull.state, "merged");
+  assert.notEqual(summaryEtag(merged), summaryEtag(first));
+
+  // A new commit: a new head, so gh is asked again and the log is rebuilt.
+  const ghCalls = calls.length;
+  const next = commit(f.main, "more", 1_000_300);
+  const after = await readGithubSummary(f.main, { gh, now });
+  assert.equal(after.commits[0].sha, next);
+  assert.ok(calls.length > ghCalls, "a new head asks gh again");
+  assert.notEqual(summaryEtag(after), summaryEtag(merged));
 });
 
 test("PR totals retain zero values and remain available for closed and merged PRs", async (t) => {

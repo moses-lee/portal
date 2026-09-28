@@ -86,7 +86,7 @@ test("an intent check fires the intent: a Needs-you item with its links, a note 
     { kind: "intent_update", title: "acme/app#42 merged", fingerprint: `intent_update:${intent.id}`, links: { intentId: intent.id, threadId: "main", pull } },
   );
   assert.deepEqual(item.actions, [{ type: "open_url", url: pull.url, label: "Open PR" }]);
-  const [note] = await h.runtime.history();
+  const [note] = (await h.runtime.history()).messages;
   assert.equal(note.parts[0].text, "acme/app#42 merged; its worktree can be removed.");
   assert.deepEqual(note.metadata.run, { id: run.id, kind: "intent_check" });
   assert.deepEqual(note.metadata.itemIds, [item.id]);
@@ -104,7 +104,7 @@ test("a check whose trigger does not hold rewrites the notes, posts nothing, and
   assert.equal(intent.notes, "Still open; CI running.");
   assert.equal(intent.fires, 0);
   assert.equal(intent.lastCheckedAt, T0, "checkNow: checked as soon as it was created");
-  assert.deepEqual(await h.runtime.history(), []);
+  assert.deepEqual((await h.runtime.history()).messages, []);
   const [job] = await h.jobs.listJobs({ intentId: intent.id });
   assert.equal(job.status, "active");
   assert.equal(job.nextRunAt, T0 + 2 * MIN);

@@ -16,7 +16,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import ResponsiveDialog from "./ResponsiveDialog";
 import { isGrouped, orderConfigOptions } from "@/lib/session-config";
-import type { SessionState, SetConfigRequest } from "@/lib/types";
+import type { SessionListState, SetConfigRequest } from "@/lib/types";
 
 function ConfigControl({
   option,
@@ -98,7 +98,7 @@ export default function SessionControls({
   error,
   onChange,
 }: {
-  state: SessionState;
+  state: SessionListState;
   disabled: boolean;
   error?: string | null;
   onChange: (request: SetConfigRequest) => void;

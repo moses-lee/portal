@@ -15,7 +15,9 @@
     "test": "node --import ./tests/helpers/scratch-home.mjs --test --test-timeout=15000 --test-reporter=spec tests/*.test.mjs",
     "import": "node src/import/cli.ts",
     "db:generate": "drizzle-kit generate",
-    "postinstall": "node scripts/prepare-pty.mjs"
+    "postinstall": "node scripts/prepare-pty.mjs",
+    "bench": "node scripts/bench.mjs",
+    "migrate:blobs": "node scripts/migrate-blobs.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.81.0",

@@ -21,7 +21,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Message, MessageContent } from "@/components/ui/message";
-import type { OrchestratorMessage } from "@/lib/orchestrator/types";
+import { TOOL_IO_OMITTED, type OrchestratorMessage } from "@/lib/orchestrator/types";
 
 type Part = UIMessagePart<UIDataTypes, UITools>;
 
@@ -31,6 +31,14 @@ export function formatTime(at: number) {
 
 function Json({ label, value }: { label: string; value: unknown }) {
   if (value === undefined) return null;
+  // A paged message: the row asked for the whole message when it opened; this shows until it lands.
+  if (value === TOOL_IO_OMITTED)
+    return (
+      <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <LoaderCircle className="size-3 animate-spin" />
+        Loading {label.toLowerCase()}…
+      </p>
+    );
   return (
     <div>
       <p className="mb-1.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
@@ -67,14 +75,14 @@ function describeToolState(part: ToolPart): { verb: string; tone: "running" | "f
 }
 
 /** One tool call as a one-line row ("Ran get_tick_digest") that expands to its input and output. */
-function ToolRow({ part }: { part: ToolPart }) {
+function ToolRow({ part, onOpen }: { part: ToolPart; onOpen?: () => void }) {
   const name = getToolName(part);
   const { verb, tone } = describeToolState(part);
   const failed = tone === "failed";
   const reason =
     (part.state === "approval-responded" || part.state === "output-denied") && part.approval.reason;
   return (
-    <Collapsible className="tool-details">
+    <Collapsible className="tool-details" onOpenChange={(open) => open && onOpen?.()}>
       <CollapsibleTrigger asChild>
         <button
           type="button"
@@ -156,12 +164,15 @@ const PortalMessage = memo(function PortalMessage({
   message,
   streaming,
   onOpenCurationRun,
+  onLoadToolIO,
 }: {
   message: OrchestratorMessage;
   /** True while this message is still arriving. */
   streaming: boolean;
   /** Set when the page can show a curation run's digest and diff (a consolidator's note links to it). */
   onOpenCurationRun?: (runId: string) => void;
+  /** Asked for the whole message when a tool row of a paged message (tool traffic left out) is opened. */
+  onLoadToolIO?: (messageId: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -200,7 +211,14 @@ const PortalMessage = memo(function PortalMessage({
                 streaming={streaming && part.state === "streaming"}
               />
             ) : null;
-          if (isToolUIPart(part)) return <ToolRow key={index} part={part} />;
+          if (isToolUIPart(part))
+            return (
+              <ToolRow
+                key={index}
+                part={part}
+                onOpen={message.metadata?.toolIO === "omitted" && onLoadToolIO ? () => onLoadToolIO(message.id) : undefined}
+              />
+            );
           return null;
         })}
         {curationRun && (

@@ -118,13 +118,20 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
 
   const emitItems = () => hub.store.listItems().then((items) => hub.emit({ type: "items", items }), () => {});
 
+  /** The earliest pending deadline, as of the last sweep plan; null while none is pending. Reads skip the expiry write until it passes. */
+  let dueAt: number | null = null;
+
   /** Plan the next expiry sweep at the earliest pending deadline; nothing is planned while none is pending. */
   async function scheduleSweep() {
     if (sweep !== null) hub.timers.clearTimeout(sweep);
     sweep = null;
     const pending = await store.list({ status: ["pending"], limit: 500 });
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      dueAt = null;
+      return;
+    }
     const next = Math.min(...pending.map((approval) => approval.expiresAt));
+    dueAt = next;
     sweep = hub.timers.setTimeout(() => {
       sweep = null;
       void expireDue().then(scheduleSweep).catch((err: unknown) => console.error("Could not expire approvals:", err));
@@ -447,7 +454,8 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
     revokeGrant,
     expireDue,
     async pending() {
-      await expireDue();
+      // Every status push reads this; an UPDATE per read is only worth it once a deadline has passed.
+      if (dueAt !== null && now() >= dueAt) await expireDue();
       return store.list({ status: ["pending"] });
     },
     async hasPendingFor(runId) {

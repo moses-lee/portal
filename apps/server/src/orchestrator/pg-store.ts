@@ -7,14 +7,14 @@
  * Records are stripped of U+0000 before they are written (Postgres cannot store it, and a command's
  * output quoted in a message may carry it); the stripped record is what callers get back.
  */
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { stripNul } from "../db/sanitize.ts";
 import { orchestratorDocuments, orchestratorItems, orchestratorMessages, threads } from "../db/schema.ts";
 import {
   buildItem, buildThread, capMemory, mainThread, newId, parseItemPatch, patchItem, patchThread, sortThreads, unknownItem, unknownThread,
 } from "./store.ts";
-import type { Item, OrchestratorMessage, OrchestratorStore, Scope, Thread, TickSnapshot } from "./types.ts";
+import type { Item, ItemFilter, MessagePage, MessagePageQuery, OrchestratorMessage, OrchestratorStore, Scope, Thread, TickSnapshot } from "./types.ts";
 import { MAIN_THREAD_ID } from "./types.ts";
 
 type Body = Record<string, unknown>;
@@ -98,6 +98,49 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
         .where(eq(orchestratorMessages.threadId, threadId)).orderBy(asc(orchestratorMessages.ordinal));
       return rows.map((row) => row.body as unknown as OrchestratorMessage);
     },
+    async readMessageRows(threadId = MAIN_THREAD_ID) {
+      const rows = await db.select({ ordinal: orchestratorMessages.ordinal, body: orchestratorMessages.body }).from(orchestratorMessages)
+        .where(eq(orchestratorMessages.threadId, threadId)).orderBy(asc(orchestratorMessages.ordinal));
+      return rows.map((row) => ({ ordinal: row.ordinal, message: row.body as unknown as OrchestratorMessage }));
+    },
+    async readMessagePage(threadId, { before, after, limit }: MessagePageQuery): Promise<MessagePage> {
+      const where = and(
+        eq(orchestratorMessages.threadId, threadId),
+        ...(before === undefined ? [] : [lt(orchestratorMessages.ordinal, before)]),
+        ...(after === undefined ? [] : [gt(orchestratorMessages.ordinal, after)]),
+      );
+      // Newest page (and pages before a cursor) read backwards; a page after a cursor reads forwards. One
+      // extra row says whether more exist in the direction of travel.
+      const forwards = after !== undefined && before === undefined;
+      const rows = await db.select({ ordinal: orchestratorMessages.ordinal, body: orchestratorMessages.body }).from(orchestratorMessages)
+        .where(where).orderBy(forwards ? asc(orchestratorMessages.ordinal) : desc(orchestratorMessages.ordinal)).limit(limit + 1);
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      if (!forwards) page.reverse();
+      return {
+        messages: page.map((row) => row.body as unknown as OrchestratorMessage),
+        hasMore,
+        before: page[0]?.ordinal ?? null,
+        after: page.at(-1)?.ordinal ?? null,
+      };
+    },
+    async getMessage(threadId, id) {
+      const [row] = await db.select({ body: orchestratorMessages.body }).from(orchestratorMessages)
+        .where(and(eq(orchestratorMessages.threadId, threadId), eq(orchestratorMessages.id, id))).limit(1);
+      return row ? (row.body as unknown as OrchestratorMessage) : null;
+    },
+    deleteMessagesThrough(threadId, ordinal) {
+      return serialized("messages", async () => {
+        await db.delete(orchestratorMessages).where(and(eq(orchestratorMessages.threadId, threadId), lte(orchestratorMessages.ordinal, ordinal)));
+      });
+    },
+    replaceMessage(threadId, ordinal, message) {
+      return serialized("messages", async () => {
+        const [row] = messageRows([message], threadId);
+        await db.update(orchestratorMessages).set({ id: row.id, body: row.body })
+          .where(and(eq(orchestratorMessages.threadId, threadId), eq(orchestratorMessages.ordinal, ordinal)));
+      });
+    },
     writeMessages(messages, threadId = MAIN_THREAD_ID) {
       return serialized("messages", async () => {
         await requireThread(threadId);
@@ -140,8 +183,9 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       });
     },
 
-    async listItems() {
-      const rows = await db.select({ body: orchestratorItems.body }).from(orchestratorItems).orderBy(...newestItems);
+    async listItems(filter?: ItemFilter) {
+      const where = filter?.status ? inArray(orchestratorItems.status, filter.status) : sql`true`;
+      const rows = await db.select({ body: orchestratorItems.body }).from(orchestratorItems).where(where).orderBy(...newestItems);
       return rows.map((row) => row.body as unknown as Item);
     },
     getItem: readItem,

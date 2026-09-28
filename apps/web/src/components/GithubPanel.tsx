@@ -15,6 +15,7 @@ import { relativeAge } from "@/lib/relative-age";
 import CopyButton from "./CopyButton";
 import IconButton from "./IconButton";
 import { useGithubSummary } from "./useGithubSummary";
+import { useNow } from "./portal/PortalLive";
 import type { UseGithubSummary } from "./useGithubSummary";
 import {
   Tooltip,
@@ -633,7 +634,8 @@ function PanelHeader({
   refresh,
 }: Pick<GithubPanelProps, "projectId" | "projectRemoved" | "onClose"> &
   Pick<UseGithubSummary, "summary" | "refreshing" | "refresh">) {
-  const now = summary?.at ?? 0;
+  // A clock of this tab's own: a cached snapshot shown later still says how long ago things happened.
+  const now = useNow(30_000);
   return (
     <div className="mb-4 flex shrink-0 items-center gap-1">
       <h2 className="flex-1 text-[10px] font-semibold tracking-[.12em] text-muted-foreground uppercase">
@@ -861,8 +863,7 @@ function CommitHistory({
     });
   };
   const historyBase = summary.logBase?.replace(/^origin\//, "") ?? null;
-  // Polling refreshes the snapshot used for relative ages, keeping rendering pure.
-  const now = summary.at;
+  const now = useNow(30_000);
   return (
     <div className="mt-5">
       <h3 className="mb-2 text-[10px] font-semibold tracking-[.1em] text-muted-foreground uppercase">

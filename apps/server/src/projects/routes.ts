@@ -10,7 +10,7 @@ import { errorMessage, errorStatus } from "../http/errors.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
 import { displayPath, readGitInfo } from "../lib/git-info.ts";
-import { pullFastForward, readCommitPage, readGithubSummary } from "../lib/github-summary.ts";
+import { pullFastForward, readCommitPage, readGithubSummary, summaryEtag } from "../lib/github-summary.ts";
 import { type ProjectLookup, type RemovedFacts, parentOf, projectIdOfRow, summarizeOrphans, summarizeRemoved } from "../lib/removed-projects.ts";
 import { preWorktreeDeleteRun, runConfiguredScript } from "../lib/script-runner.ts";
 import type { BranchListing, Project, RemovedProject, RemovedProjectSummary, WorktreeMeta } from "../lib/types.ts";
@@ -214,16 +214,25 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
     }
   });
 
-  /** The GitHub panel's snapshot for a project; `?fetch=1` runs `git fetch origin --prune` first. */
+  /**
+   * The GitHub panel's snapshot for a project; `?fetch=1` runs `git fetch origin --prune` first and
+   * `?fresh=1` (the manual refresh) asks gh again. Answers 304 to a matching `If-None-Match`: the
+   * body changes only when the refs, the PR, or the fetch time do, so a poll usually carries nothing.
+   */
   app.get<IdParams>("/api/projects/:id/github", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     await ctx.projects.ready;
     const project = ctx.projects.get(req.params.id);
     if (!project) return reply.code(404).send({ error: "Unknown project." });
     const fetch = query(req, "fetch") === "1";
+    const fresh = query(req, "fresh") === "1";
     try {
+      const summary = await readGithubSummary(project.path, { fetch, noPullCache: fresh });
+      const etag = summaryEtag(summary);
+      void reply.header("etag", etag).header("cache-control", "private, no-cache");
+      if (req.headers["if-none-match"] === etag) return reply.code(304).send();
       // Large snapshots are gzipped by the global compress plugin.
-      return { summary: await readGithubSummary(project.path, { fetch }) };
+      return { summary };
     } catch (err) {
       return fail(reply, err);
     }

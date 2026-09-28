@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createAcpRuntime, toMeta } from "../src/lib/acp-runtime.ts";
+import { createBlobStore } from "../src/lib/blobs.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/store.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
@@ -65,6 +66,7 @@ function setup(t, options = {}) {
       // A factory gives each runtime its own store instance, as each server process would have.
       store: typeof options.store === "function" ? options.store() : options.store,
       recentEvents: options.recentEvents,
+      blobs: options.blobs,
       ...extra,
     });
     runtimes.push(runtime);
@@ -781,6 +783,9 @@ test("only a turn that was really cut off is closed on restart", async (t) => {
   assert.equal(await store.eventCount("failed"), 3);
   assert.equal(await store.eventCount("empty"), 0);
   assert.deepEqual(runtime.listSessions().map(({ link }) => link.status), ["offline", "offline", "offline", "offline"]);
+  // Records from before `turnOpen` are settled from the log once and remember the answer.
+  await Promise.all(runtime.listSessions().map(({ id }) => runtime.getSession(id).writes));
+  assert.deepEqual(await Promise.all(["finished", "cut", "failed", "empty"].map(async (id) => (await store.getSession(id)).turnOpen)), [false, false, false, false]);
   // The cut-off turn's agent counts as lost to the restart, and says so; the rest are merely not attached.
   const byId = Object.fromEntries(runtime.listSessions().map((meta) => [meta.id, meta.liveness]));
   assert.equal(byId.cut.state, "dead");
@@ -818,9 +823,10 @@ test("deleting a session while it reconnects does not bring it back", async (t) 
 test("a write the store rejects loses only that event", async (t) => {
   const inner = createMemorySessionStore();
   let failOnce = true;
-  const store = { ...inner, appendEvent: async (id, event) => {
-    if (failOnce && event.seq === 2) { failOnce = false; throw new Error("disk full"); }
-    return inner.appendEvent(id, event);
+  // Text is written as its own row once the next non-chunk event arrives, so seq 2 travels alone.
+  const store = { ...inner, appendEvents: async (id, events) => {
+    if (failOnce && events.some(({ seq }) => seq === 2)) { failOnce = false; throw new Error("disk full"); }
+    return inner.appendEvents(id, events);
   } };
   const { runtime, cwd } = setup(t, { store });
   const errors = [];
@@ -835,7 +841,7 @@ test("a write the store rejects loses only that event", async (t) => {
   // user 0, turn_start 1, [update 2 lost], permission_request 3, permission_response 4, turn_end 5
   assert.deepEqual(page.events.map(({ seq }) => seq), [0, 1, 3, 4, 5]);
   assert.equal(page.nextSeq, 6);
-  assert.equal(errors.filter((line) => /Could not save event 2/.test(line)).length, 1);
+  assert.equal(errors.filter((line) => /Could not save events 2\.\.2/.test(line)).length, 1);
   assert.equal(errors.length, 1);
 });
 
@@ -1075,4 +1081,72 @@ test("a closed connection is recorded as such, not as Portal's own kill that fol
   await delay(100);
   assert.equal(session.lost.reason, "connection_closed");
   assert.equal(session.lost.detail, "Claude Code closed its connection to Portal");
+});
+
+test("a streamed turn is logged compactly: text merged under its last seq, no heartbeats, images as blobs", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "portal-blobs-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const first = await persistentSetup(t, { blobs: createBlobStore(dir) });
+  const { runtime, cwd, store, loggedEvents } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  const seen = [];
+  runtime.subscribe(session.id, { onEvent: (seq) => seen.push(seq) });
+  await runtime.sendPrompt(session.id, "stream");
+  await until(() => !session.busy, "turn");
+
+  // In memory (and on the live stream) every chunk has its own seq; the heartbeats never got one.
+  const kinds = session.events.map((event) => (event.type === "update" ? event.update.sessionUpdate : event.type));
+  assert.deepEqual(kinds, [
+    "user", "turn_start", "agent_message_chunk", "agent_message_chunk", "agent_message_chunk", "agent_thought_chunk", "agent_thought_chunk",
+    "tool_call", "tool_call_update", "tool_call_update", "agent_message_chunk", "turn_end",
+  ]);
+  assert.equal(session.nextSeq, 12);
+  assert.deepEqual(seen, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  assert.deepEqual(runtime.eventsSince(session.id, 1).map(({ seq }) => seq), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  assert.equal(runtime.eventsSince(session.id, 12), null, "a cursor past the log asks for a reset");
+
+  // On disk a run of chunks is one row under the run's last seq, and the page reads back merged.
+  const page = await runtime.readEvents(session.id);
+  assert.deepEqual(page.events.map(({ seq }) => seq), [0, 1, 4, 6, 7, 8, 9, 10, 11]);
+  assert.equal(page.nextSeq, 12);
+  assert.equal(page.events[2].update.content.text, "Hello there");
+  assert.equal(page.events[3].update.content.text, "thinking");
+  assert.equal(page.events[5].update.status, "in_progress", "pending -> in_progress is news, so it is logged");
+  assert.equal(await loggedEvents(session.id), 9);
+  assert.equal(await store.eventCount(session.id), 12, "the store's highest seq is the runtime's next seq minus one");
+  assert.equal((await store.getSession(session.id)).turnOpen, false);
+
+  // The screenshot went to the blob store; the event and its rawOutput copy name the file.
+  const done = page.events[6].update;
+  assert.equal(done.status, "completed");
+  const { uri, data, mimeType } = done.content[0].content;
+  assert.match(uri, /^\/api\/blobs\/[a-f0-9]{64}\.png$/);
+  assert.equal(data, "");
+  assert.equal(mimeType, "image/png");
+  assert.deepEqual(done.rawOutput, { image: uri, note: "done" });
+  const file = path.join(dir, path.basename(uri));
+  await until(() => existsSync(file), "blob file");
+  assert.equal(readFileSync(file).length, 5000);
+  assert.equal(session.events[9].update.content[0].content.data, "", "the in-memory copy is the externalized one too");
+
+  // A restart resumes numbering exactly where this process stopped, with no cut-off turn to close.
+  await runtime.dispose();
+  const next = restart(t, first, { claude: "resume" });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  assert.equal(restored.nextSeq, 12);
+  assert.equal((await next.readEvents(session.id)).events.at(-1).type, "turn_end");
+});
+
+test("a page read flushes held text so it holds everything below the cursor", async (t) => {
+  const { runtime, cwd, store } = await persistentSetup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "hold");
+  await until(() => session.pendingPermissions.size === 1, "held permission");
+  // The agent's text chunk is still in the write buffer; the page must not skip it.
+  const page = await runtime.readEvents(session.id);
+  assert.deepEqual(page.events.map(({ type }) => type), ["user", "turn_start", "update", "permission_request"]);
+  assert.equal(page.nextSeq, 4);
+  assert.equal(await store.eventCount(session.id), 4);
+  assert.equal((await store.getSession(session.id)).turnOpen, true);
 });

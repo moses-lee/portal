@@ -1,4 +1,5 @@
-/** `/api/agents`, `/api/sessions/**`, as the web app's Next.js routes served them. */
+/** `/api/agents`, `/api/sessions/**`, and `/api/blobs/**`, as the web app's Next.js routes served them. */
+import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
@@ -6,15 +7,17 @@ import { errorMessage } from "../http/errors.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 import { openEventStream } from "../http/sse.ts";
 import { toMeta, type SessionListChange } from "../lib/acp-runtime.ts";
+import { BLOB_NAME, mimeTypeOf } from "../lib/blobs.ts";
 import { errorStatus, resolveDirectory } from "../lib/fs-paths.ts";
 import { sameGitInfo } from "@portal/shared/git-info";
 import { displayPath, readGitInfo, type GitInfo } from "../lib/git-info.ts";
-import { summarizeSession } from "../lib/session-summary.ts";
+import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
 import type { PermissionAnswerRequest, PortalEvent, SessionListEvent, SessionMetaEvent, SetConfigRequest } from "../lib/types.ts";
 
 const META_POLL_MS = 1000;
 const DEFAULT_PAGE = 300;
 const MAX_PAGE = 2000;
+const MAX_TURNS = 50;
 
 type IdParams = { Params: { id: string } };
 
@@ -57,7 +60,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.get("/api/sessions", async () => {
     await ready();
     return {
-      sessions: await Promise.all(ctx.sessions.listSessions().map((meta) => summarizeSession(meta, projectOf(meta.projectId)))),
+      sessions: await Promise.all(ctx.sessions.listSessions().map((meta) => summarizeForList(meta, projectOf(meta.projectId)))),
     };
   });
 
@@ -120,7 +123,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
       queue = queue.then(async () => {
         if (stream.closed) return;
         if (change.type !== "created") { send(change); return; }
-        const session = await summarizeSession(change.session, projectOf(change.session.projectId));
+        const session = await summarizeForList(change.session, projectOf(change.session.projectId));
         send({ type: "created", session });
       }).catch(() => {});
     };
@@ -239,7 +242,9 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   /**
    * One page of the session's log, oldest first, ending before `?before=<seq>` (default: the
-   * newest events) and starting at a turn boundary. Follow the live tail with `/stream?since=<last seq>`.
+   * newest events) and starting at a turn boundary. Sized by `?turns=<n>` (the browser; capped
+   * at `TURN_PAGE_MAX_EVENTS` rows, past which the page starts inside a turn) or `?limit=<rows>`.
+   * Follow the live tail with `/stream?since=<last seq>`.
    */
   app.get<IdParams>("/api/sessions/:id/events", async (req, reply) => {
     const { id } = req.params;
@@ -247,11 +252,26 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (!ctx.sessions.getSession(id)) return reply.code(404).send({ error: "Unknown session." });
     const query = searchParams(req);
     const before = query.get("before") === null ? undefined : parseCount(query.get("before"));
+    const turns = query.get("turns") === null ? undefined : parseCount(query.get("turns"));
     const limit = query.get("limit") === null ? DEFAULT_PAGE : parseCount(query.get("limit"));
-    if (before === null || limit === null || limit < 1) {
+    if (before === null || limit === null || limit < 1 || turns === null || (turns !== undefined && (turns < 1 || turns > MAX_TURNS))) {
       return reply.code(400).send({ error: "Invalid page cursor." });
     }
-    return ctx.sessions.readEvents(id, { before, limit: Math.min(limit, MAX_PAGE) });
+    return turns !== undefined
+      ? ctx.sessions.readEvents(id, { before, turns })
+      : ctx.sessions.readEvents(id, { before, limit: Math.min(limit, MAX_PAGE) });
+  });
+
+  /** An image a tool result carried, moved out of the event log; names are content hashes, so the response never changes. */
+  app.get<{ Params: { name: string } }>("/api/blobs/:name", { compress: false }, async (req, reply) => {
+    const { name } = req.params;
+    const blobs = ctx.sessions.blobs;
+    if (!blobs || !BLOB_NAME.test(name)) return reply.code(404).send({ error: "No such blob." });
+    if (!(await blobs.has(name))) return reply.code(404).send({ error: "No such blob." });
+    return reply
+      .header("content-type", mimeTypeOf(name))
+      .header("cache-control", "public, max-age=31536000, immutable")
+      .send(createReadStream(blobs.pathOf(name)));
   });
 
   app.post<IdParams>("/api/sessions/:id/prompt", async (req, reply) => {

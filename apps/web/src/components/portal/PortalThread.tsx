@@ -21,7 +21,16 @@ import {
 } from "@/components/ui/message-scroller";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { formatDateTime } from "@/lib/orchestrator/format";
-import { MAIN_THREAD_ID, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
+import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
+
+/** Messages already held are replaced by the server's copy (same id); new ones go at the end. */
+export function mergeMessages(current: OrchestratorMessage[], incoming: OrchestratorMessage[]): OrchestratorMessage[] {
+  if (incoming.length === 0) return current;
+  const byId = new Map(incoming.map((message) => [message.id, message]));
+  const merged = current.map((message) => byId.get(message.id) ?? message);
+  const known = new Set(current.map((message) => message.id));
+  return [...merged, ...incoming.filter((message) => !known.has(message.id))];
+}
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
 
@@ -41,10 +50,23 @@ function describeChatError(error: unknown): string {
 
 /** Where a thread's messages live. The main thread keeps its original routes. */
 function threadRoutes(threadId: string) {
-  if (threadId === MAIN_THREAD_ID)
-    return { messages: "/api/portal/messages", cancel: `/api/portal/threads/${MAIN_THREAD_ID}/cancel` };
   const base = `/api/portal/threads/${encodeURIComponent(threadId)}`;
-  return { messages: `${base}/messages`, cancel: `${base}/cancel` };
+  return {
+    messages: threadId === MAIN_THREAD_ID ? "/api/portal/messages" : `${base}/messages`,
+    message: (id: string) => `${base}/messages/${encodeURIComponent(id)}`,
+    cancel: `${base}/cancel`,
+  };
+}
+
+/** `GET` a page of messages; the response may lack cursors (an older server, a test fixture). */
+async function fetchPage(url: string, signal?: AbortSignal): Promise<MessagePage> {
+  const r = await fetch(url, { signal });
+  if (!r.ok) {
+    const j = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(j.error ?? "Could not load the conversation.");
+  }
+  const page = (await r.json()) as Partial<MessagePage>;
+  return { messages: page.messages ?? [], hasMore: page.hasMore ?? false, before: page.before ?? null, after: page.after ?? null };
 }
 
 /**
@@ -198,23 +220,27 @@ export default function PortalThread({
 
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  /** The newest request already answered; the server's `messages` event is what asks for the next one. */
+  /** The newest request already answered; a failed turn is what asks for the next one. */
   const [historyServed, setHistoryServed] = useState(-1);
-  // Load the thread on mount and on every request, but never while a turn is streaming into it:
-  // a turn that starts mid-load aborts it, and the load runs again once the turn ends.
+  /** Where the loaded messages sit in the thread: cursors for the page before and for what arrived since. */
+  const cursor = useRef<{ before: number | null; after: number | null }>({ before: null, after: null });
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
+  /** A `messages` event arrived while a turn was streaming here; fetched once the turn ends. */
+  const newerPending = useRef(false);
+  // Load the newest page on mount and on every request, but never while a turn is streaming into
+  // it: a turn that starts mid-load aborts it, and the load runs again once the turn ends.
   useEffect(() => {
     if (responding || historyServed >= historyRequest) return;
     const controller = new AbortController();
     const load = async () => {
       try {
-        const r = await fetch(routes.messages, { signal: controller.signal });
-        if (!r.ok) {
-          const j = (await r.json().catch(() => ({}))) as { error?: string };
-          throw new Error(j.error ?? "Could not load the conversation.");
-        }
-        const { messages: history } = (await r.json()) as { messages: OrchestratorMessage[] };
+        const page = await fetchPage(routes.messages, controller.signal);
         if (controller.signal.aborted) return;
-        setMessages(history);
+        setMessages(page.messages);
+        cursor.current = { before: page.before, after: page.after };
+        setHasMore(page.hasMore);
         setHistoryError(null);
         setHistoryServed(historyRequest);
       } catch (e) {
@@ -232,10 +258,79 @@ export default function PortalThread({
     return () => controller.abort();
   }, [historyRequest, historyServed, responding, routes, setMessages]);
 
+  /**
+   * Bring in what the server appended since the newest message held (a job's note, the stored copy
+   * of a turn just streamed here), merged by id so untouched messages keep their identity. Without a
+   * cursor yet (the first page has not landed, or the server sent none) the newest page is reloaded.
+   */
+  const fetchNewer = useCallback(async () => {
+    const after = cursor.current.after;
+    if (after === null) {
+      refetchHistory();
+      return;
+    }
+    try {
+      const page = await fetchPage(`${routes.messages}?after=${after}`);
+      setMessages((prev) => mergeMessages(prev, page.messages));
+      if (page.after !== null) cursor.current.after = page.after;
+    } catch {
+      // The next event, or a reconnect, tries again.
+    }
+  }, [routes, setMessages, refetchHistory]);
+
   usePortalEvents((event) => {
-    if (event.type === "reconnected") refetchHistory();
-    else if (event.type === "messages" && (event.threadId ?? MAIN_THREAD_ID) === threadId) refetchHistory();
+    if (event.type !== "reconnected" && !(event.type === "messages" && (event.threadId ?? MAIN_THREAD_ID) === threadId)) return;
+    // The SDK owns the message list while it streams; the server's copies are merged once it is done.
+    if (responding) newerPending.current = true;
+    else void fetchNewer();
   });
+  useEffect(() => {
+    if (responding || !newerPending.current) return;
+    newerPending.current = false;
+    void fetchNewer();
+  }, [responding, fetchNewer]);
+
+  /** The page before the oldest message held, prepended; the scroller keeps the viewport where it was. */
+  const loadOlder = useCallback(async () => {
+    const before = cursor.current.before;
+    if (before === null || loadingOlderRef.current || historyLoading) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const page = await fetchPage(`${routes.messages}?before=${before}`);
+      setMessages((prev) => {
+        const known = new Set(prev.map((message) => message.id));
+        return [...page.messages.filter((message) => !known.has(message.id)), ...prev];
+      });
+      if (page.before !== null) cursor.current.before = page.before;
+      setHasMore(page.hasMore);
+    } catch {
+      setHistoryError("Could not load earlier messages. Scroll up to retry.");
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
+  }, [routes, setMessages, historyLoading]);
+
+  /** A paged message comes without its tool traffic; opening a tool row fetches the whole message once. */
+  const loadingToolIO = useRef(new Set<string>());
+  const loadToolIO = useCallback(
+    async (messageId: string) => {
+      if (loadingToolIO.current.has(messageId)) return;
+      loadingToolIO.current.add(messageId);
+      try {
+        const r = await fetch(routes.message(messageId));
+        if (!r.ok) return;
+        const { message } = (await r.json()) as { message: OrchestratorMessage };
+        setMessages((prev) => prev.map((current) => (current.id === messageId ? message : current)));
+      } catch {
+        // Leave the placeholder; the next open retries.
+      } finally {
+        loadingToolIO.current.delete(messageId);
+      }
+    },
+    [routes, setMessages],
+  );
 
   const isMain = threadId === MAIN_THREAD_ID;
   const ready = status?.ready ?? false;
@@ -310,7 +405,22 @@ export default function PortalThread({
     <div hidden={!visible} className="flex min-h-0 flex-1 flex-col" data-thread={threadId}>
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={80}>
         <MessageScroller className="flex-1">
-          <MessageScrollerViewport aria-label={isMain ? "Talk to Portal" : thread?.title ?? "Thread"}>
+          <MessageScrollerViewport
+            aria-label={isMain ? "Talk to Portal" : thread?.title ?? "Thread"}
+            preserveScrollOnPrepend
+            onScroll={(event) => {
+              if (event.currentTarget.scrollTop < 200 && hasMore && !historyLoading && !loadingOlder) void loadOlder();
+            }}
+          >
+            {/* Outside the message list so its first item stays a stable scroll anchor. */}
+            {(hasMore || loadingOlder) && (
+              <div className="flex justify-center px-6 pt-4">
+                <Button type="button" variant="ghost" size="sm" onClick={() => void loadOlder()} disabled={loadingOlder}>
+                  {loadingOlder ? <LoaderCircle className="size-3 animate-spin" /> : null}
+                  {loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
+                </Button>
+              </div>
+            )}
             <MessageScrollerContent
               className="conversation-content !gap-8"
               role="log"
@@ -358,11 +468,12 @@ export default function PortalThread({
                 </div>
               )}
               {messages.map((message, index) => (
-                <MessageScrollerItem key={message.id} messageId={message.id} className="![content-visibility:visible]">
+                <MessageScrollerItem key={message.id} messageId={message.id}>
                   <PortalMessage
                     message={message}
                     streaming={responding && index === messages.length - 1}
                     onOpenCurationRun={handlers.onOpenCurationRun}
+                    onLoadToolIO={loadToolIO}
                   />
                 </MessageScrollerItem>
               ))}

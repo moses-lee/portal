@@ -47,6 +47,24 @@ type ProjectState = {
 
 const EMPTY: ProjectState = { projectId: null, summary: null, error: null, pullError: null, extra: [], extraCursor: null, extraFor: null };
 
+/**
+ * The last state of every project this tab looked at, shared by every instance of the hook and
+ * kept across unmounts: a return to a project (another session on the same repo, the panel closed
+ * and opened again, a visit to the terminal) shows what it showed last and refreshes behind it.
+ */
+const cache = new Map<string, ProjectState>();
+const MAX_CACHED_PROJECTS = 20;
+function remember(state: ProjectState) {
+  if (!state.projectId) return;
+  cache.delete(state.projectId);
+  cache.set(state.projectId, state);
+  while (cache.size > MAX_CACHED_PROJECTS) cache.delete(cache.keys().next().value as string);
+}
+/** The instance's state when it is this project's; else what the tab last held for it. */
+function stateFor(prev: ProjectState, projectId: string): ProjectState {
+  return prev.projectId === projectId ? prev : (cache.get(projectId) ?? EMPTY);
+}
+
 async function readError(r: Response) {
   const j = (await r.json().catch(() => ({}))) as { error?: string };
   return j.error || `Request failed (${r.status})`;
@@ -75,7 +93,15 @@ export function useGithubSummary({ projectId, enabled, session }: {
   /** The active session, whose branch changes and turn ends trigger a refresh when it belongs to the project. */
   session: SessionSummary | undefined;
 }): UseGithubSummary {
-  const [state, setState] = useState<ProjectState>(EMPTY);
+  const [state, setState] = useState<ProjectState>(() => (projectId ? (cache.get(projectId) ?? EMPTY) : EMPTY));
+  /** Every change goes through here so the tab-wide cache mirrors the instance. */
+  const commit = useCallback((update: (prev: ProjectState) => ProjectState) => {
+    setState((prev) => {
+      const next = update(prev);
+      remember(next);
+      return next;
+    });
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -83,12 +109,13 @@ export function useGithubSummary({ projectId, enabled, session }: {
   /** Counter of summary requests; only the newest one's response is applied. */
   const requestRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
-  /** The project whose first load has landed (success or error); an aborted request does not count. */
+  /** A cached snapshot shows at once; this instance still refreshes it on its first look. */
   const loadedForRef = useRef<string | null>(null);
 
-  const current = state.projectId === projectId ? state : EMPTY;
+  const current = projectId ? stateFor(state, projectId) : EMPTY;
 
-  const load = useCallback(async (fetchRemote: boolean) => {
+  /** `fetchRemote` runs `git fetch` first; `fresh` (the manual refresh) also asks gh again about the PR. */
+  const load = useCallback(async (fetchRemote: boolean, { fresh = false } = {}) => {
     if (!projectId) return;
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -96,39 +123,41 @@ export function useGithubSummary({ projectId, enabled, session }: {
     const id = ++requestRef.current;
     setRefreshing(true);
     try {
-      const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github${fetchRemote ? "?fetch=1" : ""}`, { signal: controller.signal });
+      const params = [fetchRemote ? "fetch=1" : "", fresh ? "fresh=1" : ""].filter(Boolean).join("&");
+      const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github${params ? `?${params}` : ""}`, { signal: controller.signal });
       if (id !== requestRef.current) return;
       if (!r.ok) throw new Error(await readError(r));
       const { summary } = (await r.json()) as { summary: GithubSummary };
       if (id !== requestRef.current) return;
       loadedForRef.current = projectId;
-      setState((prev) => {
-        const same = prev.projectId === projectId;
+      commit((prev) => {
+        const base = stateFor(prev, projectId);
         // A refused pull stays visible until the remote moves on; polls alone do not clear it.
-        const behindChanged = !same || !prev.summary || prev.summary.behind !== summary.behind;
+        const behindChanged = !base.summary || base.summary.behind !== summary.behind;
         return {
           projectId,
           summary,
           error: null,
-          pullError: behindChanged ? null : prev.pullError,
-          extra: same ? prev.extra : [],
-          extraCursor: same ? prev.extraCursor : null,
-          extraFor: same ? prev.extraFor : null,
+          pullError: behindChanged ? null : base.pullError,
+          extra: base.extra,
+          extraCursor: base.extraCursor,
+          extraFor: base.extraFor,
         };
       });
     } catch (e) {
       if (controller.signal.aborted || id !== requestRef.current) return;
       loadedForRef.current = projectId;
       const message = e instanceof Error && e.message ? e.message : NETWORK_ERROR;
-      setState((prev) => ({ ...(prev.projectId === projectId ? prev : EMPTY), projectId, error: message }));
+      commit((prev) => ({ ...stateFor(prev, projectId), projectId, error: message }));
     } finally {
       if (id === requestRef.current) setRefreshing(false);
     }
-  }, [projectId]);
+  }, [projectId, commit]);
 
   const active = enabled && visible && !!projectId;
 
-  // First load for a project, then polling while the inspector and document are visible.
+  // First look at a project (a cached snapshot is refreshed behind itself), then polling while the
+  // inspector and document are visible.
   useEffect(() => {
     if (!projectId) return;
     if (loadedForRef.current !== projectId || active) void load(false);
@@ -175,14 +204,14 @@ export function useGithubSummary({ projectId, enabled, session }: {
   }, [projectId]);
 
   const refresh = useCallback(() => {
-    setState((prev) => (prev.projectId === projectId && prev.pullError ? { ...prev, pullError: null } : prev));
-    return load(true);
-  }, [projectId, load]);
+    if (projectId) commit((prev) => { const base = stateFor(prev, projectId); return base.pullError ? { ...base, pullError: null } : prev; });
+    return load(true, { fresh: true });
+  }, [projectId, load, commit]);
 
   const pull = useCallback(async () => {
     if (!projectId) return;
     setPulling(true);
-    setState((prev) => (prev.projectId === projectId && prev.pullError ? { ...prev, pullError: null } : prev));
+    commit((prev) => { const base = stateFor(prev, projectId); return base.pullError ? { ...base, pullError: null } : prev; });
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github/pull`, { method: "POST" });
       if (!r.ok) throw new Error(await readError(r));
@@ -191,14 +220,14 @@ export function useGithubSummary({ projectId, enabled, session }: {
       requestRef.current += 1;
       controllerRef.current?.abort();
       setRefreshing(false);
-      setState((prev) => ({ ...(prev.projectId === projectId ? prev : EMPTY), projectId, summary, error: null, pullError: null }));
+      commit((prev) => ({ ...stateFor(prev, projectId), projectId, summary, error: null, pullError: null }));
     } catch (e) {
       const message = e instanceof Error && e.message ? e.message : NETWORK_ERROR;
-      setState((prev) => ({ ...(prev.projectId === projectId ? prev : EMPTY), projectId, pullError: message }));
+      commit((prev) => ({ ...stateFor(prev, projectId), projectId, pullError: message }));
     } finally {
       setPulling(false);
     }
-  }, [projectId]);
+  }, [projectId, commit]);
 
   const extraValid = !!current.summary && !!current.extraFor
     && current.extraFor.cursor === current.summary.cursor && current.extraFor.branch === current.summary.branch;
@@ -215,24 +244,25 @@ export function useGithubSummary({ projectId, enabled, session }: {
       const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github/log?before=${encodeURIComponent(cursor)}`);
       if (!r.ok) throw new Error(await readError(r));
       const page = (await r.json()) as CommitPage;
-      setState((prev) => {
-        if (prev.projectId !== projectId || !prev.summary) return prev;
-        if (prev.summary.cursor !== tail.cursor || prev.summary.branch !== tail.branch) return prev;
-        const continuing = !!prev.extraFor && prev.extraFor.cursor === tail.cursor && prev.extraFor.branch === tail.branch;
+      commit((prev) => {
+        const base = stateFor(prev, projectId);
+        if (!base.summary) return prev;
+        if (base.summary.cursor !== tail.cursor || base.summary.branch !== tail.branch) return prev;
+        const continuing = !!base.extraFor && base.extraFor.cursor === tail.cursor && base.extraFor.branch === tail.branch;
         return {
-          ...prev,
-          extra: continuing ? [...prev.extra, ...page.commits] : page.commits,
+          ...base,
+          extra: continuing ? [...base.extra, ...page.commits] : page.commits,
           extraCursor: page.cursor,
           extraFor: tail,
         };
       });
     } catch (e) {
       const message = e instanceof Error && e.message ? e.message : NETWORK_ERROR;
-      setState((prev) => (prev.projectId === projectId ? { ...prev, error: message } : prev));
+      commit((prev) => ({ ...stateFor(prev, projectId), projectId, error: message }));
     } finally {
       setLoadingMore(false);
     }
-  }, [projectId, cursor, loadingMore, tailCursor, tailBranch]);
+  }, [projectId, cursor, loadingMore, tailCursor, tailBranch, commit]);
 
   const summary = useMemo<GithubSummary | null>(() => {
     if (!current.summary) return null;

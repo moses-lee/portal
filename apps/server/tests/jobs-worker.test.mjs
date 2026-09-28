@@ -54,7 +54,7 @@ test("a due job is claimed and run once; its run is recorded and the job is rele
   assert.equal(after.nextRunAt, T0 + MIN + 5 * MIN);
   assert.equal(after.failures, 0);
   // The answer went to the job's thread, marked with the run.
-  const [note] = await h.runtime.history();
+  const [note] = (await h.runtime.history()).messages;
   assert.equal(note.parts[0].text, "Three sessions finished today.");
   assert.deepEqual(note.metadata.run, { id: run.id, kind: "helper" });
   assert.deepEqual(h.events.filter((event) => event.type === "run" && event.run.id === run.id).map((event) => event.run.status), ["running", "succeeded"]);

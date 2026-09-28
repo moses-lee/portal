@@ -17,7 +17,7 @@ export function createShellRuntime({
   shell = process.env.SHELL || "/bin/sh",
   args = ["-l"],
   env = process.env,
-  pollIntervalMs = 750,
+  pollIntervalMs = 1_000,
 } = {}) {
   const listeners = new Set<(event: ShellEvent) => void>();
   let proc: pty.IPty | null = null;

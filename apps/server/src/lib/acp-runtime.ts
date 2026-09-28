@@ -5,9 +5,10 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentDefinition } from "./agents.ts";
 import { childEnv } from "./child-env.ts";
-import { DEFAULT_HUNG_AFTER_MS, type ProbeState, createProbeState, deriveLiveness, resetProbe, sampleProbe, trackToolCall } from "./liveness.ts";
+import { type BlobStore, externalizeImages } from "./blobs.ts";
+import { DEFAULT_HUNG_AFTER_MS, type ProbeState, createProbeState, deriveLiveness, isHeartbeat, resetProbe, sampleProbe, trackProgress, trackToolCall } from "./liveness.ts";
 import { type ProcessTable, readProcessTable } from "./process-probe.ts";
-import { coalesceTextChunks, readTurnPage } from "./session-pages.ts";
+import { coalesceTextChunks, isTextChunk, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
 import type {
   EventPage, OpenToolCall, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionLiveness, SessionLoss, SessionMeta, SessionState, StoredEvent,
@@ -40,6 +41,13 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
   pendingPermissions: Set<string>;
   /** Store writes issued so far; awaited before reading pages so they include the newest events. */
   writes: Promise<void>;
+  /** Events numbered but not yet handed to the store; flushed as one write (see `flush`). */
+  pending: StoredEvent[];
+  /** The run of streamed text chunks being merged into one row; stored under the run's last seq. */
+  run: PendingRun | null;
+  flushTimer: NodeJS.Timeout | null;
+  /** Ids of tool calls last reported `in_progress`, so a repeat with nothing new is a heartbeat. */
+  progressing: Set<string>;
   /** True while `session/load` replays history the store already holds. */
   replaying: boolean;
   process: AgentProcess | null;
@@ -61,6 +69,17 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
 
 /** Liveness settings; `setLivenessOptions` changes them for every session at once. */
 export type LivenessConfig = { hungAfterMs: number };
+
+type PendingRun = { kind: "agent_message_chunk" | "agent_thought_chunk"; first: StoredEvent; seq: number; text: string };
+
+/** How long numbered events wait for company before they are written; also the most streamed text a crash can lose. */
+export const WRITE_DELAY_MS = 250;
+/** A text run this long is written without waiting for the timer. */
+const RUN_FLUSH_CHARS = 4096;
+/** Rows a page read by turns never exceeds; past this the page may start inside a turn. */
+export const TURN_PAGE_MAX_EVENTS = 1000;
+/** Sessions loaded from the store at once on boot. */
+const LOAD_CONCURRENCY = 8;
 
 type AgentProcess = {
   agent: AgentDefinition;
@@ -194,6 +213,8 @@ export type AcpRuntimeOptions = {
   probeEveryMs?: number;
   /** Reads the process table; tests pass a fake. */
   readProcesses?: () => Promise<ProcessTable | null>;
+  /** Where inline images in tool results are moved to; without one they stay in the event. */
+  blobs?: BlobStore | null;
 };
 
 /** How often the probe samples while any turn is open. */
@@ -205,7 +226,7 @@ export function createAcpRuntime(
   agentDefinitions: readonly AgentDefinition[],
   {
     initializeTimeoutMs = 30_000, agentCallTimeoutMs = 5_000, store = createMemorySessionStore(), recentEvents = 2_000,
-    hungAfterMs = DEFAULT_HUNG_AFTER_MS, probeEveryMs = PROBE_EVERY_MS, readProcesses = readProcessTable,
+    hungAfterMs = DEFAULT_HUNG_AFTER_MS, probeEveryMs = PROBE_EVERY_MS, readProcesses = readProcessTable, blobs = null,
   }: AcpRuntimeOptions = {},
 ) {
   const livenessConfig: LivenessConfig = { hungAfterMs };
@@ -244,7 +265,7 @@ export function createAcpRuntime(
 
   function toRecord(session: Session): SessionRecord {
     const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost } = session;
-    return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost };
+    return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost, turnOpen: session.busy };
   }
 
   /** Record (or, with null, clear) why the session's agent was lost. */
@@ -257,6 +278,7 @@ export function createAcpRuntime(
   function startTurn(session: Session) {
     session.turnStartedAt = Date.now();
     session.openTools.clear();
+    session.progressing.clear();
     session.lastOutputAt = null;
     resetProbe(session.probe);
   }
@@ -264,6 +286,7 @@ export function createAcpRuntime(
   function endTurn(session: Session) {
     session.turnStartedAt = null;
     session.openTools.clear();
+    session.progressing.clear();
     session.lastOutputAt = null;
     resetProbe(session.probe);
   }
@@ -275,8 +298,11 @@ export function createAcpRuntime(
 
   function persistMeta(session: Session) {
     if (!current(session)) return;
+    // Taken now, not when the chain gets to it: the record must say what was true at this call
+    // (a turn that opened here is open, whatever a later shutdown does to `busy` before the write).
+    const record = toRecord(session);
     session.writes = session.writes
-      .then(() => store.putSession(toRecord(session)))
+      .then(() => store.putSession(record))
       .catch((error: unknown) => console.error(`Could not save session ${session.id}: ${errorMessage(error)}`));
   }
 
@@ -291,15 +317,78 @@ export function createAcpRuntime(
       session.eventTimes.splice(0, drop);
       session.eventBase += drop;
     }
-    const stored: StoredEvent = { ...event, seq, ts };
     // A deleted session may still receive its agent's final events; viewers hear them, disk does not.
-    if (current(session)) {
-      session.writes = session.writes
-        .then(() => store.appendEvent(session.id, stored))
-        // The store accepts a gap after a failed write, so only this event is lost.
-        .catch((error: unknown) => console.error(`Could not save event ${seq} of session ${session.id}: ${errorMessage(error)}`));
-    }
+    if (current(session)) queueWrite(session, { ...event, seq, ts });
     for (const listener of session.listeners) listener(seq, event);
+  }
+
+  /**
+   * Hold an event for the next write. Adjacent text chunks of one kind merge into a single row
+   * carrying the run's last seq, so after every flush the store's highest seq is `nextSeq - 1`
+   * and a restart resumes numbering where this process left off. Tool call rows wait at most
+   * `WRITE_DELAY_MS` and go in one multi-row insert with whatever else arrived. Turn markers,
+   * prompts, permissions, and errors are written at once, each as its own write, so a turn's
+   * boundaries are on disk the moment they happen and a failed write loses one event.
+   */
+  function queueWrite(session: Session, stored: StoredEvent) {
+    if (isTextChunk(stored)) {
+      const { sessionUpdate, content } = stored.update;
+      if (session.run && session.run.kind === sessionUpdate) {
+        session.run.seq = stored.seq;
+        session.run.text += content.text;
+        if (session.run.text.length >= RUN_FLUSH_CHARS) flush(session);
+        return;
+      }
+      endRun(session);
+      session.run = { kind: sessionUpdate, first: stored, seq: stored.seq, text: content.text };
+      session.flushTimer ??= setTimeout(() => flush(session), WRITE_DELAY_MS);
+      return;
+    }
+    if (stored.type === "update") {
+      endRun(session);
+      session.pending.push(stored);
+      session.flushTimer ??= setTimeout(() => flush(session), WRITE_DELAY_MS);
+      return;
+    }
+    flush(session);
+    session.pending.push(stored);
+    flush(session);
+  }
+
+  /** Close the open text run into a pending row (under the run's last seq, with the first chunk's timestamp). */
+  function endRun(session: Session) {
+    const run = session.run;
+    if (!run) return;
+    session.run = null;
+    const first = run.first as StoredEvent & { type: "update"; update: { content: { type: "text"; text: string } } };
+    const merged = { ...first, seq: run.seq, update: { ...first.update, content: { ...first.update.content, text: run.text } } };
+    session.pending.push(merged as unknown as StoredEvent);
+  }
+
+  /** Hand every held event to the store as one write. Called by the timer, before a page read, and on shutdown. */
+  function flush(session: Session) {
+    if (session.flushTimer) {
+      clearTimeout(session.flushTimer);
+      session.flushTimer = null;
+    }
+    endRun(session);
+    if (session.pending.length === 0) return;
+    const batch = session.pending;
+    session.pending = [];
+    const first = batch[0].seq;
+    const last = batch[batch.length - 1].seq;
+    session.writes = session.writes
+      .then(() => store.appendEvents(session.id, batch))
+      // The store accepts a gap after a failed write, so only this batch is lost.
+      .catch((error: unknown) => console.error(`Could not save events ${first}..${last} of session ${session.id}: ${errorMessage(error)}`));
+  }
+
+  /** Forget held events (the session is gone). */
+  function discardWrites(session: Session) {
+    if (session.flushTimer) clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+    session.run = null;
+    session.pending = [];
   }
 
   function setState(session: Session, patch: Partial<SessionState>): SessionState {
@@ -369,6 +458,8 @@ export function createAcpRuntime(
       endTurn(session);
       cancelPermissions(session);
       if (instance.loss) setLost(session, instance.loss);
+      // On shutdown the record keeps saying the turn is open, so the next start closes it; a crash closes it here.
+      else if (wasBusy && !disposed) persistMeta(session);
       detach(session, error.message);
       // On shutdown the log is left as it is; the next start marks the cut-off turn instead.
       if (wasBusy && !disposed) emit(session, { type: "error", message: `${error.message} Send a message to reconnect.` });
@@ -376,6 +467,16 @@ export function createAcpRuntime(
     // Closing ACP rejects pending initialize/new/prompt requests immediately.
     instance.conn.close(error);
     instance.proc.kill();
+  }
+
+  /** The update as it is logged and streamed: inline images moved to the blob store when there is one. */
+  function storable(update: acp.SessionUpdate): acp.SessionUpdate {
+    if (!blobs) return update;
+    const { update: logged, files } = externalizeImages(update);
+    for (const file of files) {
+      blobs.put(file.bytes, file.mimeType).catch((error: unknown) => console.error(`Could not save blob ${file.name}: ${errorMessage(error)}`));
+    }
+    return logged;
   }
 
   function startProcess(agent: AgentDefinition): AgentProcess {
@@ -439,15 +540,21 @@ export function createAcpRuntime(
               announce(session);
             }
             return;
-          default:
+          default: {
             // `session/load` replays history Portal already logged; only live updates are appended.
             if (session.replaying) return;
+            // Decided before `trackProgress` records this update's own status.
+            const heartbeat = isHeartbeat(update, session.progressing);
             if (session.busy) {
               const tool = update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update";
               // Tool heartbeats say the agent is alive, not that the tool gets anywhere; everything else is output.
               if (!tool || trackToolCall(session.openTools, update, Date.now())) session.lastOutputAt = Date.now();
             }
-            emit(session, { type: "update", update });
+            trackProgress(session.progressing, update);
+            // A heartbeat has done its work for liveness; it tells a reader nothing, so it gets no seq and no row.
+            if (heartbeat) return;
+            emit(session, { type: "update", update: storable(update) });
+          }
         }
       })
       .connect(stream);
@@ -560,6 +667,10 @@ export function createAcpRuntime(
       closeListeners: new Set(),
       pendingPermissions: new Set(),
       writes: Promise.resolve(),
+      pending: [],
+      run: null,
+      flushTimer: null,
+      progressing: new Set(),
       replaying: false,
       process: null,
       attaching: null,
@@ -575,16 +686,20 @@ export function createAcpRuntime(
     return session;
   }
 
-  /** Sessions persisted by an earlier process appear offline; a turn cut off by the restart is closed with an error. */
+  /**
+   * Sessions persisted by an earlier process appear offline; a turn cut off by the restart is
+   * closed with an error. Whether a turn was open is on the record; a record from before that
+   * field was kept is settled by reading its tail once, and the answer is written back.
+   */
   async function loadPersisted() {
     await store.ready;
     const records = await store.listSessions();
-    await Promise.all(records.map(async (record) => {
+    const load = async (record: SessionRecord) => {
       if (sessions.has(record.id)) return;
       const count = await store.eventCount(record.id);
       const session = makeSession(record, count, { status: "offline", error: null });
+      let open: boolean | null = record.turnOpen ?? null;
       // Look back through the tail until a turn marker says whether a turn was cut off.
-      let open: boolean | null = null;
       for (let before = count, scanned = 0; open === null && before > 0 && scanned < 5_000;) {
         const { events: tail } = await store.readTail(record.id, { beforeSeq: before, limit: 256 });
         if (tail.length === 0) break;
@@ -595,8 +710,19 @@ export function createAcpRuntime(
       if (open) {
         emit(session, { type: "error", message: "Portal restarted while this turn was running. Send a message to continue." });
         setLost(session, { reason: "portal_restarted", detail: "Portal restarted while the turn was running", at: Date.now() });
+      } else if (record.turnOpen == null) {
+        persistMeta(session);
       }
-    }));
+    };
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const record = records[next++];
+        if (!record) return;
+        await load(record);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LOAD_CONCURRENCY, records.length) }, worker));
   }
   const ready = loadPersisted();
 
@@ -766,6 +892,7 @@ export function createAcpRuntime(
       endTurn(session);
       cancelPermissions(session);
       emit(session, { type: "turn_end", stopReason: response.stopReason });
+      persistMeta(session);
       announce(session);
     }).catch((error: unknown) => {
       if (instance.failure) return; // fail() already ended this session's turn.
@@ -773,6 +900,7 @@ export function createAcpRuntime(
       endTurn(session);
       cancelPermissions(session);
       emit(session, { type: "error", message: agentError(instance.agent, "prompt failed", error).message });
+      persistMeta(session);
       announce(session);
     });
   }
@@ -866,26 +994,36 @@ export function createAcpRuntime(
     }
   }
 
-  /** One page of the log ending before `before` (default: the newest events), aligned to a turn start. */
-  async function readEvents(id: string, { before, limit = 300 }: { before?: number; limit?: number } = {}): Promise<EventPage> {
+  /**
+   * One page of the log ending before `before` (default: the newest events), aligned to a turn
+   * start. Sized by `turns` (the browser: the last few turns, capped at `TURN_PAGE_MAX_EVENTS`
+   * rows, past which the page may start inside a turn) or by `limit` rows (the orchestrator's
+   * windows).
+   */
+  async function readEvents(id: string, { before, limit, turns }: { before?: number; limit?: number; turns?: number } = {}): Promise<EventPage> {
     await ready;
     const session = requireSession(id);
     // Taken before the read: an event that lands mid-read is either on the page or replayed by the
-    // stream from this cursor (viewers drop duplicates), never skipped.
+    // stream from this cursor (viewers drop duplicates), never skipped. Held events go first, so
+    // the page holds everything numbered below the cursor.
     const nextSeq = session.nextSeq;
+    flush(session);
     await session.writes;
-    const page = await readTurnPage(store, id, { before, minEvents: limit });
+    const page = turns !== undefined
+      ? await readTurnPage(store, id, { before, minTurns: turns, maxEvents: TURN_PAGE_MAX_EVENTS })
+      : await readTurnPage(store, id, { before, minEvents: limit ?? 300 });
     return { events: coalesceTextChunks(page.events), hasMore: page.hasMore, nextSeq };
   }
 
   /**
-   * Events after `since` that are still in memory, or null when they have aged out and the
+   * Events after `since` that are still in memory, or null when they have aged out (or `since`
+   * is past the log, which a viewer can only hold from a process with other numbering) and the
    * viewer must refetch a page instead.
    */
   function eventsSince(id: string, since: number): StoredEvent[] | null {
     const session = requireSession(id);
     const from = since + 1;
-    if (from < session.eventBase) return null;
+    if (from < session.eventBase || from > session.nextSeq) return null;
     const offset = from - session.eventBase;
     return session.events.slice(offset).map((event, i) => ({ ...event, seq: from + i, ts: session.eventTimes[offset + i] }));
   }
@@ -941,6 +1079,7 @@ export function createAcpRuntime(
     endTurn(session);
     for (const listener of session.closeListeners) listener();
     notifyList({ type: "deleted", id });
+    discardWrites(session);
     await session.writes;
     await store.deleteSession(id);
     return true;
@@ -1008,6 +1147,7 @@ export function createAcpRuntime(
     disposed = true;
     if (probeTimer) clearInterval(probeTimer);
     for (const instance of processes.values()) fail(instance, new Error("ACP runtime is stopped."));
+    for (const session of sessions.values()) flush(session);
     await Promise.all([...sessions.values()].map((session) => session.writes));
     await store.dispose().catch(() => {});
   }

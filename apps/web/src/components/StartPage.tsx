@@ -21,7 +21,7 @@ import {
 import type {
   AgentInfo,
   ProjectSummary,
-  SessionState,
+  SessionListState,
   SetConfigRequest,
 } from "@/lib/types";
 
@@ -36,7 +36,7 @@ export type StartPageProps = {
   selectedAgentId: string;
   onSelectAgent: (agentId: string) => void;
   /** Agent settings for the new session, seeded from the agent's latest session; null when none are known yet. */
-  settings: SessionState | null;
+  settings: SessionListState | null;
   onSettingsChange: (request: SetConfigRequest) => void;
   loading?: boolean;
   canCreate: boolean;

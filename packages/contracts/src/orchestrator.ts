@@ -263,9 +263,30 @@ export type OrchestratorMessageMetadata = {
   run?: { id: string; kind: JobRun["kind"] };
   /** Items created or updated by this message. The thread does not show them (they live in Needs you); the audit trail does. */
   itemIds?: string[];
+  /**
+   * Set on a message served in a page: its tool parts carry `TOOL_IO_OMITTED` in place of their
+   * input and output. `GET /api/portal/threads/[id]/messages/[messageId]` has the whole message.
+   */
+  toolIO?: "omitted";
 };
 
 export type OrchestratorMessage = UIMessage<OrchestratorMessageMetadata>;
+
+/** What a paged message's tool parts hold instead of their input and output (see `toolIO`). */
+export const TOOL_IO_OMITTED = "[open to load]";
+
+/**
+ * One page of a thread (`GET /api/portal/messages`, `GET /api/portal/threads/[id]/messages`),
+ * oldest first. Cursors are the store's ordinals: `?before=<before>` pages back, `?after=<after>`
+ * fetches what arrived since. Null cursors mean the page was empty.
+ */
+export type MessagePage = {
+  messages: OrchestratorMessage[];
+  /** More messages exist before `messages[0]` (or, for an `after` query, beyond the page). */
+  hasMore: boolean;
+  before: number | null;
+  after: number | null;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Snapshots (what each full world refresh diffs against the previous one)

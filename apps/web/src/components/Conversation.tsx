@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  memo,
-  useEffect,
-  useMemo,
-  useState,
-  type ComponentProps,
-} from "react";
+import { memo, useEffect, useState, type ComponentProps } from "react";
 import {
   ArrowDown,
   Check,
@@ -19,7 +13,6 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { diffLines } from "diff";
 import { Button } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
@@ -45,6 +38,10 @@ import AgentLogo from "./AgentLogo";
 import CodeBlock from "./CodeBlock";
 import CopyButton from "./CopyButton";
 import PermissionCard from "./PermissionCard";
+import dynamic from "next/dynamic";
+
+// The diff library is only needed once an edit's card is opened.
+const DiffView = dynamic(() => import("./DiffView"));
 import type { Block, History, ToolBlock, Turn } from "@/lib/transcript";
 
 const markdownComponents = {
@@ -57,6 +54,23 @@ const markdownComponents = {
 };
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];
+/**
+ * Where a reply still streaming can be cut so the settled part renders once: after the last blank
+ * line that is not inside a fenced code block. Everything before it is parsed and highlighted
+ * once and memoised; only the tail is re-parsed as chunks arrive. Returns [settled, tail].
+ */
+export function splitSettled(text: string): [string, string] {
+  let fences = 0;
+  let cut = -1;
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("```") || line.startsWith("~~~")) fences++;
+    else if (line === "" && fences % 2 === 0 && offset > 0) cut = offset;
+    offset += line.length + 1;
+  }
+  return cut === -1 ? ["", text] : [text.slice(0, cut), text.slice(cut)];
+}
+
 const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="conversation-markdown">
@@ -70,69 +84,6 @@ const Markdown = memo(function Markdown({ text }: { text: string }) {
     </div>
   );
 });
-
-function DiffView({
-  path,
-  oldText,
-  newText,
-}: {
-  path: string;
-  oldText?: string | null;
-  newText: string;
-}) {
-  const changes = useMemo(
-    () =>
-      (oldText?.length ?? 0) + newText.length > 300_000
-        ? undefined
-        : diffLines(oldText ?? "", newText, {
-            timeout: 30,
-            maxEditLength: 1500,
-          }),
-    [oldText, newText],
-  );
-  return (
-    <div className="overflow-hidden rounded-lg border border-white/5">
-      <div className="break-all border-b border-white/5 px-3 py-2 font-mono text-xs text-muted-foreground">
-        {path}
-      </div>
-      {changes ? (
-        <pre className="max-h-96 overflow-auto py-2 text-[11px] leading-6">
-          {changes.map((change, i) => (
-            <span
-              key={i}
-              className={`block min-w-max px-3 ${change.added ? "bg-emerald-400/5 text-emerald-200" : change.removed ? "bg-rose-400/5 text-rose-200" : "text-muted-foreground"}`}
-            >
-              {change.value
-                .replace(/\n$/, "")
-                .split("\n")
-                .map((line, index) => (
-                  <span key={index} className="block">
-                    <span
-                      className="mr-3 select-none opacity-50"
-                      aria-hidden="true"
-                    >
-                      {change.added ? "+" : change.removed ? "−" : " "}
-                    </span>
-                    {line || " "}
-                  </span>
-                ))}
-            </span>
-          ))}
-        </pre>
-      ) : (
-        <div className="space-y-3 p-3 text-xs">
-          <p className="text-muted-foreground">
-            Large change — showing full versions.
-          </p>
-          <p>Before</p>
-          <pre className="max-h-64 overflow-auto">{oldText ?? "New file"}</pre>
-          <p>After</p>
-          <pre className="max-h-64 overflow-auto">{newText}</pre>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function ToolStatus({ status }: { status?: string | null }) {
   if (status === "completed")
@@ -164,7 +115,8 @@ function ToolStatus({ status }: { status?: string | null }) {
   );
 }
 
-function ToolCard({ block }: { block: ToolBlock }) {
+/** Memoised on the block: a live turn re-renders per streamed chunk, and only the block an event touched is a new object. */
+const ToolCard = memo(function ToolCard({ block }: { block: ToolBlock }) {
   const text = block.content.filter((item) => item.type === "content");
   return (
     <Collapsible className="tool-details">
@@ -212,6 +164,22 @@ function ToolCard({ block }: { block: ToolBlock }) {
               >
                 {item.content.text}
               </pre>
+            ) : item.content.type === "image" &&
+              (item.content.uri || item.content.data) ? (
+              // Images live in the blob store and load only when the card is opened. Plain <img>: the
+              // files are local, content-addressed, and served immutable, so next/image has nothing to add.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={i}
+                src={
+                  item.content.uri ||
+                  `data:${item.content.mimeType};base64,${item.content.data}`
+                }
+                alt={block.title}
+                loading="lazy"
+                decoding="async"
+                className="max-h-96 max-w-full rounded-lg border border-white/5"
+              />
             ) : null,
           )}
           {block.rawOutput !== undefined && text.length === 0 && (
@@ -225,7 +193,7 @@ function ToolCard({ block }: { block: ToolBlock }) {
       </CollapsibleContent>
     </Collapsible>
   );
-}
+});
 
 type Phase = "thinking" | "tool" | "approval";
 const toolVerbs: Record<string, string> = {
@@ -419,6 +387,11 @@ const TurnView = memo(function TurnView({
         if (segment.kind === "assistant") {
           const label = !hasAgentLabel;
           hasAgentLabel = true;
+          // While the reply streams, the settled part is one memoised render; only the tail re-parses.
+          const [settled, tail] =
+            working && i === segments.length - 1
+              ? splitSettled(segment.text)
+              : [segment.text, ""];
           return (
             <Message key={`assistant-${i}`}>
               <MessageContent className="gap-3">
@@ -428,7 +401,8 @@ const TurnView = memo(function TurnView({
                     {agentName}
                   </div>
                 )}
-                <Markdown text={segment.text} />
+                {settled && <Markdown text={settled} />}
+                {tail && <Markdown text={tail} />}
                 {!working && (
                   <MessageFooter className="!px-0">
                     <CopyButton
@@ -581,11 +555,7 @@ export default function Conversation({
               </div>
             )}
             {history.turns.map((turn, i) => (
-              <MessageScrollerItem
-                key={turn.key}
-                messageId={`turn-${turn.key}`}
-                className="![content-visibility:visible]"
-              >
+              <MessageScrollerItem key={turn.key} messageId={`turn-${turn.key}`}>
                 <TurnView
                   turn={turn}
                   agentId={agentId}

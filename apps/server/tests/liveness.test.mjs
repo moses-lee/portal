@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createProbeState, deriveLiveness, formatDuration, isStall, resetProbe, sampleProbe, trackToolCall,
 } from "../src/lib/liveness.ts";
+import * as livenessModule from "../src/lib/liveness.ts";
 
 const MIN = 60_000;
 
@@ -161,4 +162,33 @@ test("durations read the way a person would say them", () => {
   assert.equal(formatDuration(125 * MIN), "2h 5m");
   assert.equal(formatDuration(3 * 60 * MIN), "3h");
   assert.equal(formatDuration(52 * 60 * MIN), "2d 4h");
+});
+
+test("a heartbeat is a bare in_progress repeat for a call already in progress; anything else is logged", () => {
+  const { isHeartbeat, trackProgress } = livenessModule;
+  const progressing = new Set();
+  const start = { sessionUpdate: "tool_call", toolCallId: "a", title: "bazel test //...", kind: "execute", status: "pending" };
+  assert.equal(isHeartbeat(start, progressing), false);
+  trackProgress(progressing, start);
+  // pending -> in_progress carries news (the status changed), so it is logged...
+  const first = { sessionUpdate: "tool_call_update", toolCallId: "a", status: "in_progress" };
+  assert.equal(isHeartbeat(first, progressing), false);
+  trackProgress(progressing, first);
+  // ...and every bare repeat after it is a heartbeat, with or without Claude Code's elapsed-time meta.
+  assert.equal(isHeartbeat({ ...first, _meta: { claudeCode: { toolResponse: { elapsedTimeSeconds: 30 } } } }, progressing), true);
+  assert.equal(isHeartbeat(first, progressing), true);
+  assert.equal(isHeartbeat({ sessionUpdate: "tool_call_update", toolCallId: "a" }, progressing), true);
+  // Anything that tells a reader something is not a heartbeat.
+  assert.equal(isHeartbeat({ ...first, title: "bazel test //... (retry)" }, progressing), false);
+  assert.equal(isHeartbeat({ ...first, content: [{ type: "content", content: { type: "text", text: "..." } }] }, progressing), false);
+  assert.equal(isHeartbeat({ ...first, rawOutput: { partial: true } }, progressing), false);
+  assert.equal(isHeartbeat({ ...first, rawInput: { cmd: "x" } }, progressing), false);
+  assert.equal(isHeartbeat({ ...first, locations: [{ path: "/x" }] }, progressing), false);
+  assert.equal(isHeartbeat({ ...first, status: "completed" }, progressing), false);
+  // A call this runtime never saw in progress (it started before a reconnect) is logged the first time.
+  assert.equal(isHeartbeat({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress" }, progressing), false);
+  trackProgress(progressing, { sessionUpdate: "tool_call_update", toolCallId: "a", status: "completed" });
+  assert.equal(progressing.has("a"), false);
+  assert.equal(isHeartbeat(first, progressing), false);
+  assert.equal(isHeartbeat({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } }, progressing), false);
 });

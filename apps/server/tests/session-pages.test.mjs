@@ -105,3 +105,38 @@ test("non-text chunks and other updates are passed through untouched", () => {
   assert.deepEqual(coalesceTextChunks(events), events);
   assert.deepEqual(coalesceTextChunks([]), []);
 });
+
+test("a page asked for by turns holds that many whole turns, however small they are", async () => {
+  const { store, starts, total } = await seed([10, 4, 4, 4, 4]);
+  const page = await readTurnPage(store, "s", { minTurns: 3 });
+  assert.equal(page.events[0].seq, starts[2]);
+  assert.equal(page.events.at(-1).seq, total - 1);
+  assert.equal(page.events.length, 12);
+  assert.equal(page.hasMore, true);
+  const older = await readTurnPage(store, "s", { before: page.events[0].seq, minTurns: 3 });
+  assert.equal(older.events[0].seq, starts[0]);
+  assert.equal(older.events.length, 14);
+  assert.equal(older.hasMore, false);
+  // Fewer turns than asked for: the whole log.
+  const all = await readTurnPage(store, "s", { minTurns: 50 });
+  assert.equal(all.events.length, total);
+  assert.equal(all.hasMore, false);
+});
+
+test("a turn longer than the row cap is cut: the page starts inside it and says more exists", async () => {
+  const { store, starts, total } = await seed([5, 30, 5]);
+  const page = await readTurnPage(store, "s", { minTurns: 3, maxEvents: 12 });
+  assert.equal(page.events.length, 12);
+  assert.equal(page.events.at(-1).seq, total - 1);
+  assert.equal(page.events[0].type, "update", "the page starts inside the long turn");
+  assert.equal(page.hasMore, true);
+  // The next page continues backwards from the cut, and reaches the turn's start.
+  const older = await readTurnPage(store, "s", { before: page.events[0].seq, minTurns: 3, maxEvents: 100 });
+  assert.equal(older.events[0].seq, starts[0]);
+  assert.equal(older.events.at(-1).seq, page.events[0].seq - 1);
+  assert.equal(older.hasMore, false);
+  // A cap that a short last turn fits under still aligns to its start.
+  const short = await readTurnPage(store, "s", { minTurns: 1, maxEvents: 12 });
+  assert.equal(short.events[0].seq, starts[2]);
+  assert.equal(short.events.length, 5);
+});

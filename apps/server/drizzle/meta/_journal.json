@@ -71,6 +71,20 @@
       "when": 1790378348942,
       "tag": "0009_session_lost",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790544551965,
+      "tag": "0010_session_turn_open",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790549716971,
+      "tag": "0011_items_status_index",
+      "breakpoints": true
     }
   ]
 }

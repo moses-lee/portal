@@ -149,7 +149,10 @@ export default function PortalPage({
             Portal has no thread with the id “{shownThread}”.
           </p>
         )}
-        {visited.map((threadId) => (
+        {/* Hidden threads stay mounted only while a turn streams into them; the rest reload their newest page when shown again. */}
+        {visited
+          .filter((threadId) => threadId === shownThread || (status?.busyThreads ?? []).includes(threadId))
+          .map((threadId) => (
           <PortalThread
             key={threadId}
             threadId={threadId}

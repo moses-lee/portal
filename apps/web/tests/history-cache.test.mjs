@@ -90,3 +90,20 @@ test("an unknown session resolves null and drops any entry; failures reject but 
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(cache.get("s"), undefined);
 });
+
+test("the cache keeps the most recently used entries and drops the rest", async () => {
+  const { fetchPage } = fetcher(Array.from({ length: 25 }, (_, i) => page(i * 10, 2)));
+  const cache = createHistoryCache(fetchPage, { maxEntries: 3 });
+  await cache.load("a");
+  await cache.load("b");
+  await cache.load("c");
+  assert.ok(cache.get("a"), "reading refreshes an entry");
+  await cache.load("d");
+  assert.equal(cache.get("b"), undefined, "the least recently used entry went");
+  assert.ok(cache.get("a"));
+  assert.ok(cache.get("c"));
+  assert.ok(cache.get("d"));
+  cache.set("e", { history: { turns: [], hasMore: false }, cursor: 0 });
+  assert.equal(cache.get("a"), undefined);
+  assert.ok(cache.get("e"));
+});

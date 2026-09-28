@@ -8,6 +8,9 @@
 import { segment, type History } from "./transcript.ts";
 import type { EventPage } from "./types.ts";
 
+/** Turns a transcript page holds (`GET /events?turns=`): the first page ends at the newest event, older pages end where the previous began. */
+export const PAGE_TURNS = 3;
+
 export type CachedHistory = {
   history: History;
   /** Seq of the newest event the history holds; the stream is opened with `?since=<cursor>`. */
@@ -29,9 +32,21 @@ export type HistoryCache = {
   prefetch(id: string): void;
 };
 
+/** Sessions kept; the least recently read or written goes first. A long-lived tab visits (and hovers) many. */
+export const MAX_ENTRIES = 20;
+
 /** `fetchPage` resolves null for an unknown session and rejects on other failures. */
-export function createHistoryCache(fetchPage: (id: string) => Promise<EventPage | null>): HistoryCache {
+export function createHistoryCache(
+  fetchPage: (id: string) => Promise<EventPage | null>,
+  { maxEntries = MAX_ENTRIES }: { maxEntries?: number } = {},
+): HistoryCache {
+  /** Insertion order is recency: a read or write moves the entry to the end. */
   const entries = new Map<string, CachedHistory>();
+  const remember = (id: string, entry: CachedHistory) => {
+    entries.delete(id);
+    entries.set(id, entry);
+    while (entries.size > maxEntries) entries.delete(entries.keys().next().value as string);
+  };
   const inflight = new Map<string, Promise<CachedHistory | null>>();
   /** Bumped by every load and `set`, so a load that finishes after a newer write leaves the entry alone. */
   const generation = new Map<string, number>();
@@ -55,7 +70,7 @@ export function createHistoryCache(fetchPage: (id: string) => Promise<EventPage 
         return null;
       }
       const entry: CachedHistory = { history: { turns: segment(page.events), hasMore: page.hasMore }, cursor: page.nextSeq - 1 };
-      if (generation.get(id) === gen) entries.set(id, entry);
+      if (generation.get(id) === gen) remember(id, entry);
       return entry;
     }).finally(() => {
       if (inflight.get(id) === run) inflight.delete(id);
@@ -65,10 +80,14 @@ export function createHistoryCache(fetchPage: (id: string) => Promise<EventPage 
   };
 
   return {
-    get: (id) => entries.get(id),
+    get(id) {
+      const hit = entries.get(id);
+      if (hit) remember(id, hit);
+      return hit;
+    },
     set(id, entry) {
       bump(id);
-      entries.set(id, entry);
+      remember(id, entry);
     },
     delete(id) {
       bump(id);

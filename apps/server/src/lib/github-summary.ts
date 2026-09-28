@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   CheckRun, CheckState, CheckSummary, CommitPage, CommitRow, ConflictSummary, DiffSummary, GithubSummary, PullSummary,
 } from "./types.ts";
@@ -25,6 +26,12 @@ const fetchesByRepo = new Map<string, Promise<FetchResult>>();
 const fetchesInFlight = new Map<string, Promise<FetchResult>>();
 const summariesInFlight = new Map<string, Promise<GithubSummary>>();
 const pullCache = new Map<string, PullResult & { expires: number }>();
+/**
+ * The last summary built per repository root, with the refs it was built from and the PR answer it
+ * used. A poll that finds both unchanged answers from it and skips the log, the merge check, and
+ * the diff, which are most of a read's git processes.
+ */
+const summaryCache = new Map<string, { fingerprint: string; pull: string; summary: GithubSummary }>();
 /** Checkout path → common git dir; resolved once per checkout. */
 const repoKeys = new Map<string, string>();
 let mergeTreeSupport: Promise<boolean> | null = null;
@@ -36,6 +43,7 @@ export function resetGithubSummaryCaches() {
   fetchesInFlight.clear();
   summariesInFlight.clear();
   pullCache.clear();
+  summaryCache.clear();
   repoKeys.clear();
 }
 
@@ -322,10 +330,11 @@ async function readPull(repoRoot: string, branch: string, gh: GhRunner): Promise
   return { pull: { ...pull, ...counts }, pullError: null, diff: toPullDiff(parsed, pull.baseBranch) };
 }
 
-async function cachedPull(repoRoot: string, branch: string, gh: GhRunner, now: number, bypass: boolean): Promise<PullResult> {
+async function cachedPull(repoRoot: string, branch: string, headSha: string | null, gh: GhRunner, now: number, bypass: boolean): Promise<PullResult> {
   // gh has no `--` separator: a name that looks like a flag cannot be looked up safely.
   if (branch.startsWith("-")) return { pull: null, pullError: null, diff: null };
-  const key = `${repoRoot}|${branch}`;
+  // A new head means a new PR state (checks restart, totals move): the minute's cache is for a head that stood still.
+  const key = `${repoRoot}|${branch}|${headSha ?? ""}`;
   const hit = pullCache.get(key);
   if (hit && !bypass && hit.expires > now) return { pull: hit.pull, pullError: hit.pullError, diff: hit.diff };
   const result = await readPull(repoRoot, branch, gh);
@@ -438,15 +447,26 @@ async function buildSummary(repoRoot: string, { gh, fetch, now, noPullCache, log
   const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
   const detached = branch === null;
   const upstream = detached ? null : upstreamName?.trim() || null;
+  const repoUrl = remote ? githubRepoUrl(remote) : null;
+  // The manual refresh asks gh again; the periodic fetch keeps the minute's answer.
+  const pullResult = branch === null ? { pull: null, pullError: null, diff: null } : await cachedPull(repoRoot, branch, marks.headSha, gh, now(), noPullCache);
+  const { pull, pullError, diff: pullDiff } = pullResult;
+
+  // Everything below derives from these refs and the PR answer. Unchanged since the last build: reuse it.
+  const defaultSha = defaultBranch ? (await gitMaybe(repoRoot, ["rev-parse", "--verify", "-q", `refs/remotes/origin/${defaultBranch}^{commit}`]))?.trim() || null : null;
+  const fingerprint = JSON.stringify([ref, marks.headSha, marks.remoteSha, upstream, defaultBranch, defaultSha, remote, logCap]);
+  const pullKey = JSON.stringify(pullResult);
+  const cached = summaryCache.get(repoRoot);
+  if (cached && cached.fingerprint === fingerprint && cached.pull === pullKey) {
+    return { ...cached.summary, fetchedAt: fetched.fetchedAt, fetchError: fetched.fetchError, at: now() };
+  }
+
   let ahead = 0;
   let behind = 0;
   if (upstream && marks.headSha) {
     const counts = (await gitMaybe(repoRoot, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]))?.trim().split(/\s+/);
     if (counts?.length === 2) [ahead, behind] = [Number(counts[0]) || 0, Number(counts[1]) || 0];
   }
-  const repoUrl = remote ? githubRepoUrl(remote) : null;
-
-  const { pull, pullError, diff: pullDiff } = branch === null ? { pull: null, pullError: null, diff: null } : await cachedPull(repoRoot, branch, gh, now(), fetch || noPullCache);
 
   const base = (pull?.state === "open" && pull.baseBranch) || defaultBranch;
   let logBase: string | null = null;
@@ -473,18 +493,27 @@ async function buildSummary(repoRoot: string, { gh, fetch, now, noPullCache, log
     diff = await readBranchDiff(repoRoot, base, marks.headSha, baseSha);
   }
 
-  return {
+  const summary: GithubSummary = {
     branch, detached, defaultBranch, upstream, ahead, behind,
     fetchedAt: fetched.fetchedAt, fetchError: fetched.fetchError,
     repoUrl, logBase, commits, cursor, pull, pullError, conflicts, diff, at: now(),
   };
+  summaryCache.set(repoRoot, { fingerprint, pull: pullKey, summary });
+  return summary;
+}
+
+/** A validator for the summary as the browser caches it: everything but the clock. */
+export function summaryEtag(summary: GithubSummary): string {
+  const { at: _at, ...rest } = summary;
+  return `W/"${createHash("sha1").update(JSON.stringify(rest)).digest("base64url")}"`;
 }
 
 /**
- * Everything the GitHub panel shows for the project at `dir`. The git half is always read fresh; the gh
- * half is cached for a minute per branch (bypassed with `fetch`). Concurrent calls for one directory
- * share a single read. With `fetch`, `git fetch origin --prune` runs first (throttled by `fetchRepo`).
- * `logCap` (the first page's own-commit limit) and `noPullCache` exist for tests and the pull.
+ * Everything the GitHub panel shows for the project at `dir`. The refs are always read fresh; the log,
+ * merge check, and diff are reused while the refs and the PR answer stand still; the gh half is cached
+ * for a minute per branch and head (bypassed with `noPullCache`: the manual refresh and the pull).
+ * Concurrent calls for one directory share a single read. With `fetch`, `git fetch origin --prune`
+ * runs first (throttled by `fetchRepo`). `logCap` (the first page's own-commit limit) exists for tests.
  */
 export function readGithubSummary(dir: string, opts: { gh?: GhRunner; fetch?: boolean; now?: () => number; noPullCache?: boolean; logCap?: number } = {}): Promise<GithubSummary> {
   const options: ReadOptions = {

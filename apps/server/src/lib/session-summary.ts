@@ -1,9 +1,9 @@
 import { stat } from "node:fs/promises";
 import { displayPath, readGitInfo } from "./git-info.ts";
-import type { Project, SessionMeta, SessionSummary } from "./types.ts";
+import type { Project, SessionDetail, SessionMeta, SessionSummary } from "./types.ts";
 
 /** Attach the session directory's display form, current branch, and owning project for the browser. */
-export async function summarizeSession(meta: SessionMeta, project: Project | null): Promise<SessionSummary> {
+export async function summarizeSession(meta: SessionMeta, project: Project | null): Promise<SessionDetail> {
   const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, awaitingPermission, link, state, liveness } = meta;
   const cwdMissing = await stat(cwd).then(() => false, () => true);
   // readGitInfo walks up to parent directories, so skip it once the folder itself is gone.
@@ -14,4 +14,15 @@ export async function summarizeSession(meta: SessionMeta, project: Project | nul
     project: project ? { id: project.id, name: project.name } : null,
     cwdMissing,
   };
+}
+
+/**
+ * The session's list entry: the summary without the slash commands and the liveness detail.
+ * Those are only read on the session page, which gets them from its own stream, and together
+ * they are most of the bytes of a session (the command list alone runs to tens of KB).
+ */
+export async function summarizeForList(meta: SessionMeta, project: Project | null): Promise<SessionSummary> {
+  const { state, liveness: _liveness, ...detail } = await summarizeSession(meta, project);
+  const { modes, configOptions } = state;
+  return { ...detail, state: { modes, configOptions } };
 }

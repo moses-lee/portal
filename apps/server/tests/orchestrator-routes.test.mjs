@@ -61,7 +61,7 @@ test("status, messages, ticks, and items answer their JSON shapes; watches and t
   assert.equal(status.json().status.provider, "anthropic");
   assert.equal(status.json().status.counts.needsYou, 0);
 
-  assert.deepEqual((await inject(app, "GET", "/api/portal/messages")).json(), { messages: [] });
+  assert.deepEqual((await inject(app, "GET", "/api/portal/messages")).json(), { messages: [], hasMore: false, before: null, after: null });
   for (const [method, url] of [["GET", "/api/portal/ticks"], ["POST", "/api/portal/tick"]]) assert.equal((await inject(app, method, url)).statusCode, 404, `${url} is gone`);
   for (const field of ["intervalMinutes", "idleIntervalMinutes", "lastTick", "nextTickAt"]) assert.ok(!(field in status.json().status), `status has no ${field}`);
   assert.deepEqual((await inject(app, "GET", "/api/portal/items")).json(), { items: [] });
@@ -243,4 +243,43 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
   assert.equal(await settings.apiKey("anthropic"), "key-anthropic");
   // Scripts read their settings from the context's settings service; an unset script does not run.
   assert.deepEqual(await deps.scripts.run("preWorktreeDelete", { cwd: home }), { ran: false });
+});
+
+test("message routes page the thread, hand out one message in full, and filter items by status", async (t) => {
+  const { app } = await setup(t);
+  const store = appContext(app).orchestrator.hub.store;
+  const tool = { type: "tool-list_sessions", toolCallId: "c1", state: "output-available", input: { limit: 2 }, output: { rows: [1, 2] } };
+  await store.appendMessages([
+    ...Array.from({ length: 4 }, (_, i) => ({ id: `u${i}`, role: "user", parts: [{ type: "text", text: `q${i}` }], metadata: { at: i } })),
+    { id: "a1", role: "assistant", parts: [{ type: "text", text: "ran it" }, tool], metadata: { at: 9 } },
+  ]);
+  const page = (await inject(app, "GET", "/api/portal/messages?limit=2")).json();
+  assert.deepEqual(page.messages.map((m) => m.id), ["u3", "a1"]);
+  assert.equal(page.hasMore, true);
+  assert.equal(typeof page.before, "number");
+  // Tool traffic is left out of a page and marked; the single-message route has it.
+  const paged = page.messages[1];
+  assert.equal(paged.metadata.toolIO, "omitted");
+  assert.equal(paged.parts[1].input, "[open to load]");
+  assert.equal(paged.parts[1].output, "[open to load]");
+  assert.equal(paged.parts[1].state, "output-available");
+  const full = (await inject(app, "GET", "/api/portal/threads/main/messages/a1")).json().message;
+  assert.deepEqual(full.parts[1], tool);
+  assert.equal(full.metadata.toolIO, undefined);
+  assert.equal((await inject(app, "GET", "/api/portal/threads/main/messages/nope")).statusCode, 404);
+  assert.equal((await inject(app, "GET", "/api/portal/threads/other/messages/a1")).statusCode, 404);
+
+  const older = (await inject(app, "GET", `/api/portal/messages?before=${page.before}&limit=2`)).json();
+  assert.deepEqual(older.messages.map((m) => m.id), ["u1", "u2"]);
+  const newer = (await inject(app, "GET", `/api/portal/messages?after=${older.after}`)).json();
+  assert.deepEqual(newer.messages.map((m) => m.id), ["u3", "a1"]);
+  assert.equal(newer.hasMore, false);
+  assert.equal((await inject(app, "GET", "/api/portal/messages?before=x")).statusCode, 400);
+  assert.equal((await inject(app, "GET", "/api/portal/threads/main/messages?limit=1")).json().messages.length, 1);
+
+  await store.createItem({ kind: "custom", title: "open", body: "", links: {}, actions: [], fingerprint: "f1" });
+  await store.createItem({ kind: "custom", title: "done", body: "", links: {}, actions: [], fingerprint: "f2", status: "resolved" });
+  assert.equal((await inject(app, "GET", "/api/portal/items")).json().items.length, 2);
+  const live = (await inject(app, "GET", "/api/portal/items?status=open,snoozed")).json().items;
+  assert.deepEqual(live.map((item) => item.title), ["open"]);
 });

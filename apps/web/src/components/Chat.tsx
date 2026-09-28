@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useMediaQuery } from "./useMediaQuery";
+import { useStableCallback } from "@/hooks/use-stable-callback";
 import { usePreference } from "./usePreference";
 import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
 import {
@@ -15,10 +16,8 @@ import Sidebar from "./Sidebar";
 import SessionPane from "./SessionPane";
 import TerminalPage from "./TerminalPage";
 import PortalPage from "./PortalPage";
-import ApprovalsDialog from "./portal/ApprovalsDialog";
 import { PortalLiveProvider } from "./portal/PortalLive";
 import AddProjectDialog from "./AddProjectDialog";
-import SettingsDialog from "./SettingsDialog";
 import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
 import { useRemovedProjects } from "./useRemovedProjects";
@@ -31,7 +30,7 @@ import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
 import { pinnedFirst } from "@/lib/pins";
-import { createHistoryCache } from "@/lib/history-cache";
+import { PAGE_TURNS, createHistoryCache } from "@/lib/history-cache";
 import { byRecentActivity, orderProjectsByActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
@@ -56,13 +55,18 @@ import type {
   EventPage,
   GithubSummary,
   ProjectSummary,
+  SessionDetail,
   SessionListEvent,
+  SessionListState,
   SessionState,
   SessionSummary,
   SetConfigRequest,
 } from "@/lib/types";
 
 const GithubInspector = dynamic(() => import("./GithubInspector"));
+// Shown rarely, so their code (the settings dialog alone is the sidebar kit and a 1,500-line form) loads when first needed.
+const SettingsDialog = dynamic(() => import("./SettingsDialog"));
+const ApprovalsDialog = dynamic(() => import("./portal/ApprovalsDialog"));
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -85,7 +89,7 @@ function storeProjectId(id: string) {
 /** The app shell: sidebar, session list, project selection, and the pane for the session named by the URL. */
 /** The latest transcript page for the history cache; null when the session is gone. */
 async function fetchHistoryPage(id: string): Promise<EventPage | null> {
-  const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/events`);
+  const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/events?turns=${PAGE_TURNS}`);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return (await r.json()) as EventPage;
@@ -160,7 +164,7 @@ export default function Chat() {
   /** Agent settings chosen on the start page, tied to the agent they were chosen for. */
   const [startConfig, setStartConfig] = useState<{
     agentId: string;
-    state: SessionState;
+    state: SessionListState;
   } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -347,7 +351,7 @@ export default function Chat() {
    */
   const applyStartSettings = async (
     sessionId: string,
-    desired: SessionState,
+    desired: SessionListState,
     actual: SessionState,
   ) => {
     let state = actual;
@@ -576,7 +580,7 @@ export default function Chat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, agentId: selectedAgentId }),
       });
-      const session = (await r.json()) as SessionSummary & { error?: string };
+      const session = (await r.json()) as SessionDetail & { error?: string };
       if (!r.ok || !session.id) {
         setSessionError(
           session.error ??
@@ -690,6 +694,26 @@ export default function Chat() {
     if (!onStartPage) pushPath(startPath());
     setShowSidebar(false);
   };
+  // Stable identities for the sidebar: its rows are memoised, and this component re-renders on
+  // every list-stream event, so an inline arrow here would re-render every row each time.
+  const sidebarSelect = useStableCallback((id: string) => selectSession(id));
+  const sidebarPrefetch = useStableCallback((id: string) => historyCache.prefetch(id));
+  const sidebarDelete = useStableCallback(deleteSession);
+  const sidebarNewSession = useStableCallback(startIn);
+  const sidebarAddProject = useStableCallback(() => setShowAddProject(true));
+  const sidebarOpenSettings = useStableCallback(() => setShowSettings(true));
+  const sidebarRename = useStableCallback(async (id: string, name: string) => {
+    await renameProject(id, name);
+  });
+  const sidebarRemove = useStableCallback(removeProjectFromWorkspace);
+  const sidebarRefreshRemoved = useStableCallback(refreshRemoved);
+  const sidebarRestore = useStableCallback(restoreProject);
+  const sidebarDiscard = useStableCallback(discardRemovedProject);
+  const sidebarClose = useStableCallback(() => setShowSidebar(false));
+  const sidebarTerminal = useStableCallback(openTerminal);
+  const sidebarPortalView = useStableCallback(openPortalView);
+  const sidebarCollapse = useStableCallback(() => setSidebarPreference("false"));
+
   return (
     <PortalLiveProvider>
     <div className="portal-shell">
@@ -701,30 +725,28 @@ export default function Chat() {
         onTogglePinProject={toggleProjectPin}
         onTogglePinSession={toggleSessionPin}
         active={active}
-        onSelect={(id) => selectSession(id)}
-        onPrefetch={(id) => historyCache.prefetch(id)}
-        onDeleteSession={deleteSession}
-        onNewSession={startIn}
-        onAddProject={() => setShowAddProject(true)}
-        onOpenSettings={() => setShowSettings(true)}
-        onRenameProject={async (id, name) => {
-          await renameProject(id, name);
-        }}
-        onRemoveProject={removeProjectFromWorkspace}
+        onSelect={sidebarSelect}
+        onPrefetch={sidebarPrefetch}
+        onDeleteSession={sidebarDelete}
+        onNewSession={sidebarNewSession}
+        onAddProject={sidebarAddProject}
+        onOpenSettings={sidebarOpenSettings}
+        onRenameProject={sidebarRename}
+        onRemoveProject={sidebarRemove}
         removedProjects={removedProjects}
         removedError={removedError}
-        onRefreshRemoved={refreshRemoved}
-        onRestoreProject={restoreProject}
-        onDiscardRemoved={discardRemovedProject}
+        onRefreshRemoved={sidebarRefreshRemoved}
+        onRestoreProject={sidebarRestore}
+        onDiscardRemoved={sidebarDiscard}
         open={showSidebar}
-        onClose={() => setShowSidebar(false)}
-        onTerminal={openTerminal}
+        onClose={sidebarClose}
+        onTerminal={sidebarTerminal}
         terminalActive={terminalOpen}
-        onPortalView={openPortalView}
+        onPortalView={sidebarPortalView}
         portalView={portalView}
         projectsActive={!!active || onStartPage}
         desktopOpen={sidebarPreference === "true"}
-        onCollapse={() => setSidebarPreference("false")}
+        onCollapse={sidebarCollapse}
       />
       <AddProjectDialog
         open={showAddProject}

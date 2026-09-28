@@ -155,6 +155,25 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       respond(id, { stopReason: "end_turn" });
       return;
     }
+    if (text === "stream") {
+      // What a real turn looks like on the wire: text in small chunks, a tool that heartbeats while
+      // it runs, a screenshot in the result (repeated in rawOutput, as Claude Code does), more text.
+      for (const piece of ["Hel", "lo ", "there"]) update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: piece } });
+      for (const piece of ["think", "ing"]) update(params.sessionId, { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: piece } });
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "call-3", title: "screenshot", kind: "other", status: "pending" });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "in_progress" });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "in_progress", _meta: { claudeCode: { toolResponse: { elapsedTimeSeconds: 30 } } } });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "in_progress" });
+      const png = Buffer.alloc(5000, 7).toString("base64");
+      update(params.sessionId, {
+        sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "completed",
+        content: [{ type: "content", content: { type: "image", data: png, mimeType: "image/png" } }],
+        rawOutput: { image: png, note: "done" },
+      });
+      update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "bye" } });
+      respond(id, { stopReason: "end_turn" });
+      return;
+    }
     if (text === "commands") {
       update(params.sessionId, {
         sessionUpdate: "available_commands_update",
