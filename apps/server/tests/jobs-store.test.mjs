@@ -213,6 +213,23 @@ for (const [label, open] of backends) {
     await rejectsWith(store.updateIntent("w1", { status: "paused" }), 400, /Unknown intent status/);
     await rejectsWith(store.createIntent(intentInput({ id: "w1" })), 409, /already exists/);
   });
+
+  test(`${label}: concurrent intent updates each land: a count derived from the stored intent, beside plain changes`, async (t) => {
+    const { store } = await open(t);
+    const intent = await store.createIntent(intentInput({ fireBudget: null }));
+    await Promise.all([
+      ...Array.from({ length: 12 }, () => store.updateIntent(intent.id, (current) => ({ fires: current.fires + 1 }))),
+      ...Array.from({ length: 6 }, (_, i) => store.updateIntent(intent.id, { notes: `note ${i}` })),
+      store.updateIntent(intent.id, { lastCheckedAt: T0 + 1 }),
+    ]);
+    const stored = await store.getIntent(intent.id);
+    assert.equal(stored.fires, 12, "no firing is lost to a write of the row as another update read it");
+    assert.match(stored.notes, /^note \d$/);
+    assert.equal(stored.lastCheckedAt, T0 + 1);
+    const untouched = await store.updateIntent(intent.id, () => null);
+    assert.deepEqual(untouched, stored, "null writes nothing");
+    await rejectsWith(store.updateIntent("nope", () => ({ notes: "x" })), 404, /Unknown intent/);
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

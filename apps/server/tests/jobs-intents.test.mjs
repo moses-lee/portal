@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { POLL_MS } from "../src/orchestrator/jobs/worker.ts";
-import { T0, call, flush, jobsHarness, started, textStep, toolContext, toolStep } from "./fixtures/jobs-harness.mjs";
+import { createPgJobsStore } from "../src/orchestrator/jobs/pg-store.ts";
+import { T0, call, flush, jobsHarness, started, textStep, toolContext, toolStep, toolsStep } from "./fixtures/jobs-harness.mjs";
+import { temporaryDatabase } from "./helpers/db.mjs";
 import { liveness, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const MIN = 60_000;
@@ -92,6 +94,41 @@ test("an intent check fires the intent: a Needs-you item with its links, a note 
   assert.deepEqual(note.metadata.itemIds, [item.id]);
   const kinds = (await h.hub.activity.list()).map((entry) => entry.kind);
   for (const kind of ["intent.fired", "intent.closed", "run.finished", "tool.call"]) assert.ok(kinds.includes(kind), kind);
+});
+
+test("a check that fires beside rewriting its notes and closing the intent, in one step, counts the firing and posts to the thread (Postgres)", async (t) => {
+  const { db } = await temporaryDatabase(t);
+  const title = "Re-review of acme/app#42 complete";
+  const h = await started(jobsHarness(t, {
+    store: createPgJobsStore({ db }),
+    doGenerate: [
+      toolsStep(
+        ["update_intent", { notes: "The session finished its re-review. Fired." }],
+        ["fire_intent", { title, body: "Seven issues found." }],
+        ["close_intent", { status: "done", reason: "Reported." }],
+      ),
+      textStep("The re-review finished with seven issues."),
+    ],
+  }));
+  const { created } = await withIntent(h, { checkNow: true });
+  const [job] = await h.jobs.listJobs({ intentId: created.id });
+  let run;
+  for (let tries = 0; tries < 200; tries++) {
+    await flush();
+    [run] = await h.jobs.listRuns({ jobId: job.id });
+    if (run && run.status !== "running") break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(run.status, "succeeded");
+
+  const intent = await h.jobs.getIntent(created.id);
+  assert.deepEqual({ status: intent.status, fires: intent.fires, lastFiredTitle: intent.lastFiredTitle }, { status: "done", fires: 1, lastFiredTitle: title });
+  assert.match(run.summary, /^Fired/);
+  assert.equal(run.result.fired, true);
+  const [note] = (await h.runtime.history()).messages;
+  assert.equal(note?.parts[0].text, "The re-review finished with seven issues.", "the user hears of the firing in the thread");
+  const closed = await h.hub.activity.list({ kind: "intent.closed" });
+  assert.equal(closed.length, 1, "one close ends it, whichever of the firing and close_intent got there first");
 });
 
 test("a check whose trigger does not hold rewrites the notes, posts nothing, and stays scheduled", async (t) => {

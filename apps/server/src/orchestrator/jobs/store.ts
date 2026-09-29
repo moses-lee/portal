@@ -76,6 +76,13 @@ export type NewIntent = {
 
 export type IntentChanges = Partial<Omit<Intent, "id" | "createdAt" | "updatedAt">>;
 
+/**
+ * Changes to an intent, or a function that derives them from the intent as stored, run while no
+ * other write can change it (its answer null writes nothing). Derive anything that reads a field
+ * another turn may be writing, such as a firing's count, or that write is lost.
+ */
+export type IntentUpdate = IntentChanges | ((current: Intent) => IntentChanges | null);
+
 export interface JobsStore {
   ready: Promise<void>;
 
@@ -112,7 +119,8 @@ export interface JobsStore {
   getIntent(id: string): Promise<Intent | null>;
   /** Newest first. */
   listIntents(filter?: { status?: IntentStatus[] }): Promise<Intent[]>;
-  updateIntent(id: string, changes: IntentChanges): Promise<Intent>;
+  /** Answers the intent as stored after the update. */
+  updateIntent(id: string, update: IntentUpdate): Promise<Intent>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -358,8 +366,11 @@ export function createMemoryJobsStore({ now = Date.now }: { now?: () => number }
       return [...intents.values()].filter((intent) => !filter.status || filter.status.includes(intent.status))
         .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
     },
-    async updateIntent(id, changes) {
-      const intent = patchIntent(requireIntent(id), changes, now());
+    async updateIntent(id, update) {
+      const current = requireIntent(id);
+      const changes = typeof update === "function" ? update(current) : update;
+      if (!changes) return current;
+      const intent = patchIntent(current, changes, now());
       intents.set(id, intent);
       return intent;
     },

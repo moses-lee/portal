@@ -214,12 +214,19 @@ export function createPgJobsStore({ db, now = Date.now }: { db: Db; now?: () => 
       const rows = await db.select().from(intents).where(where).orderBy(desc(intents.createdAt), desc(intents.id));
       return rows.map(intentFromRow);
     },
-    async updateIntent(id, changes) {
-      const current = await readIntent(id);
-      if (!current) throw unknownIntent(id);
-      const intent = stripNul(patchIntent(current, changes, now()));
-      await db.update(intents).set(intentColumns(intent)).where(eq(intents.id, id));
-      return intent;
+    // Read and written under the row's lock: two turns updating one intent at once (a firing beside
+    // a notes rewrite) would otherwise each write back the row as they read it, losing the other's change.
+    async updateIntent(id, update) {
+      return db.transaction(async (tx) => {
+        const [row] = await tx.select().from(intents).where(eq(intents.id, id)).for("update");
+        if (!row) throw unknownIntent(id);
+        const current = intentFromRow(row);
+        const changes = typeof update === "function" ? update(current) : update;
+        if (!changes) return current;
+        const intent = stripNul(patchIntent(current, changes, now()));
+        await tx.update(intents).set(intentColumns(intent)).where(eq(intents.id, id));
+        return intent;
+      });
     },
   };
 }

@@ -53,6 +53,27 @@ const short = (text: string, max = 80) => (text.length > max ? `${text.slice(0, 
  */
 const repeatKey = (title: string) => title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
+type Refusal = { reason: string; close?: "expired" | "done" };
+
+/**
+ * Why the intent may not fire now, or null when it may; `close` when the refusal should end it (its
+ * time is up, its budget spent). A repeat of the last firing's title is refused only for the model:
+ * the server's watches fire on changes they compute themselves. The title is kept on the intent,
+ * not read back from its item, which the user may have dismissed.
+ */
+function refusal(intent: Intent, now: number, title: string, actor: ActivityActor): Refusal | null {
+  if (intent.status !== "active") return { reason: `the intent is ${intent.status}` };
+  if (intent.expiresAt !== null && intent.expiresAt <= now) return { reason: "the intent has expired", close: "expired" };
+  if (intent.fireBudget !== null && intent.fires >= intent.fireBudget) return { reason: "the intent's fire budget is spent", close: "done" };
+  if (intent.lastFiredAt !== null && now - intent.lastFiredAt < intent.cooldownMs) {
+    return { reason: `the intent is cooling down until ${new Date(intent.lastFiredAt + intent.cooldownMs).toISOString()}` };
+  }
+  if (actor !== "system" && intent.lastFiredTitle !== null && intent.lastFiredAt !== null && repeatKey(intent.lastFiredTitle) === repeatKey(title)) {
+    return { reason: `this repeats the last firing at ${new Date(intent.lastFiredAt).toISOString()} ("${short(intent.lastFiredTitle, 120)}"); fire only when something changed since then` };
+  }
+  return null;
+}
+
 export function checkTitle(text: string): string {
   return `Check: ${short(text.trim().replace(/\s+/g, " "), 100)}`;
 }
@@ -89,11 +110,13 @@ export function createIntents(core: JobsCore) {
   }
 
   async function update(id: string, changes: IntentChanges, how: How & { check?: JobSchedule }): Promise<Intent> {
-    const current = await requireIntent(id);
-    if (current.status !== "active" && (changes.status === undefined || changes.status === current.status)) {
-      throw httpError(`This intent is ${current.status}; create a new one instead.`, 409);
-    }
-    const intent = await store.updateIntent(id, changes);
+    // Checked on the stored intent, so a firing that closes it at the same moment is seen.
+    const intent = await store.updateIntent(id, (current) => {
+      if (current.status !== "active" && (changes.status === undefined || changes.status === current.status)) {
+        throw httpError(`This intent is ${current.status}; create a new one instead.`, 409);
+      }
+      return changes;
+    });
     if (how.check) {
       const jobs = await checkJobs(id);
       for (const job of jobs) {
@@ -116,7 +139,14 @@ export function createIntents(core: JobsCore) {
   async function close(id: string, status: Exclude<IntentStatus, "active">, how: How & { reason?: string }): Promise<Intent> {
     const current = await requireIntent(id);
     if (current.status !== "active") return current;
-    const intent = await store.updateIntent(id, { status });
+    // Only the close that ends it goes on to end its jobs and log it; a concurrent one answers the intent as closed.
+    let ended = false;
+    const intent = await store.updateIntent(id, (stored) => {
+      if (stored.status !== "active") return null;
+      ended = true;
+      return { status };
+    });
+    if (!ended) return intent;
     await core.endIntentJobs(id, status === "cancelled" ? "cancelled" : "done", how);
     const verb = status === "done" ? "Done" : status === "expired" ? "Expired" : "Cancelled";
     void hub.activity.log({
@@ -147,22 +177,8 @@ export function createIntents(core: JobsCore) {
     return intent;
   }
 
-  /** Why the intent may not fire now, or null when it may. Expires it on the way when its time is up. */
-  async function refusal(intent: Intent, now: number): Promise<string | null> {
-    if (intent.status !== "active") return `the intent is ${intent.status}`;
-    if (intent.expiresAt !== null && intent.expiresAt <= now) {
-      await close(intent.id, "expired", { actor: "system" });
-      return "the intent has expired";
-    }
-    if (intent.fireBudget !== null && intent.fires >= intent.fireBudget) {
-      await close(intent.id, "done", { actor: "system", reason: "fire budget spent" });
-      return "the intent's fire budget is spent";
-    }
-    if (intent.lastFiredAt !== null && now - intent.lastFiredAt < intent.cooldownMs) {
-      return `the intent is cooling down until ${new Date(intent.lastFiredAt + intent.cooldownMs).toISOString()}`;
-    }
-    return null;
-  }
+  /** Runs of checks in progress, each with the firings its tools made: what a check reports, whatever else writes the intent meanwhile. */
+  const firings = new Map<string, number>();
 
   /** The Needs-you item for a firing: one per intent, updated on each firing. Its links carry full ids, even from a scope stored with prefixes. */
   async function raiseItem(stored: Intent, title: string, body: string): Promise<Item> {
@@ -191,16 +207,18 @@ export function createIntents(core: JobsCore) {
    * when that spent its budget.
    */
   async function fire(id: string, { title, body, item = true }: { title: string; body: string; item?: boolean }, how: How & { touched?: Set<string> }) {
-    const intent = await requireIntent(id);
     const now = hub.timers.now();
-    const refused = await refusal(intent, now);
-    if (refused) return { fired: false as const, reason: refused };
-    // Only the model's firings: the server's watches fire on changes they compute themselves. The
-    // title is kept on the intent, not read back from its item, which the user may have dismissed.
-    if (how.actor !== "system" && intent.lastFiredTitle !== null && intent.lastFiredAt !== null && repeatKey(intent.lastFiredTitle) === repeatKey(title)) {
-      return { fired: false as const, reason: `this repeats the last firing at ${new Date(intent.lastFiredAt).toISOString()} ("${short(intent.lastFiredTitle, 120)}"); fire only when something changed since then` };
+    // The rules are judged and the firing counted on the intent as stored, in one update.
+    let refused = null as Refusal | null;
+    const fired = await store.updateIntent(id, (current) => {
+      refused = refusal(current, now, title, how.actor);
+      return refused ? null : { fires: current.fires + 1, lastFiredAt: now, lastFiredTitle: short(title, 200) };
+    });
+    if (refused) {
+      if (refused.close) await close(id, refused.close, { actor: "system", ...(refused.close === "done" ? { reason: "fire budget spent" } : {}) });
+      return { fired: false as const, reason: refused.reason };
     }
-    const fired = await store.updateIntent(id, { fires: intent.fires + 1, lastFiredAt: now, lastFiredTitle: short(title, 200) });
+    if (how.runId && firings.has(how.runId)) firings.set(how.runId, (firings.get(how.runId) ?? 0) + 1);
     const raised = item ? await raiseItem(fired, title, body) : null;
     if (raised) how.touched?.add(raised.id);
     void hub.activity.log({
@@ -266,9 +284,17 @@ export function createIntents(core: JobsCore) {
       summary: job.title,
     });
     if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the intent was not checked." };
-    const result = await generateTurn(prepared, { prompt: intentCheckPrompt(intent, now, sessions), signal, maxSteps: INTENT_CHECK_STEPS });
+    // Whether it fired is what fire_intent did in this run, not the stored count: another write may have changed that.
+    firings.set(prepared.run.id, 0);
+    let result: Awaited<ReturnType<typeof generateTurn>>;
+    let fired: boolean;
+    try {
+      result = await generateTurn(prepared, { prompt: intentCheckPrompt(intent, now, sessions), signal, maxSteps: INTENT_CHECK_STEPS });
+    } finally {
+      fired = (firings.get(prepared.run.id) ?? 0) > 0;
+      firings.delete(prepared.run.id);
+    }
     const after = (await store.getIntent(intent.id)) ?? intent;
-    const fired = after.fires > intent.fires;
     if (after.status === "active") await store.updateIntent(intent.id, { lastCheckedAt: hub.timers.now() });
     const text = result.text.trim();
     if (fired && text && text !== NO_UPDATE) await core.postToThread(threadId, text, run, [...touched]);

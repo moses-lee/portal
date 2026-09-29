@@ -28,6 +28,12 @@ export function toolStep(toolName, input, toolCallId = "call-1") {
   return { content: [{ type: "tool-call", toolCallId, toolName, input: JSON.stringify(input) }], finishReason: finish("tool-calls"), usage, warnings: [] };
 }
 
+/** One model step that calls several tools at once, as `[toolName, input]` pairs; the SDK runs them concurrently. */
+export function toolsStep(...calls) {
+  const content = calls.map(([toolName, input], index) => ({ type: "tool-call", toolCallId: `call-${index + 1}`, toolName, input: JSON.stringify(input) }));
+  return { content, finishReason: finish("tool-calls"), usage, warnings: [] };
+}
+
 /** A promise with its resolve and reject handed out, for model steps a test releases by hand. */
 export function deferred() {
   let resolve;
