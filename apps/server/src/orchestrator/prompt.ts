@@ -6,10 +6,11 @@
 import { guidance as approvalsGuidance } from "./approvals/prompt.ts";
 import { guidance as jobsGuidance } from "./jobs/prompt.ts";
 import { guidance as memoryGuidance } from "./memory/prompt.ts";
+import { guidance as trackedGuidance } from "./tracked/prompt.ts";
 import { changesGuidance, guidance as worldGuidance } from "./world/prompt.ts";
 
 /** Each domain's lines for the system prompt, in a fixed order. */
-const domainGuidance = () => [worldGuidance, memoryGuidance, jobsGuidance, approvalsGuidance].map((text) => text.trim()).filter(Boolean);
+const domainGuidance = () => [worldGuidance, trackedGuidance, memoryGuidance, jobsGuidance, approvalsGuidance].map((text) => text.trim()).filter(Boolean);
 
 export type SystemPromptInput = {
   login: string | null;

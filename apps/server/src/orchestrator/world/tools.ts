@@ -20,7 +20,7 @@ export const GET_WORLD_DETAIL_TOKENS = 8000;
 const SLICE_ROWS = 50;
 const SLICE_DETAIL_ROWS = 200;
 
-export const worldSlices = ["projects", "repos", "sessions", "terminals", "pulls", "intents", "jobs", "items", "errors"] as const;
+export const worldSlices = ["projects", "repos", "sessions", "terminals", "pulls", "intents", "jobs", "items", "tracked", "errors"] as const;
 
 /** get_changes looks back this far unless told otherwise, and answers this many rows by default and at most. */
 export const DEFAULT_CHANGES_SINCE_MS = 24 * 60 * 60_000;

@@ -4,8 +4,8 @@
  * reads: the session must belong to an active review goal (the check job's `payload.review`), the
  * setting must be on and the goal must not have opted out, the tool call must be a read or search,
  * or a shell command the read-only checker behind `run_command` vouches for, and the agent must
- * offer an "allow once" option. Everything else waits for the user as before, and the review goal
- * raises its `session_waiting` item. Every answer is Portal's in the transcript (`by: "portal"`,
+ * offer an "allow once" option. Everything else waits for the user as before; the review's session
+ * is tracked, so the tracked list shows it waiting on a permission. Every answer is Portal's in the transcript (`by: "portal"`,
  * with the reason) and in the activity log.
  */
 import type { PermissionOption } from "@agentclientprotocol/sdk";

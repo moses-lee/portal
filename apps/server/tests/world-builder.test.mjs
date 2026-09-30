@@ -185,3 +185,20 @@ test("helpers: repo from origin, project for a path, repo grouping", () => {
   ]);
   assert.deepEqual(repos.map((r) => [r.repo, r.projectIds]), [["acme/app", ["m", "w"]], ["zed/one", ["z"]]]);
 });
+
+test("every build reads the tracked set (oldest first); a failed read keeps the previous one and says so", async () => {
+  const { hub } = setup();
+  const rows = [{ sessionId: "s2", trackedAt: T0 - 10, trackedBy: "user" }, { sessionId: "s1", trackedAt: T0, trackedBy: "portal" }];
+  hub.tracked = { list: async () => rows };
+  const full = await buildWorld({ hub, previous: null, mode: "full" });
+  assert.deepEqual(full.tracked, ["s2", "s1"]);
+  rows.pop();
+  const local = await buildWorld({ hub, previous: full, mode: "local" });
+  assert.deepEqual(local.tracked, ["s2"], "a local build reads it too");
+  hub.tracked = { list: async () => { throw new Error("db down"); } };
+  const failed = await buildWorld({ hub, previous: local, mode: "local" });
+  assert.deepEqual(failed.tracked, ["s2"]);
+  assert.ok(failed.errors.some((line) => /Tracked sessions could not be read \(db down\)/.test(line)), failed.errors.join("\n"));
+  delete hub.tracked;
+  assert.deepEqual((await buildWorld({ hub, previous: null, mode: "local" })).tracked, [], "without a tracked service nothing is tracked");
+});

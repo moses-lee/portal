@@ -5,9 +5,11 @@ import { type Block, reduce, segment } from "@portal/shared/transcript";
 import { isStall } from "../../lib/liveness.ts";
 import type { SessionLiveness, SessionMeta, SessionState } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
+import type { DomainToolContext } from "../hub.ts";
 import { lastTurnEnd, snapshotActivity } from "../digest.ts";
 import { pickById } from "../ids.ts";
-import { httpError, requireSession, startSession } from "../ops.ts";
+import { type SessionTracker, httpError, requireSession, startSession } from "../ops.ts";
+import { trackContext } from "../tracked/tools.ts";
 import { DEFAULT_LIMIT, type ToolContext, capped, define } from "./context.ts";
 
 const sessionId = z.string().min(1);
@@ -25,7 +27,8 @@ const TURN_END_WINDOW = 20;
 
 const livenessStates = ["dead", "blocked", "busy", "hung", "idle"] as const;
 
-function sessionRow(meta: SessionMeta) {
+/** A session as the list tools answer it (list_sessions, list_tracked_sessions, ...). */
+export function sessionRow(meta: SessionMeta) {
   return {
     id: meta.id, title: meta.title, projectId: meta.projectId || null, agent: meta.agentId,
     activity: snapshotActivity(meta),
@@ -96,7 +99,12 @@ export async function readTranscript(deps: OrchestratorDeps, id: string, lastTur
   return { sessionId: id, turns: turns.length, text, truncated };
 }
 
-export function sessionTools({ deps }: ToolContext) {
+export function sessionTools(ctx: ToolContext) {
+  const { deps } = ctx;
+  // Turns build these tools over the domain context; a bare tool context (a test) has no tracked list.
+  const domain = "hub" in ctx ? (ctx as DomainToolContext) : null;
+  /** Sessions the orchestrator starts are tracked (as Portal's), attributed to this turn. */
+  const tracker: SessionTracker | undefined = domain ? { tracked: domain.hub.tracked, context: trackContext(domain) } : undefined;
   /** The full id of the session `id` names (itself or a unique prefix). */
   const full = async (id: string) => (await requireSession(deps, id)).id;
   return {
@@ -192,9 +200,9 @@ export function sessionTools({ deps }: ToolContext) {
       },
     ),
     create_session: define(
-      "Start a new session in a project, optionally sending a first prompt right away. Returns the session id.",
+      "Start a new session in a project, optionally sending a first prompt right away; it is tracked. Returns the session id.",
       z.object({ projectId: z.string().min(1), agentId: z.string().optional(), prompt: z.string().optional() }),
-      (input) => startSession(deps, input),
+      (input) => startSession(deps, input, tracker),
     ),
     send_prompt: define(
       "Send a prompt to a session; the agent works on it asynchronously. Fails while the session is busy.",
@@ -267,6 +275,8 @@ export function sessionTools({ deps }: ToolContext) {
       z.object({ sessionId }),
       async (input) => {
         const sessionId = await full(input.sessionId);
+        // Untracked first, so the activity log shows the untrack before the delete (the cascade would drop the row unlogged).
+        if (domain) await domain.hub.tracked.untrack(sessionId, "portal", trackContext(domain, "deleted"));
         return { sessionId, deleted: await deps.sessions.remove(sessionId) };
       },
     ),

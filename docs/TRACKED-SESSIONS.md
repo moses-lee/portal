@@ -78,15 +78,15 @@ Tools, in a new `tracked` tool group and always offered on chat turns:
 
 | Tool | Behaviour |
 |---|---|
-| `track_session({ sessionId })` | Adds the row with `trackedBy: "portal"`. Idempotent. Accepts id prefixes through `resolveSession`. |
+| `track_session({ sessionId })` | Adds the row with `trackedBy: "portal"`. Idempotent. Accepts id prefixes through `requireSession`. |
 | `untrack_session({ sessionId, reason? })` | Removes the row. The reason goes into the activity entry. |
 | `list_tracked_sessions()` | The tracked sessions with their live state: the same row shape as `list_sessions` plus `trackedAt`, `trackedBy`. |
 
-`ops.startSession` and `setup_pr_reviews` track the sessions they create. `delete_session` untracks first so the activity log shows both.
+`ops.startSession` and `setup_pr_reviews` track the sessions they create. Review sessions are untracked automatically when the review goal reports their findings (`review-watch.checkReview`, reason "review reported"). `delete_session` untracks first so the activity log shows both.
 
 The rendered world gets a "Tracked sessions" section listing each tracked session with its activity, liveness and age, so the agent answers "what are we waiting on" without a tool call. `WorldState` gains `tracked: string[]` so the section and `list_tracked_sessions` agree.
 
-Prompt guidance: track a session when you start one for the user or when the user asks; untrack when the work is done and reported (for example after summarising a finished review into findings); prefer untracking over leaving stale rows. The old guidance to raise `session_*` items goes away.
+Prompt guidance: track a session when you start one for the user or when the user asks; untrack other work when it is done and reported (review sessions are untracked automatically once their findings are reported); prefer untracking over leaving stale rows. The old guidance to raise `session_*` items goes away.
 
 Item creation: `create_item` rejects the five retired kinds with a message pointing at `track_session`. `review-watch.flagStuck` stops raising `session_waiting` and `session_hung` items; the tracked list shows those states live. `digest.diffSnapshots` and `world/changes.ts` keep recording session transitions in the change log, since the prompt's "Recent changes" section still uses them.
 

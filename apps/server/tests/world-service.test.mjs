@@ -6,6 +6,8 @@ import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { emptyRefreshReport, performRefresh } from "../src/orchestrator/tick.ts";
 import { WORLD_STALE_MS, createWorldService } from "../src/orchestrator/world/service.ts";
 import { createMemoryWorldStore } from "../src/orchestrator/world/store.ts";
+import { createTrackedService } from "../src/orchestrator/tracked/service.ts";
+import { createMemoryTrackedStore } from "../src/orchestrator/tracked/store.ts";
 import { changesGuidance, guidance } from "../src/orchestrator/world/prompt.ts";
 import { DEFAULT_CHANGES_SINCE_MS, changeMatches, parseSince } from "../src/orchestrator/world/tools.ts";
 import { T0, attentionPull, fakeDeps, fakePresence, fakeSettings, fakeTimers, flush, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
@@ -256,4 +258,44 @@ test("a chat turn's system prompt carries the world guidance and the rendered wo
   assert.match(system, /acme\/monorepo/);
   const tools = model.doStreamCalls[0].tools.map((tool) => tool.name);
   for (const name of ["resolve_pull", "resolve_repo", "resolve_session", "get_world"]) assert.ok(tools.includes(name), name);
+});
+
+test("a track or untrack reaches the current world at once, without a rebuild, and a build that read the set before a change takes the newer one", async () => {
+  const { hub, world, state, timers } = setup();
+  state.sessions.push(sessionMeta({ id: "s2", projectId: "p1" }));
+  hub.activity = { log: async () => {} };
+  hub.tracked = createTrackedService(hub, createMemoryTrackedStore());
+  const built = await world.refresh("manual");
+  assert.deepEqual(built.tracked, []);
+  await hub.tracked.track("s2", "user");
+  timers.tick(1000);
+  await hub.tracked.track("s1", "portal");
+  assert.deepEqual((await world.current()).tracked, ["s2", "s1"]);
+  assert.equal(state.searches.length, 1, "no rebuild");
+  assert.match(world.render(await world.current()), /Tracked sessions:\n- "Fix the login bug" \[s2\]/);
+
+  // A build that reads the set, then hears of an untrack before it finishes, ends with the set after the untrack.
+  const list = hub.tracked.list;
+  let release;
+  hub.tracked.list = async () => {
+    const rows = await list();
+    await new Promise((resolve) => { release = resolve; });
+    return rows;
+  };
+  const refreshing = world.refresh("manual");
+  while (!release) await flush();
+  hub.tracked.list = list;
+  await hub.tracked.untrack("s2", "portal");
+  release();
+  assert.deepEqual((await refreshing).tracked, ["s1"]);
+  assert.deepEqual((await world.current()).tracked, ["s1"]);
+});
+
+test("a world stored before the tracked set existed is adopted as tracking nothing", async () => {
+  const worldStore = createMemoryWorldStore();
+  const before = setup({ worldStore });
+  const { tracked: _tracked, ...old } = await before.world.refresh("tick");
+  await worldStore.append(old, "old");
+  const after = setup({ worldStore });
+  assert.deepEqual((await after.world.current()).tracked, []);
 });

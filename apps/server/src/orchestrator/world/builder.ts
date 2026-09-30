@@ -1,7 +1,7 @@
 /**
  * The world builder: one `WorldState` from everything Portal can see (projects and the repos behind
- * them, worktrees, sessions, terminals, the attention pulls, and the orchestrator's own intents,
- * jobs, and open items). A "full" build also asks GitHub and reads worktree state, and carries the
+ * them, worktrees, sessions, terminals, the attention pulls, the tracked sessions, and the
+ * orchestrator's own intents, jobs, and open items). A "full" build also asks GitHub and reads worktree state, and carries the
  * `TickSnapshot` the diff compares (collected by `collectSnapshot`, so one build serves both); a
  * "local" build refreshes only what the machine answers at once and reuses the rest of the
  * previous build, so a chat turn never waits on the network. A source that fails keeps its
@@ -36,7 +36,8 @@ export function createWorldCache(): WorldCache {
 }
 
 export type WorldBuildInput = {
-  hub: Pick<OrchestratorHub, "deps" | "store" | "jobs" | "timers">;
+  /** `tracked` may be missing in tests; the world then tracks nothing. */
+  hub: Pick<OrchestratorHub, "deps" | "store" | "jobs" | "timers"> & Partial<Pick<OrchestratorHub, "tracked">>;
   /** The previous build; failing sources keep their slice from here. */
   previous: WorldState | null;
   mode: BuildMode;
@@ -275,6 +276,14 @@ export async function buildWorld({ hub, previous, mode, cache = createWorldCache
     kept("Items", err);
   }
 
+  // Tracked sessions: a local read, so every build takes it.
+  let tracked = previous?.tracked ?? [];
+  try {
+    if (hub.tracked) tracked = (await hub.tracked.list()).map((row) => row.sessionId);
+  } catch (err) {
+    kept("Tracked sessions", err);
+  }
+
   let login = previous?.login ?? null;
   if (full) {
     try {
@@ -284,5 +293,5 @@ export async function buildWorld({ hub, previous, mode, cache = createWorldCache
     }
   }
 
-  return { at: now, login, projects, repos, sessions, terminals, pulls, intents, jobs, items, errors, snapshot };
+  return { at: now, login, projects, repos, sessions, terminals, pulls, intents, jobs, items, tracked, errors, snapshot };
 }

@@ -18,7 +18,7 @@ function worldSession(overrides = {}) {
 
 function world(overrides = {}) {
   return {
-    at: T0, login: "moses-lee", projects: [], repos: [], sessions: [], terminals: [], pulls: [], intents: [], jobs: [], items: [], errors: [],
+    at: T0, login: "moses-lee", projects: [], repos: [], sessions: [], terminals: [], pulls: [], intents: [], jobs: [], items: [], tracked: [], errors: [],
     snapshot: { at: T0, sessions: {}, pulls: {}, worktrees: {}, missingProjects: [] }, ...overrides,
   };
 }
@@ -126,7 +126,39 @@ test("projects without a GitHub repo are listed apart, and an empty world still 
   const input = world({ projects: [worldProject({ id: "p9", name: "notes" }), worldProject({ id: "p8", name: "gone", missing: true })] });
   const text = renderWorld(input);
   assert.match(text, /- no GitHub repo: notes \[p9\], gone \[p8\] \(missing\)/);
-  assert.equal(renderWorld(world()).split("\n").length, 1);
+  assert.deepEqual(renderWorld(world()).split("\n").slice(1), ["Tracked sessions: none."], "the header and the tracked placeholder only");
+});
+
+test("the Tracked sessions section lists every tracked session, oldest tracked first, with its state and age, before the other sessions", () => {
+  const input = world({
+    projects: [worldProject()],
+    sessions: [
+      worldSession({ id: "busy-0001", title: "Bazel run", activity: "working", liveness: "busy", status: "running tool: bazel test for 45m", lastActiveAt: T0 - 50 * MIN }),
+      worldSession({ id: "done-0001", title: "Review #12", liveness: "idle", status: "idle", lastActiveAt: T0 - 3 * 60 * MIN }),
+      worldSession({ id: "dead-0001", title: "Lost one", liveness: "dead", status: "dead: the agent process is gone", link: "offline", lastActiveAt: T0 - 2 * MIN }),
+      worldSession({ id: "free-0001", title: "Untracked work", activity: "working", liveness: "busy", status: "working for 2m", lastActiveAt: T0 - MIN }),
+    ],
+    tracked: ["done-0001", "busy-0001", "dead-0001", "gone-0001-new"],
+  });
+  const text = renderWorld(input);
+  const lines = text.split("\n");
+  const start = lines.indexOf("Tracked sessions:");
+  assert.ok(start > 0, text);
+  assert.deepEqual(lines.slice(start + 1, start + 5), [
+    '- "Review #12" [done-000] in app [p1] · Claude Code · idle, turn ended, waiting on a reply · last prompt 3h ago',
+    '- "Bazel run" [busy-000] in app [p1] · Claude Code · running tool: bazel test for 45m · last prompt 50m ago',
+    '- "Lost one" [dead-000] in app [p1] · Claude Code · dead: the agent process is gone · last prompt 2m ago',
+    "- session gone-000 (not in this build yet; get_session has it)",
+  ]);
+  assert.ok(text.indexOf("Tracked sessions:") < text.indexOf("Sessions needing you or working:"));
+  assert.equal(text.split('"Bazel run"').length, 2, "a tracked session is shown once");
+  assert.match(text, /Sessions needing you or working:\n- "Untracked work"/);
+  assert.doesNotMatch(text, /Tracked sessions: none/);
+});
+
+test("a world stored before the tracked set existed renders as tracking nothing", () => {
+  const { tracked: _tracked, ...old } = world();
+  assert.match(renderWorld(old), /Tracked sessions: none\./);
 });
 
 test("session lines say what the agent is doing, from its liveness; stalls come first and the last prompt is named as such", () => {
