@@ -9,6 +9,7 @@ import { liveDeps, liveSettingsStore } from "./deps.ts";
 import { type OrchestratorRuntimeOptions, createOrchestratorRuntime } from "./runtime.ts";
 import type { OrchestratorRuntime } from "./types.ts";
 import { createPgOrchestratorStore } from "./pg-store.ts";
+import { createPgTrackedStore } from "./tracked/pg-store.ts";
 
 export type OrchestratorService = OrchestratorRuntime;
 
@@ -22,6 +23,7 @@ export function createOrchestratorService(
   return createOrchestratorRuntime({
     store: createPgOrchestratorStore({ db: ctx.db }),
     activityStore: createPgActivityStore({ db: ctx.db }),
+    trackedStore: createPgTrackedStore({ db: ctx.db }),
     settingsStore: liveSettingsStore(ctx),
     deps: liveDeps(ctx),
     presence: ctx.presence,

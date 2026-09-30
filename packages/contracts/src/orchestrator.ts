@@ -22,7 +22,10 @@
  *   PATCH  /api/portal/items/:id       body ItemPatch -> { item }
  *   POST   /api/portal/items/:id/actions/:index -> { sessionId?, promptError?, approvalId? }
  *   GET    /api/portal/activity        see activity.ts
- *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`
+ *   GET    /api/portal/tracked         { sessions: TrackedSession[] }
+ *   PUT    /api/portal/tracked/:sessionId -> { session: TrackedSession }; 404 when the session does not exist
+ *   DELETE /api/portal/tracked/:sessionId -> 204
+ *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `tracked`
  */
 import type { UIMessage } from "ai";
 import type { ActivityEntry } from "./activity.ts";
@@ -172,11 +175,19 @@ export type Thread = {
 export type ItemStatus = "open" | "snoozed" | "resolved" | "dismissed";
 
 export type ItemKind =
+  /*
+   * Retired (2026-09-29): the five session kinds below are no longer created; tracked sessions show
+   * those states live instead (see TrackedSession). They stay in the union so old resolved rows
+   * still type-check.
+   */
   | "session_finished"
-  /** A session's turn ended because it was cancelled (Stop, cancel_turn, stop_session). */
+  /** Retired. A session's turn ended because it was cancelled (Stop, cancel_turn, stop_session). */
   | "session_stopped"
+  /** Retired. */
   | "session_waiting"
+  /** Retired. */
   | "session_offline"
+  /** Retired. */
   | "session_hung"
   | "pr_checks_failing"
   | "pr_changes_requested"
@@ -348,6 +359,20 @@ export type PullAttention = PullRef & {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Tracked sessions
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A session the user or Portal chose to keep an eye on; the right sidebar lists them with their
+ * live state. Membership is explicit: nothing is tracked by inference. Deleting the session
+ * removes it.
+ */
+export type TrackedSession = { sessionId: string; trackedAt: number; trackedBy: "user" | "portal" };
+
+/** The whole tracked set, pushed on connect and after every change (the set is small). */
+export type TrackedSessionsEvent = { type: "tracked"; sessions: TrackedSession[] };
+
+// ---------------------------------------------------------------------------------------------
 // Runtime status and live events (what the API routes and the page consume)
 // ---------------------------------------------------------------------------------------------
 
@@ -388,4 +413,6 @@ export type OrchestratorEvent =
   | { type: "memory"; recordIds: string[] }
   /** The world state was rebuilt. */
   | { type: "world"; at: number }
-  | { type: "items"; items: Item[] };
+  | { type: "items"; items: Item[] }
+  /** The tracked sessions changed (tracked, untracked, or deleted); the full list. */
+  | TrackedSessionsEvent;

@@ -22,7 +22,11 @@ export type ActivityActor = "user" | "agent" | "system";
  * intent.updated · intent.fired · intent.closed · thread.created · memory.remembered ·
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
- * approval.requested · approval.decided · approval.executed · world.refreshed
+ * approval.requested · approval.decided · approval.executed · world.refreshed · session.tracked ·
+ * session.untracked
+ *
+ * `session.tracked` and `session.untracked` carry `refs.sessionId` and `detail.trackedBy` (who:
+ * "user" or "portal"), plus `detail.reason` when one was given.
  */
 export type ActivityKind = string;
 

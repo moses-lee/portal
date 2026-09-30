@@ -45,6 +45,17 @@ export const sessionEvents = pgTable(
   (table) => [primaryKey({ columns: [table.sessionId, table.seq] })],
 );
 
+/**
+ * Sessions the user or Portal chose to keep an eye on (the right sidebar's list). Membership is
+ * explicit; deleting the session removes its row.
+ */
+export const trackedSessions = pgTable("tracked_sessions", {
+  sessionId: text("session_id").primaryKey().references(() => sessions.id, { onDelete: "cascade" }),
+  trackedAt: epochMs("tracked_at").notNull(),
+  /** "user" or "portal". */
+  trackedBy: text("tracked_by").notNull(),
+});
+
 // ---------------------------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------------------------

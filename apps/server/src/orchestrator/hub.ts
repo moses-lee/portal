@@ -1,7 +1,7 @@
 /**
  * The orchestrator hub: one object that holds everything the orchestrator's parts share (store,
  * settings, deps, clock, presence, event emitter) and the domain services built on them
- * (activity, jobs, world, memory, approvals); `turn.ts` builds model turns over it. It follows the AppContext pattern: services
+ * (activity, tracked sessions, jobs, world, memory, approvals); `turn.ts` builds model turns over it. It follows the AppContext pattern: services
  * are attached in order and read their siblings from the hub at call time, never at construction,
  * so the order they are built in does not matter and tests can swap any one of them.
  *
@@ -19,6 +19,7 @@ import type { ActivityService } from "./activity/service.ts";
 import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import type { ProviderOptions } from "./model.ts";
 import type { SchedulerTimers } from "./jobs/timers.ts";
+import type { TrackedService } from "./tracked/service.ts";
 import type { ToolContext } from "./tools/context.ts";
 import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, OrchestratorStore, Scope } from "./types.ts";
 
@@ -162,6 +163,8 @@ export interface WorldService {
   render(world: WorldState, opts?: { budgetTokens?: number; scope?: Scope }): string;
   /** resolve_pull, resolve_repo, resolve_session, get_world, ... */
   tools(ctx: DomainToolContext): ToolSet;
+  /** The tracked set changed (full ids, oldest tracked first): the latest world takes it at once, without a rebuild. */
+  trackedChanged?(sessionIds: string[]): void;
 }
 
 export type MemoryPromptContext = {
@@ -217,6 +220,8 @@ export interface OrchestratorHub {
   /** The model for a role, or null when no key is stored for its provider. */
   model(role: ModelRole): Promise<ResolvedModel | null>;
   activity: ActivityService;
+  /** The tracked sessions: track and untrack (logged and pushed), list. */
+  tracked: TrackedService;
   jobs: JobsService;
   world: WorldService;
   memory: MemoryService;

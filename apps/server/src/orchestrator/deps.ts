@@ -68,6 +68,8 @@ export type OrchestratorDeps = {
     remove(id: string): Promise<boolean>;
     /** The session's liveness after a fresh look at its agent's processes; null for an unknown session. Fakes may leave it out (then `get` answers). */
     liveness?(id: string): Promise<SessionLiveness | null>;
+    /** Called with the id of every session deleted, by anyone; answers the unsubscribe function. Fakes may leave it out. */
+    onDeleted?(listener: (id: string) => void): () => void;
   };
   agents: {
     list(): Promise<AgentInfo[]>;
@@ -205,6 +207,9 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
         const runtime = await acp();
         return runtime.getSession(id) ? runtime.probeSession(id) : null;
       },
+      onDeleted: (listener) => ctx.sessions.onSessionsChange((change) => {
+        if (change.type === "deleted") listener(change.id);
+      }),
     },
     // The sessions service's agents, not the built-in list: the orchestrator must offer only agents it can start.
     agents: {

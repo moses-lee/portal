@@ -85,6 +85,13 @@
       "when": 1790549716971,
       "tag": "0011_items_status_index",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790729322373,
+      "tag": "0012_tracked_sessions",
+      "breakpoints": true
     }
   ]
 }
