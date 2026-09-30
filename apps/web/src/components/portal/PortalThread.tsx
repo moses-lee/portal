@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { Archive, GitPullRequest, KeyRound, LoaderCircle, Sparkles, Target } from "lucide-react";
@@ -21,16 +21,8 @@ import {
 } from "@/components/ui/message-scroller";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { formatDateTime } from "@/lib/orchestrator/format";
+import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
-
-/** Messages already held are replaced by the server's copy (same id); new ones go at the end. */
-export function mergeMessages(current: OrchestratorMessage[], incoming: OrchestratorMessage[]): OrchestratorMessage[] {
-  if (incoming.length === 0) return current;
-  const byId = new Map(incoming.map((message) => [message.id, message]));
-  const merged = current.map((message) => byId.get(message.id) ?? message);
-  const known = new Set(current.map((message) => message.id));
-  return [...merged, ...incoming.filter((message) => !known.has(message.id))];
-}
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
 
@@ -238,7 +230,8 @@ export default function PortalThread({
       try {
         const page = await fetchPage(routes.messages, controller.signal);
         if (controller.signal.aborted) return;
-        setMessages(page.messages);
+        // Unchanged messages keep the objects already held, so their memoised rows skip rendering.
+        setMessages((prev) => replaceWithPage(prev, page.messages));
         cursor.current = { before: page.before, after: page.after };
         setHasMore(page.hasMore);
         setHistoryError(null);
@@ -298,10 +291,7 @@ export default function PortalThread({
     setLoadingOlder(true);
     try {
       const page = await fetchPage(`${routes.messages}?before=${before}`);
-      setMessages((prev) => {
-        const known = new Set(prev.map((message) => message.id));
-        return [...page.messages.filter((message) => !known.has(message.id)), ...prev];
-      });
+      setMessages((prev) => prependOlder(prev, page.messages));
       if (page.before !== null) cursor.current.before = page.before;
       setHasMore(page.hasMore);
     } catch {
@@ -385,6 +375,16 @@ export default function PortalThread({
     stop();
     fetch(routes.cancel, { method: "POST" }).catch(() => {});
   };
+  /**
+   * The rows are memoised; `handlers` changes identity whenever the page above re-renders, so the
+   * rows get a stable callback that reads the newest handler instead.
+   */
+  const latestHandlers = useRef(handlers);
+  useLayoutEffect(() => {
+    latestHandlers.current = handlers;
+  }, [handlers]);
+  const openCurationRun = useCallback((runId: string) => latestHandlers.current.onOpenCurationRun?.(runId), []);
+  const canOpenCurationRun = !!handlers.onOpenCurationRun;
   const cardHandlers: ItemCardHandlers = useMemo(() => ({ ...handlers, onAsk: ask }), [handlers, ask]);
 
   const last = messages.at(-1);
@@ -472,7 +472,7 @@ export default function PortalThread({
                   <PortalMessage
                     message={message}
                     streaming={responding && index === messages.length - 1}
-                    onOpenCurationRun={handlers.onOpenCurationRun}
+                    onOpenCurationRun={canOpenCurationRun ? openCurationRun : undefined}
                     onLoadToolIO={loadToolIO}
                   />
                 </MessageScrollerItem>
