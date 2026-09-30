@@ -183,9 +183,118 @@ test.describe("on a phone", () => {
     await sheet.getByRole("button", { name: finishedTitle, exact: true }).click();
     await expect(page).toHaveURL(/\/\?session=s1$/);
     await expect(sheet.getByRole("heading", { name: finishedTitle })).toBeVisible();
+    // The session takes the whole screen, with its transcript and composer.
+    expect((await sheet.boundingBox())!.width).toBe(390);
+    await expect(sheet.getByText("A calmer place to work", { exact: true })).toBeVisible();
+    await expect(sheet.getByRole("combobox", { name: "Message Claude Code" })).toBeVisible();
+    await sheet.getByRole("button", { name: "Back to tracked sessions" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(sheet.getByRole("heading", { name: "Tracked (4)" })).toBeVisible();
 
+    await sheet.getByRole("button", { name: finishedTitle, exact: true }).click();
+    await expect(page).toHaveURL(/\/\?session=s1$/);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Tracked sessions" })).toHaveCount(0);
     await expect(page).toHaveURL(/\/$/);
   });
+
+  test("Ask Portal from a session in the sheet closes it and fills the composer", async ({ page }) => {
+    await setup(page);
+    await page.goto("/?session=s1");
+    const sheet = page.getByRole("dialog", { name: "Tracked sessions" });
+    await expect(sheet.getByRole("heading", { name: finishedTitle })).toBeVisible();
+    await sheet.getByRole("button", { name: `Actions for ${finishedTitle}` }).click();
+    await page.getByRole("menuitem", { name: "Ask Portal about this" }).click();
+
+    await expect(page.getByRole("dialog", { name: "Tracked sessions" })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/$/);
+    const composer = page.getByRole("textbox", { name: "Message Portal" });
+    await expect(composer).toHaveValue(`About session s1 (${finishedTitle}): `);
+    await expect(composer).toBeFocused();
+  });
+});
+
+test("session mode shows the transcript and sends a reply from the panel", async ({ page }) => {
+  const fixture = await setup(page);
+  await page.goto("/?session=s1");
+  const panel = panelOf(page);
+  await expect(panel.getByRole("heading", { name: finishedTitle })).toBeVisible();
+  await expect(panel.getByText("A calmer place to work", { exact: true })).toBeVisible();
+  // The orchestrator thread stays beside it.
+  await expect(page.getByRole("textbox", { name: "Message Portal" })).toBeVisible();
+
+  const input = panel.getByRole("combobox", { name: "Message Claude Code" });
+  await input.fill("Ship the panel");
+  await input.press("Enter");
+  await expect
+    .poll(() => fixture.requests.find((r) => r.method === "POST" && r.path === "/api/sessions/s1/prompt")?.body)
+    .toMatchObject({ text: "Ship the panel" });
+
+  await panel.getByRole("button", { name: "Back to tracked sessions" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(panel.getByRole("heading", { name: "Tracked (4)" })).toBeVisible();
+});
+
+test("session mode is resizable, keeps the thread at 480 px, and remembers its width", async ({ page }) => {
+  await setup(page);
+  await page.goto("/?session=s1");
+  const separator = panelOf(page).getByRole("separator", { name: "Resize tracked session" });
+  await expect(separator).toBeVisible();
+  const main = page.locator("main");
+  await expect.poll(async () => (await main.boundingBox())!.width).toBeGreaterThanOrEqual(480);
+
+  // Half the space beside the 280 px sidebar (580 at 1440 px): measured after the first layout.
+  await expect.poll(async () => Number(await separator.getAttribute("aria-valuenow"))).toBeGreaterThan(400);
+  const start = Number(await separator.getAttribute("aria-valuenow"));
+  await separator.focus();
+  await separator.press("ArrowRight");
+  await expect(separator).toHaveAttribute("aria-valuenow", String(start - 16));
+  // Widening past the limit stops where the thread keeps 480 px.
+  await separator.press("End");
+  const max = Number(await separator.getAttribute("aria-valuenow"));
+  await expect.poll(async () => Math.round((await main.boundingBox())!.width)).toBeGreaterThanOrEqual(480);
+  await separator.press("ArrowRight");
+  await expect(separator).toHaveAttribute("aria-valuenow", String(max - 16));
+
+  await page.reload();
+  await expect(panelOf(page).getByRole("separator", { name: "Resize tracked session" })).toHaveAttribute("aria-valuenow", String(max - 16));
+  expect(await page.evaluate(() => localStorage.getItem("portal.tracked.width"))).toBe(String(max - 16));
+});
+
+test("Ask Portal about this prefills the thread's composer and focuses it", async ({ page }) => {
+  await setup(page);
+  await page.goto("/goals");
+  const panel = panelOf(page);
+  await panel.getByRole("button", { name: `Actions for ${finishedTitle}` }).click();
+  await page.getByRole("menuitem", { name: "Ask Portal about this" }).click();
+  // From another view it goes to the thread it last showed (the main one).
+  await expect(page).toHaveURL(/\/$/);
+  const composer = page.getByRole("textbox", { name: "Message Portal" });
+  await expect(composer).toHaveValue(`About session s1 (${finishedTitle}): `);
+  await expect(composer).toBeFocused();
+});
+
+test("an item's open-session action opens the session in the panel instead of navigating", async ({ page }) => {
+  await setup(page);
+  await page.goto("/");
+  await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: portalItem.title }).click();
+  await page.getByRole("article", { name: portalItem.title }).getByRole("button", { name: "Open session" }).click();
+  await expect(page).toHaveURL(/\/\?session=s1$/);
+  const panel = panelOf(page);
+  await expect(panel.getByRole("heading", { name: finishedTitle })).toBeVisible();
+
+  // "Open full page" still navigates.
+  await panel.getByRole("button", { name: "Open full page" }).click();
+  await expect(page).toHaveURL(/\/sessions\/s1$/);
+});
+
+test("Ask Portal from the chat view prefills its composer in place", async ({ page }) => {
+  await setup(page);
+  await page.goto("/");
+  await panelOf(page).getByRole("button", { name: `Actions for ${workingTitle}` }).click();
+  await page.getByRole("menuitem", { name: "Ask Portal about this" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const composer = page.getByRole("textbox", { name: "Message Portal" });
+  await expect(composer).toHaveValue(`About session s2 (${workingTitle}): `);
+  await expect(composer).toBeFocused();
 });

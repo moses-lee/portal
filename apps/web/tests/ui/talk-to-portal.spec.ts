@@ -263,7 +263,7 @@ test("a messages stream event refetches the thread and shows what was appended",
   expect(loads()).toBe(before + 1);
 });
 
-test("Open session navigates to the session", async ({
+test("Open session opens the session in the tracked panel", async ({
   page,
 }) => {
   await setupPortal(page);
@@ -273,9 +273,11 @@ test("Open session navigates to the session", async ({
     .getByRole("article", { name: portalItem.title })
     .getByRole("button", { name: "Open session" })
     .click();
-  await expect(page).toHaveURL(/\/sessions\/s1$/);
+  await expect(page).toHaveURL(/\/\?session=s1$/);
   await expect(
-    page.getByRole("combobox", { name: "Message Claude Code" }),
+    page
+      .getByRole("complementary", { name: "Tracked sessions" })
+      .getByRole("combobox", { name: "Message Claude Code" }),
   ).toBeVisible();
 });
 

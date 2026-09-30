@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { LoaderCircle, PanelLeft } from "lucide-react";
 import AuroraBackground from "./AuroraBackground";
@@ -8,10 +8,10 @@ import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import ResponsiveDialog from "./ResponsiveDialog";
 import PortalStatusLine from "./portal/PortalStatusLine";
-import PortalThread from "./portal/PortalThread";
+import PortalThread, { threadDraftKey } from "./portal/PortalThread";
 import ThreadSwitcher from "./portal/ThreadSwitcher";
-import TrackedPanel, { TrackedPanelFromUrl, type TrackedPanelProps } from "./tracked/TrackedPanel";
-import { TrackedToggle } from "./tracked/parts";
+import TrackedPanel, { TrackedPanelFromUrl, setPanelSession, type TrackedPanelProps } from "./tracked/TrackedPanel";
+import { TrackedToggle, trackedTitle } from "./tracked/parts";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
 import { readDraft, writeDraft } from "@/lib/drafts";
@@ -19,6 +19,16 @@ import { portalActivity } from "@/lib/orchestrator/format";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import { portalLocation, portalPathKeepingPanel, type PortalLocation, type PortalView } from "@/lib/session-routes";
 import type { SessionSummary } from "@/lib/types";
+
+/** Focus a thread's composer, caret at the end, once the frame with its newest draft has rendered. */
+function focusComposer(draftKey: string) {
+  requestAnimationFrame(() => {
+    const textarea = document.querySelector<HTMLTextAreaElement>(`[data-draft-key="${CSS.escape(draftKey)}"] textarea`);
+    if (!textarea) return;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  });
+}
 
 /** Stands in for a view while its chunk loads: the views mount only when opened. */
 function ViewLoading() {
@@ -57,7 +67,7 @@ export default function PortalPage({
   /** Change the URL within the app (no server round trip). */
   onNavigate: (path: string) => void;
   onOpenSidebar: () => void;
-  /** Navigate to a session, the way the sidebar does. */
+  /** Navigate to a session's full page, the way the sidebar does (the tracked panel's "Open full page"). */
   onOpenSession: (sessionId: string) => void;
 }) {
   const live = usePortalLive();
@@ -90,15 +100,17 @@ export default function PortalPage({
     setUnread((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   });
 
+  /** Item actions, thread mentions, and view links open a session in the tracked panel; its "Open full page" navigates. */
+  const openInPanel = useCallback((sessionId: string) => setPanelSession(sessionId), []);
   const handlers: Omit<ItemCardHandlers, "onAsk"> = useMemo(
     () => ({
-      onOpenSession,
+      onOpenSession: openInPanel,
       onPatched: putItem,
       onReviewApproval: requestApproval,
       onOpenMemory: () => go("memory"),
       onOpenCurationRun: (runId: string) => go({ view: "memory", entityId: null, runId }),
     }),
-    [onOpenSession, putItem, requestApproval, go],
+    [openInPanel, putItem, requestApproval, go],
   );
   /** An item opened from a link (Activity, Goals): its card in a dialog. */
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -106,6 +118,11 @@ export default function PortalPage({
   const dialogHandlers: ItemCardHandlers = useMemo(
     () => ({
       ...handlers,
+      // The panel opens beside the view; the dialog would cover it.
+      onOpenSession: (sessionId: string) => {
+        setOpenItemId(null);
+        openInPanel(sessionId);
+      },
       // Outside a conversation, "Ask Portal" drafts into the main thread and goes there.
       onAsk: (text: string) => {
         const key = "portal:orchestrator";
@@ -115,25 +132,49 @@ export default function PortalPage({
         go({ view: "chat", threadId: MAIN_THREAD_ID });
       },
     }),
-    [handlers, go],
+    [handlers, go, openInPanel],
   );
   const links = useMemo(
     () => ({
       openThread: (threadId: string) => go({ view: "chat", threadId }),
       openItem: (itemId: string) => setOpenItemId(itemId),
-      openSession: onOpenSession,
+      openSession: openInPanel,
       openGoals: () => go("goals"),
       openEntity: (entityId: string) => go({ view: "memory", entityId }),
       openCurationRun: (runId: string | null) => go({ view: "memory", entityId: null, runId }),
       openApproval: requestApproval,
     }),
-    [go, onOpenSession, requestApproval],
+    [go, openInPanel, requestApproval],
   );
 
   /** Below 1280 px the tracked list is a sheet, opened from the header. */
   const [trackedSheetOpen, setTrackedSheetOpen] = useState(false);
-  // TODO(step 6): prefill the current thread's composer with `About session <id> (<title>): ` and focus it.
-  const askPortalAbout = useCallback((session: SessionSummary) => void session, []);
+  /** The composer to focus once the chat view shows (after "Ask Portal about this" switched to it). */
+  const pendingFocus = useRef<string | null>(null);
+  /**
+   * "Ask Portal about this": prefill the current thread's composer (the last one shown, when another
+   * view is open, which then switches to it) with `About session <id> (<title>): ` and focus it.
+   */
+  const askPortalAbout = useCallback(
+    (session: SessionSummary) => {
+      const key = threadDraftKey(shownThread);
+      const text = `About session ${session.id} (${trackedTitle(session)}): `;
+      const current = readDraft(key);
+      if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
+      if (view === "chat") focusComposer(key);
+      else {
+        pendingFocus.current = key;
+        go({ view: "chat", threadId: shownThread });
+      }
+    },
+    [shownThread, view, go],
+  );
+  useEffect(() => {
+    const key = pendingFocus.current;
+    if (!key || view !== "chat") return;
+    pendingFocus.current = null;
+    focusComposer(key);
+  }, [view]);
   const trackedProps: TrackedPanelProps = {
     sheetOpen: trackedSheetOpen,
     onSheetOpenChange: setTrackedSheetOpen,

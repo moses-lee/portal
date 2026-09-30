@@ -42,6 +42,7 @@ export default function ChatComposer({
   error,
   describedBy,
   historyKey,
+  paletteId = "command-palette",
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -60,6 +61,8 @@ export default function ChatComposer({
   describedBy?: string;
   /** Recall this conversation's earlier prompts with Up/Down (see `@/lib/prompt-history`). */
   historyKey?: string;
+  /** The command palette's element id; two composers on one page (a Portal thread and the tracked panel) need different ones. */
+  paletteId?: string;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [caret, setCaret] = useState(0);
@@ -146,7 +149,7 @@ export default function ChatComposer({
       <div className="relative">
         {paletteOpen && token && (
           <CommandPalette
-            id="command-palette"
+            id={paletteId}
             matches={matches}
             trigger={token.trigger}
             selected={selected}
@@ -172,9 +175,9 @@ export default function ChatComposer({
               role={commands.length ? "combobox" : undefined}
               aria-autocomplete={commands.length ? "list" : undefined}
               aria-expanded={commands.length ? paletteOpen : undefined}
-              aria-controls={paletteOpen ? "command-palette" : undefined}
+              aria-controls={paletteOpen ? paletteId : undefined}
               aria-activedescendant={
-                paletteOpen ? `command-palette-${selected}` : undefined
+                paletteOpen ? `${paletteId}-${selected}` : undefined
               }
               onChange={(event) => {
                 onChange(event.target.value);

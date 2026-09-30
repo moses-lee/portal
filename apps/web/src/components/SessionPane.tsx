@@ -9,6 +9,7 @@ import StartPage, { type StartPageProps } from "./StartPage";
 import ChatComposer from "./ChatComposer";
 import Conversation from "./Conversation";
 import SessionHeader from "./SessionHeader";
+import SessionLinkBanner from "./SessionLinkBanner";
 import AuroraBackground from "./AuroraBackground";
 import { Button } from "@/components/ui/button";
 import { useSessions } from "./SessionsProvider";
@@ -108,7 +109,6 @@ export default function SessionPane({
   });
   const shellButton = useRef<HTMLButtonElement>(null);
 
-  const offline = link?.status === "offline";
   const agentName = session?.agentName ?? "the agent";
 
   const hideShell = () => {
@@ -189,29 +189,11 @@ export default function SessionPane({
               />
             )}
             <div className="composer-wrap">
-              {link && link.status !== "live" && (
-                <div
-                  role="status"
-                  className={`mb-3 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs leading-relaxed ${offline ? "border-amber-300/10 bg-amber-300/5 text-amber-200" : "border-white/5 text-muted-foreground"}`}
-                >
-                  <span className="min-w-0 flex-1">
-                    {link.status === "connecting"
-                      ? `Connecting to ${agentName}…`
-                      : (link.error ??
-                        `${agentName} is offline. Send a message to reconnect.`)}
-                  </span>
-                  {offline && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void retryAttach()}
-                    >
-                      Reconnect
-                    </Button>
-                  )}
-                </div>
-              )}
+              <SessionLinkBanner
+                link={link}
+                agentName={agentName}
+                onRetry={() => void retryAttach()}
+              />
               <ChatComposer
                 value={input}
                 onChange={setInput}

@@ -19,7 +19,7 @@ This spec adds an explicit "tracked sessions" set, shared by Moses and the orche
 | 2 | Waiting on a reply | Not stored. A tracked session that is idle and live is by definition waiting on us; a reply flips it to working. No read state, no reply timestamps. |
 | 3 | Row content | Title, project, agent logo, state badge, age. Grouped: needs approval, finished, working, connecting, offline/error/hung. |
 | 4 | Session view | Not inline. Selecting a row expands the sidebar into a wide dual view (session next to the orchestrator thread) with a back button. Full-screen takeover on mobile. |
-| 5 | Panel behaviour | One panel: the list, or the selected session (option a). Expanded width resizable and persisted, default half the shell, orchestrator thread never narrower than ~480 px. List width fixed. |
+| 5 | Panel behaviour | One panel: the list, or the selected session (option a). Expanded width resizable and persisted, default half the space beside the sidebar, orchestrator thread never narrower than ~480 px. List width fixed. |
 | 6 | Where it appears | Every Portal view (chat, goals, activity, memory, system). Mobile gets a sheet for the list and a full view for the session. |
 | 7 | Needs-you | The session-kind items (`session_finished`, `session_stopped`, `session_waiting`, `session_hung`, `session_offline`) are retired: no longer created, filtered from the strip, and the existing open ones resolved once at boot. |
 | 8 | Links | Item actions and thread mentions that open a session open the panel instead of navigating to `/sessions/:id`. |
@@ -101,7 +101,7 @@ New activity kinds `session.tracked` and `session.untracked`, with `refs.session
 - `SessionsProvider` (new, `components/SessionsProvider.tsx`) owns what `Chat.tsx` holds today: the agents list, the `SessionSummary[]` list, the list SSE, `updateSession`, plus the tracked set from the portal stream. `useSessions()` returns `{ agents, sessions, tracked, loading, updateSession, track(id), untrack(id) }`. `Sidebar`, `SessionPane` and the new panel read from it.
 - `useSessionStream(sessionId, historyCache)` (new hook, extracted from `SessionPane`) returns `{ history, loading, loadingOlder, error, meta, cursor, loadOlder, send, stop, answerPermission, setConfig, retryAttach, activity, awaitingPermission }`. `SessionPane` becomes a thin layout over it; the panel uses the same hook. Two mounted instances of the hook for one session are supported by the server and by the history cache (last writer wins, harmless).
 - The selected panel session lives in the URL as a search param, `?session=<id>`, on any Portal path. `portalLocation`/`portalPath` in `lib/session-routes.ts` learn to keep it. `?session=` restores the expanded panel on reload.
-- Preferences: `portal.tracked.open` (`"true"`/`"false"`, default true on desktop), `portal.tracked.width` (expanded width in px, default half the shell at first open, clamped so the main pane keeps 480 px).
+- Preferences: `portal.tracked.open` (`"true"`/`"false"`, default true on desktop), `portal.tracked.width` (expanded width in px, default half the space beside the sidebar at first open, clamped so the main pane keeps 480 px).
 
 ### Panel (`components/tracked/TrackedPanel.tsx`)
 

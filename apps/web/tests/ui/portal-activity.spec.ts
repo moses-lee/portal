@@ -82,6 +82,7 @@ test("activity links open the thread, the item, the session, and memory", async 
   await expect(page).toHaveURL(/\/threads\/t-review$/);
   await page.goBack();
 
+  // A session opens in the tracked panel beside the view.
   await rows.nth(2).getByRole("button", { name: "Session" }).click();
-  await expect(page).toHaveURL(/\/sessions\/s1$/);
+  await expect(page).toHaveURL(/\/activity\?session=s1$/);
 });

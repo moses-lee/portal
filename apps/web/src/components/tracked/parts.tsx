@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Eye, EyeOff, ExternalLink, MessageCircleMore, MoreHorizontal, Square } from "lucide-react";
 import { useSessions } from "../SessionsProvider";
 import { Button } from "@/components/ui/button";
@@ -140,6 +140,8 @@ export function TrackedRowMenu({
   className?: string;
 }) {
   const [busy, setBusy] = useState(false);
+  /** Set by "Ask Portal": focus goes to the composer it filled, not back to this trigger. */
+  const focusElsewhere = useRef(false);
   const title = trackedTitle(session);
   const run = (work: () => Promise<void>, fallback: string) => {
     setBusy(true);
@@ -161,7 +163,14 @@ export function TrackedRowMenu({
           <MoreHorizontal />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          if (!focusElsewhere.current) return;
+          focusElsewhere.current = false;
+          event.preventDefault();
+        }}
+      >
         <DropdownMenuItem onSelect={() => actions.onOpenFullPage(session.id)}>
           <ExternalLink />
           Open full page
@@ -172,7 +181,12 @@ export function TrackedRowMenu({
             Stop turn
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={() => actions.onAskPortal(session)}>
+        <DropdownMenuItem
+          onSelect={() => {
+            focusElsewhere.current = true;
+            actions.onAskPortal(session);
+          }}
+        >
           <MessageCircleMore />
           Ask Portal about this
         </DropdownMenuItem>

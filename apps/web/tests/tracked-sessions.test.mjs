@@ -93,3 +93,20 @@ test("short ids are the first eight characters", () => {
   assert.equal(shortSessionId("0123456789abcdef"), "01234567");
   assert.equal(shortSessionId("abc"), "abc");
 });
+
+test("session mode starts at half the space beside the sidebar and keeps the main pane at 480 px", async () => {
+  const { trackedSessionWidth, parseTrackedWidth } = await import("../src/lib/tracked-sessions.ts");
+  // First open: half the space beside the sidebar (1440 wide, 280 sidebar: 580, the thread keeps 580).
+  assert.equal(trackedSessionWidth({ wanted: null, shared: 1160 }), 580);
+  // Half would leave the pane under 480: clamped (and never under the session minimum).
+  assert.equal(trackedSessionWidth({ wanted: null, shared: 900 }), 420);
+  // A stored width wins, within the bounds.
+  assert.equal(trackedSessionWidth({ wanted: 600, shared: 1320 }), 600);
+  assert.equal(trackedSessionWidth({ wanted: 1200, shared: 1320 }), 840);
+  assert.equal(trackedSessionWidth({ wanted: 100, shared: 1320 }), 360);
+  // Too little room: never narrower than the list.
+  assert.equal(trackedSessionWidth({ wanted: 500, shared: 700 }), 320);
+  assert.equal(parseTrackedWidth(""), null);
+  assert.equal(parseTrackedWidth("abc"), null);
+  assert.equal(parseTrackedWidth("640"), 640);
+});

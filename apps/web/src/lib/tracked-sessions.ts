@@ -110,3 +110,27 @@ export function trackedAttentionCount(groups: readonly { id: TrackedGroupId; row
 export function shortSessionId(id: string): string {
   return id.slice(0, 8);
 }
+
+/** The list mode's fixed width, px. */
+export const TRACKED_LIST_WIDTH = 320;
+/** The narrowest session mode, px. */
+export const TRACKED_SESSION_MIN_WIDTH = 360;
+/** What the main Portal pane keeps beside an expanded panel, px. */
+export const MAIN_PANE_MIN_WIDTH = 480;
+
+/**
+ * Session mode's width: the stored (or dragged) width, else half the space beside the sidebar, clamped so the main
+ * pane keeps `MAIN_PANE_MIN_WIDTH`. `shared` is the room the panel and the main pane split between
+ * them (the shell less the sidebar). Never below the list width, even when that squeezes the pane.
+ */
+export function trackedSessionWidth({ wanted, shared }: { wanted: number | null; shared: number }): number {
+  const max = shared - MAIN_PANE_MIN_WIDTH;
+  const width = Math.min(max, Math.max(TRACKED_SESSION_MIN_WIDTH, wanted ?? Math.round(shared / 2)));
+  return Math.max(TRACKED_LIST_WIDTH, Math.round(width));
+}
+
+/** A stored `portal.tracked.width`: a positive number, else null (never set, or garbage). */
+export function parseTrackedWidth(stored: string): number | null {
+  const value = Number(stored);
+  return stored && Number.isFinite(value) && value > 0 ? value : null;
+}

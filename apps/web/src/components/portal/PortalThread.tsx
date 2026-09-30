@@ -88,7 +88,7 @@ class Acknowledgement {
 }
 
 /** Drafts and prompt history per thread; the main thread keeps the keys it had before side threads existed. */
-const threadKey = (threadId: string) =>
+export const threadDraftKey = (threadId: string) =>
   threadId === MAIN_THREAD_ID ? "portal:orchestrator" : `portal:orchestrator:${threadId}`;
 
 /** What a side thread is about, above its messages: title, when Portal opened it, and its scope. */
@@ -174,7 +174,7 @@ export default function PortalThread({
   const live = usePortalLive();
   const { status, items } = live;
   const routes = useMemo(() => threadRoutes(threadId), [threadId]);
-  const key = threadKey(threadId);
+  const key = threadDraftKey(threadId);
   const [ack] = useState(() => new Acknowledgement());
   const transport = useMemo(
     () =>
@@ -487,7 +487,7 @@ export default function PortalThread({
           </MessageScrollerViewport>
         </MessageScroller>
       </MessageScrollerProvider>
-      <div ref={composerWrap} className="composer-wrap">
+      <div ref={composerWrap} className="composer-wrap" data-draft-key={key}>
         <ChatComposer
           value={draft}
           onChange={setDraft}
