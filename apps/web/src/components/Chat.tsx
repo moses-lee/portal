@@ -17,6 +17,7 @@ import SessionPane from "./SessionPane";
 import TerminalPage from "./TerminalPage";
 import PortalPage from "./PortalPage";
 import { PortalLiveProvider } from "./portal/PortalLive";
+import { SessionsProvider, useSessions } from "./SessionsProvider";
 import AddProjectDialog from "./AddProjectDialog";
 import { usePins } from "./usePins";
 import { useProjects } from "./useProjects";
@@ -30,7 +31,6 @@ import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
 import { pinnedFirst } from "@/lib/pins";
-import { PAGE_TURNS, createHistoryCache } from "@/lib/history-cache";
 import { byRecentActivity, orderProjectsByActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
@@ -51,15 +51,11 @@ import {
   type PortalView,
 } from "@/lib/session-routes";
 import type {
-  AgentInfo,
-  EventPage,
   GithubSummary,
   ProjectSummary,
   SessionDetail,
-  SessionListEvent,
   SessionListState,
   SessionState,
-  SessionSummary,
   SetConfigRequest,
 } from "@/lib/types";
 
@@ -86,15 +82,6 @@ function storeProjectId(id: string) {
   }
 }
 
-/** The app shell: sidebar, session list, project selection, and the pane for the session named by the URL. */
-/** The latest transcript page for the history cache; null when the session is gone. */
-async function fetchHistoryPage(id: string): Promise<EventPage | null> {
-  const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/events?turns=${PAGE_TURNS}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return (await r.json()) as EventPage;
-}
-
 /**
  * Change the URL without a server round trip. Next syncs `usePathname` with the native history
  * API, and the session routes render nothing of their own, so a router navigation (which fetches
@@ -104,7 +91,22 @@ const pushPath = (path: string) => window.history.pushState(null, "", path);
 const replacePath = (path: string) =>
   window.history.replaceState(null, "", path);
 
+/**
+ * The app: the live orchestrator state and the session list, which every page reads, around the
+ * shell. The layout mounts this once, so both providers live for the whole visit.
+ */
 export default function Chat() {
+  return (
+    <PortalLiveProvider>
+      <SessionsProvider>
+        <ChatShell />
+      </SessionsProvider>
+    </PortalLiveProvider>
+  );
+}
+
+/** The app shell: sidebar, project selection, and the pane for the session named by the URL. */
+function ChatShell() {
   const pathname = usePathname();
   /** The open session comes from the URL, so refresh, back, and shared links all land on it. */
   const active = useMemo(() => sessionIdFromPath(pathname ?? "/"), [pathname]);
@@ -115,13 +117,25 @@ export default function Chat() {
   /** Portal, the orchestrator: the home (`/`) and its views, outside every project and session. */
   const portalOpen = isPortalPath(pathname ?? "/");
   const portalView: PortalView | null = portalOpen ? portalLocation(pathname ?? "/").view : null;
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [loading, setLoading] = useState(true);
+  const {
+    agents,
+    defaultAgentId,
+    sessions,
+    loading,
+    loadError,
+    updateSession,
+    putSession,
+    removeSession,
+    refetchSessions,
+    historyCache,
+  } = useSessions();
+  /** The agent picked on the start page; the registry's default until then. */
+  const [chosenAgentId, setSelectedAgentId] = useState("");
+  const selectedAgentId = chosenAgentId || defaultAgentId;
   const [creating, setCreating] = useState(false);
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  /** The current list, for stream handlers that must not close over a stale render. */
+  const [createError, setSessionError] = useState<string | null>(null);
+  const sessionError = createError ?? loadError;
+  /** The current list, for handlers that must not close over a stale render. */
   const sessionsRef = useRef(sessions);
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -196,108 +210,6 @@ export default function Chat() {
     error: string | null;
   } | null>(null);
   const creatingRef = useRef(false);
-  /** Reduced transcripts of visited (and hovered) sessions, for instant switches. */
-  const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
-
-  /** Refetch the whole list; used when the live feed names a session this page does not know. Resolves with the list. */
-  const refetchSessions = useCallback(async (signal?: AbortSignal) => {
-    const r = await fetch("/api/sessions", { signal });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const { sessions: fetched } = (await r.json()) as {
-      sessions: SessionSummary[];
-    };
-    if (!signal?.aborted) setSessions(fetched);
-    return fetched;
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = async () => {
-      try {
-        const [agentsResponse, sessionsResponse] = await Promise.all([
-          fetch("/api/agents", { signal: controller.signal }),
-          fetch("/api/sessions", { signal: controller.signal }),
-        ]);
-        if (!agentsResponse.ok || !sessionsResponse.ok) {
-          throw new Error(
-            "Could not load agents and sessions. Reload the page to retry.",
-          );
-        }
-        const [registry, saved] = await Promise.all([
-          agentsResponse.json() as Promise<{
-            agents: AgentInfo[];
-            defaultAgentId: string;
-          }>,
-          sessionsResponse.json() as Promise<{ sessions: SessionSummary[] }>,
-        ]);
-        if (controller.signal.aborted) return;
-        setAgents(registry.agents);
-        setSelectedAgentId(registry.defaultAgentId);
-        setSessions(saved.sessions);
-      } catch {
-        if (!controller.signal.aborted) {
-          setSessionError(
-            "Could not load agents and sessions. Check the server and reload the page to retry.",
-          );
-        }
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    };
-    void load();
-    return () => controller.abort();
-  }, []);
-
-  // Follow the list live once it has loaded: other sessions' busy, permission, connection, title,
-  // and activity changes, plus sessions created or deleted from another browser. The open session's
-  // own stream still patches its git state and agent state.
-  useEffect(() => {
-    if (loading || sessionError) return;
-    const controller = new AbortController();
-    const es = new EventSource("/api/sessions/stream");
-    es.onmessage = (m) => {
-      const event = JSON.parse(m.data) as SessionListEvent;
-      switch (event.type) {
-        case "snapshot": {
-          const byId = new Map(event.sessions.map((s) => [s.id, s]));
-          // The snapshot decides what exists; entries it lacks were deleted while we were not listening.
-          setSessions((prev) =>
-            prev
-              .filter((s) => byId.has(s.id))
-              .map((s) => ({ ...s, ...byId.get(s.id) })),
-          );
-          // A session created while we were not listening needs its full entry (folder, branch, project).
-          const known = new Set(sessionsRef.current.map((s) => s.id));
-          if (event.sessions.some((s) => !known.has(s.id)))
-            refetchSessions(controller.signal).catch(() => {});
-          return;
-        }
-        case "created":
-          setSessions((prev) =>
-            prev.some((s) => s.id === event.session.id)
-              ? prev
-              : [event.session, ...prev],
-          );
-          return;
-        case "updated":
-          setSessions((prev) =>
-            prev.map((s) => (s.id === event.id ? { ...s, ...event.patch } : s)),
-          );
-          return;
-        case "deleted":
-          setSessions((prev) => prev.filter((s) => s.id !== event.id));
-          historyCache.delete(event.id);
-          writeDraft(event.id, "");
-          forgetPromptHistory(sessionHistoryKey(event.id));
-          return;
-      }
-    };
-    return () => {
-      controller.abort();
-      es.close();
-    };
-  }, [loading, sessionError, refetchSessions, historyCache]);
-
   // Pins outlive their projects and sessions in storage; forget the ones for things that are gone.
   useEffect(() => {
     if (loading || sessionError || projectsLoading) return;
@@ -392,15 +304,6 @@ export default function Chat() {
     setShowSidebar(false);
   };
 
-  const updateSession = useCallback(
-    (id: string, patch: Partial<SessionSummary>) => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
-      );
-    },
-    [],
-  );
-
   const initialSendHandled = useCallback((id: string) => {
     setInitialSend((previous) =>
       previous?.sessionId === id && !previous.pending ? null : previous,
@@ -408,10 +311,13 @@ export default function Chat() {
   }, []);
 
   /** Another viewer deleted the open session, or the server dropped it: leave it. */
-  const sessionDeleted = useCallback((id: string) => {
-    setSessions((prev) => prev.filter((s) => s.id !== id));
-    replacePath("/");
-  }, []);
+  const sessionDeleted = useCallback(
+    (id: string) => {
+      removeSession(id);
+      replacePath("/");
+    },
+    [removeSession],
+  );
 
   /** `DELETE /api/sessions/[id]`; leaves the session if it is open. Rejects with the server's message. */
   const deleteSession = async (sessionId: string) => {
@@ -429,7 +335,7 @@ export default function Chat() {
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       throw new Error(j.error ?? "Could not delete the session. Try again.");
     }
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    removeSession(sessionId);
     historyCache.delete(sessionId);
     writeDraft(sessionId, "");
     forgetPromptHistory(sessionHistoryKey(sessionId));
@@ -590,10 +496,7 @@ export default function Chat() {
       }
       // The worktree choice was for this start only; the next start page begins at Original again.
       setWorktreePick(null);
-      setSessions((prev) => [
-        session,
-        ...prev.filter((item) => item.id !== session.id),
-      ]);
+      putSession(session);
       if (firstPrompt.trim()) {
         writeDraft(session.id, firstPrompt);
         clearSubmittedDraft("new", firstPrompt);
@@ -715,11 +618,9 @@ export default function Chat() {
   const sidebarCollapse = useStableCallback(() => setSidebarPreference("false"));
 
   return (
-    <PortalLiveProvider>
     <div className="portal-shell">
       <Sidebar
         projects={orderedProjects}
-        sessions={sessions}
         projectPins={projectPins}
         sessionPins={sessionPins}
         onTogglePinProject={toggleProjectPin}
@@ -778,7 +679,6 @@ export default function Chat() {
       <SessionPane
         key={active ?? ""}
         sessionId={active}
-        session={activeSession}
         start={{
           projects: orderedProjects,
           selectedProjectId,
@@ -813,9 +713,7 @@ export default function Chat() {
         initialSend={initialSend}
         onInitialSendHandled={initialSendHandled}
         onBack={() => selectSession(null)}
-        onSessionUpdate={updateSession}
         onSessionDeleted={sessionDeleted}
-        historyCache={historyCache}
         showShell={showShell}
         onShowShell={setShowShell}
         shellSize={shellSize}
@@ -839,6 +737,5 @@ export default function Chat() {
         }}
       />
     </div>
-    </PortalLiveProvider>
   );
 }
