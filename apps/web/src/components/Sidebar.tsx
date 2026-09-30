@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, memo, useCallback, useState } from "react";
+import { Activity, memo, useCallback, useMemo, useState } from "react";
 import {
   ChevronRight,
   FolderKanban,
@@ -133,7 +133,16 @@ function SidebarContent(props: SidebarProps) {
     onRestoreProject,
     onDiscardRemoved,
   } = props;
-  const { sessions } = useSessions();
+  const { sessions, tracked, track, untrack } = useSessions();
+  const trackedIds = useMemo(
+    () => new Set(tracked.map((entry) => entry.sessionId)),
+    [tracked],
+  );
+  // Stable (track and untrack are), so the memoised rows keep their props.
+  const toggleTrack = useCallback(
+    (id: string, on: boolean) => (on ? track(id) : untrack(id)),
+    [track, untrack],
+  );
   /**
    * The column on show: Portal's views (home), the Projects section (projects and their
    * conversations), or the list of removed projects. It follows the URL: a session or the start page
@@ -235,6 +244,8 @@ function SidebarContent(props: SidebarProps) {
           onDeleteSession={onDeleteSession}
           onTogglePinSession={onTogglePinSession}
           onTogglePinProject={onTogglePinProject}
+          trackedIds={trackedIds}
+          onToggleTrack={toggleTrack}
           onNewSession={onNewSession}
           onAddProject={onAddProject}
           onRenameProject={onRenameProject}

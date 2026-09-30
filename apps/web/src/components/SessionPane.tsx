@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import SessionControls from "./SessionControls";
@@ -62,7 +62,20 @@ export default function SessionPane({
   shellSize,
   onShellSize,
 }: SessionPaneProps) {
-  const { historyCache } = useSessions();
+  const { historyCache, tracked, track, untrack } = useSessions();
+  const isTracked = !!sessionId && tracked.some((entry) => entry.sessionId === sessionId);
+  const [trackError, setTrackError] = useState<string | null>(null);
+  const [trackPending, setTrackPending] = useState(false);
+  const toggleTracked = () => {
+    if (!sessionId || trackPending) return;
+    setTrackPending(true);
+    setTrackError(null);
+    (isTracked ? untrack(sessionId) : track(sessionId))
+      .catch((error: unknown) =>
+        setTrackError(error instanceof Error ? error.message : "Could not change tracking. Try again."),
+      )
+      .finally(() => setTrackPending(false));
+  };
   const initialPending =
     initialSend?.sessionId === sessionId && initialSend.pending;
   const {
@@ -127,7 +140,15 @@ export default function SessionPane({
         onTerminal={() => onShowShell(!showShell)}
         onGithub={onToggleGithub}
         shellButton={shellButton}
+        tracked={isTracked}
+        trackPending={trackPending}
+        onToggleTrack={toggleTracked}
       />
+      {trackError && (
+        <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
+          {trackError}
+        </p>
+      )}
       {!sessionId ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <StartPage {...start} />

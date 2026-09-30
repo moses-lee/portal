@@ -105,7 +105,7 @@ New activity kinds `session.tracked` and `session.untracked`, with `refs.session
 
 ### Panel (`components/tracked/TrackedPanel.tsx`)
 
-Rendered by `PortalPage` to the right of the main pane on every Portal view, desktop ≥ 1024 px as a push panel (`border-l`, same shell styling as the GitHub inspector), below that as a right `Sheet`.
+Rendered by `PortalPage` to the right of the main pane on every Portal view, desktop ≥ 1280 px (the GitHub inspector's breakpoint, so the main pane keeps room beside a wide sidebar) as a push panel (`border-l`, same shell styling as the GitHub inspector), below that as a right `Sheet`.
 
 Two modes:
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { LoaderCircle, PanelLeft } from "lucide-react";
 import AuroraBackground from "./AuroraBackground";
@@ -10,12 +10,15 @@ import ResponsiveDialog from "./ResponsiveDialog";
 import PortalStatusLine from "./portal/PortalStatusLine";
 import PortalThread from "./portal/PortalThread";
 import ThreadSwitcher from "./portal/ThreadSwitcher";
+import TrackedPanel, { TrackedPanelFromUrl, type TrackedPanelProps } from "./tracked/TrackedPanel";
+import { TrackedToggle } from "./tracked/parts";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { portalActivity } from "@/lib/orchestrator/format";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
-import { portalLocation, portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
+import { portalLocation, portalPathKeepingPanel, type PortalLocation, type PortalView } from "@/lib/session-routes";
+import type { SessionSummary } from "@/lib/types";
 
 /** Stands in for a view while its chunk loads: the views mount only when opened. */
 function ViewLoading() {
@@ -61,7 +64,11 @@ export default function PortalPage({
   const { status, threads, putItem, requestApproval, items, approvals } = live;
   const location = useMemo(() => portalLocation(pathname), [pathname]);
   const view = location.view;
-  const go = useCallback((to: PortalLocation | PortalView) => onNavigate(portalPath(to)), [onNavigate]);
+  /** Switch views; the tracked panel's `?session=` comes along unless `to` sets its own. */
+  const go = useCallback(
+    (to: PortalLocation | PortalView) => onNavigate(portalPathKeepingPanel(to, window.location.search)),
+    [onNavigate],
+  );
   const currentThread = location.view === "chat" ? location.threadId : null;
   /** The thread the chat view shows: the one in the URL, else the last one shown. */
   const [lastThread, setLastThread] = useState(currentThread ?? MAIN_THREAD_ID);
@@ -123,67 +130,91 @@ export default function PortalPage({
     [go, onOpenSession, requestApproval],
   );
 
+  /** Below 1280 px the tracked list is a sheet, opened from the header. */
+  const [trackedSheetOpen, setTrackedSheetOpen] = useState(false);
+  // TODO(step 6): prefill the current thread's composer with `About session <id> (<title>): ` and focus it.
+  const askPortalAbout = useCallback((session: SessionSummary) => void session, []);
+  const trackedProps: TrackedPanelProps = {
+    sheetOpen: trackedSheetOpen,
+    onSheetOpenChange: setTrackedSheetOpen,
+    onOpenFullPage: onOpenSession,
+    onAskPortal: askPortalAbout,
+  };
+
   const threadExists = shownThread === MAIN_THREAD_ID || threads.some((thread) => thread.id === shownThread);
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
-      <AuroraBackground activity={portalActivity(status, approvals)} />
-      <header className="workspace-header !items-start max-sm:!items-center">
-        <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={onOpenSidebar} className="text-muted-foreground">
-          <PanelLeft className="size-4" />
-        </IconButton>
-        <div className="min-w-0 flex-1 pt-1.5 max-sm:pt-0">
-          <h1 className="text-[13px] font-medium leading-snug tracking-[-.01em]">{viewMeta[view].title}</h1>
-          {view === "chat" && <PortalStatusLine onOpenThread={links.openThread} />}
-        </div>
-      </header>
-      {live.error && (
-        <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
-          {live.error}
-        </p>
-      )}
-      <section hidden={view !== "chat"} aria-label="Chat" className="flex min-h-0 flex-1 flex-col">
-        <ThreadSwitcher current={shownThread} unread={unread} onSelect={links.openThread} />
-        {!threadExists && threads.length > 0 && (
-          <p role="alert" className="mx-auto w-full max-w-[840px] px-7 pt-4 text-sm text-destructive">
-            Portal has no thread with the id “{shownThread}”.
+    <>
+      <main className="flex min-w-0 flex-1 flex-col">
+        <AuroraBackground activity={portalActivity(status, approvals)} />
+        <header className="workspace-header !items-start max-sm:!items-center">
+          <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={onOpenSidebar} className="text-muted-foreground">
+            <PanelLeft className="size-4" />
+          </IconButton>
+          <div className="min-w-0 flex-1 pt-1.5 max-sm:pt-0">
+            <h1 className="text-[13px] font-medium leading-snug tracking-[-.01em]">{viewMeta[view].title}</h1>
+            {view === "chat" && <PortalStatusLine onOpenThread={links.openThread} />}
+          </div>
+          <TrackedToggle
+            id="tracked-toggle"
+            expanded={trackedSheetOpen}
+            controls={trackedSheetOpen ? "tracked-sheet" : undefined}
+            onClick={() => setTrackedSheetOpen(true)}
+            className="xl:hidden"
+          />
+        </header>
+        {live.error && (
+          <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
+            {live.error}
           </p>
         )}
-        {/* Hidden threads stay mounted only while a turn streams into them; the rest reload their newest page when shown again. */}
-        {visited
-          .filter((threadId) => threadId === shownThread || (status?.busyThreads ?? []).includes(threadId))
-          .map((threadId) => (
-          <PortalThread
-            key={threadId}
-            threadId={threadId}
-            thread={threads.find((thread) => thread.id === threadId) ?? null}
-            visible={view === "chat" && threadId === shownThread}
-            handlers={handlers}
-            onOpenGoals={links.openGoals}
+        <section hidden={view !== "chat"} aria-label="Chat" className="flex min-h-0 flex-1 flex-col">
+          <ThreadSwitcher current={shownThread} unread={unread} onSelect={links.openThread} />
+          {!threadExists && threads.length > 0 && (
+            <p role="alert" className="mx-auto w-full max-w-[840px] px-7 pt-4 text-sm text-destructive">
+              Portal has no thread with the id “{shownThread}”.
+            </p>
+          )}
+          {/* Hidden threads stay mounted only while a turn streams into them; the rest reload their newest page when shown again. */}
+          {visited
+            .filter((threadId) => threadId === shownThread || (status?.busyThreads ?? []).includes(threadId))
+            .map((threadId) => (
+            <PortalThread
+              key={threadId}
+              threadId={threadId}
+              thread={threads.find((thread) => thread.id === threadId) ?? null}
+              visible={view === "chat" && threadId === shownThread}
+              handlers={handlers}
+              onOpenGoals={links.openGoals}
+            />
+          ))}
+        </section>
+        {view === "goals" && <GoalsView links={links} />}
+        {view === "activity" && <ActivityView links={links} />}
+        {view === "memory" && (
+          <MemoryView
+            entityId={location.view === "memory" ? location.entityId : null}
+            runId={location.view === "memory" ? location.runId : undefined}
+            onSelectEntity={(id) => go({ view: "memory", entityId: id })}
+            onSelectRun={links.openCurationRun}
+            links={links}
           />
-        ))}
-      </section>
-      {view === "goals" && <GoalsView links={links} />}
-      {view === "activity" && <ActivityView links={links} />}
-      {view === "memory" && (
-        <MemoryView
-          entityId={location.view === "memory" ? location.entityId : null}
-          runId={location.view === "memory" ? location.runId : undefined}
-          onSelectEntity={(id) => go({ view: "memory", entityId: id })}
-          onSelectRun={links.openCurationRun}
-          links={links}
-        />
-      )}
-      {view === "system" && <SystemView links={links} />}
-      <ResponsiveDialog
-        open={openItem !== null}
-        onOpenChange={(open) => !open && setOpenItemId(null)}
-        title="Item"
-        description="An action item Portal raised."
-      >
-        {openItem && <PortalItemCard item={openItem} {...dialogHandlers} />}
-      </ResponsiveDialog>
-    </main>
+        )}
+        {view === "system" && <SystemView links={links} />}
+        <ResponsiveDialog
+          open={openItem !== null}
+          onOpenChange={(open) => !open && setOpenItemId(null)}
+          title="Item"
+          description="An action item Portal raised."
+        >
+          {openItem && <PortalItemCard item={openItem} {...dialogHandlers} />}
+        </ResponsiveDialog>
+      </main>
+      {/* The panel reads `?session=` through useSearchParams, which needs a boundary on these prerendered routes; the fallback is the list, so the server HTML already has the panel. */}
+      <Suspense fallback={<TrackedPanel {...trackedProps} selected={null} />}>
+        <TrackedPanelFromUrl {...trackedProps} />
+      </Suspense>
+    </>
   );
 }
 

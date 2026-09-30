@@ -27,6 +27,7 @@ import type {
   OrchestratorMessage,
   OrchestratorStatus,
   Thread,
+  TrackedSession,
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
 import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
@@ -401,6 +402,7 @@ declare global {
       threads: Thread[];
       intents: Intent[];
       approvals: Approval[];
+      tracked: TrackedSession[];
     };
   }
 }
@@ -464,6 +466,8 @@ export async function setupPortal(
       core?: CoreDocument;
       world?: WorldResponse;
       grants?: ApprovalGrant[];
+      /** The tracked set: what `GET /api/portal/tracked` and the stream's `tracked` event answer with. */
+      tracked?: TrackedSession[];
       /** What `POST /api/portal/items/:id/actions/:index` answers for server-side actions. */
       actionResult?: { sessionId?: string; approvalId?: string };
     };
@@ -481,6 +485,7 @@ export async function setupPortal(
     threads: structuredClone(options.portal?.threads ?? [mainThread]),
     intents: structuredClone(options.portal?.intents ?? []),
     approvals: structuredClone(options.portal?.approvals ?? []),
+    tracked: structuredClone(options.portal?.tracked ?? []),
   };
   const orch = {
     threadMessages: structuredClone(options.portal?.threadMessages ?? {}),
@@ -529,6 +534,7 @@ export async function setupPortal(
               this.send({ type: "threads", threads: window.__portalLive.threads }, "message");
               this.send({ type: "approvals", approvals: window.__portalLive.approvals }, "message");
               this.send({ type: "intents", intents: window.__portalLive.intents }, "message");
+              this.send({ type: "tracked", sessions: window.__portalLive.tracked }, "message");
             } else
               this.send(
                 window.__portalSessions.find((session) =>
@@ -627,6 +633,24 @@ export async function setupPortal(
     }
     if (path === "/api/portal/cancel") return route.fulfill({ status: 204 });
     if (path === "/api/portal/items") return json({ items: live.items });
+    if (path === "/api/portal/tracked" && method === "GET") return json({ sessions: live.tracked });
+    const trackedMatch = path.match(/^\/api\/portal\/tracked\/([^/]+)$/);
+    if (trackedMatch) {
+      // Like the server: the answer, then the full set on the stream.
+      const id = decodeURIComponent(trackedMatch[1]);
+      if (method === "PUT") {
+        if (!currentSessions.some((session) => session.id === id)) return json({ error: `Unknown session "${id}".` }, 404);
+        const entry: TrackedSession = live.tracked.find((row) => row.sessionId === id) ?? { sessionId: id, trackedAt: Date.now(), trackedBy: "user" };
+        live.tracked = [...live.tracked.filter((row) => row.sessionId !== id), entry];
+        await page.evaluate((sessions) => window.__portalEmit("/api/portal/stream", { type: "tracked", sessions }, "message"), live.tracked);
+        return json({ session: entry });
+      }
+      if (method === "DELETE") {
+        live.tracked = live.tracked.filter((row) => row.sessionId !== id);
+        await page.evaluate((sessions) => window.__portalEmit("/api/portal/stream", { type: "tracked", sessions }, "message"), live.tracked);
+        return route.fulfill({ status: 204 });
+      }
+    }
     const orchestratorReply = handleOrchestrator(path, method, url.searchParams, body, live, orch);
     if (orchestratorReply)
       return orchestratorReply.status === 204

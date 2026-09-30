@@ -15,6 +15,8 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  Eye,
+  EyeOff,
   Folder,
   FolderGit2,
   MoreHorizontal,
@@ -66,6 +68,10 @@ export type ProjectsColumnProps = {
   onDeleteSession: (id: string) => void | Promise<void>;
   onTogglePinSession: (id: string) => void;
   onTogglePinProject: (id: string) => void;
+  /** Sessions in the tracked set; their row menus offer Untrack instead of Track. */
+  trackedIds: ReadonlySet<string>;
+  /** Track (`true`) or untrack a session; rejects with the server's message. */
+  onToggleTrack: (id: string, track: boolean) => Promise<void>;
   onNewSession: (projectId: string) => void;
   onAddProject: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
@@ -89,24 +95,29 @@ const SessionRow = memo(function SessionRow({
   session,
   active,
   pinned,
+  tracked,
   now,
   onSelect,
   onPrefetch,
   onDelete,
   onTogglePin,
+  onToggleTrack,
 }: {
   session: SessionSummary;
   active: boolean;
   pinned: boolean;
+  tracked: boolean;
   now: number;
   onSelect: (id: string) => void;
   onPrefetch: (id: string) => void;
   onDelete: (id: string) => void | Promise<void>;
   onTogglePin: (id: string) => void;
+  onToggleTrack: (id: string, track: boolean) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [trackError, setTrackError] = useState<string | null>(null);
   const hover = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
     () => () => {
@@ -201,6 +212,19 @@ const SessionRow = memo(function SessionRow({
             {pinned ? <PinOff /> : <Pin />}
             {pinned ? "Unpin session" : "Pin session"}
           </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              setTrackError(null);
+              onToggleTrack(session.id, !tracked).catch((e: unknown) =>
+                setTrackError(
+                  e instanceof Error ? e.message : "Could not change tracking.",
+                ),
+              );
+            }}
+          >
+            {tracked ? <EyeOff /> : <Eye />}
+            {tracked ? "Untrack session" : "Track session"}
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
@@ -246,6 +270,11 @@ const SessionRow = memo(function SessionRow({
           </div>
         </div>
       )}
+      {trackError && (
+        <p role="alert" className="col-span-2 px-3 pb-1 text-[11px] text-destructive">
+          {trackError}
+        </p>
+      )}
     </div>
   );
 });
@@ -267,6 +296,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
   onDeleteSession,
   onTogglePinSession,
   onTogglePinProject,
+  trackedIds,
+  onToggleTrack,
   onNewSession,
   onAddProject,
   onRenameProject,
@@ -605,11 +636,13 @@ const ProjectsColumn = memo(function ProjectsColumn({
                     session={session}
                     active={session.id === active}
                     pinned={session.id in sessionPins}
+                    tracked={trackedIds.has(session.id)}
                     now={now || session.lastActiveAt}
                     onSelect={onSelect}
                     onPrefetch={onPrefetch}
                     onDelete={onDeleteSession}
                     onTogglePin={onTogglePinSession}
+                    onToggleTrack={onToggleTrack}
                   />
                 ))}
                 {rows.length === 0 && (

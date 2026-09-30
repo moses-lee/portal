@@ -43,7 +43,7 @@ import {
   isStartPath,
   isTerminalPath,
   portalLocation,
-  portalPath,
+  portalPathKeepingPanel,
   sessionIdFromPath,
   sessionPath,
   startPath,
@@ -430,11 +430,12 @@ function ChatShell() {
   /**
    * A Portal entry in the sidebar: open that view's root (Chat is the main thread, `/`). Compares
    * paths, not views, so Chat from a side thread returns to the main thread and Memory from an
-   * entity returns to the list.
+   * entity returns to the list. The tracked panel's `?session=` stays open across Portal views; a
+   * session page, the terminal, and `/new` carry no query, so leaving Portal drops it.
    */
   const openPortalView = (view: PortalView) => {
-    const path = portalPath(view);
-    if (path !== pathname) pushPath(path);
+    const path = portalPathKeepingPanel(view, window.location.search);
+    if (path !== `${window.location.pathname}${window.location.search}`) pushPath(path);
     setShowSidebar(false);
   };
 
@@ -670,7 +671,7 @@ function ChatShell() {
           pathname={pathname ?? "/"}
           onNavigate={pushPath}
           onOpenSidebar={toggleSidebar}
-          onOpenSession={selectSession}
+          onOpenSession={sidebarSelect}
         />
       ) : terminalOpen ? (
         <TerminalPage onOpenSidebar={toggleSidebar} />
@@ -732,7 +733,12 @@ function ChatShell() {
       )}
       <ApprovalsDialog
         onNavigate={(path) => {
-          pushPath(path);
+          // Its links are Portal paths; the tracked panel's session stays open across them.
+          pushPath(
+            isPortalPath(path)
+              ? portalPathKeepingPanel(portalLocation(path), window.location.search)
+              : path,
+          );
           setShowSidebar(false);
         }}
       />

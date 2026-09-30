@@ -19,18 +19,10 @@ import type {
   SessionListEvent,
   SessionSummary,
 } from "@/lib/types";
+import type { TrackedSession } from "@/lib/orchestrator/types";
 import { usePortalEvents } from "./portal/PortalLive";
 
-// TODO(step 5): import from @portal/contracts
-/** A session the user or Portal chose to keep an eye on (`GET /api/portal/tracked`). */
-export type TrackedSession = {
-  sessionId: string;
-  trackedAt: number;
-  trackedBy: "user" | "portal";
-};
-// TODO(step 5): import from @portal/contracts
-/** The portal stream's full tracked set, sent on connect and after every change. */
-type TrackedSessionsEvent = { type: "tracked"; sessions: TrackedSession[] };
+export type { TrackedSession };
 
 export type Sessions = {
   /** The agent registry (`GET /api/agents`). */
@@ -224,11 +216,9 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     return () => controller.abort();
   }, []);
   usePortalEvents((event) => {
-    // TODO(step 5): drop the cast once `OrchestratorEvent` from @portal/contracts is used here.
-    const e = event as typeof event | TrackedSessionsEvent;
-    if (e.type !== "tracked") return;
+    if (event.type !== "tracked") return;
     trackedFromStreamRef.current = true;
-    setTracked((e as TrackedSessionsEvent).sessions);
+    setTracked(event.sessions);
   });
 
   const updateSession = useCallback(
