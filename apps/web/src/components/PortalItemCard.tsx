@@ -53,11 +53,25 @@ export const kindLabels: Record<ItemKind, string> = {
 };
 
 /**
+ * The session kinds the tracked-sessions panel replaced: the server no longer raises them and
+ * resolved the open ones once, so the strip leaves out any that still come through.
+ */
+export const retiredItemKinds: ReadonlySet<ItemKind> = new Set<ItemKind>([
+  "session_finished",
+  "session_stopped",
+  "session_waiting",
+  "session_hung",
+  "session_offline",
+]);
+
+/**
  * What still asks for attention: open items, and snoozed ones whose snooze has run out. The
  * "Needs you" strip and the counts use this. Cards under a message are not filtered by it: the
  * thread stays an honest record, so resolved and dismissed items render there dimmed instead.
+ * Retired session kinds never count.
  */
 export function isVisibleItem(item: Item, now = Date.now()): boolean {
+  if (retiredItemKinds.has(item.kind)) return false;
   if (item.status === "open") return true;
   return item.status === "snoozed" && (item.snoozedUntil === null || item.snoozedUntil <= now);
 }

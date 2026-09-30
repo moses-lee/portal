@@ -424,6 +424,7 @@ export const worldResponse: WorldResponse = {
         lastActiveAt: now - min,
       },
     ],
+    tracked: [],
     terminals: [],
     pulls: [
       {

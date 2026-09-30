@@ -13,6 +13,7 @@ import { parentOf } from "../lib/removed-projects.ts";
 import { preWorktreeDeleteRun } from "../lib/script-runner.ts";
 import type { Project, RemovedProject, SessionMeta, WorktreeMeta } from "../lib/types.ts";
 import type { OrchestratorDeps } from "./deps.ts";
+import type { TrackContext, TrackedService } from "./tracked/service.ts";
 import { matchId, pickById } from "./ids.ts";
 
 export function httpError(message: string, status: number): Error & { status: number } {
@@ -41,17 +42,29 @@ export async function projectCwd(deps: OrchestratorDeps, project: Project): Prom
   }
 }
 
+/** Where `startSession` tracks the session it creates (as Portal's), and the activity context of that track. */
+export type SessionTracker = { tracked: Pick<TrackedService, "track">; context?: TrackContext };
+
 /**
  * Create a session in a project and, with `prompt`, start its first turn (POST /api/sessions + prompt).
  * The session exists once created: a prompt that fails is reported as `promptError` rather than
- * thrown, so a retry sends the prompt again instead of creating a second session.
+ * thrown, so a retry sends the prompt again instead of creating a second session. With `tracker`,
+ * the new session is tracked (by Portal) before its prompt goes out; a failure to track is logged,
+ * never thrown, since the session exists either way.
  */
-export async function startSession(deps: OrchestratorDeps, { projectId, agentId, prompt }: { projectId: string; agentId?: string; prompt?: string }): Promise<{ sessionId: string; promptError?: string }> {
+export async function startSession(
+  deps: OrchestratorDeps, { projectId, agentId, prompt }: { projectId: string; agentId?: string; prompt?: string }, tracker?: SessionTracker,
+): Promise<{ sessionId: string; promptError?: string }> {
   const project = await requireProject(deps, projectId);
   const agent = agentId ?? await deps.agents.defaultId();
   if (!(await deps.agents.list()).some((known) => known.id === agent)) throw httpError(`Unknown agent "${agent}".`, 400);
   const cwd = await projectCwd(deps, project);
   const session = await deps.sessions.create(cwd, agent, project.id);
+  if (tracker) {
+    await tracker.tracked.track(session.id, "portal", tracker.context).catch((err: unknown) => {
+      console.error(`Could not track session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
   if (!prompt?.trim()) return { sessionId: session.id };
   try {
     await deps.sessions.prompt(session.id, prompt);

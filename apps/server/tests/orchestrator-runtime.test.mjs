@@ -371,6 +371,8 @@ test("performAction runs start_session and send_prompt server-side once approved
   assert.deepEqual(approved.result, { sessionId: "s2" });
   assert.deepEqual(state.created.map((session) => [session.projectId, session.agentId]), [["p1", "codex"]]);
   assert.deepEqual(state.prompts, [{ id: "s2", text: "Look into it" }]);
+  // Portal started it from its card, so it is tracked.
+  assert.deepEqual(await runtime.hub.tracked.list(), [{ sessionId: "s2", trackedAt: T0, trackedBy: "portal" }]);
 
   // send_prompt has no grant yet; approving it once sends the prompt.
   const prompt = await runtime.performAction(item.id, 1);
@@ -428,12 +430,20 @@ test("a chat turn starts with the common tools and loads a group with use_tools 
   assert.equal(offered.length, 3);
   const [first, second, third] = offered;
   assert.ok(first.has("use_tools") && first.has("resolve_pull") && first.has("setup_pr_reviews"));
-  for (const group of Object.values(TOOL_GROUPS)) for (const name of group.tools) assert.ok(!first.has(name), `${name} is not offered up front`);
+  for (const [name, group] of Object.entries(TOOL_GROUPS)) {
+    if (name === "tracked") continue;
+    for (const tool of group.tools) assert.ok(!first.has(tool), `${tool} is not offered up front`);
+  }
+  // The tracked group is always offered: its tools from the first step, and it is not one use_tools loads.
+  for (const name of TOOL_GROUPS.tracked.tools) assert.ok(first.has(name) && second.has(name), `${name} is offered from the start`);
   for (const name of [...TOOL_GROUPS.items.tools, ...TOOL_GROUPS.memory.tools]) assert.ok(second.has(name) && third.has(name), `${name} stays loaded`);
   assert.ok(!second.has("delete_session"), "groups not asked for stay out");
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.match(system, /use_tools\(\{ groups \}\)/);
   assert.match(system, /- items: change Needs-you items \(create_item, /);
+  assert.doesNotMatch(system, /- tracked: /, "the always-on group is not listed as loadable");
+  assert.match(system, /Tracked sessions:\n- The tracked list/, "the tracked guidance");
+  assert.match(system, /Tracked sessions: none\./, "the world's tracked section");
   const [assistant] = (await runtime.hub.store.readMessages()).filter((message) => message.role === "assistant");
   const dismiss = assistant.parts.find((part) => part.type === "tool-dismiss_item");
   assert.match(JSON.stringify(dismiss.output), /Unknown item/, "the loaded tool ran");

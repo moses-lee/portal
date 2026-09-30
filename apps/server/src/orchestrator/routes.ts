@@ -15,6 +15,7 @@ import { registerApprovalRoutes } from "./approvals/routes.ts";
 import { registerJobRoutes } from "./jobs/routes.ts";
 import { registerMemoryRoutes } from "./memory/routes.ts";
 import { parseItemPatch } from "./store.ts";
+import { registerTrackedRoutes } from "./tracked/routes.ts";
 import type { Item, OrchestratorEvent, OrchestratorMessage } from "./types.ts";
 import { MAIN_THREAD_ID } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
@@ -229,7 +230,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `threads`, `approvals`, and `intents`, then forwards every runtime event as
+   * `items`, `threads`, `approvals`, `intents`, and `tracked`, then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter cadence of jobs that have an idle one.
    */
@@ -238,13 +239,13 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
     // The browser shows open and snoozed items only; resolved ones stay in the store for the agent.
-    const [status, items, threads, approvals, intents] = await Promise.all([
+    const [status, items, threads, approvals, intents, tracked] = await Promise.all([
       runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.listThreads(), runtime.hub.approvals.pending(),
-      runtime.hub.jobs.listIntents({ status: ["active"] }),
+      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.tracked.list(),
     ]);
     const opening: OrchestratorEvent[] = [
       { type: "status", status }, { type: "items", items }, { type: "threads", threads },
-      { type: "approvals", approvals }, { type: "intents", intents },
+      { type: "approvals", approvals }, { type: "intents", intents }, { type: "tracked", sessions: tracked },
     ];
     const stream = openEventStream(req, reply);
     if (stream.closed) return reply;
@@ -262,4 +263,5 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
   registerWorldRoutes(app, ctx);
   registerMemoryRoutes(app, ctx);
   registerApprovalRoutes(app, ctx);
+  registerTrackedRoutes(app, ctx);
 }

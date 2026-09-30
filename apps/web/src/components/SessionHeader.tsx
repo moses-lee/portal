@@ -1,4 +1,4 @@
-import { GitBranch, PanelLeft, SquarePen, TerminalSquare } from "lucide-react";
+import { Eye, GitBranch, PanelLeft, SquarePen, TerminalSquare } from "lucide-react";
 import IconButton from "./IconButton";
 import {
   Popover,
@@ -19,6 +19,9 @@ export default function SessionHeader({
   onTerminal,
   onGithub,
   shellButton,
+  tracked,
+  trackPending,
+  onToggleTrack,
 }: {
   title: string;
   activity: AgentActivity;
@@ -30,6 +33,11 @@ export default function SessionHeader({
   onTerminal: () => void;
   onGithub: () => void;
   shellButton: RefObject<HTMLButtonElement | null>;
+  /** Whether the session is in the tracked set (the Portal views' right panel lists it). */
+  tracked: boolean;
+  /** A track or untrack request is in flight. */
+  trackPending: boolean;
+  onToggleTrack: () => void;
 }) {
   return (
     <header className="workspace-header">
@@ -77,6 +85,20 @@ export default function SessionHeader({
             className="hidden text-muted-foreground sm:inline-flex"
           >
             <SquarePen className="size-4" />
+          </IconButton>
+        )}
+        {hasSession && (
+          <IconButton
+            id="track-toggle"
+            label="Track session"
+            aria-pressed={tracked}
+            disabled={trackPending}
+            onClick={onToggleTrack}
+            className={
+              tracked ? "bg-white/8 text-foreground" : "text-muted-foreground"
+            }
+          >
+            <Eye className="size-4" />
           </IconButton>
         )}
         {hasSession && (

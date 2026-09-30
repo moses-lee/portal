@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, memo, useCallback, useState } from "react";
+import { Activity, memo, useCallback, useMemo, useState } from "react";
 import {
   ChevronRight,
   FolderKanban,
@@ -15,6 +15,7 @@ import PortalViewBadge, { usePortalViewCounts, viewMeta } from "./portal/views";
 import ProjectsColumn from "./ProjectsColumn";
 import RemovedProjects from "./RemovedProjects";
 import { useMediaQuery } from "./useMediaQuery";
+import { useSessions } from "./SessionsProvider";
 import { usePreference } from "./usePreference";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,15 +27,10 @@ import {
 import { portalViews, type PortalView } from "@/lib/session-routes";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
-import type {
-  ProjectSummary,
-  RemovedProjectSummary,
-  SessionSummary,
-} from "@/lib/types";
+import type { ProjectSummary, RemovedProjectSummary } from "@/lib/types";
 
 export type SidebarProps = {
   projects: ProjectSummary[];
-  sessions: SessionSummary[];
   projectPins: PinMap;
   sessionPins: PinMap;
   onTogglePinProject: (id: string) => void;
@@ -114,7 +110,6 @@ const PortalViewEntries = memo(function PortalViewEntries({
 function SidebarContent(props: SidebarProps) {
   const {
     projects,
-    sessions,
     projectPins,
     sessionPins,
     active,
@@ -138,6 +133,16 @@ function SidebarContent(props: SidebarProps) {
     onRestoreProject,
     onDiscardRemoved,
   } = props;
+  const { sessions, tracked, track, untrack } = useSessions();
+  const trackedIds = useMemo(
+    () => new Set(tracked.map((entry) => entry.sessionId)),
+    [tracked],
+  );
+  // Stable (track and untrack are), so the memoised rows keep their props.
+  const toggleTrack = useCallback(
+    (id: string, on: boolean) => (on ? track(id) : untrack(id)),
+    [track, untrack],
+  );
   /**
    * The column on show: Portal's views (home), the Projects section (projects and their
    * conversations), or the list of removed projects. It follows the URL: a session or the start page
@@ -239,6 +244,8 @@ function SidebarContent(props: SidebarProps) {
           onDeleteSession={onDeleteSession}
           onTogglePinSession={onTogglePinSession}
           onTogglePinProject={onTogglePinProject}
+          trackedIds={trackedIds}
+          onToggleTrack={toggleTrack}
           onNewSession={onNewSession}
           onAddProject={onAddProject}
           onRenameProject={onRenameProject}

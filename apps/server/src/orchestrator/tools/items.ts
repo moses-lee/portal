@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { fullId, knownIds, mapRefs } from "../ids.ts";
 import { httpError } from "../ops.ts";
-import { itemKinds } from "../store.ts";
+import { itemKinds, retiredItemKinds } from "../store.ts";
 import type { Item } from "../types.ts";
 import { type ToolContext, capped, define } from "./context.ts";
 
@@ -33,7 +33,17 @@ const actionSchema = z.discriminatedUnion("type", [
 /** "<kind>:<key>": a change kind or the per-PR "pr" prefix, then a key without whitespace. */
 const FINGERPRINT = /^[a-z_]+:\S+$/;
 
-const kindSchema = z.enum(itemKinds);
+const retired = new Set<string>(retiredItemKinds);
+type CreatableKind = Exclude<(typeof itemKinds)[number], (typeof retiredItemKinds)[number]>;
+const creatableKinds = itemKinds.filter((kind): kind is CreatableKind => !retired.has(kind));
+
+/** The error for a retired kind, which the model may still reach for from habit or an old item. */
+export const RETIRED_KIND_ERROR = (kind: string) =>
+  `${kind} items are retired: a session finishing, waiting on a permission, hanging, or going offline shows live in the tracked list (use track_session in a chat turn); nothing to raise.`;
+
+const kindSchema = z.enum(creatableKinds as [CreatableKind, ...CreatableKind[]], {
+  error: (issue) => (typeof issue.input === "string" && retired.has(issue.input) ? RETIRED_KIND_ERROR(issue.input) : undefined),
+});
 
 function itemRow(item: Item) {
   return { id: item.id, kind: item.kind, title: item.title, status: item.status, fingerprint: item.fingerprint, updatedAt: item.updatedAt };

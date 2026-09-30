@@ -864,20 +864,24 @@ test("list subscribers hear sessions being created, working, waiting on permissi
   assert.deepEqual(changes.map(({ type }) => type), ["created"]);
   assert.equal(changes[0].session.id, session.id);
   assert.equal(changes[0].session.awaitingPermission, false);
+  assert.equal(changes[0].session.liveness.state, "idle");
   assert.deepEqual(runtime.listSessions().map(({ awaitingPermission }) => awaitingPermission), [false]);
 
   const patches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch);
   await runtime.sendPrompt(session.id, "hold");
   assert.equal(patches().at(-1).busy, true);
   assert.equal(patches().at(-1).title, "hold");
+  assert.equal(patches().at(-1).liveness, "busy");
   await until(() => patches().some((patch) => patch.awaitingPermission), "waiting on permission");
+  assert.equal(patches().at(-1).liveness, "blocked");
   assert.equal(runtime.listSessions()[0].awaitingPermission, true);
   await answerPermission(runtime, session);
   assert.equal(patches().at(-1).awaitingPermission, false);
   assert.equal(patches().at(-1).busy, true);
+  assert.equal(patches().at(-1).liveness, "busy");
   await runtime.cancel(session.id);
   await until(() => !session.busy, "cancellation");
-  assert.deepEqual(patches().at(-1), { busy: false, awaitingPermission: false, link: { status: "live" }, title: "hold", lastActiveAt: session.lastActiveAt });
+  assert.deepEqual(patches().at(-1), { busy: false, awaitingPermission: false, link: { status: "live" }, title: "hold", lastActiveAt: session.lastActiveAt, liveness: "idle" });
 
   await runtime.deleteSession(session.id);
   assert.deepEqual(changes.at(-1), { type: "deleted", id: session.id });
@@ -1046,6 +1050,105 @@ test("a running tool reads as busy with its processes; a turn with no CPU and no
   await until(() => !session.busy, "the short turn");
   assert.equal(session.openTools.size, 0);
   assert.equal(toMeta(session).liveness.state, "idle");
+});
+
+test("list subscribers hear a turn go hung and come back once each, from the probe that already runs", { skip: process.platform === "win32" }, async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const livenessPatches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch.liveness);
+
+  await runtime.sendPrompt(session.id, "tool");
+  await until(() => session.openTools.size === 1, "the tool call");
+  await runtime.probe([session]);
+  assert.deepEqual(livenessPatches(), ["busy"], "a probe that finds nothing new announces nothing");
+
+  runtime.setLivenessOptions({ hungAfterMs: 300 });
+  await delay(350);
+  await runtime.probe([session]);
+  assert.deepEqual(livenessPatches(), ["busy", "hung"]);
+  assert.equal(changes.at(-1).patch.busy, true);
+  await runtime.probe([session]);
+  assert.equal((await runtime.probeSession(session.id)).state, "hung");
+  assert.deepEqual(livenessPatches(), ["busy", "hung"], "a state already announced is not announced again");
+
+  // A longer threshold ends the hang without waiting for the next probe.
+  runtime.setLivenessOptions({ hungAfterMs: 60_000 });
+  assert.deepEqual(livenessPatches(), ["busy", "hung", "busy"]);
+  runtime.setLivenessOptions({ hungAfterMs: 300 });
+  assert.deepEqual(livenessPatches(), ["busy", "hung", "busy", "hung"]);
+
+  await runtime.cancel(session.id);
+  await until(() => !session.busy, "the hung turn stopped");
+  assert.equal(livenessPatches().at(-1), "idle");
+  assert.equal(changes.at(-1).patch.busy, false);
+  await runtime.probe([session]);
+  assert.equal(livenessPatches().filter((state) => state === "idle").length, 1);
+});
+
+test("output from a hung turn is announced at once, not at the next probe", { skip: process.platform === "win32" }, async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  runtime.setLivenessOptions({ hungAfterMs: 200 });
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const livenessPatches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch.liveness);
+  await runtime.sendPrompt(session.id, "tool-then-talk");
+  await until(() => session.openTools.size === 1, "the tool call");
+  await runtime.probe([session]);
+  await delay(250);
+  await runtime.probe([session]);
+  assert.deepEqual(livenessPatches(), ["busy", "hung"]);
+  // The fake speaks up when told (a set_mode), so the timing is the test's, not a timer's.
+  await runtime.setMode(session.id, "default");
+  assert.deepEqual(livenessPatches(), ["busy", "hung", "busy"]);
+  await runtime.cancel(session.id);
+  await until(() => !session.busy, "the turn stopped");
+});
+
+test("an agent that dies while blocked on a permission goes blocked then dead, never idle between", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const livenessPatches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch.liveness);
+  await runtime.sendPrompt(session.id, "hold");
+  await until(() => session.pendingPermissions.size > 0, "the permission request");
+  assert.deepEqual(livenessPatches(), ["busy", "blocked"]);
+  session.process.proc.kill("SIGKILL");
+  await until(() => session.link.status === "offline", "the agent to be lost");
+  assert.deepEqual(livenessPatches(), ["busy", "blocked", "dead"]);
+  assert.equal(changes.at(-1).patch.awaitingPermission, false);
+});
+
+test("a turn that ends with a permission still open is announced once, idle", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const livenessPatches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch.liveness);
+  await runtime.sendPrompt(session.id, "hold");
+  await until(() => session.pendingPermissions.size > 0, "the permission request");
+  // Cancelling through the agent (not `runtime.cancel`, which releases the prompt itself) ends the turn with it open.
+  await session.process.conn.agent.notify("session/cancel", { sessionId: session.upstreamId });
+  await until(() => !session.busy, "the turn to end");
+  assert.deepEqual(livenessPatches(), ["busy", "blocked", "idle"]);
+});
+
+test("list subscribers hear an agent that exits mid-turn as dead", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  await runtime.sendPrompt(session.id, "exit");
+  await until(() => session.lost?.reason === "process_exited", "the exit to be recorded");
+  await until(() => changes.at(-1)?.patch?.liveness === "dead", "a dead patch");
+  assert.equal(changes.at(-1).patch.link.status, "offline");
+  assert.equal(runtime.listSessions()[0].liveness.state, "dead");
+  runtime.setLivenessOptions({ hungAfterMs: 1_000 });
+  await runtime.probe([session]);
+  assert.equal(changes.filter(({ patch }) => patch?.liveness === "dead").length, 1);
 });
 
 test("a lost agent records why: the exit code on every session of the process, persisted, and cleared on reconnect", async (t) => {

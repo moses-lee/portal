@@ -6,7 +6,10 @@
  * refresh job's run. `current` answers from memory (or the newest stored build after a
  * restart); once that is older than `staleMs` it rebuilds only the local slices (sessions,
  * projects, terminals, items, jobs, intents) and reuses the last PRs, so a chat turn never waits on
- * the network. Local rebuilds are kept in memory only; the store holds full builds.
+ * the network. Local rebuilds are kept in memory only; the store holds full builds. The tracked
+ * set is the exception to "as of the last build": `trackedChanged` puts each change into the
+ * latest world at once, so the World section and `list_tracked_sessions` follow a track or
+ * untrack within the same turn.
  */
 import type { WorldResponse, WorldState } from "@portal/contracts/world";
 import { MAIN_THREAD_ID, type Scope } from "@portal/contracts/orchestrator";
@@ -67,13 +70,21 @@ export function createWorldService(hub: OrchestratorHub, options: WorldOptions =
   let loaded: Promise<void> | null = null;
   let fullBuild: Promise<WorldRefresh> | null = null;
   let localBuild: Promise<WorldState> | null = null;
+  /**
+   * The tracked set as `trackedChanged` last heard it, and how many changes it has heard: a build
+   * that read the set before a change it finished after takes the newer set instead.
+   */
+  let trackedIds: string[] | null = null;
+  let trackedSeq = 0;
+  const withTracked = (world: WorldState, seq: number): WorldState => (trackedIds && seq !== trackedSeq ? { ...world, tracked: trackedIds } : world);
 
   /** Adopt the newest stored build once, unless this process already built a newer world. */
   const load = () => loaded ??= store.latest().then((build) => {
     if (!build) return;
     built = true;
     fullAt = Math.max(fullAt ?? 0, build.at);
-    if (!latest || build.at > latest.at) latest = build.world;
+    // Worlds stored before the tracked set was part of them track nothing.
+    if (!latest || build.at > latest.at) latest = { ...build.world, tracked: trackedIds ?? build.world.tracked ?? [] };
   }).catch((err: unknown) => {
     console.error("Could not read the stored world:", err);
   });
@@ -117,7 +128,8 @@ export function createWorldService(hub: OrchestratorHub, options: WorldOptions =
   function update(reason: string): Promise<WorldRefresh> {
     fullBuild ??= (async () => {
       await load();
-      const world = await buildWorld({ hub, previous: latest, mode: "full", cache });
+      const seq = trackedSeq;
+      const world = withTracked(await buildWorld({ hub, previous: latest, mode: "full", cache }), seq);
       adopt(world);
       built = true;
       fullAt = Math.max(fullAt ?? 0, world.at);
@@ -138,7 +150,8 @@ export function createWorldService(hub: OrchestratorHub, options: WorldOptions =
 
   function refreshLocal(): Promise<WorldState> {
     localBuild ??= (async () => {
-      const world = await buildWorld({ hub, previous: latest, mode: "local", cache });
+      const seq = trackedSeq;
+      const world = withTracked(await buildWorld({ hub, previous: latest, mode: "local", cache }), seq);
       adopt(world);
       return latest ?? world;
     })().finally(() => { localBuild = null; });
@@ -194,6 +207,11 @@ export function createWorldService(hub: OrchestratorHub, options: WorldOptions =
       return { world, rendered, tokens: estimateTokens(rendered) };
     },
     builds: (filter) => store.list(filter),
+    trackedChanged(sessionIds) {
+      trackedIds = [...sessionIds];
+      trackedSeq++;
+      if (latest) latest = { ...latest, tracked: trackedIds };
+    },
     tools: (ctx) => worldTools(ctx, service, options.lookup),
   };
   return service;

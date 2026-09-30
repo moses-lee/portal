@@ -2,8 +2,9 @@
  * Tool groups for chat turns. Every tool schema is re-sent on every model step, and a chat turn
  * offering all ~70 tools pays about 11k tokens a step for them. A chat turn therefore starts with
  * the tools most turns use; the rest sit in named groups the model loads with `use_tools` when a
- * request needs them, and they stay loaded for the rest of the turn. A tool no group names is
- * always offered, so a tool added later is never hidden by accident.
+ * request needs them, and they stay loaded for the rest of the turn. A group marked `always` is
+ * offered from the start (it is named so its tools read as one family, not so it can be loaded). A
+ * tool no group names is always offered too, so a tool added later is never hidden by accident.
  */
 import { z } from "zod";
 import type { ToolSet } from "../hub.ts";
@@ -11,6 +12,7 @@ import { define } from "./context.ts";
 
 /** The groups a chat turn can load, with what each is for. Tool names only; a name the turn lacks is ignored. */
 export const TOOL_GROUPS = {
+  tracked: { about: "the tracked sessions beside the thread", tools: ["track_session", "untrack_session", "list_tracked_sessions"], always: true },
   items: { about: "change Needs-you items", tools: ["create_item", "update_item", "resolve_item", "snooze_item", "dismiss_item"] },
   projects: {
     about: "manage projects, clones, branches, worktrees",
@@ -28,12 +30,17 @@ export const TOOL_GROUPS = {
   memory: { about: "propose, explain, forget memory records", tools: ["propose_memory", "explain_memory", "forget"] },
   threads: { about: "list and archive side threads", tools: ["list_threads", "archive_thread"] },
   settings: { about: "your schedule of jobs, stored settings", tools: ["get_schedule", "get_settings"] },
-} as const satisfies Record<string, { about: string; tools: readonly string[] }>;
+} as const satisfies Record<string, { about: string; tools: readonly string[]; always?: true }>;
 
-export type ToolGroup = keyof typeof TOOL_GROUPS;
-export const toolGroups = Object.keys(TOOL_GROUPS) as ToolGroup[];
+type GroupName = keyof typeof TOOL_GROUPS;
+/** The groups offered from the start of every chat turn. */
+export const alwaysGroups = (Object.keys(TOOL_GROUPS) as GroupName[]).filter((name) => "always" in TOOL_GROUPS[name] && TOOL_GROUPS[name].always);
+/** The groups `use_tools` loads: every group not offered from the start. */
+export type ToolGroup = Exclude<GroupName, { [K in GroupName]: (typeof TOOL_GROUPS)[K] extends { always: true } ? K : never }[GroupName]>;
+export const toolGroups = (Object.keys(TOOL_GROUPS) as GroupName[]).filter((name): name is ToolGroup => !alwaysGroups.includes(name));
 
-const grouped = new Set<string>(Object.values(TOOL_GROUPS).flatMap((group) => group.tools));
+/** Tools held back until their group is loaded. */
+const grouped = new Set<string>(toolGroups.flatMap((group) => TOOL_GROUPS[group].tools));
 
 /** One line per group for the system prompt, naming only tools the turn has. */
 export function toolGroupsGuidance(available: ReadonlySet<string>): string {

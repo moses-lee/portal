@@ -74,6 +74,12 @@ export type WorldState = {
   intents: { id: string; text: string; status: string; lastCheckedAt: number | null }[];
   jobs: { id: string; kind: string; title: string; nextRunAt: number | null }[];
   items: { id: string; kind: ItemKind; title: string; status: string }[];
+  /**
+   * Ids of the tracked sessions (the right sidebar's list), oldest tracked first: the World
+   * section's "Tracked sessions" and `list_tracked_sessions` both read this. Kept current between
+   * builds as sessions are tracked and untracked; worlds stored before this field lack it (read as none).
+   */
+  tracked: string[];
   /** Sources that could not be read this time (their previous slice was kept). */
   errors: string[];
   /** The slice each full refresh diffs against the previous one (the change log's input), carried so one build serves both. */

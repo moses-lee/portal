@@ -16,6 +16,7 @@ export const activityFilters: readonly ActivityFilter[] = [
   { id: "intent", label: "Goals", prefix: "intent." },
   { id: "item", label: "Items", prefix: "item." },
   { id: "thread", label: "Threads", prefix: "thread." },
+  { id: "session", label: "Sessions", prefix: "session." },
   { id: "memory", label: "Memory", prefix: "memory." },
   { id: "approval", label: "Approvals", prefix: "approval." },
   { id: "world", label: "World", prefix: "world." },

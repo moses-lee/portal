@@ -3,7 +3,8 @@
  * Each check reads the sessions' state; once every one has ended (its turn finished, or it failed
  * or went away), a summarizing helper turn reads the reviews and reports the findings of each PR
  * through `report_review`, each PR gets a `review_findings` Needs-you item linking the PR and its
- * session, one line goes to the intent's thread, and the intent fires once and is done.
+ * session, each review session is untracked (its findings item carries it from there), one line
+ * goes to the intent's thread, and the intent fires once and is done.
  */
 import type { Intent, JobRun } from "@portal/contracts/jobs";
 import { segment } from "@portal/shared/transcript";
@@ -232,57 +233,13 @@ export type ReviewCheckParts = {
   fire(id: string, what: { title: string; body: string; item?: boolean }, how: { actor: "system"; runId: string; touched?: Set<string> }): Promise<unknown>;
 };
 
-/**
- * A review blocked on a permission prompt, or hung, reaches the user at this check: the hourly world
- * refresh is too slow for it. Each item carries the fingerprint the snapshot diff uses
- * (`session_waiting` or `session_hung`), so a dismissed one stays dismissed (and is released once
- * the session moves on), and it is resolved here once the session moves on.
- */
-async function flagStuck(core: JobsCore, intent: Intent, watch: ReviewWatch, progress: Map<string, SessionProgress>): Promise<void> {
-  const { hub } = core;
-  let changed = false;
-  const items = await hub.store.listItems();
-  const flags = [
-    {
-      state: "waiting", kind: "session_waiting" as const, label: "Answer",
-      title: (pr: number) => `The review of ${watch.repo}#${pr} is waiting for your permission`,
-      body: () => "The review session asked to run a command. Answer it in the session; the review goes on from there.",
-    },
-    {
-      state: "stalled", kind: "session_hung" as const, label: "Open session",
-      title: (pr: number) => `The review of ${watch.repo}#${pr} is hung`,
-      body: (note?: string) => `${note ? `${note[0].toUpperCase()}${note.slice(1)}.` : "Nothing in the review session has moved for a while."} Look at the session; stop it or nudge it on.`,
-    },
-  ];
-  for (const session of watch.sessions) {
-    const current = progress.get(session.sessionId);
-    for (const flag of flags) {
-      const fingerprint = `${flag.kind}:${session.sessionId}`;
-      const live = items.find((item) => item.fingerprint === fingerprint && (item.status === "open" || item.status === "snoozed"));
-      if (current?.state === flag.state) {
-        if (live || items.some((item) => item.fingerprint === fingerprint && item.status === "dismissed")) continue;
-        await hub.store.createItem({
-          kind: flag.kind, title: flag.title(session.pr), body: flag.body(current.note), fingerprint,
-          links: { sessionId: session.sessionId, projectId: session.projectId, pull: { repo: watch.repo, number: session.pr, url: session.url }, intentId: intent.id },
-          actions: [{ type: "open_session", sessionId: session.sessionId, label: flag.label }],
-        });
-        changed = true;
-      } else if (live?.status === "open") {
-        await hub.store.updateItem(live.id, { status: "resolved" });
-        changed = true;
-      }
-    }
-  }
-  if (changed) hub.emit({ type: "items", items: await hub.store.listItems() });
-}
-
 /** One check of a review goal: wait while any session works, else summarize and report. */
 export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, trigger, signal }: KindContext, intent: Intent, watch: ReviewWatch): Promise<KindResult> {
   const { hub } = core;
   const progress = new Map<string, SessionProgress>();
   for (const session of watch.sessions) progress.set(session.sessionId, await sessionProgress(hub.deps, session.sessionId));
   await core.store.updateIntent(intent.id, { lastCheckedAt: hub.timers.now() });
-  await flagStuck(core, intent, watch, progress);
+  // A review waiting on a permission or hung raises no item: its session is tracked, and the tracked list shows those states live.
   const open = watch.sessions.filter((session) => ["working", "waiting", "stalled"].includes(progress.get(session.sessionId)!.state));
   if (open.length) {
     const count = (state: SessionProgress["state"]) => open.filter((session) => progress.get(session.sessionId)!.state === state).length;
@@ -344,6 +301,9 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
       ? await hub.store.updateItem(existing.id, { kind: fields.kind, title: fields.title, body: fields.body, actions: fields.actions, links, status: "open" })
       : await hub.store.createItem({ ...fields, links });
     touched.add(item.id);
+    // Reported, so the session leaves the tracked list; the findings item carries it from here. A failure costs only that.
+    await hub.tracked.untrack(session.sessionId, "portal", { reason: "review reported", runId: run.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) })
+      .catch((err: unknown) => console.error(`Could not untrack review session ${session.sessionId}: ${err instanceof Error ? err.message : String(err)}`));
     const tally = counts(report.findings);
     verdicts.push(`#${session.pr} ${verdictLabel[report.verdict]}${tally ? ` (${tally})` : ""}`);
   }

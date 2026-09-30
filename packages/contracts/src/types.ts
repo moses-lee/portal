@@ -237,8 +237,13 @@ export type SessionMeta = {
   liveness: SessionLiveness;
 };
 
-/** The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`. */
-export type SessionListPatch = Pick<SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "lastActiveAt">;
+/**
+ * The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`.
+ * `liveness` is only the derived state (the detail stays on the session page).
+ */
+export type SessionListPatch = Pick<SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "lastActiveAt"> & {
+  liveness: LivenessState;
+};
 
 /** `SessionState` without the slash-command list, which only the session's own `meta` event carries (it runs to tens of KB per session). */
 export type SessionListState = Omit<SessionState, "commands">;
@@ -259,9 +264,10 @@ export type SessionDetail = SessionMeta & {
 /**
  * One row of `GET /api/sessions` and of the list stream's `created` event: what the sidebar and
  * the start page need. The slash commands and the liveness detail are left out (the session
- * page gets them from its own stream), so a list of hundreds of sessions stays small.
+ * page gets them from its own stream), so a list of hundreds of sessions stays small; only the
+ * liveness state is kept, which list stream patches keep current.
  */
-export type SessionSummary = Omit<SessionDetail, "state" | "liveness"> & { state: SessionListState };
+export type SessionSummary = Omit<SessionDetail, "state" | "liveness"> & { state: SessionListState; liveness: LivenessState };
 
 /** Payload of the SSE `meta` event on `/api/sessions/[id]/stream`. */
 export type SessionMetaEvent = {

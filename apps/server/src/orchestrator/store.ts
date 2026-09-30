@@ -33,6 +33,11 @@ export const itemKinds = [
   "approval_needed", "memory_reconfirm", "custom",
 ] as const satisfies readonly ItemKind[];
 const itemKindSet = new Set<string>(itemKinds);
+/**
+ * Kinds nothing creates any more: the session states they raised show live in the tracked list.
+ * Old rows keep them; `create_item` and `update_item` refuse them.
+ */
+export const retiredItemKinds = ["session_finished", "session_stopped", "session_waiting", "session_offline", "session_hung"] as const satisfies readonly ItemKind[];
 const itemStatuses = new Set(["open", "snoozed", "resolved", "dismissed"]);
 
 /**

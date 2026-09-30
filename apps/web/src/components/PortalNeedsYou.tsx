@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { BellRing, ChevronDown } from "lucide-react";
-import PortalItemCard, { kindLabels, type ItemCardHandlers } from "./PortalItemCard";
+import PortalItemCard, { kindLabels, retiredItemKinds, type ItemCardHandlers } from "./PortalItemCard";
 import {
   Collapsible,
   CollapsibleContent,
@@ -41,13 +41,15 @@ function Row({ item, handlers }: { item: Item; handlers: ItemCardHandlers }) {
 
 /** The "Needs you (n)" strip at the top of the thread: every open needs_you item, one line each; a single line when there are none. */
 export default function PortalNeedsYou({
-  items,
+  items: all,
   handlers,
 }: {
   items: Item[];
   handlers: ItemCardHandlers;
 }) {
   const [open, setOpen] = useState(true);
+  // Belt and braces: callers pass `isVisibleItem` rows, which already leave the retired kinds out.
+  const items = all.filter((item) => !retiredItemKinds.has(item.kind));
   const count = items.length;
   return (
     <section

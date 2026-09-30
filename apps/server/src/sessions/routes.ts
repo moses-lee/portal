@@ -101,7 +101,8 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   /**
    * Server-Sent Events feed of the session list: which sessions exist and, for each, whether it is
-   * working, waiting on a permission prompt, connected, its title, and when it was last active.
+   * working, waiting on a permission prompt, connected, its title, when it was last active, and its
+   * liveness state (dead, blocked, busy, hung, idle).
    * Every connection opens with a `snapshot` (authoritative for which sessions exist, so a
    * reconnect can drop what was deleted meanwhile), then changes follow one message each.
    */
@@ -114,7 +115,9 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     const send = (event: SessionListEvent) => stream.send(event);
     send({
       type: "snapshot",
-      sessions: ctx.sessions.listSessions().map(({ id, busy, awaitingPermission, link, title, lastActiveAt }) => ({ id, busy, awaitingPermission, link, title, lastActiveAt })),
+      sessions: ctx.sessions.listSessions().map(({ id, busy, awaitingPermission, link, title, lastActiveAt, liveness }) => ({
+        id, busy, awaitingPermission, link, title, lastActiveAt, liveness: liveness.state,
+      })),
     });
     // `created` carries the full list entry, which needs the folder's git state; keep those in
     // order behind one another so a fast create-then-update cannot arrive reversed.

@@ -174,9 +174,10 @@ test("POST /api/sessions validates like the web route and creates a session in t
   const list = await app.inject({ method: "GET", url: "/api/sessions" });
   assert.equal(list.statusCode, 200);
   assert.deepEqual(list.json().sessions.map(({ id }) => id).sort(), [session.id, codex.id].sort());
-  // The list leaves out what only the session page reads: the slash commands and the liveness detail.
+  // The list leaves out what only the session page reads: the slash commands and the liveness
+  // detail. The liveness state stays, so the list can show hung and dead sessions.
   for (const entry of list.json().sessions) {
-    assert.equal(entry.liveness, undefined);
+    assert.equal(entry.liveness, "idle");
     assert.deepEqual(Object.keys(entry.state).sort(), ["configOptions", "modes"]);
     assert.equal(entry.state.configOptions.length, 3);
   }
@@ -284,7 +285,7 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
 
   const snapshot = await stream.next();
   assert.equal(snapshot.data.type, "snapshot");
-  assert.deepEqual(snapshot.data.sessions, [{ id: existing.id, busy: false, awaitingPermission: false, link: { status: "live" }, title: null, lastActiveAt: existing.lastActiveAt }]);
+  assert.deepEqual(snapshot.data.sessions, [{ id: existing.id, busy: false, awaitingPermission: false, link: { status: "live" }, title: null, lastActiveAt: existing.lastActiveAt, liveness: "idle" }]);
   assert.equal(presence.count(), before + 1);
 
   const created = await createSession(app, { projectId: "proj-1", agentId: "codex" });
@@ -293,6 +294,7 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
   assert.equal(createdFrame.data.session.id, created.id);
   assert.deepEqual(createdFrame.data.session.project, { id: "proj-1", name: "Repo" });
   assert.equal(typeof createdFrame.data.session.displayCwd, "string");
+  assert.equal(createdFrame.data.session.liveness, "idle");
 
   await app.inject({ method: "POST", url: `/api/sessions/${created.id}/prompt`, payload: { text: "hold" } });
   const updated = await stream.next();
@@ -300,6 +302,7 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
   assert.equal(updated.data.id, created.id);
   assert.equal(updated.data.patch.busy, true);
   assert.equal(updated.data.patch.title, "hold");
+  assert.equal(updated.data.patch.liveness, "busy");
 
   await app.inject({ method: "DELETE", url: `/api/sessions/${existing.id}` });
   let frame;

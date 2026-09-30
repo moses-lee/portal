@@ -4,12 +4,15 @@ import {
   isPortalPath,
   isStartPath,
   isTerminalPath,
+  panelSessionFromSearch,
   portalLocation,
   portalPath,
+  portalPathKeepingPanel,
   sessionIdFromPath,
   sessionPath,
   startPath,
   terminalPath,
+  withPanelSession,
 } from "../src/lib/session-routes.ts";
 
 test("session paths round-trip", () => {
@@ -74,4 +77,32 @@ test("Portal locations and paths round-trip, with the main thread at /", () => {
   assert.deepEqual(portalLocation("/memory/curation"), { view: "memory", entityId: null, runId: null });
   assert.equal(portalPath({ view: "memory", entityId: null, runId: "r1" }), "/memory/curation/r1");
   assert.deepEqual(portalLocation("/memory/curation/r1"), { view: "memory", entityId: null, runId: "r1" });
+});
+
+test("the tracked panel's session rides along as ?session= on any Portal path", () => {
+  assert.equal(panelSessionFromSearch(""), null);
+  assert.equal(panelSessionFromSearch("?session="), null);
+  assert.equal(panelSessionFromSearch("?session=a%20b"), "a b");
+  assert.equal(panelSessionFromSearch("session=s1&x=1"), "s1");
+  assert.equal(withPanelSession("/goals", "a b/c"), "/goals?session=a+b%2Fc");
+  assert.equal(withPanelSession("/goals", null), "/goals");
+  assert.equal(panelSessionFromSearch(withPanelSession("/", "a b/c").slice(1)), "a b/c");
+
+  // Without a query the locations are as before; with one they carry the session.
+  assert.deepEqual(portalLocation("/goals", ""), { view: "goals" });
+  assert.deepEqual(portalLocation("/goals", "?session=s1"), { view: "goals", session: "s1" });
+  assert.deepEqual(portalLocation("/threads/t1", "?session=s1"), { view: "chat", threadId: "t1", session: "s1" });
+  assert.equal(portalPath({ view: "chat", threadId: "main", session: "s1" }), "/?session=s1");
+  assert.equal(portalPath({ view: "memory", entityId: "e1", session: "s1" }), "/memory/e1?session=s1");
+  assert.equal(portalPath({ view: "goals", session: null }), "/goals");
+  const location = portalLocation("/memory/curation/r1", "?session=s1");
+  assert.equal(portalPath(location), "/memory/curation/r1?session=s1");
+
+  // Switching views keeps the panel's session unless the target sets its own.
+  assert.equal(portalPathKeepingPanel("goals", "?session=s1"), "/goals?session=s1");
+  assert.equal(portalPathKeepingPanel("chat", "?session=s1"), "/?session=s1");
+  assert.equal(portalPathKeepingPanel("memory", ""), "/memory");
+  assert.equal(portalPathKeepingPanel({ view: "chat", threadId: "t1" }, "?session=s1"), "/threads/t1?session=s1");
+  assert.equal(portalPathKeepingPanel({ view: "goals", session: "s2" }, "?session=s1"), "/goals?session=s2");
+  assert.equal(portalPathKeepingPanel({ view: "goals", session: null }, "?session=s1"), "/goals");
 });

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { z } from "zod";
 import { execCommand, readFileCapped } from "../src/orchestrator/deps.ts";
 import { STALE_PULL_MS } from "../src/orchestrator/digest.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
@@ -11,6 +12,9 @@ import { REDACTED } from "../src/orchestrator/tools/context.ts";
 import { BACKGROUND_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
 import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
 import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
+import { createTrackedService } from "../src/orchestrator/tracked/service.ts";
+import { createMemoryTrackedStore } from "../src/orchestrator/tracked/store.ts";
+import { trackedTools } from "../src/orchestrator/tracked/tools.ts";
 import { T0, attentionPull, fakeDeps, fakeSettings, liveness, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const options = { toolCallId: "call", messages: [] };
@@ -35,11 +39,21 @@ function setup({ interactive = true, settings = fakeSettings(), memory = [], ...
         .map((entry) => ({ entity: { id: `e-${entry.key}`, type: entry.type, key: entry.key }, records: entry.records }))),
     },
   };
+  // The tracked list: the real service over a memory store, its activity entries and pushes recorded, the world holding the set.
+  const activity = [];
+  const events = [];
+  const world = { tracked: [] };
+  Object.assign(hub, {
+    deps, timers: { now: () => T0 }, emit: (event) => events.push(event),
+    activity: { log: async (entry) => { activity.push(entry); } },
+    world: { current: async () => world, trackedChanged: (ids) => { world.tracked = ids; } },
+  });
+  hub.tracked = createTrackedService(hub, createMemoryTrackedStore({ sessionExists: (id) => state.sessions.some((meta) => meta.id === id) }));
   const ctx = {
     store, deps, touched, settings, interactive, now: () => T0,
     hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job" },
   };
-  return { tools: createTools(ctx), store, deps, state, touched, intents };
+  return { tools: { ...createTools(ctx), ...trackedTools(ctx) }, store, deps, state, touched, intents, hub, activity, events, world };
 }
 
 /** Call a tool the way the SDK does: the input goes through its zod schema first, so bounds are asserted for real. */
@@ -151,7 +165,7 @@ test("an ambiguous or unknown id is an error that says so, never one that reads 
 test("create_item and update_item store full ids in links and actions, and refuse ids that name nothing or several", async () => {
   const { tools, store } = prefixed();
   const input = {
-    kind: "session_waiting", title: "Review waits", body: "It asks.", fingerprint: "session_waiting:review",
+    kind: "custom", title: "Review waits", body: "It asks.", fingerprint: "custom:review",
     links: { sessionId: "17329ac6", projectId: "9b1d4e7a" },
     actions: [{ type: "open_session", sessionId: "17329ac6" }, { type: "start_session", projectId: "9b1d4e7a", prompt: "Go" }, { type: "open_url", url: "https://x" }],
   };
@@ -192,7 +206,7 @@ test("create_item dedupes by fingerprint, accepts the digest's shapes, rejects o
   // The per-repo review form and the classic <kind>:<key> form are fine; anything else is not.
   const perRepo = await run(tools.create_item, { ...input, kind: "pr_review_requested", fingerprint: "pr_review_requested:acme/app" });
   assert.equal(perRepo.created, true);
-  const classic = await run(tools.create_item, { ...input, kind: "session_waiting", fingerprint: "session_waiting:s1" });
+  const classic = await run(tools.create_item, { ...input, kind: "worktree_dirty", fingerprint: "worktree_dirty:w1" });
   assert.equal(classic.created, true);
   for (const fingerprint of ["custom:has space", "nocolon", "Upper:x", "pr:", ":key", "pr-x:key"]) {
     const bad = await run(tools.create_item, { ...input, fingerprint });
@@ -621,4 +635,148 @@ test("session tools report liveness: rows carry the state and its line, get_sess
   assert.equal((await run(tools.list_sessions, { liveness: "asleep" })).invalidInput, true);
   const active = await run(tools.list_active_sessions, {});
   assert.deepEqual(active.sessions.map((row) => row.id).sort(), ["s1", "s2"]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Tracked sessions
+// ---------------------------------------------------------------------------------------------
+
+test("track_session takes an id prefix, tracks as Portal with the turn's run and thread, and is idempotent", async () => {
+  const { tools, hub, activity, events, world } = prefixed();
+  const tracked = await run(tools.track_session, { sessionId: "17329ac6" });
+  assert.deepEqual(tracked, { sessionId: REVIEW, tracked: true, trackedAt: T0, trackedBy: "portal" });
+  assert.deepEqual((await hub.tracked.list()).map((row) => row.sessionId), [REVIEW], "stored with the full id");
+  assert.deepEqual(world.tracked, [REVIEW], "the world's set follows at once");
+  assert.equal(activity.length, 1);
+  assert.equal(activity[0].kind, "session.tracked");
+  assert.equal(activity[0].actor, "agent");
+  assert.deepEqual(activity[0].refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" });
+  assert.equal(events.filter((event) => event.type === "tracked").length, 1);
+
+  const again = await run(tools.track_session, { sessionId: REVIEW });
+  assert.equal(again.tracked, true);
+  assert.match(again.note, /already tracked/);
+  assert.equal(activity.length, 1, "nothing logged the second time");
+
+  assert.match((await run(tools.track_session, { sessionId: "deadbeef" })).error, /^No session has id "deadbeef"/);
+  assert.match((await run(tools.track_session, { sessionId: "5e0f" })).error, /ambiguous/);
+  assert.equal((await hub.tracked.list()).length, 1);
+});
+
+test("untrack_session puts its reason into the activity entry and says when the session was not tracked", async () => {
+  const { tools, hub, activity } = prefixed();
+  await hub.tracked.track(REVIEW, "user");
+  const untracked = await run(tools.untrack_session, { sessionId: "17329ac6", reason: "  review summarized  " });
+  assert.deepEqual(untracked, { sessionId: REVIEW, untracked: true });
+  const entry = activity.at(-1);
+  assert.equal(entry.kind, "session.untracked");
+  assert.match(entry.summary, /^Untracked "Review auth": review summarized$/);
+  assert.deepEqual(entry.detail, { trackedBy: "portal", reason: "review summarized" });
+  assert.equal(entry.refs.runId, "run1");
+  assert.deepEqual(await hub.tracked.list(), []);
+
+  const again = await run(tools.untrack_session, { sessionId: REVIEW });
+  assert.equal(again.untracked, false);
+  assert.match(again.note, /not tracked/);
+  assert.match((await run(tools.untrack_session, { sessionId: "deadbeef" })).error, /^No session has id "deadbeef"/);
+  assert.equal((await run(tools.untrack_session, { sessionId: REVIEW, reason: "x".repeat(201) })).invalidInput, true);
+});
+
+test("list_tracked_sessions answers the world's tracked set with list_sessions' rows plus when and by whom", async () => {
+  const { tools, hub, state, world } = prefixed();
+  state.sessions[1].liveness = liveness("busy", "running tool: tests for 3m");
+  await hub.tracked.track(FIRST, "user");
+  await hub.tracked.track(REVIEW, "portal");
+  const listed = await run(tools.list_tracked_sessions, {});
+  const plain = await run(tools.list_sessions, {});
+  assert.deepEqual(listed.sessions.map((row) => row.id), world.tracked);
+  for (const row of listed.sessions) {
+    const { trackedAt, trackedBy, ...rest } = row;
+    assert.deepEqual(rest, plain.sessions.find((entry) => entry.id === row.id), "the same row as list_sessions");
+    assert.equal(trackedAt, T0);
+    assert.equal(trackedBy, row.id === FIRST ? "user" : "portal");
+  }
+  assert.equal(listed.sessions.find((row) => row.id === FIRST).liveness, "busy");
+
+  // The world's set decides, so the section and the tool agree even before the next build.
+  world.tracked = [REVIEW];
+  assert.deepEqual((await run(tools.list_tracked_sessions, {})).sessions.map((row) => row.id), [REVIEW]);
+  assert.deepEqual((await run(tools.untrack_session, { sessionId: REVIEW })).untracked, true);
+  assert.deepEqual((await run(tools.list_tracked_sessions, {})).sessions, [FIRST].map((id) => ({ ...plain.sessions.find((entry) => entry.id === id), trackedAt: T0, trackedBy: "user" })));
+});
+
+test("sessions Portal starts are tracked: create_session and each of setup_pr_reviews' sessions", async () => {
+  const { tools, hub, activity } = setup({
+    projects: [project()],
+    getPull: async (repoRoot, number) => ({ number, title: `PR ${number}`, branch: `feat/${number}`, state: "open", updatedAt: T0, fork: false, author: "moses-lee" }),
+    ensureWorktree: async ({ branch }) => ({ path: `/wt/${branch}`, created: true }),
+    originUrl: async (dir) => (dir === "/repo" ? "git@github.com:acme/app.git" : null),
+  });
+  const created = await run(tools.create_session, { projectId: "p1", prompt: "Say hi" });
+  assert.deepEqual(await hub.tracked.list(), [{ sessionId: created.sessionId, trackedAt: T0, trackedBy: "portal" }]);
+  assert.deepEqual(activity[0].refs, { sessionId: created.sessionId, projectId: "p1", runId: "run1", threadId: "main" });
+
+  const reviews = await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [3, 4] });
+  const ids = reviews.sessions.map((entry) => entry.sessionId);
+  assert.equal(ids.length, 2);
+  assert.deepEqual((await hub.tracked.list()).map((row) => row.sessionId), [created.sessionId, ...ids]);
+  assert.ok((await hub.tracked.list()).every((row) => row.trackedBy === "portal"));
+  assert.deepEqual(activity.filter((entry) => entry.kind === "session.tracked").map((entry) => entry.detail.reason ?? null), [null, "review of acme/app#3", "review of acme/app#4"]);
+});
+
+test("a session Portal starts is still started when tracking it fails", async () => {
+  const { tools, hub, state } = setup({ projects: [project()] });
+  hub.tracked.track = async () => { throw new Error("db down"); };
+  const errors = [];
+  const original = console.error;
+  console.error = (line) => errors.push(line);
+  try {
+    assert.deepEqual(await run(tools.create_session, { projectId: "p1", prompt: "Go" }), { sessionId: "s1" });
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(state.prompts, [{ id: "s1", text: "Go" }]);
+  assert.match(errors[0], /Could not track session s1: db down/);
+});
+
+test("a session whose first prompt fails is still tracked, and the prompt error is returned", async () => {
+  const { tools, hub, state } = setup({ projects: [project()] });
+  state.promptFailure = "agent not ready";
+  assert.deepEqual(await run(tools.create_session, { projectId: "p1", prompt: "Go" }), { sessionId: "s1", promptError: "agent not ready" });
+  assert.deepEqual(await hub.tracked.list(), [{ sessionId: "s1", trackedAt: T0, trackedBy: "portal" }]);
+});
+
+test("delete_session untracks first, so the activity log shows the untrack before the delete", async () => {
+  const { tools, hub, deps, activity } = prefixed();
+  await hub.tracked.track(REVIEW, "user");
+  const remove = deps.sessions.remove;
+  let loggedBeforeRemove = null;
+  deps.sessions.remove = async (id) => {
+    loggedBeforeRemove = activity.map((entry) => entry.kind);
+    return remove(id);
+  };
+  assert.deepEqual(await run(tools.delete_session, { sessionId: "17329ac6" }), { sessionId: REVIEW, deleted: true });
+  assert.deepEqual(loggedBeforeRemove, ["session.tracked", "session.untracked"]);
+  assert.deepEqual(activity.at(-1).detail, { trackedBy: "portal", reason: "deleted" });
+  assert.deepEqual(await hub.tracked.list(), []);
+  // An untracked session is deleted without an untrack entry.
+  await run(tools.delete_session, { sessionId: FIRST });
+  assert.equal(activity.filter((entry) => entry.kind === "session.untracked").length, 1);
+});
+
+test("create_item and update_item refuse the retired session kinds and point at track_session", async () => {
+  const { tools, store } = setup();
+  for (const kind of ["session_finished", "session_stopped", "session_waiting", "session_offline", "session_hung"]) {
+    const refused = await run(tools.create_item, { kind, title: "Session done", body: "It finished.", fingerprint: `${kind}:s1` });
+    assert.equal(refused.invalidInput, true, kind);
+    assert.match(refused.error, new RegExp(`^kind: ${kind} items are retired: .*\\(use track_session in a chat turn\\); nothing to raise\\.$`), kind);
+  }
+  assert.deepEqual(await store.listItems(), []);
+  const { id } = await run(tools.create_item, { kind: "custom", title: "Keep", body: "", fingerprint: "custom:keep" });
+  assert.match((await run(tools.update_item, { id, kind: "session_hung" })).error, /session_hung items are retired/);
+  assert.equal((await store.getItem(id)).kind, "custom");
+  assert.match((await run(tools.create_item, { kind: "nonsense", title: "x", body: "", fingerprint: "custom:x" })).error, /Invalid option/, "any other bad kind keeps the usual error");
+  const schema = JSON.stringify(z.toJSONSchema(tools.create_item.inputSchema));
+  assert.match(schema, /"custom"/);
+  assert.doesNotMatch(schema, /session_waiting/, "the model is not offered the retired kinds");
 });

@@ -20,7 +20,7 @@ export function isServerAction(action: ItemAction): action is ServerAction {
  * is the card it came from, or null when the card is gone by the time an approval replays it.
  */
 export async function runItemAction(
-  hub: Pick<OrchestratorHub, "deps" | "activity">,
+  hub: Pick<OrchestratorHub, "deps" | "activity" | "tracked">,
   item: Pick<Item, "id" | "title" | "links"> | null,
   action: ServerAction,
   extraRefs: { approvalId?: string } = {},
@@ -29,8 +29,10 @@ export async function runItemAction(
   let outcome: ActionOutcome = {};
   switch (action.type) {
     case "start_session":
-      // The session exists even when its prompt failed; the caller gets both facts.
-      outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt });
+      // The session exists even when its prompt failed; the caller gets both facts. Portal started it from its card, so it is tracked.
+      outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt }, {
+        tracked: hub.tracked, context: { reason: item ? `started from "${item.title}"` : "started from a card" },
+      });
       break;
     case "send_prompt":
       // Cards stored before ids were kept full may carry a prefix.

@@ -69,9 +69,13 @@ test("a review goal waits without a model call, then summarizes the reviews into
       textStep("One PR needs changes, the other is ready."),
     ],
   }));
+  // setup_pr_reviews tracks the review sessions; reporting their findings untracks them.
+  await h.hub.tracked.track("s1", "portal");
+  await h.hub.tracked.track("s2", "portal");
   const { intent, job } = await reviewGoal(h);
   await h.timers.advance(POLL_MS);
   await flush();
+  assert.equal((await h.hub.tracked.list()).length, 2, "still tracked while a review works");
   let [run] = await h.jobs.listRuns({ jobId: job.id });
   assert.equal(run.status, "succeeded");
   assert.match(run.summary, /Waiting for 1 of 2 review session/);
@@ -115,6 +119,9 @@ test("a review goal waits without a model call, then summarizes the reviews into
   const note = (await h.store.readMessages()).at(-1);
   assert.equal(note.parts[0].text, run.summary, "the thread gets the same sentence, not a list");
   assert.deepEqual(note.metadata.itemIds.sort(), items.map((item) => item.id).sort());
+  assert.deepEqual(await h.hub.tracked.list(), [], "both review sessions left the tracked list");
+  const untracked = (await h.hub.activity.list()).filter((entry) => entry.kind === "session.untracked");
+  assert.deepEqual(untracked.map((entry) => [entry.refs.sessionId, entry.detail.reason, entry.refs.runId]).sort(), [["s1", "review reported", run.id], ["s2", "review reported", run.id]]);
 });
 
 test("a review that ended without a report still gets an item saying so, and a deleted session counts as ended", async (t) => {
@@ -123,9 +130,17 @@ test("a review that ended without a report still gets an item saying so, and a d
     sessions, events: { s1: transcript("half done", { open: true }) },
     doGenerate: [textStep("Neither review finished.")],
   }));
+  // A failure to untrack costs only the untrack: the findings are still reported and the goal ends.
+  h.hub.tracked.untrack = async () => { throw new Error("db down"); };
+  const errors = [];
+  const original = console.error;
+  console.error = (line) => errors.push(String(line));
+  t.after(() => { console.error = original; });
   const { intent } = await reviewGoal(h);
   await h.timers.advance(POLL_MS);
   await flush();
+  console.error = original;
+  assert.ok(errors.some((line) => /Could not untrack review session s1: db down/.test(line)), errors.join("\n"));
   const items = (await h.store.listItems()).filter((item) => item.kind === "review_findings");
   assert.deepEqual(items.map((item) => item.title).sort(), ["Review of acme/app#1: review incomplete", "Review of acme/app#2: review incomplete"]);
   assert.match(items.find((item) => item.links.pull.number === 1).body, /did not finish: the turn stopped without finishing/);
@@ -160,28 +175,22 @@ test("reviewWatchOf keeps only well-formed sessions, and findingsItem caps the b
   assert.equal(item.fingerprint, "review_findings:acme/app#1:s1");
 });
 
-test("a review waiting for a permission raises a waiting item at once and resolves it when the session moves on", async (t) => {
+test("a review waiting for a permission raises no item (the tracked list shows it live); the check says so and keeps waiting", async (t) => {
   const sessions = [sessionMeta({ id: "s1", awaitingPermission: true, busy: true }), sessionMeta({ id: "s2", busy: true })];
   const h = await started(jobsHarness(t, { sessions, events: { s1: [], s2: [] } }));
   const { job } = await reviewGoal(h);
   await h.timers.advance(POLL_MS);
   await flush();
-  let [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_waiting");
-  assert.equal(item.fingerprint, "session_waiting:s1", "the snapshot diff's fingerprint, so a dismissal of it holds and is released like any other");
-  assert.equal(item.title, "The review of acme/app#1 is waiting for your permission");
-  assert.deepEqual(item.actions, [{ type: "open_session", sessionId: "s1", label: "Answer" }]);
-  assert.match((await h.jobs.listRuns({ jobId: job.id }))[0].summary, /1 waiting for a permission/);
-
-  // Another check while it still waits adds nothing.
-  await h.timers.advance(REVIEW_CHECK_MS);
-  await flush();
-  assert.equal((await h.store.listItems()).filter((entry) => entry.kind === "session_waiting").length, 1);
+  assert.deepEqual(await h.store.listItems(), [], "no session_waiting item");
+  const [run] = await h.jobs.listRuns({ jobId: job.id });
+  assert.match(run.summary, /Waiting for 2 of 2 review session\(s\) \(1 waiting for a permission\)/);
+  assert.equal(run.result.fired, false);
 
   sessions[0].awaitingPermission = false;
   await h.timers.advance(REVIEW_CHECK_MS);
   await flush();
-  [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_waiting");
-  assert.equal(item.status, "resolved");
+  assert.deepEqual(await h.store.listItems(), []);
+  assert.match((await h.jobs.listRuns({ jobId: job.id }))[0].summary, /^Waiting for 2 of 2 review session\(s\)\.$/);
 });
 
 test("sessionProgress goes by liveness: a busy long run keeps working, a hung one is stalled, a dead one failed with why", async () => {
@@ -200,7 +209,7 @@ test("sessionProgress goes by liveness: a busy long run keeps working, a hung on
   assert.deepEqual(await sessionProgress(deps, "restarted"), { state: "failed", note: "the agent was lost: Portal restarted while the turn was running" });
 });
 
-test("a hung review keeps the goal open, raises a hung item at once, and resolves it when the session moves again", async (t) => {
+test("a hung review keeps the goal open and raises no item; the check's summary counts it as hung", async (t) => {
   const sessions = [
     sessionMeta({ id: "s1", busy: true, liveness: liveness("hung", "hung: no CPU or output for 20m (tool: npm test, started 40m ago)") }),
     sessionMeta({ id: "s2", busy: true, liveness: liveness("busy", "running tool: bazel test //... for 45m") }),
@@ -209,20 +218,11 @@ test("a hung review keeps the goal open, raises a hung item at once, and resolve
   const { job } = await reviewGoal(h);
   await h.timers.advance(POLL_MS);
   await flush();
-  let [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_hung");
-  assert.equal(item.fingerprint, "session_hung:s1");
-  assert.equal(item.title, "The review of acme/app#1 is hung");
-  assert.equal(item.body, "Hung: no CPU or output for 20m (tool: npm test, started 40m ago). Look at the session; stop it or nudge it on.");
-  assert.deepEqual(item.actions, [{ type: "open_session", sessionId: "s1", label: "Open session" }]);
+  assert.deepEqual(await h.store.listItems(), [], "no session_hung item");
   const [run] = await h.jobs.listRuns({ jobId: job.id });
   assert.match(run.summary, /Waiting for 2 of 2 review session\(s\) \(1 hung\)/);
   assert.equal(run.result.fired, false);
-
-  sessions[0].liveness = liveness("busy", "running tool: npm test for 41m");
-  await h.timers.advance(REVIEW_CHECK_MS);
-  await flush();
-  [item] = (await h.store.listItems()).filter((entry) => entry.kind === "session_hung");
-  assert.equal(item.status, "resolved");
+  assert.equal(run.result.sessions.s1.state, "stalled");
 });
 
 test("the thread's verdict is prose: one sentence per goal, counts spelled out, no list", () => {

@@ -15,7 +15,7 @@ import type { SessionRecord, SessionStore, TailQuery, TailResult } from "./store
 type Row = typeof sessions.$inferSelect;
 
 /** Postgres `foreign_key_violation`; Drizzle wraps the driver error as `cause`. */
-function isForeignKeyViolation(err: unknown): boolean {
+export function isForeignKeyViolation(err: unknown): boolean {
   const code = (e: unknown) => (e as { code?: unknown } | null)?.code;
   return code(err) === "23503" || code((err as { cause?: unknown } | null)?.cause) === "23503";
 }
