@@ -6,6 +6,8 @@ import { createInterface } from "node:readline";
 // starting a model or reading the developer's agent credentials.
 const [agentId, logPath, configPath] = process.argv.slice(2);
 const prompts = new Map();
+/** Sessions whose "tool-then-talk" turn speaks up on the next set_mode. */
+const talkers = new Set();
 const permissions = new Map();
 const configs = new Map();
 /** Child processes a "spawn" prompt started, by session; killed on cancel and when this process exits. */
@@ -124,6 +126,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.value });
     }
   } else if (method === "session/set_mode") {
+    if (talkers.delete(params.sessionId)) {
+      update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "still here" } });
+    }
     respond(id, {});
     update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.modeId });
   } else if (method === "session/prompt") {
@@ -147,6 +152,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         log({ event: "child", childPid: child.pid });
         children.set(params.sessionId, child);
       }
+      return;
+    }
+    if (text === "tool-then-talk") {
+      // A tool that sits quiet until the test signals (with a set_mode), then the agent speaks up;
+      // the turn stays open until cancelled.
+      prompts.set(params.sessionId, id);
+      talkers.add(params.sessionId);
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "call-4", title: "wait", kind: "execute", status: "pending" });
       return;
     }
     if (text === "finish-tool") {
@@ -209,6 +222,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (promptId !== undefined) {
       prompts.delete(params.sessionId);
       respond(promptId, { stopReason: "cancelled" });
+    }
+    // A turn still waiting on a permission ends too, leaving the request unanswered on the client.
+    for (const [permissionId, prompt] of permissions) {
+      if (prompt.sessionId !== params.sessionId) continue;
+      permissions.delete(permissionId);
+      respond(prompt.id, { stopReason: "cancelled" });
     }
   } else if (!method && permissions.has(id)) {
     const prompt = permissions.get(id);

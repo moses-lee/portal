@@ -17,12 +17,13 @@ export async function summarizeSession(meta: SessionMeta, project: Project | nul
 }
 
 /**
- * The session's list entry: the summary without the slash commands and the liveness detail.
+ * The session's list entry: the summary without the slash commands and the liveness detail
+ * (only its state is kept).
  * Those are only read on the session page, which gets them from its own stream, and together
  * they are most of the bytes of a session (the command list alone runs to tens of KB).
  */
 export async function summarizeForList(meta: SessionMeta, project: Project | null): Promise<SessionSummary> {
-  const { state, liveness: _liveness, ...detail } = await summarizeSession(meta, project);
+  const { state, liveness, ...detail } = await summarizeSession(meta, project);
   const { modes, configOptions } = state;
-  return { ...detail, state: { modes, configOptions } };
+  return { ...detail, state: { modes, configOptions }, liveness: liveness.state };
 }

@@ -138,6 +138,7 @@ export function makeSession(
     title,
     agentId,
     agentName: agentId === "claude" ? "Claude Code" : "Codex",
+    liveness: "idle",
     projectId: p.id,
     project: { id: p.id, name: p.name },
     createdAt: now,

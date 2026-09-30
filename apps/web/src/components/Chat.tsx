@@ -496,7 +496,7 @@ function ChatShell() {
       }
       // The worktree choice was for this start only; the next start page begins at Original again.
       setWorktreePick(null);
-      putSession(session);
+      putSession({ ...session, liveness: session.liveness.state });
       if (firstPrompt.trim()) {
         writeDraft(session.id, firstPrompt);
         clearSubmittedDraft("new", firstPrompt);

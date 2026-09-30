@@ -11,7 +11,8 @@ import { type ProcessTable, readProcessTable } from "./process-probe.ts";
 import { coalesceTextChunks, isTextChunk, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
 import type {
-  EventPage, OpenToolCall, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionLiveness, SessionLoss, SessionMeta, SessionState, StoredEvent,
+  EventPage, LivenessState, OpenToolCall, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionLiveness, SessionLoss, SessionMeta,
+  SessionState, StoredEvent,
 } from "./types.ts";
 
 /** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
@@ -65,6 +66,8 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
   lost: SessionLoss | null;
   /** The runtime's liveness settings, shared by all its sessions. */
   livenessConfig: LivenessConfig;
+  /** The liveness state list subscribers last heard (in a patch or `created`), so a transition is told once. */
+  listedLiveness: LivenessState;
 };
 
 /** Liveness settings; `setLivenessOptions` changes them for every session at once. */
@@ -244,17 +247,28 @@ export function createAcpRuntime(
 
   function toListPatch(session: Session): SessionListPatch {
     const { busy, link, title, lastActiveAt } = session;
-    return { busy, awaitingPermission: session.pendingPermissions.size > 0, link, title, lastActiveAt };
+    return { busy, awaitingPermission: session.pendingPermissions.size > 0, link, title, lastActiveAt, liveness: livenessOf(session).state };
   }
 
   function notifyList(change: SessionListChange) {
     for (const listener of listListeners) listener(change);
   }
 
-  /** Tell list subscribers about a change to a session's busy, permission, link, title, or activity fields. */
+  /** Tell list subscribers about a change to a session's busy, permission, link, title, activity, or liveness fields. */
   function announce(session: Session) {
     if (!current(session)) return;
-    notifyList({ type: "updated", id: session.id, patch: toListPatch(session) });
+    const patch = toListPatch(session);
+    session.listedLiveness = patch.liveness;
+    notifyList({ type: "updated", id: session.id, patch });
+  }
+
+  /**
+   * Announce the session when its liveness state moved without anything else announcing it: a
+   * turn going quiet (hung) or picking up again, or a probe finding the agent process gone.
+   */
+  function announceLiveness(session: Session) {
+    if (!current(session)) return;
+    if (livenessOf(session).state !== session.listedLiveness) announce(session);
   }
 
   /** Subscribe to session list changes; returns the unsubscribe function. */
@@ -404,14 +418,15 @@ export function createAcpRuntime(
     announce(session);
   }
 
-  function settlePermission(requestId: string, outcome: acp.RequestPermissionOutcome, answered?: Answered) {
+  /** Settle an open permission request; `quiet` leaves the list announcement to a caller that makes its own right after. */
+  function settlePermission(requestId: string, outcome: acp.RequestPermissionOutcome, answered?: Answered, quiet = false) {
     const request = pending.get(requestId);
     if (!request) return;
     pending.delete(requestId);
     request.session.pendingPermissions.delete(requestId);
     const [next] = request.session.pendingPermissions;
     request.session.permissionTitle = next ? pending.get(next)?.title ?? null : null;
-    announce(request.session);
+    if (!quiet) announce(request.session);
     if (outcome.outcome === "selected") {
       const option = request.options.find((option) => option.optionId === outcome.optionId);
       emit(request.session, {
@@ -428,9 +443,13 @@ export function createAcpRuntime(
     request.resolve({ outcome });
   }
 
-  function cancelPermissions(session: Session): boolean {
+  /**
+   * Cancel the session's open permission requests. With `announce` false the caller announces
+   * the session itself right after, so list subscribers get one patch with the final state.
+   */
+  function cancelPermissions(session: Session, announce = true): boolean {
     const open = [...session.pendingPermissions];
-    for (const requestId of open) settlePermission(requestId, { outcome: "cancelled" });
+    for (const requestId of open) settlePermission(requestId, { outcome: "cancelled" }, undefined, !announce);
     return open.length > 0;
   }
 
@@ -456,7 +475,7 @@ export function createAcpRuntime(
       const wasBusy = session.busy;
       session.busy = false;
       endTurn(session);
-      cancelPermissions(session);
+      cancelPermissions(session, false); // `detach` below announces the session once, dead or offline.
       if (instance.loss) setLost(session, instance.loss);
       // On shutdown the record keeps saying the turn is open, so the next start closes it; a crash closes it here.
       else if (wasBusy && !disposed) persistMeta(session);
@@ -549,6 +568,8 @@ export function createAcpRuntime(
               const tool = update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update";
               // Tool heartbeats say the agent is alive, not that the tool gets anywhere; everything else is output.
               if (!tool || trackToolCall(session.openTools, update, Date.now())) session.lastOutputAt = Date.now();
+              // Output ends a hang at once rather than at the next probe.
+              if (session.listedLiveness === "hung") announceLiveness(session);
             }
             trackProgress(session.progressing, update);
             // A heartbeat has done its work for liveness; it tells a reader nothing, so it gets no seq and no row.
@@ -681,7 +702,9 @@ export function createAcpRuntime(
       probe: createProbeState(),
       lost: record.lost ?? null,
       livenessConfig,
+      listedLiveness: "idle",
     };
+    session.listedLiveness = livenessOf(session).state;
     sessions.set(session.id, session);
     return session;
   }
@@ -710,6 +733,8 @@ export function createAcpRuntime(
       if (open) {
         emit(session, { type: "error", message: "Portal restarted while this turn was running. Send a message to continue." });
         setLost(session, { reason: "portal_restarted", detail: "Portal restarted while the turn was running", at: Date.now() });
+        // Not yet listed to anyone; the first snapshot or list read carries it.
+        session.listedLiveness = livenessOf(session).state;
       } else if (record.turnOpen == null) {
         persistMeta(session);
       }
@@ -774,7 +799,9 @@ export function createAcpRuntime(
       instance.sessions.delete(response.sessionId);
       throw new Error(`Could not save the new session: ${errorMessage(error)}`);
     }
-    notifyList({ type: "created", session: toMeta(session) });
+    const meta = toMeta(session);
+    session.listedLiveness = meta.liveness.state;
+    notifyList({ type: "created", session: meta });
     return session;
   }
 
@@ -890,7 +917,7 @@ export function createAcpRuntime(
       if (instance.failure) return;
       session.busy = false;
       endTurn(session);
-      cancelPermissions(session);
+      cancelPermissions(session, false);
       emit(session, { type: "turn_end", stopReason: response.stopReason });
       persistMeta(session);
       announce(session);
@@ -898,7 +925,7 @@ export function createAcpRuntime(
       if (instance.failure) return; // fail() already ended this session's turn.
       session.busy = false;
       endTurn(session);
-      cancelPermissions(session);
+      cancelPermissions(session, false);
       emit(session, { type: "error", message: agentError(instance.agent, "prompt failed", error).message });
       persistMeta(session);
       announce(session);
@@ -1099,10 +1126,17 @@ export function createAcpRuntime(
   }
 
   /**
-   * Sample the process tree of `targets`. Concurrent callers share the `ps` read; a platform
-   * without `ps` leaves the probes empty, so no session is ever called hung there.
+   * Sample the process tree of `targets`, then tell list subscribers about any whose liveness
+   * state moved (a turn gone hung or moving again, an agent process gone). Concurrent callers
+   * share the `ps` read; a platform without `ps` leaves the probes empty, so no session is ever
+   * called hung there.
    */
   async function probe(targets: Session[]): Promise<void> {
+    await sample(targets);
+    for (const session of targets) announceLiveness(session);
+  }
+
+  async function sample(targets: Session[]): Promise<void> {
     if (!targets.some(probeable)) return;
     const table = await readTable();
     if (!table) return;
@@ -1141,6 +1175,7 @@ export function createAcpRuntime(
   /** Change the liveness settings of every session (the hung threshold comes from the user's settings). */
   function setLivenessOptions(options: Partial<LivenessConfig>): void {
     if (typeof options.hungAfterMs === "number" && options.hungAfterMs > 0) livenessConfig.hungAfterMs = options.hungAfterMs;
+    for (const session of sessions.values()) announceLiveness(session);
   }
 
   async function dispose() {
