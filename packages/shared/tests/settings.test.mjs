@@ -71,7 +71,7 @@ test("mergeSettings applies orchestrator overrides and masks API keys to boolean
   assert.deepEqual(merged.orchestrator, {
     provider: "openai",
     model: "gpt-x",
-    bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
+    bookkeeping: { provider: "anthropic", model: "claude-sonnet-5" },
     consolidation: orchestratorDefaults.consolidation,
     reviews: { answerReadOnly: false },
     stalls: orchestratorDefaults.stalls,
@@ -167,7 +167,7 @@ test("applySettingsPatch touches only the section a patch names", () => {
   assert.deepEqual(orchestratorOnly.orchestrator, {
     provider: "openai",
     model: "gpt-y",
-    bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
+    bookkeeping: { provider: "anthropic", model: "claude-sonnet-5" },
     consolidation: { ...orchestratorDefaults.consolidation, minIntervalMinutes: 30 },
     reviews: { answerReadOnly: false },
     stalls: orchestratorDefaults.stalls,

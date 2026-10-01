@@ -106,7 +106,7 @@ export type OrchestratorSettingsPatch = {
 export const defaultOrchestratorSettings: OrchestratorSettings = {
   provider: "anthropic",
   model: "claude-opus-5-5",
-  bookkeeping: { provider: "anthropic", model: "claude-haiku-4-5" },
+  bookkeeping: { provider: "anthropic", model: "claude-sonnet-5" },
   consolidation: { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 },
   reviews: { answerReadOnly: true },
   stalls: { hungAfterMinutes: 15 },
@@ -122,7 +122,7 @@ export type ModelChoice = { provider: OrchestratorProvider; model: string };
 
 /** The model each role uses on a provider unless the user picked another one. */
 export const defaultModels: Record<OrchestratorProvider, Record<ModelRole, string>> = {
-  anthropic: { chat: "claude-opus-5-5", bookkeeping: "claude-haiku-4-5" },
+  anthropic: { chat: "claude-opus-5-5", bookkeeping: "claude-sonnet-5" },
   openai: { chat: "gpt-5", bookkeeping: "gpt-5-mini" },
 };
 

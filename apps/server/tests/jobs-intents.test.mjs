@@ -79,7 +79,7 @@ test("an intent check fires the intent: a Needs-you item with its links, a note 
   const [run] = await h.jobs.listRuns({ jobId: job.id });
   assert.equal(run.kind, "intent_check");
   assert.equal(run.status, "succeeded");
-  assert.deepEqual(run.model, { provider: "anthropic", model: "claude-haiku-4-5" }, "checks run on the bookkeeping model");
+  assert.deepEqual(run.model, { provider: "anthropic", model: "claude-sonnet-5" }, "checks run on the bookkeeping model");
   assert.match(run.summary, /^Fired/);
 
   const [item] = await h.store.listItems();

@@ -12,7 +12,7 @@ test("settings pick a chat model and a bookkeeping model; a provider change rese
   const chatModel = dialog.getByRole("textbox", { name: "Chat model" });
   const bookkeepingModel = dialog.getByRole("textbox", { name: "Bookkeeping model" });
   await expect(chatModel).toHaveValue("claude-opus-5-5");
-  await expect(bookkeepingModel).toHaveValue("claude-haiku-4-5");
+  await expect(bookkeepingModel).toHaveValue("claude-sonnet-5");
   await dialog.screenshot({ animations: "disabled", path: info.outputPath("settings-models.png") });
 
   const patches = () =>
