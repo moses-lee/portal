@@ -13,7 +13,11 @@ test("parses a version-1 file, keeping only known fields", () => {
   const gone = { id: "g", name: "g", path: "/home/g", createdAt: 0, removedAt: 5, parentPath: "/home/one", junk: true };
   const parsed = parseLegacyProjectsFile(JSON.stringify({ version: 1, projects: [parent, wt], removed: [gone] }));
   assert.deepEqual(parsed, {
-    projects: [parent, { id: "w", name: "feat", path: "/home/two", createdAt: 2, worktree: { parentId: "p", branch: "feat" } }],
+    // The file predates pins and kept reasons: listed projects come back unpinned.
+    projects: [
+      { ...parent, pinnedAt: null, keptReason: null },
+      { id: "w", name: "feat", path: "/home/two", createdAt: 2, worktree: { parentId: "p", branch: "feat" }, pinnedAt: null, keptReason: null },
+    ],
     removed: [{ id: "g", name: "g", path: "/home/g", createdAt: 0, removedAt: 5, parentPath: "/home/one" }],
     droppedRemoved: 0,
   });

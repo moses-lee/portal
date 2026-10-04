@@ -881,7 +881,12 @@ test("list subscribers hear sessions being created, working, waiting on permissi
   assert.equal(patches().at(-1).liveness, "busy");
   await runtime.cancel(session.id);
   await until(() => !session.busy, "cancellation");
-  assert.deepEqual(patches().at(-1), { busy: false, awaitingPermission: false, link: { status: "live" }, title: "hold", lastActiveAt: session.lastActiveAt, liveness: "idle" });
+  assert.deepEqual(patches().at(-1), {
+    busy: false, awaitingPermission: false, link: { status: "live" }, title: "hold", titleSource: "prompt", lastActiveAt: session.lastActiveAt,
+    idleSince: session.idleSince, turnEndedAt: session.turnEndedAt, liveness: "idle",
+  });
+  assert.equal(typeof session.idleSince, "number");
+  assert.equal(typeof session.turnEndedAt, "number");
 
   await runtime.deleteSession(session.id);
   assert.deepEqual(changes.at(-1), { type: "deleted", id: session.id });
@@ -1252,4 +1257,207 @@ test("a page read flushes held text so it holds everything below the cursor", as
   assert.equal(page.nextSeq, 4);
   assert.equal(await store.eventCount(session.id), 4);
   assert.equal((await store.getSession(session.id)).turnOpen, true);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Session lifecycle: idle clocks and title precedence
+// ---------------------------------------------------------------------------------------------
+
+/** The session's row once every write issued so far has landed. */
+async function persisted(store, session) {
+  await session.writes;
+  return store.getSession(session.id);
+}
+
+test("idleSince is set while nothing runs and cleared while a turn is open; turnEndedAt marks every turn end", async (t) => {
+  const { runtime, cwd, store } = await persistentSetup(t);
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const patches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch);
+  const session = await runtime.createSession(cwd, "claude");
+  // A new session has nothing running: idle from creation, no turn yet.
+  assert.equal(session.idleSince, session.createdAt);
+  assert.equal(session.turnEndedAt, null);
+  assert.equal(changes[0].session.idleSince, session.createdAt);
+  assert.equal(changes[0].session.turnEndedAt, null);
+  const created = await persisted(store, session);
+  assert.deepEqual({ idleSince: created.idleSince, turnEndedAt: created.turnEndedAt }, { idleSince: session.createdAt, turnEndedAt: null });
+
+  // A turn starting clears it, in memory, on disk, and in the list patch.
+  await runtime.sendPrompt(session.id, "tool");
+  assert.equal(session.idleSince, null);
+  assert.equal(patches().at(-1).busy, true);
+  assert.equal(patches().at(-1).idleSince, null);
+  assert.equal((await persisted(store, session)).idleSince, null);
+
+  // Cancelling ends the turn: both clocks are set and announced.
+  const before = Date.now();
+  await runtime.cancel(session.id);
+  await until(() => !session.busy, "cancelled turn");
+  assert.ok(session.turnEndedAt >= before);
+  assert.ok(session.idleSince >= session.turnEndedAt);
+  assert.deepEqual(session.events.at(-1), { type: "turn_end", stopReason: "cancelled" });
+  assert.equal(patches().at(-1).idleSince, session.idleSince);
+  assert.equal(patches().at(-1).turnEndedAt, session.turnEndedAt);
+  const row = await persisted(store, session);
+  assert.equal(row.idleSince, session.idleSince);
+  assert.equal(row.turnEndedAt, session.turnEndedAt);
+  assert.equal(runtime.listSessions()[0].idleSince, session.idleSince);
+
+  // A completed turn sets them again; lastActiveAt keeps meaning the last prompt.
+  await delay(5);
+  await runtime.sendPrompt(session.id, "finish-tool");
+  const prompted = session.lastActiveAt;
+  await until(() => !session.busy, "finished turn");
+  assert.ok(session.turnEndedAt >= prompted);
+  assert.ok(session.idleSince >= prompted);
+  assert.equal(session.lastActiveAt, prompted);
+});
+
+test("a permission request after the turn ended keeps the session from idling until it is answered", async (t) => {
+  const { runtime, cwd, store } = await persistentSetup(t);
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const patches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "ask-on-mode");
+  await until(() => !session.busy, "turn");
+  const ended = session.idleSince;
+  assert.equal(typeof ended, "number");
+
+  // The agent asks with no turn open (the fixture does it on the next set_mode).
+  await runtime.setMode(session.id, "plan");
+  await until(() => session.pendingPermissions.size === 1, "permission outside a turn");
+  assert.equal(session.busy, false);
+  assert.equal(session.idleSince, null);
+  assert.equal(patches().at(-1).awaitingPermission, true);
+  assert.equal(patches().at(-1).idleSince, null);
+  assert.equal((await persisted(store, session)).idleSince, null);
+
+  // Answering it makes the session idle again, from now.
+  const count = patches().length;
+  await answerPermission(runtime, session, "once");
+  assert.equal(session.pendingPermissions.size, 0);
+  assert.ok(session.idleSince >= ended);
+  assert.equal(patches().length, count + 1, "one patch for the answer");
+  assert.equal(patches().at(-1).awaitingPermission, false);
+  assert.equal(patches().at(-1).idleSince, session.idleSince);
+  assert.equal((await persisted(store, session)).idleSince, session.idleSince);
+});
+
+test("a failed turn sets turnEndedAt and idleSince; the background task set starts empty", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  assert.ok(session.backgroundTasks instanceof Map);
+  assert.equal(session.backgroundTasks.size, 0);
+  const before = Date.now();
+  await runtime.sendPrompt(session.id, "exit");
+  await until(() => session.link.status === "offline", "offline after exit");
+  assert.equal(session.busy, false);
+  assert.ok(session.turnEndedAt >= before);
+  assert.ok(session.idleSince >= before);
+});
+
+test("a restart keeps the stored idle clock; a turn the restart cut off starts one", async (t) => {
+  const store = createMemorySessionStore();
+  const record = (id, extra) => ({
+    id, agentId: "claude", agentName: "Claude Code", cwd: os.tmpdir(), projectId: "", createdAt: 1, lastActiveAt: 1,
+    title: "t", upstreamId: `up-${id}`, state: { modes: null, configOptions: [], commands: [] }, ...extra,
+  });
+  await store.putSession(record("idle", { turnOpen: false, idleSince: 1234, turnEndedAt: 1200, titleSource: "user" }));
+  await store.putSession(record("cut", { turnOpen: true, idleSince: null, turnEndedAt: 900 }));
+  for (const [seq, event] of [{ type: "user", text: "hi" }, { type: "turn_start" }].entries()) await store.appendEvent("cut", { ...event, seq, ts: 0 });
+  const before = Date.now();
+  const runtime = createAcpRuntime([], { store });
+  t.after(() => runtime.dispose());
+  await runtime.ready;
+
+  const idle = runtime.getSession("idle");
+  assert.equal(idle.idleSince, 1234);
+  assert.equal(idle.turnEndedAt, 1200);
+  assert.equal(idle.titleSource, "user");
+  const cut = runtime.getSession("cut");
+  assert.ok(cut.idleSince >= before);
+  assert.ok(cut.turnEndedAt >= before);
+  await Promise.all([idle.writes, cut.writes]);
+  assert.equal((await store.getSession("idle")).idleSince, 1234);
+  assert.equal((await store.getSession("cut")).idleSince, cut.idleSince);
+  assert.equal((await store.getSession("cut")).turnEndedAt, cut.turnEndedAt);
+
+  // Records from before the columns come back prompt-titled.
+  await store.putSession(record("old", { turnOpen: false }));
+  const later = createAcpRuntime([], { store });
+  t.after(() => later.dispose());
+  await later.ready;
+  assert.equal(later.getSession("old").titleSource, "prompt");
+});
+
+test("shutdown leaves the idle clock of a running turn alone, so the restart closes the turn", async (t) => {
+  const first = await persistentSetup(t);
+  const session = await first.runtime.createSession(first.cwd, "claude");
+  await first.runtime.sendPrompt(session.id, "tool");
+  assert.equal(session.idleSince, null);
+  await first.runtime.dispose();
+  const row = await first.store.getSession(session.id);
+  assert.equal(row.turnOpen, true);
+  assert.equal(row.idleSince, null);
+});
+
+test("the agent's title replaces the prompt's but never one the user or Portal set", async (t) => {
+  const { runtime, cwd, store } = await persistentSetup(t);
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const patches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch);
+  const titleOf = async (session) => {
+    const { title, titleSource } = await persisted(store, session);
+    return { title, titleSource };
+  };
+  const session = await runtime.createSession(cwd, "claude");
+  assert.equal(session.titleSource, "prompt");
+
+  // The first prompt names it; the agent then improves on that.
+  await runtime.sendPrompt(session.id, "name:Agent title");
+  await until(() => !session.busy, "turn");
+  assert.equal(session.title, "Agent title");
+  assert.equal(session.titleSource, "agent");
+  assert.ok(patches().some((patch) => patch.title === "Agent title" && patch.titleSource === "agent"));
+  assert.deepEqual(await titleOf(session), { title: "Agent title", titleSource: "agent" });
+
+  // A user rename is persisted and reaches both the session's viewers and the list.
+  const links = [];
+  const unsubscribe = runtime.subscribe(session.id, { onLink: (link) => links.push(link.status) });
+  const count = patches().length;
+  assert.equal(await runtime.setTitle(session.id, "  My name  ", "user"), true);
+  assert.equal(session.title, "My name");
+  assert.equal(session.titleSource, "user");
+  assert.deepEqual(links, ["live"]);
+  assert.equal(patches().length, count + 1);
+  assert.equal(patches().at(-1).title, "My name");
+  assert.equal(patches().at(-1).titleSource, "user");
+  assert.deepEqual(await titleOf(session), { title: "My name", titleSource: "user" });
+  unsubscribe();
+
+  // The agent cannot overwrite it, and neither can Portal.
+  await runtime.sendPrompt(session.id, "name:Agent again");
+  await until(() => !session.busy, "second turn");
+  assert.equal(session.title, "My name");
+  assert.equal(await runtime.setTitle(session.id, "Portal name", "portal"), false);
+  assert.equal(session.title, "My name");
+  assert.equal(session.titleSource, "user");
+  await assert.rejects(runtime.setTitle(session.id, "   ", "user"), /empty/);
+  await assert.rejects(runtime.setTitle("nope", "x", "user"), /no such session/i);
+
+  // A session Portal named keeps that name over the agent and the first prompt; the user still wins.
+  const named = await runtime.createSession(cwd, "codex");
+  assert.equal(await runtime.setTitle(named.id, "Portal's name", "portal"), true);
+  assert.equal(named.titleSource, "portal");
+  await runtime.sendPrompt(named.id, "name:Codex name");
+  await until(() => !named.busy, "named turn");
+  assert.equal(named.title, "Portal's name");
+  assert.equal(named.titleSource, "portal");
+  assert.equal(await runtime.setTitle(named.id, "Portal again", "portal"), true);
+  assert.equal(named.title, "Portal again");
+  assert.equal(await runtime.setTitle(named.id, "Mine", "user"), true);
+  assert.equal(named.titleSource, "user");
+  assert.equal(runtime.listSessions().find(({ id }) => id === named.id).title, "Mine");
 });

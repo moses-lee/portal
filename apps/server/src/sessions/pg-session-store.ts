@@ -34,6 +34,9 @@ function toRecord(row: Row): SessionRecord {
     state: row.state,
     ...(row.lost ? { lost: row.lost } : {}),
     ...(row.turnOpen === null ? {} : { turnOpen: row.turnOpen }),
+    titleSource: row.titleSource,
+    idleSince: row.idleSince,
+    turnEndedAt: row.turnEndedAt,
   };
 }
 

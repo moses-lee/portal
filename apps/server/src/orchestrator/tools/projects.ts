@@ -6,7 +6,7 @@ import { type ToolContext, capped, define } from "./context.ts";
 
 const id = z.string().min(1);
 
-function row(project: Project) {
+function row(project: Pick<Project, "id" | "name" | "path" | "worktree">) {
   return { id: project.id, name: project.name, path: displayPath(project.path), ...(project.worktree ? { worktree: project.worktree } : {}) };
 }
 

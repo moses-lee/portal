@@ -8,6 +8,8 @@ const [agentId, logPath, configPath] = process.argv.slice(2);
 const prompts = new Map();
 /** Sessions whose "tool-then-talk" turn speaks up on the next set_mode. */
 const talkers = new Set();
+/** Sessions whose "ask-on-mode" turn asks for a permission, outside any turn, on the next set_mode. */
+const askers = new Set();
 const permissions = new Map();
 const configs = new Map();
 /** Child processes a "spawn" prompt started, by session; killed on cancel and when this process exits. */
@@ -126,6 +128,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.value });
     }
   } else if (method === "session/set_mode") {
+    if (askers.delete(params.sessionId)) {
+      // A permission request with no prompt behind it, as a background task of a finished turn may send.
+      const permissionId = `permission-${++permissionCount}`;
+      permissions.set(permissionId, { id: null, sessionId: params.sessionId, hold: false });
+      send({
+        id: permissionId,
+        method: "session/request_permission",
+        params: {
+          sessionId: params.sessionId,
+          toolCall: { toolCallId: "tool-bg", title: `${agentId} background tool` },
+          options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
+        },
+      });
+    }
     if (talkers.delete(params.sessionId)) {
       update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "still here" } });
     }
@@ -187,6 +203,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       respond(id, { stopReason: "end_turn" });
       return;
     }
+    if (text.startsWith("name:")) {
+      // The agent names the conversation, as Claude Code does after the first turn.
+      update(params.sessionId, { sessionUpdate: "session_info_update", title: text.slice("name:".length) });
+      respond(id, { stopReason: "end_turn" });
+      return;
+    }
+    if (text === "ask-on-mode") {
+      askers.add(params.sessionId);
+      respond(id, { stopReason: "end_turn" });
+      return;
+    }
     if (text === "commands") {
       update(params.sessionId, {
         sessionUpdate: "available_commands_update",
@@ -227,11 +254,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     for (const [permissionId, prompt] of permissions) {
       if (prompt.sessionId !== params.sessionId) continue;
       permissions.delete(permissionId);
-      respond(prompt.id, { stopReason: "cancelled" });
+      if (prompt.id !== null) respond(prompt.id, { stopReason: "cancelled" });
     }
   } else if (!method && permissions.has(id)) {
     const prompt = permissions.get(id);
     permissions.delete(id);
+    if (prompt.id === null) return; // Asked outside a turn: no prompt to finish.
     if (prompt.hold) prompts.set(prompt.sessionId, prompt.id);
     else respond(prompt.id, { stopReason: "end_turn" });
   }

@@ -285,7 +285,10 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
 
   const snapshot = await stream.next();
   assert.equal(snapshot.data.type, "snapshot");
-  assert.deepEqual(snapshot.data.sessions, [{ id: existing.id, busy: false, awaitingPermission: false, link: { status: "live" }, title: null, lastActiveAt: existing.lastActiveAt, liveness: "idle" }]);
+  assert.deepEqual(snapshot.data.sessions, [{
+    id: existing.id, busy: false, awaitingPermission: false, link: { status: "live" }, title: null, titleSource: "prompt",
+    lastActiveAt: existing.lastActiveAt, idleSince: existing.createdAt, turnEndedAt: null, liveness: "idle",
+  }]);
   assert.equal(presence.count(), before + 1);
 
   const created = await createSession(app, { projectId: "proj-1", agentId: "codex" });

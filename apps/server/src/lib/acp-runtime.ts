@@ -10,9 +10,9 @@ import { DEFAULT_HUNG_AFTER_MS, type ProbeState, createProbeState, deriveLivenes
 import { type ProcessTable, readProcessTable } from "./process-probe.ts";
 import { coalesceTextChunks, isTextChunk, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
-import type {
-  EventPage, LivenessState, OpenToolCall, PermissionAnswerer, PortalEvent, SessionLink, SessionListPatch, SessionLiveness, SessionLoss, SessionMeta,
-  SessionState, StoredEvent,
+import {
+  type EventPage, type LivenessState, type OpenToolCall, type PermissionAnswerer, type PortalEvent, type SessionLink, type SessionListPatch,
+  type SessionLiveness, type SessionLoss, type SessionMeta, type SessionState, type StoredEvent, type TitleSource, titleMayReplace,
 } from "./types.ts";
 
 /** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
@@ -40,6 +40,11 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
   closeListeners: Set<() => void>;
   /** Request IDs of permission prompts the agent is still waiting on. Server-only. */
   pendingPermissions: Set<string>;
+  /**
+   * Work the agent runs past the end of a turn (background shells), by task id. Always empty
+   * until the agent reports such tasks; any entry keeps the session from counting as idle.
+   */
+  backgroundTasks: Map<string, BackgroundTask>;
   /** Store writes issued so far; awaited before reading pages so they include the newest events. */
   writes: Promise<void>;
   /** Events numbered but not yet handed to the store; flushed as one write (see `flush`). */
@@ -69,6 +74,9 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
   /** The liveness state list subscribers last heard (in a patch or `created`), so a transition is told once. */
   listedLiveness: LivenessState;
 };
+
+/** A task the agent keeps running after its turn ended. */
+export type BackgroundTask = { title: string; startedAt: number };
 
 /** Liveness settings; `setLivenessOptions` changes them for every session at once. */
 export type LivenessConfig = { hungAfterMs: number };
@@ -169,11 +177,16 @@ export function livenessOf(session: Session, now = Date.now()): SessionLiveness 
 
 /** The session's browser-facing metadata, without the runtime's own bookkeeping. */
 export function toMeta(session: Session): SessionMeta {
-  const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, link, state } = session;
+  const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, idleSince, turnEndedAt, busy, link, state } = session;
   return {
-    id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, busy, awaitingPermission: session.pendingPermissions.size > 0, link, state,
-    liveness: livenessOf(session),
+    id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, idleSince, turnEndedAt, busy,
+    awaitingPermission: session.pendingPermissions.size > 0, link, state, liveness: livenessOf(session),
   };
+}
+
+/** Idle: no open turn, no permission prompt waiting, and no background work. */
+export function isIdle(session: Pick<Session, "busy" | "pendingPermissions" | "backgroundTasks">): boolean {
+  return !session.busy && session.pendingPermissions.size === 0 && session.backgroundTasks.size === 0;
 }
 
 /**
@@ -246,8 +259,11 @@ export function createAcpRuntime(
   let disposed = false;
 
   function toListPatch(session: Session): SessionListPatch {
-    const { busy, link, title, lastActiveAt } = session;
-    return { busy, awaitingPermission: session.pendingPermissions.size > 0, link, title, lastActiveAt, liveness: livenessOf(session).state };
+    const { busy, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt } = session;
+    return {
+      busy, awaitingPermission: session.pendingPermissions.size > 0, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt,
+      liveness: livenessOf(session).state,
+    };
   }
 
   function notifyList(change: SessionListChange) {
@@ -278,8 +294,31 @@ export function createAcpRuntime(
   }
 
   function toRecord(session: Session): SessionRecord {
-    const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost } = session;
-    return { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, upstreamId, state, lost, turnOpen: session.busy };
+    const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, upstreamId, state, lost, idleSince, turnEndedAt } = session;
+    return {
+      id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, upstreamId, state, lost, turnOpen: session.busy,
+      idleSince, turnEndedAt,
+    };
+  }
+
+  /**
+   * Bring `idleSince` in line with what the session is doing: set to now when it has just gone
+   * idle (see `isIdle`), cleared when it has just started something. Runs after every change to
+   * `busy`, the pending permissions, or the background tasks. A change is persisted and announced,
+   * unless `quiet`, for callers that persist and announce right after anyway. Nothing is written
+   * while the runtime shuts down, so the record keeps what was true before (a turn cut off by the
+   * shutdown is still open on disk). Returns whether `idleSince` changed.
+   */
+  function settleIdle(session: Session, { quiet = false }: { quiet?: boolean } = {}): boolean {
+    if (disposed || !current(session)) return false;
+    const idle = isIdle(session);
+    if (idle === (session.idleSince !== null)) return false;
+    session.idleSince = idle ? Date.now() : null;
+    if (!quiet) {
+      persistMeta(session);
+      announce(session);
+    }
+    return true;
   }
 
   /** Record (or, with null, clear) why the session's agent was lost. */
@@ -412,6 +451,22 @@ export function createAcpRuntime(
     return session.state;
   }
 
+  /**
+   * Name the session, unless its current title came from a source that outranks `source` (see
+   * `titleMayReplace`). Persists, refreshes the session's `meta` (its viewers re-read it on a link
+   * notification), and patches the list. Returns false when the title was kept.
+   */
+  function applyTitle(session: Session, title: string, source: TitleSource): boolean {
+    if (!titleMayReplace(session.titleSource, source)) return false;
+    if (session.title === title && session.titleSource === source) return true;
+    session.title = title;
+    session.titleSource = source;
+    persistMeta(session);
+    for (const listener of session.linkListeners) listener(session.link);
+    announce(session);
+    return true;
+  }
+
   function setLink(session: Session, link: SessionLink) {
     session.link = link;
     for (const listener of session.linkListeners) listener(link);
@@ -426,7 +481,8 @@ export function createAcpRuntime(
     request.session.pendingPermissions.delete(requestId);
     const [next] = request.session.pendingPermissions;
     request.session.permissionTitle = next ? pending.get(next)?.title ?? null : null;
-    if (!quiet) announce(request.session);
+    // A quiet caller settles idleness itself once the rest of its change is in.
+    if (!quiet && !settleIdle(request.session)) announce(request.session);
     if (outcome.outcome === "selected") {
       const option = request.options.find((option) => option.optionId === outcome.optionId);
       emit(request.session, {
@@ -476,9 +532,13 @@ export function createAcpRuntime(
       session.busy = false;
       endTurn(session);
       cancelPermissions(session, false); // `detach` below announces the session once, dead or offline.
+      if (wasBusy && !disposed) session.turnEndedAt = Date.now();
+      // No-op on shutdown; otherwise persisted just below with the loss or the closed turn, and `detach` announces.
+      const settled = settleIdle(session, { quiet: true });
+      const lostChanged = instance.loss !== null && session.lost !== instance.loss;
       if (instance.loss) setLost(session, instance.loss);
       // On shutdown the record keeps saying the turn is open, so the next start closes it; a crash closes it here.
-      else if (wasBusy && !disposed) persistMeta(session);
+      if (!disposed && !lostChanged && (wasBusy || settled)) persistMeta(session);
       detach(session, error.message);
       // On shutdown the log is left as it is; the next start marks the cut-off turn instead.
       if (wasBusy && !disposed) emit(session, { type: "error", message: `${error.message} Send a message to reconnect.` });
@@ -529,7 +589,7 @@ export function createAcpRuntime(
           if (session.pendingPermissions.size === 0) session.permissionTitle = title;
           session.pendingPermissions.add(requestId);
           emit(session, { type: "permission_request", requestId, toolCall: params.toolCall, options: params.options });
-          announce(session);
+          if (!settleIdle(session)) announce(session);
           if (advisor) void advise(advisor, { sessionId: session.id, requestId, toolCall: params.toolCall, options: params.options });
         });
       })
@@ -551,13 +611,9 @@ export function createAcpRuntime(
             setState(session, { configOptions: update.configOptions });
             return;
           case "session_info_update":
-            // Agents that name conversations (Claude Code does) improve on the first-prompt title.
-            if (typeof update.title === "string" && update.title.trim() && update.title !== session.title) {
-              session.title = update.title.trim();
-              persistMeta(session);
-              for (const listener of session.linkListeners) listener(session.link);
-              announce(session);
-            }
+            // Agents that name conversations (Claude Code does) improve on the first-prompt title,
+            // but never on a name the user or Portal gave the session.
+            if (typeof update.title === "string" && update.title.trim()) applyTitle(session, update.title.trim(), "agent");
             return;
           default: {
             // `session/load` replays history Portal already logged; only live updates are appended.
@@ -676,6 +732,9 @@ export function createAcpRuntime(
   function makeSession(record: SessionRecord, nextSeq: number, link: SessionLink): Session {
     const session: Session = {
       ...record,
+      titleSource: record.titleSource ?? "prompt",
+      idleSince: record.idleSince ?? null,
+      turnEndedAt: record.turnEndedAt ?? null,
       busy: false,
       link,
       events: [],
@@ -687,6 +746,7 @@ export function createAcpRuntime(
       linkListeners: new Set(),
       closeListeners: new Set(),
       pendingPermissions: new Set(),
+      backgroundTasks: new Map(),
       writes: Promise.resolve(),
       pending: [],
       run: null,
@@ -730,12 +790,16 @@ export function createAcpRuntime(
         before = tail[0].seq;
         scanned += tail.length;
       }
+      // Every session comes back with no turn. A stored `idleSince` is kept, so the clock does not
+      // reset on restart; one the record does not have (a turn the restart cut off) starts now.
+      // Not yet listed to anyone, so nothing is announced: the first snapshot or list read carries it.
+      const settled = settleIdle(session, { quiet: true });
       if (open) {
+        session.turnEndedAt = Date.now();
         emit(session, { type: "error", message: "Portal restarted while this turn was running. Send a message to continue." });
         setLost(session, { reason: "portal_restarted", detail: "Portal restarted while the turn was running", at: Date.now() });
-        // Not yet listed to anyone; the first snapshot or list read carries it.
         session.listedLiveness = livenessOf(session).state;
-      } else if (record.turnOpen == null) {
+      } else if (record.turnOpen == null || settled) {
         persistMeta(session);
       }
     };
@@ -782,6 +846,10 @@ export function createAcpRuntime(
       createdAt: now,
       lastActiveAt: now,
       title: null,
+      titleSource: "prompt",
+      // Nothing is running yet: a session that is never prompted is idle from its creation.
+      idleSince: now,
+      turnEndedAt: null,
       upstreamId: response.sessionId,
       state: {
         modes: response.modes ?? null,
@@ -877,7 +945,10 @@ export function createAcpRuntime(
           ...(replaced ? { commands: [] } : {}),
         });
         setLost(session, null);
-        setLink(session, { status: "live" });
+        // A resume that finds the agent still at work leaves the session not idle; one that finds
+        // nothing running keeps the clock it came back with.
+        if (settleIdle(session, { quiet: true })) persistMeta(session);
+        setLink(session, { status: "live" }); // announces
       } catch (error) {
         // Startup failures already name the agent; only wrap errors from the resume itself.
         const failure = instance?.failure
@@ -902,8 +973,10 @@ export function createAcpRuntime(
     // Claim the turn before yielding so concurrent requests cannot both start it.
     session.busy = true;
     session.lastActiveAt = Date.now();
-    if (session.title === null) session.title = titleFrom(text) || null;
+    // The first prompt names the session until something with more say does.
+    if (session.title === null && session.titleSource === "prompt") session.title = titleFrom(text) || null;
     startTurn(session);
+    settleIdle(session, { quiet: true });
     persistMeta(session);
     announce(session);
     emit(session, { type: "user", text });
@@ -918,7 +991,10 @@ export function createAcpRuntime(
       session.busy = false;
       endTurn(session);
       cancelPermissions(session, false);
+      // A cancelled turn ends here too, with stopReason "cancelled".
+      session.turnEndedAt = Date.now();
       emit(session, { type: "turn_end", stopReason: response.stopReason });
+      settleIdle(session, { quiet: true });
       persistMeta(session);
       announce(session);
     }).catch((error: unknown) => {
@@ -926,10 +1002,25 @@ export function createAcpRuntime(
       session.busy = false;
       endTurn(session);
       cancelPermissions(session, false);
+      session.turnEndedAt = Date.now();
       emit(session, { type: "error", message: agentError(instance.agent, "prompt failed", error).message });
+      settleIdle(session, { quiet: true });
       persistMeta(session);
       announce(session);
     });
+  }
+
+  /**
+   * Rename a session on behalf of `source` ("user" from the browser, "portal" from the
+   * orchestrator). A title set by a higher source is kept (`user` > `portal` > `agent` > `prompt`);
+   * returns whether this one was applied. Throws for an unknown session or a blank title.
+   */
+  async function setTitle(id: string, title: string, source: TitleSource): Promise<boolean> {
+    await ready;
+    const session = requireSession(id);
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error("A session title cannot be empty.");
+    return applyTitle(session, trimmed, source);
   }
 
   async function cancel(id: string): Promise<void> {
@@ -1188,7 +1279,7 @@ export function createAcpRuntime(
   }
 
   return {
-    ready, listSessions, getSession, createSession, attach, sendPrompt, cancel,
+    ready, listSessions, getSession, createSession, attach, sendPrompt, setTitle, cancel,
     respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
     probe, probeSession, setLivenessOptions,
   };

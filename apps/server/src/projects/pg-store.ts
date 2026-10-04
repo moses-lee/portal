@@ -16,6 +16,8 @@ function toProject(row: typeof projects.$inferSelect): Project {
     path: row.path,
     createdAt: row.createdAt,
     ...(row.worktree ? { worktree: row.worktree } : {}),
+    pinnedAt: row.pinnedAt,
+    keptReason: row.keptReason,
   };
 }
 
@@ -32,6 +34,11 @@ function toRemoved(row: typeof removedProjects.$inferSelect): RemovedProject {
 }
 
 function projectRow(project: Project): typeof projects.$inferInsert {
+  return { ...baseRow(project), pinnedAt: project.pinnedAt, keptReason: project.keptReason };
+}
+
+/** The columns listed and removed projects share. */
+function baseRow(project: Project | RemovedProject) {
   return { id: project.id, name: project.name, path: project.path, createdAt: project.createdAt, worktree: project.worktree ?? null };
 }
 
@@ -50,11 +57,15 @@ export function createPgProjectsBackend(db: Db): ProjectsBackend {
     async rename(id, name) {
       await db.update(projects).set({ name }).where(eq(projects.id, id));
     },
+    async patch(id, fields) {
+      if (Object.keys(fields).length === 0) return;
+      await db.update(projects).set(fields).where(eq(projects.id, id));
+    },
     async remove(id, record) {
       await db.transaction(async (tx) => {
         await tx.delete(projects).where(eq(projects.id, id));
         if (!record) return;
-        const row = { ...projectRow(record), removedAt: record.removedAt, parentPath: record.parentPath ?? null };
+        const row = { ...baseRow(record), removedAt: record.removedAt, parentPath: record.parentPath ?? null };
         await tx.insert(removedProjects).values(row).onConflictDoUpdate({ target: removedProjects.id, set: row });
       });
     },

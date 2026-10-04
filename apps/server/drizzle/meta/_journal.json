@@ -92,6 +92,13 @@
       "when": 1790729322373,
       "tag": "0012_tracked_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791147559323,
+      "tag": "0013_session_lifecycle",
+      "breakpoints": true
     }
   ]
 }
