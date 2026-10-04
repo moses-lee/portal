@@ -77,7 +77,7 @@ export default function StartPage({
       className="mx-auto flex w-full max-w-[780px] flex-col px-6 pb-12 pt-[clamp(48px,13vh,160px)] sm:px-10"
     >
       <div className="mb-9 text-center">
-        <PortalMark className="mx-auto mb-6 size-14 rounded-[20px]" />
+        <PortalMark className="mx-auto mb-6 size-14" />
         <h2
           id="new-session-title"
           className="text-[clamp(26px,3vw,34px)] font-medium tracking-[-.045em]"
