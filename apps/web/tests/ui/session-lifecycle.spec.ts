@@ -82,7 +82,7 @@ test("the header says Background with the task titles while background work runs
         ...makeSession("s1", "Run the suite"),
         liveness: "background",
         idleSince: null,
-        backgroundTasks: [{ id: "t1", title: "bazel test //...", startedAt: Date.now(), canStop: true }],
+        backgroundTasks: [{ id: "t1", title: "bazel test //...", taskType: "shell", startedAt: Date.now(), canStop: true }],
       },
     ],
   });
