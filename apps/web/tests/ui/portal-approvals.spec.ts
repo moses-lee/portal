@@ -115,7 +115,10 @@ test("an item that links an approval, or an action the server gates, opens the d
   const dialog = page.getByRole("dialog", { name: gated.title });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Asked by an item action")).toBeVisible();
-  await expect(card.getByText("Waiting for your approval")).toBeVisible();
+  // The modal hides the Needs-you strip from the accessibility tree while it is open; the card still shows the notice.
+  await expect(
+    page.getByRole("article", { name: "A goal is paused on your approval", includeHidden: true }).getByText("Waiting for your approval"),
+  ).toBeVisible();
 });
 
 test("message text can never raise or answer an approval", async ({ page }) => {

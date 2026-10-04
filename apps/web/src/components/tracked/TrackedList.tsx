@@ -17,6 +17,7 @@ import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, t
 const TrackedRow = memo(function TrackedRow({
   session,
   state,
+  trackedAt,
   now,
   untrackAfterHours,
   onSelect,
@@ -24,6 +25,8 @@ const TrackedRow = memo(function TrackedRow({
 }: {
   session: Row["session"];
   state: Row["state"];
+  /** When it was tracked: its untrack clock starts no earlier. */
+  trackedAt: number;
   now: number;
   /** The sweep's rule 1 clock, for a finished row's "untracks in …". */
   untrackAfterHours: number;
@@ -34,7 +37,7 @@ const TrackedRow = memo(function TrackedRow({
   const title = trackedTitle(session);
   const age = relativeAge(now - session.lastActiveAt);
   // Only finished rows count down: anything else is doing something, so no idle clock runs.
-  const untracks = state === "finished" ? untrackCountdown(session, untrackAfterHours, now) : null;
+  const untracks = state === "finished" ? untrackCountdown(session, untrackAfterHours, now, trackedAt) : null;
   return (
     <li className="group flex items-start gap-0.5 rounded-xl hover:bg-white/5" data-session-id={session.id}>
       <button
@@ -113,7 +116,7 @@ export default function TrackedList({
           </h3>
           <ul className="space-y-0.5">
             {group.rows.map((row) => (
-              <TrackedRow key={row.session.id} session={row.session} state={row.state} now={now} untrackAfterHours={untrackAfterHours} onSelect={onSelect} actions={actions} />
+              <TrackedRow key={row.session.id} session={row.session} state={row.state} trackedAt={row.tracked.trackedAt} now={now} untrackAfterHours={untrackAfterHours} onSelect={onSelect} actions={actions} />
             ))}
           </ul>
         </section>

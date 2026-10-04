@@ -33,16 +33,19 @@ function inText(ms: number, coarse: boolean): string {
 }
 
 /**
- * The finished tracked row's subtitle, "untracks in 1d 3h", from `idleSince + untrackAfterHours`.
- * Null when the session is not idle (no clock is running).
+ * The finished tracked row's subtitle, "untracks in 1d 3h", from `max(idleSince, trackedAt) +
+ * untrackAfterHours`: tracking an old finished session gives it the full window from the moment it
+ * was tracked. Null when the session is not idle (no clock is running).
  */
 export function untrackCountdown(
   session: { idleSince?: number | null },
   untrackAfterHours: number,
   now: number,
+  trackedAt: number | null = null,
 ): string | null {
   if (session.idleSince == null) return null;
-  return `untracks ${inText(session.idleSince + untrackAfterHours * HOUR - now, false)}`;
+  const clock = Math.max(session.idleSince, trackedAt ?? 0);
+  return `untracks ${inText(clock + untrackAfterHours * HOUR - now, false)}`;
 }
 
 /** The fields of a project the worktree clock reads. */
@@ -68,7 +71,8 @@ export function projectIdleClock(project: Pick<Project, "id" | "createdAt">, ses
  * What a worktree project row says about the sweep, or null for nothing:
  * - only worktree projects Portal created, and never pinned ones;
  * - nothing while any of its sessions is not idle (no clock runs);
- * - "kept: uncommitted changes" (the sweep's reason) when it kept a due project;
+ * - "kept: uncommitted changes" / "kept: open terminal" (the sweep's reason) whenever the sweep set
+ *   one, in preference to any "removes" text;
  * - "removes in 2d" when removal is due within `REMOVAL_NOTICE_MS`.
  */
 export function worktreeRetention(

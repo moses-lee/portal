@@ -13,6 +13,7 @@ import { activityLabels, type AgentActivity } from "@/lib/agent-activity";
 export default function SessionHeader({
   title,
   activity,
+  statusLabel,
   hasSession,
   showShell,
   showGithub,
@@ -33,6 +34,8 @@ export default function SessionHeader({
   /** Rename the open session; the caller reports failures. */
   onRename?: (title: string) => void;
   activity: AgentActivity;
+  /** The status line's text (see `sessionStatusLabel`); the activity's label when absent. */
+  statusLabel?: string;
   hasSession: boolean;
   showShell: boolean;
   showGithub: boolean;
@@ -122,8 +125,8 @@ export default function SessionHeader({
             data-activity={activity}
             className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"
           >
-            <span className="status-dot" />
-            {activityLabels[activity]}
+            <span className="status-dot shrink-0" />
+            <span className="min-w-0 truncate">{statusLabel ?? activityLabels[activity]}</span>
           </p>
         )}
       </div>

@@ -43,8 +43,8 @@ function Row({ item, handlers }: { item: Item; handlers: ItemCardHandlers }) {
 export const NEEDS_YOU_COLLAPSE_AFTER = 5;
 
 /**
- * The "Needs you (n)" strip pinned above the thread: every open needs_you item, one line each; a
- * single line when there are none. Open by default up to `NEEDS_YOU_COLLAPSE_AFTER` items, collapsed
+ * The "Needs you (n)" strip pinned above the thread: every open needs_you item, one line each;
+ * nothing at all when there are none. Open by default up to `NEEDS_YOU_COLLAPSE_AFTER` items, collapsed
  * past that until the user opens it; once toggled, the user's choice holds. A long open list scrolls
  * inside the strip.
  */
@@ -61,33 +61,23 @@ export default function PortalNeedsYou({
   const items = all.filter((item) => !retiredItemKinds.has(item.kind));
   const count = items.length;
   const open = chosen ?? count <= NEEDS_YOU_COLLAPSE_AFTER;
+  if (count === 0) return null;
   return (
     <section
       aria-label={`Needs you (${count})`}
       className="rounded-2xl border border-white/8 bg-white/[.02] px-2 py-1.5"
     >
-      <Collapsible open={open && count > 0} onOpenChange={setOpen}>
+      <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger asChild>
           <button
             type="button"
-            disabled={count === 0}            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] font-medium disabled:cursor-default"
+            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] font-medium"
           >
-            <BellRing
-              className={`size-3.5 shrink-0 ${count ? "text-amber-300" : "text-muted-foreground"}`}
+            <BellRing className="size-3.5 shrink-0 text-amber-300" />
+            <span className="flex-1">Needs you ({count})</span>
+            <ChevronDown
+              className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
             />
-            <span className="flex-1">
-              Needs you ({count})
-              {count === 0 && (
-                <span className="ml-2 font-normal text-muted-foreground">
-                  Nothing needs you right now.
-                </span>
-              )}
-            </span>
-            {count > 0 && (
-              <ChevronDown
-                className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
-              />
-            )}
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>

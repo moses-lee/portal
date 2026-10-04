@@ -122,7 +122,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   // Resolve goes through PATCH and leaves the strip empty; the thread's messages are unchanged.
   await card.getByRole("button", { name: `More actions for ${portalItem.title}` }).click();
   await page.getByRole("menuitem", { name: "Resolve" }).click();
-  await expect(page.getByRole("region", { name: "Needs you (0)" })).toBeVisible();
+  await expect(page.getByRole("region", { name: /^Needs you/ })).toHaveCount(0);
   const patch = fixture.requests.find(
     (request) => request.path === "/api/portal/items/i1" && request.method === "PATCH",
   );

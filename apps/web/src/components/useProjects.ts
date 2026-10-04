@@ -131,8 +131,16 @@ export function useProjects(): UseProjects {
   // time, or until the server reports `pinnedAt`), then refetch so the pushed pins show.
   useEffect(() => {
     if (loading || pinMigrationRef.current !== "pending") return;
+    let storage: Storage;
+    try {
+      storage = window.localStorage;
+    } catch {
+      // Site storage blocked: there are no local pins to push.
+      pinMigrationRef.current = "done";
+      return;
+    }
     pinMigrationRef.current = "running";
-    void migrateProjectPins(projects, localStorage, (id) => patchPinned(id, true))
+    void migrateProjectPins(projects, storage, (id) => patchPinned(id, true))
       .catch(() => ({ status: "waiting" as const, pushed: 0 }))
       .then((outcome) => {
         pinMigrationRef.current = outcome.status === "done" ? "done" : "pending";

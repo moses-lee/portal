@@ -404,7 +404,8 @@ export default function PortalThread({
   return (
     <div hidden={!visible} className="flex min-h-0 flex-1 flex-col" data-thread={threadId}>
       {/* Pinned above the scroller, not inside it: in the log it sat above the oldest loaded message and went unseen. */}
-      {isMain && (
+      {/* Nothing at all with no items, so an empty strip does not cost every view its height. */}
+      {isMain && needsYou.length > 0 && (
         <div className="needs-you-slot shrink-0">
           <PortalNeedsYou items={needsYou} handlers={cardHandlers} />
         </div>
