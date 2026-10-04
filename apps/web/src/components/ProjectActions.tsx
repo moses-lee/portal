@@ -6,16 +6,27 @@ import { useSettings } from "./useSettings";
 import { isScriptEnabled } from "@/lib/scripts";
 import type { ProjectSummary } from "@/lib/types";
 
+/**
+ * An inline name editor: Enter or leaving the field commits a changed, non-blank name (trimmed);
+ * Escape, or an unchanged or blank name, cancels.
+ */
 export function RenameField({
   initial,
   onCommit,
   onCancel,
   inputRef,
+  ariaLabel = "Project name",
+  maxLength,
+  className = "my-1 w-full rounded border border-indigo-500 bg-zinc-900 px-2 py-1 text-xs outline-none",
 }: {
   initial: string;
   onCommit: (name: string) => void;
   onCancel: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
+  /** The input's accessible name: what is being renamed. */
+  ariaLabel?: string;
+  maxLength?: number;
+  className?: string;
 }) {
   const [draft, setDraft] = useState(initial);
   const doneRef = useRef(false);
@@ -39,13 +50,14 @@ export function RenameField({
   return (
     <input
       ref={inputRef}
-      aria-label="Project name"
+      aria-label={ariaLabel}
       value={draft}
+      maxLength={maxLength}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={onKeyDown}
       onBlur={() => finish(true)}
       onFocus={(e) => e.target.select()}
-      className="my-1 w-full rounded border border-indigo-500 bg-zinc-900 px-2 py-1 text-xs outline-none"
+      className={className}
     />
   );
 }

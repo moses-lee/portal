@@ -51,7 +51,15 @@ export type Sessions = {
   track: (id: string) => Promise<void>;
   /** `DELETE /api/portal/tracked/:id`; rejects with the server's message. */
   untrack: (id: string) => Promise<void>;
+  /**
+   * `PATCH /api/sessions/:id {title}`: shows the new title at once, keeps the server's answer, and
+   * puts the old title back (rejecting with the server's message) when it refuses.
+   */
+  renameSession: (id: string, title: string) => Promise<void>;
 };
+
+/** The longest session title the server takes, after trimming. */
+export const SESSION_TITLE_MAX = 120;
 
 const SessionsContext = createContext<Sessions | null>(null);
 
@@ -259,6 +267,45 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     setTracked((prev) => prev.filter((t) => t.sessionId !== id));
   }, []);
 
+  const renameSession = useCallback(async (id: string, title: string) => {
+    const name = title.trim();
+    if (!name || name.length > SESSION_TITLE_MAX)
+      throw new Error(`A title is 1 to ${SESSION_TITLE_MAX} characters.`);
+    const before = sessionsRef.current.find((s) => s.id === id);
+    const previous = before ? { title: before.title, titleSource: before.titleSource } : null;
+    // Optimistic; the list stream's `updated` patch confirms it for every other viewer.
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title: name, titleSource: "user" } : s)));
+    const revert = () => {
+      if (previous)
+        setSessions((prev) =>
+          // Only undo our own guess: a title that changed since (another viewer, the stream) stays.
+          prev.map((s) => (s.id === id && s.title === name ? { ...s, ...previous } : s)),
+        );
+    };
+    let r: Response;
+    try {
+      r = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: name }),
+      });
+    } catch {
+      revert();
+      throw new Error("Could not reach the server. Check the connection and try again.");
+    }
+    if (!r.ok) {
+      revert();
+      throw await failure(r, "Could not rename the session. Try again.");
+    }
+    const saved = (await r.json().catch(() => null)) as Partial<SessionSummary> | null;
+    if (saved && typeof saved.title === "string") {
+      const { title: savedTitle, titleSource } = saved;
+      setSessions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, title: savedTitle, ...(titleSource ? { titleSource } : {}) } : s)),
+      );
+    }
+  }, []);
+
   const value = useMemo<Sessions>(
     () => ({
       agents,
@@ -274,8 +321,9 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       historyCache,
       track,
       untrack,
+      renameSession,
     }),
-    [agents, defaultAgentId, sessions, tracked, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, track, untrack],
+    [agents, defaultAgentId, sessions, tracked, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, track, untrack, renameSession],
   );
   return <SessionsContext.Provider value={value}>{children}</SessionsContext.Provider>;
 }

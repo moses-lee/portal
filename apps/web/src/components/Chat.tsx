@@ -661,6 +661,7 @@ function ChatShell() {
       <SettingsDialog
         open={showSettings}
         section={settingsSection}
+        onRemovedDeleted={() => void refreshRemoved()}
         onClose={() => {
           setShowSettings(false);
           setSettingsSection(null);

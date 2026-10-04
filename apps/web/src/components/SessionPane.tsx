@@ -63,7 +63,7 @@ export default function SessionPane({
   shellSize,
   onShellSize,
 }: SessionPaneProps) {
-  const { historyCache, tracked, track, untrack } = useSessions();
+  const { historyCache, tracked, track, untrack, renameSession } = useSessions();
   const isTracked = !!sessionId && tracked.some((entry) => entry.sessionId === sessionId);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackPending, setTrackPending] = useState(false);
@@ -76,6 +76,14 @@ export default function SessionPane({
         setTrackError(error instanceof Error ? error.message : "Could not change tracking. Try again."),
       )
       .finally(() => setTrackPending(false));
+  };
+  // The header's line under it reports failed track toggles and renames alike.
+  const rename = (title: string) => {
+    if (!sessionId) return;
+    setTrackError(null);
+    renameSession(sessionId, title).catch((error: unknown) =>
+      setTrackError(error instanceof Error ? error.message : "Could not rename the session. Try again."),
+    );
   };
   const initialPending =
     initialSend?.sessionId === sessionId && initialSend.pending;
@@ -143,6 +151,8 @@ export default function SessionPane({
         tracked={isTracked}
         trackPending={trackPending}
         onToggleTrack={toggleTracked}
+        renameFrom={session?.title ?? ""}
+        onRename={session ? rename : undefined}
       />
       {trackError && (
         <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">

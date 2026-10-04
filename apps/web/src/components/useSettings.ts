@@ -125,8 +125,8 @@ export function useSettings(): UseSettings {
  */
 
 /** Sections of the settings dialog a caller can ask to land on. */
-export type SettingsSection = "gitActions" | "orchestrator" | "scripts";
-export const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator", "scripts"];
+export type SettingsSection = "gitActions" | "orchestrator" | "sessions" | "scripts" | "data";
+export const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator", "sessions", "scripts", "data"];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
   return typeof value === "string" && (settingsSections as readonly string[]).includes(value);

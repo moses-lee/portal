@@ -38,9 +38,9 @@ test("the panel lists tracked sessions in their groups with state badges", async
   await expect(groups).toHaveCount(4);
   const expected: [string, string, string][] = [
     ["Needs approval", approvalTitle, "Needs approval"],
-    ["Finished", finishedTitle, "Finished"],
-    ["Working", workingTitle, "Working"],
     ["Offline or hung", hungTitle, "Hung"],
+    ["Working", workingTitle, "Working"],
+    ["Finished", finishedTitle, "Finished"],
   ];
   for (const [index, [group, title, badge]] of expected.entries()) {
     await expect(groups.nth(index)).toHaveAccessibleName(group);
@@ -50,7 +50,11 @@ test("the panel lists tracked sessions in their groups with state badges", async
   }
   // Project name and age under the title; untracked sessions stay out.
   await expect(groups.nth(0).getByRole("button", { name: approvalTitle, exact: true })).toContainText(project.name);
-  await expect(groups.nth(1).getByRole("button", { name: finishedTitle, exact: true })).toContainText("5m ago");
+  const finishedRow = groups.nth(3).getByRole("button", { name: finishedTitle, exact: true });
+  await expect(finishedRow).toContainText("5m ago");
+  // Finished rows show when the sweep untracks them (idle an hour of 48: 47h left).
+  await expect(finishedRow.getByTestId("tracked-untracks")).toHaveText(/^untracks in 1d 2[23]h$/);
+  await expect(groups.nth(2).getByTestId("tracked-untracks")).toHaveCount(0);
   await expect(panel.getByText(untrackedTitle)).toHaveCount(0);
   await page.screenshot({ animations: "disabled", path: info.outputPath("tracked-list.png") });
 });
@@ -61,7 +65,7 @@ test("the panel collapses to a toggle with the waiting count, and the choice sur
   const panel = panelOf(page);
   await panel.getByRole("button", { name: "Collapse tracked sessions" }).click();
   await expect(panel.getByRole("heading", { name: /Tracked/ })).toHaveCount(0);
-  // Needs approval (s3) and finished (s1) wait on the user.
+  // Needs approval (s3) and hung (s4) are stuck on the user; finished (s1) is not counted.
   const toggle = panel.getByRole("button", { name: "Show tracked sessions (2 waiting on you)" });
   await expect(toggle).toBeVisible();
   await expect(toggle.getByTestId("tracked-attention")).toHaveText("2");

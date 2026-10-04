@@ -1,12 +1,14 @@
-import { Eye, GitBranch, PanelLeft, SquarePen, TerminalSquare } from "lucide-react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Eye, GitBranch, PanelLeft, PencilLine, SquarePen, TerminalSquare } from "lucide-react";
 import IconButton from "./IconButton";
+import { RenameField } from "./ProjectActions";
+import { SESSION_TITLE_MAX } from "./SessionsProvider";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { activityLabels, type AgentActivity } from "@/lib/agent-activity";
-import type { RefObject } from "react";
 
 export default function SessionHeader({
   title,
@@ -22,8 +24,14 @@ export default function SessionHeader({
   tracked,
   trackPending,
   onToggleTrack,
+  renameFrom,
+  onRename,
 }: {
   title: string;
+  /** The session's own title ("" while untitled) for the rename field; rename is offered only with `onRename`. */
+  renameFrom?: string;
+  /** Rename the open session; the caller reports failures. */
+  onRename?: (title: string) => void;
   activity: AgentActivity;
   hasSession: boolean;
   showShell: boolean;
@@ -39,6 +47,20 @@ export default function SessionHeader({
   trackPending: boolean;
   onToggleTrack: () => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const renameInput = useRef<HTMLInputElement>(null);
+  const renameButton = useRef<HTMLButtonElement>(null);
+  // Focus the field once it is on screen (the button that opened it is gone by then).
+  useEffect(() => {
+    if (renaming) renameInput.current?.focus();
+  }, [renaming]);
+  /** Back to the title; after Enter or Escape focus would be lost with the field, so it returns to the pencil. */
+  const stopRenaming = () => {
+    setRenaming(false);
+    requestAnimationFrame(() => {
+      if (!document.activeElement || document.activeElement === document.body) renameButton.current?.focus();
+    });
+  };
   return (
     <header className="workspace-header">
       <IconButton
@@ -50,22 +72,50 @@ export default function SessionHeader({
         <PanelLeft className="size-4" />
       </IconButton>
       <div className="min-w-0 flex-1">
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={`Conversation title: ${title}`}
-              className="block max-w-full rounded text-left"
-            >
-              <h1 className="line-clamp-2 text-[13px] font-medium leading-snug tracking-[-.01em]">
+        {renaming && onRename ? (
+          <RenameField
+            inputRef={renameInput}
+            initial={renameFrom ?? ""}
+            ariaLabel="Conversation title"
+            maxLength={SESSION_TITLE_MAX}
+            className="w-full max-w-xl rounded-md border border-indigo-500 bg-zinc-900 px-2 py-0.5 text-[13px] font-medium leading-snug outline-none"
+            onCancel={stopRenaming}
+            onCommit={(next) => {
+              stopRenaming();
+              onRename(next);
+            }}
+          />
+        ) : (
+          <div className="group/title flex min-w-0 items-start gap-1">
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Conversation title: ${title}`}
+                  className="block min-w-0 max-w-full rounded text-left"
+                >
+                  <h1 className="line-clamp-2 text-[13px] font-medium leading-snug tracking-[-.01em]">
+                    {title}
+                  </h1>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="max-w-[calc(100vw-32px)] rounded-2xl text-sm leading-relaxed break-words">
                 {title}
-              </h1>
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="max-w-[calc(100vw-32px)] rounded-2xl text-sm leading-relaxed break-words">
-            {title}
-          </PopoverContent>
-        </Popover>
+              </PopoverContent>
+            </Popover>
+            {onRename && (
+              <IconButton
+                ref={renameButton}
+                label="Rename conversation"
+                size="icon-xs"
+                onClick={() => setRenaming(true)}
+                className="-my-0.5 shrink-0 text-muted-foreground opacity-60 group-hover/title:opacity-100 focus-visible:opacity-100"
+              >
+                <PencilLine />
+              </IconButton>
+            )}
+          </div>
+        )}
         {hasSession && (
           <p
             role="status"

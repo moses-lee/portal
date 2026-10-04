@@ -3,9 +3,12 @@
 import { memo, useId } from "react";
 import AgentLogo from "../AgentLogo";
 import { useNow } from "../portal/PortalLive";
+import { useSettings } from "../useSettings";
 import { relativeAge } from "@/lib/relative-age";
+import { untrackCountdown } from "@/lib/session-lifecycle";
+import { defaultSettings } from "@/lib/settings";
 import type { TrackedGroup, TrackedRow as Row } from "@/lib/tracked-sessions";
-import { TrackedRowMenu, TrackedStateBadge, trackedTitle, type TrackedRowActions } from "./parts";
+import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, type TrackedRowActions } from "./parts";
 
 /**
  * One tracked session. Memoised: the list re-renders on every live change to any session, and the
@@ -15,24 +18,29 @@ const TrackedRow = memo(function TrackedRow({
   session,
   state,
   now,
+  untrackAfterHours,
   onSelect,
   actions,
 }: {
   session: Row["session"];
   state: Row["state"];
   now: number;
+  /** The sweep's rule 1 clock, for a finished row's "untracks in …". */
+  untrackAfterHours: number;
   onSelect: (sessionId: string) => void;
   actions: TrackedRowActions;
 }) {
   const id = useId();
   const title = trackedTitle(session);
   const age = relativeAge(now - session.lastActiveAt);
+  // Only finished rows count down: anything else is doing something, so no idle clock runs.
+  const untracks = state === "finished" ? untrackCountdown(session, untrackAfterHours, now) : null;
   return (
     <li className="group flex items-start gap-0.5 rounded-xl hover:bg-white/5" data-session-id={session.id}>
       <button
         type="button"
         aria-labelledby={`${id}-title`}
-        aria-describedby={`${id}-state ${id}-meta`}
+        aria-describedby={untracks ? `${id}-state ${id}-meta ${id}-untracks` : `${id}-state ${id}-meta`}
         onClick={() => onSelect(session.id)}
         className="flex min-w-0 flex-1 items-start gap-2.5 rounded-xl py-1.5 pl-2.5 text-left"
       >
@@ -49,9 +57,14 @@ const TrackedRow = memo(function TrackedRow({
             <span aria-hidden="true">·</span>
             <span className="shrink-0">{age === "now" ? "just now" : `${age} ago`}</span>
           </span>
+          {untracks && (
+            <span id={`${id}-untracks`} data-testid="tracked-untracks" className="mt-0.5 block text-[11px] leading-4 text-muted-foreground/75">
+              {untracks}
+            </span>
+          )}
         </span>
         <span id={`${id}-state`} className="mt-0.5 shrink-0">
-          <TrackedStateBadge state={state} />
+          <TrackedStateBadge state={state} tasks={backgroundTaskCount(session)} />
         </span>
       </button>
       <TrackedRowMenu
@@ -81,6 +94,8 @@ export default function TrackedList({
   actions: TrackedRowActions;
 }) {
   const now = useNow(60_000);
+  const { settings } = useSettings();
+  const untrackAfterHours = (settings ?? defaultSettings).sessions.tracked.untrackAfterHours;
   if (groups.length === 0)
     return (
       <p id={id} className="px-4 py-4 text-xs leading-relaxed text-muted-foreground">
@@ -98,7 +113,7 @@ export default function TrackedList({
           </h3>
           <ul className="space-y-0.5">
             {group.rows.map((row) => (
-              <TrackedRow key={row.session.id} session={row.session} state={row.state} now={now} onSelect={onSelect} actions={actions} />
+              <TrackedRow key={row.session.id} session={row.session} state={row.state} now={now} untrackAfterHours={untrackAfterHours} onSelect={onSelect} actions={actions} />
             ))}
           </ul>
         </section>

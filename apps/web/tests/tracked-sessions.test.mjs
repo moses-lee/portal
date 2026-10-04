@@ -5,6 +5,7 @@ import {
   shortSessionId,
   trackedAttentionCount,
   trackedGroupOf,
+  trackedSortKey,
   trackedState,
   trackedStateLabels,
 } from "../src/lib/tracked-sessions.ts";
@@ -57,16 +58,18 @@ test("badge labels and groups", () => {
   assert.equal(trackedGroupOf("offline"), "stalled");
   assert.equal(trackedGroupOf("hung"), "stalled");
   assert.equal(trackedGroupOf("working"), "working");
-  assert.equal(trackedGroupOf("background"), "working");
+  assert.equal(trackedGroupOf("background"), "background");
+  assert.equal(trackedGroupOf("connecting"), "connecting");
+  assert.equal(trackedGroupOf("finished"), "finished");
 });
 
-test("background work after the turn is its own state, listed with working for now", () => {
+test("background work after the turn is its own state and its own group", () => {
   assert.equal(trackedState(session("a", { liveness: "background" })), "background");
   const groups = groupTracked([track("a")], [session("a", { liveness: "background" })]);
-  assert.deepEqual(groups.map((group) => [group.id, group.rows.map((row) => row.state)]), [["working", ["background"]]]);
+  assert.deepEqual(groups.map((group) => [group.id, group.label, group.rows.map((row) => row.state)]), [["background", "Background", ["background"]]]);
 });
 
-test("tracked sessions group in order, newest prompt first, skipping unknown ids", () => {
+test("tracked sessions group as approval, stalled, working, background, connecting, finished, skipping unknown ids", () => {
   const sessions = [
     session("working", { busy: true, lastActiveAt: 5 }),
     session("done-old", { lastActiveAt: 1 }),
@@ -74,21 +77,64 @@ test("tracked sessions group in order, newest prompt first, skipping unknown ids
     session("hung", { busy: true, liveness: "hung", lastActiveAt: 3 }),
     session("dead", { liveness: "dead", lastActiveAt: 4 }),
     session("approve", { awaitingPermission: true, lastActiveAt: 2 }),
+    session("bg", { liveness: "background", lastActiveAt: 6 }),
+    session("attach", { link: { status: "connecting" }, lastActiveAt: 7 }),
     session("untracked", { awaitingPermission: true }),
   ];
-  const tracked = ["working", "done-old", "done-new", "hung", "dead", "approve", "gone"].map((id) => track(id));
+  const tracked = ["working", "done-old", "done-new", "hung", "dead", "approve", "bg", "attach", "gone"].map((id) => track(id));
   const groups = groupTracked(tracked, sessions);
   assert.deepEqual(
     groups.map((group) => [group.id, group.label, group.rows.map((row) => `${row.session.id}:${row.state}`)]),
     [
       ["approval", "Needs approval", ["approve:approval"]],
-      ["finished", "Finished", ["done-new:finished", "done-old:finished"]],
-      ["working", "Working", ["working:working"]],
       ["stalled", "Offline or hung", ["dead:offline", "hung:hung"]],
+      ["working", "Working", ["working:working"]],
+      ["background", "Background", ["bg:background"]],
+      ["connecting", "Connecting", ["attach:connecting"]],
+      ["finished", "Finished", ["done-new:finished", "done-old:finished"]],
     ],
   );
   assert.equal(groups[0].rows[0].tracked.sessionId, "approve");
+});
+
+test("finished sessions sort by when their turn ended, falling back to the last prompt", () => {
+  const sessions = [
+    // Prompted last, but its turn ended first.
+    session("long-ago", { lastActiveAt: 50, turnEndedAt: 60 }),
+    session("just-ended", { lastActiveAt: 10, turnEndedAt: 100 }),
+    // No turn end recorded: its last prompt stands in.
+    session("legacy", { lastActiveAt: 80, turnEndedAt: null }),
+    session("older-legacy", { lastActiveAt: 20 }),
+  ];
+  const groups = groupTracked(sessions.map((s) => track(s.id)), sessions);
+  assert.deepEqual(groups.map((group) => group.id), ["finished"]);
+  assert.deepEqual(groups[0].rows.map((row) => row.session.id), ["just-ended", "legacy", "long-ago", "older-legacy"]);
+  assert.equal(trackedSortKey("finished", sessions[0]), 60);
+  assert.equal(trackedSortKey("working", sessions[0]), 50);
+});
+
+test("other groups keep the newest prompt first, whatever their turn ends say", () => {
+  const sessions = [
+    session("a", { busy: true, lastActiveAt: 1, turnEndedAt: 99 }),
+    session("b", { busy: true, lastActiveAt: 2, turnEndedAt: 0 }),
+  ];
+  const [working] = groupTracked(sessions.map((s) => track(s.id)), sessions);
+  assert.deepEqual(working.rows.map((row) => row.session.id), ["b", "a"]);
+});
+
+test("the attention badge counts approvals and stalled sessions, not finished ones", () => {
+  const sessions = [
+    session("approve", { awaitingPermission: true }),
+    session("hung", { busy: true, liveness: "hung" }),
+    session("dead", { liveness: "dead" }),
+    session("done", {}),
+    session("done-2", {}),
+    session("working", { busy: true }),
+    session("bg", { liveness: "background" }),
+  ];
+  const groups = groupTracked(sessions.map((s) => track(s.id)), sessions);
   assert.equal(trackedAttentionCount(groups), 3);
+  assert.equal(trackedAttentionCount(groupTracked([track("done")], sessions)), 0);
 });
 
 test("nothing tracked, nothing listed", () => {

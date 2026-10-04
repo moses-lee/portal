@@ -11,7 +11,7 @@ import { useSessionStream } from "../useSessionStream";
 import { sessionHistoryKey } from "@/lib/prompt-history";
 import { trackedState } from "@/lib/tracked-sessions";
 import type { SessionSummary } from "@/lib/types";
-import { TrackedRowMenu, TrackedStateBadge, trackedTitle, type TrackedRowActions } from "./parts";
+import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, type TrackedRowActions } from "./parts";
 
 /**
  * The panel's session mode: one session beside the Portal view, named by `?session=`. The same
@@ -74,7 +74,7 @@ export default function TrackedSessionView({
         <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium">
           {session ? trackedTitle(session) : "Conversation"}
         </h2>
-        {state && <TrackedStateBadge state={state} />}
+        {session && state && <TrackedStateBadge state={state} tasks={backgroundTaskCount(session)} />}
         <IconButton
           label="Open full page"
           onClick={() => actions.onOpenFullPage(sessionId)}
