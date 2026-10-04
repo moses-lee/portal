@@ -1,6 +1,6 @@
 # Session lifecycle: tracked clutter, worktree retention, rename, background work
 
-Date: 2026-10-04. Status: spec agreed with Moses, nothing built yet. Branch `fix-sessions` (single branch for the whole scope).
+Date: 2026-10-04. Status: built on `fix-sessions` the same day (steps 1 to 9), reviewed, live-checked on a scratch instance; merge to main waits for Moses. See "As built" at the end for where the code departs from the plan.
 
 ## Why
 
@@ -193,3 +193,21 @@ Commit per step as it lands green; merge to main waits for Moses. The live insta
 - Watching folder activity outside Portal.
 - Proactive background renaming by the orchestrator.
 - Session pins on the server.
+
+## As built (2026-10-04)
+
+Everything above landed. Where the code departs from the plan:
+
+- **SDK parser.** `onNotification` with a custom parser is not enough: SDK 1.5.0's client installs a session-update router in its constructor that rejects unknown `sessionUpdate` kinds before any handler runs. `lib/air-tasks.ts` renames `async_task_*` messages to a Portal-local method (`_portal/air_session_update`) on the way in; standard kinds still go through the SDK's schema.
+- **Background tasks** live on `SessionMeta`, the list `updated` patch and `SessionLiveness` as `{ id, title, taskType, startedAt, canStop }[]`, not on `SessionState`. Every announced task type blocks idle, not only `shell` (Claude also announces monitors, MCP tasks and workflows); revisit if a long monitor keeps a worktree alive. The stop route answers `{ stopped }` and 409 when the agent had nothing to stop. `deleteSession` asks the agent to stop its tasks first.
+- **Sweep safety.** Projects and sessions are re-read right before each removal and again after the pre-delete script; projects sharing one worktree folder (a root and a subfolder project) are judged and removed as a group; a failed keep that is not a dirty tree is not retried until the project's clock moves; an unreadable `git status` keeps the project; the sweep aborts between projects on shutdown. A project held only by an open terminal shows "kept: open terminal". A worktree project whose folder is already gone is removed from the list (git prunes the registration; the branch is left alone unless merged).
+- **Restores restart the clock.** `projects.revived_at` (added to migration 0013) floors the project clock, so a worktree restored from Removed is not swept again five minutes later.
+- **Untrack clock** is `max(idle_since, tracked_at)`, so tracking an old finished session gives the full window from that moment. Idle untracks log as `system`.
+- **Boot.** A turn cut off by a restart is dated from its last stored event, not the boot time; migration 0013 does not backfill rows with an open turn. Nothing on `session/resume` says whether the agent is still busy; the clock reopens when a background task is announced.
+- **Rename** answers the full session JSON (the same as GET). `setTitle` rejects when the write fails. A user rename holds against the agent's next `session_info_update` (verified with Codex live).
+- **Pins.** Re-pinning keeps the original `pinnedAt`. There is no project event stream, so pin and `keptReason` changes reach other browsers on their next project refetch.
+- **Web.** The Needs-you strip renders nothing at zero items. The session header reads liveness and task titles from the list entry (the per-session `meta` event carries neither). The lifecycle hour inputs are text fields with numeric input mode so a browser-unparsable value cannot silently save the default.
+- **Settings fix on the side.** Stored `orchestrator.stalls.hungAfterMinutes` and `orchestrator.reviews.answerReadOnly` were dropped on every Postgres read before this branch; the parser now keeps them.
+
+Live check (scratch server on a cloned database with every real path rewritten): Claude and Codex sessions both reported `background` with their shell task while the turn was over and flipped to finished when it ended; the user rename held against Codex's own title; the orchestrator renamed a Portal-titled session and refused a user-titled one; with both clocks at 1 hour the sweep untracked 26 sessions, removed the clean worktree (pre-delete script ran, merged branch deleted), kept the dirty one with "uncommitted changes" logged once, and left the one with a running background task alone; a second sweep changed nothing; the purge deleted 191 removed sessions and dropped their records.
+

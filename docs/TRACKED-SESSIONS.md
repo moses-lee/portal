@@ -31,7 +31,7 @@ This spec adds an explicit "tracked sessions" set, shared by Moses and the orche
 | 14 | Session view reuse | Extract `SessionPane` logic into a `useSessionStream` hook shared by the full page and the panel. |
 | 15 | Connections | A fourth SSE stream per tab is accepted for now. |
 | 16 | Perf follow-up | Fix the orchestrator thread's memoization problem from the 2026-09-27 audit on this branch. |
-| 17 | Turn-end age | Not added. Rows show the age since the last prompt (`lastActiveAt`). Revisit if the approximation annoys. |
+| 17 | Turn-end age | Revisited in `SESSION-LIFECYCLE.md` (2026-10-04): finished rows now sort by `turnEndedAt` and show when they untrack; the group order is approval, stalled, working, background, connecting, finished. |
 
 ## Server
 
