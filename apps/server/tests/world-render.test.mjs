@@ -179,6 +179,21 @@ test("session lines say what the agent is doing, from its liveness; stalls come 
   assert.match(text, /"Done" \[idle-001\] .* · idle · last prompt 5m ago/);
 });
 
+test("a turn that ended with background tasks running is listed as working, after the turns still open", () => {
+  const text = renderWorld(world({
+    projects: [worldProject()],
+    sessions: [
+      worldSession({ id: "back-001", title: "Dev server", activity: "working", liveness: "background", status: "2 background tasks running", lastActiveAt: T0 - 10 * MIN }),
+      worldSession({ id: "busy-001", title: "Bazel run", activity: "working", liveness: "busy", status: "running tool: bazel test //... for 45m", lastActiveAt: T0 - 39 * MIN }),
+      worldSession({ id: "idle-001", title: "Done", liveness: "idle", status: "idle" }),
+    ],
+  }));
+  const active = text.slice(text.indexOf("Sessions needing you or working:"), text.indexOf("Recent sessions:"));
+  assert.match(active, /"Dev server" \[back-001\] in app \[p1\] · Claude Code · turn ended, 2 background tasks running · last prompt 10m ago/);
+  assert.ok(active.indexOf("Bazel run") < active.indexOf("Dev server"), active);
+  assert.doesNotMatch(active, /Done/);
+});
+
 test("a scope stored with an id prefix still finds its rows in focus, and a missing id says so without implying a deletion", () => {
   const input = world({
     projects: [worldProject({ id: "9b1d4e7a-5c6d-4e7f-8a9b-000000000001", name: "portal" })],

@@ -322,7 +322,7 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
   assert.equal(snapshot.data.type, "snapshot");
   assert.deepEqual(snapshot.data.sessions, [{
     id: existing.id, busy: false, awaitingPermission: false, link: { status: "live" }, title: null, titleSource: "prompt",
-    lastActiveAt: existing.lastActiveAt, idleSince: existing.createdAt, turnEndedAt: null, liveness: "idle",
+    lastActiveAt: existing.lastActiveAt, idleSince: existing.createdAt, turnEndedAt: null, backgroundTasks: [], liveness: "idle",
   }]);
   assert.equal(presence.count(), before + 1);
 
@@ -567,4 +567,44 @@ test("GET /api/sessions/:id/events pages by turns, and images a tool returned ar
   for (const bad of ["/api/blobs/../../etc/passwd", `/api/blobs/${"0".repeat(64)}.png`, "/api/blobs/x.png"]) {
     assert.equal((await app.inject({ method: "GET", url: bad })).statusCode, 404, bad);
   }
+});
+
+test("stopping a background task forwards the agent's stop request; unknown sessions and tasks are 404", async (t) => {
+  const { app, messages } = await setup(t);
+  const session = await createSession(app);
+  const detail = async () => (await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })).json();
+  const prompted = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/prompt`, payload: { text: "background" } });
+  assert.equal(prompted.statusCode, 202, prompted.body);
+  await until(async () => (await detail()).backgroundTasks.length === 1, "the background task");
+  const read = await detail();
+  assert.equal(read.liveness.state, "background");
+  assert.deepEqual(read.backgroundTasks.map(({ id, title, canStop }) => ({ id, title, canStop })), [{ id: "task-1", title: "sleep 30", canStop: true }]);
+  const listed = (await app.inject({ method: "GET", url: "/api/sessions" })).json().sessions.find(({ id }) => id === session.id);
+  assert.equal(listed.backgroundTasks.length, 1);
+  assert.equal(listed.liveness, "background");
+
+  const stop = (id, taskId, headers) => app.inject({ method: "POST", url: `/api/sessions/${id}/tasks/${taskId}/stop`, headers });
+  assert.equal((await stop(session.id, "task-1", EVIL)).statusCode, 403);
+  const unknownSession = await stop("nope", "task-1");
+  assert.equal(unknownSession.statusCode, 404);
+  assert.match(unknownSession.json().error, /no such session/i);
+  const unknownTask = await stop(session.id, "task-9");
+  assert.equal(unknownTask.statusCode, 404);
+  assert.match(unknownTask.json().error, /no such background task/i);
+  assert.equal(messages("_session/async_task/stop").length, 0, "nothing reaches the agent for a refused stop");
+
+  const stopped = await stop(session.id, "task-1");
+  assert.equal(stopped.statusCode, 200, stopped.body);
+  assert.deepEqual(stopped.json(), { ok: true });
+  const [sent] = messages("_session/async_task/stop");
+  assert.equal(sent.message.params.asyncTaskId, "task-1");
+  assert.equal(typeof sent.message.params.sessionId, "string");
+  assert.notEqual(sent.message.params.sessionId, session.id, "the agent's own session id, not Portal's");
+  await until(async () => (await detail()).backgroundTasks.length === 0, "the task to end");
+  assert.equal((await detail()).liveness.state, "idle");
+  const logged = (await events(app, session.id)).events.filter((event) => event.type === "update" && event.update.sessionUpdate.startsWith("async_task"));
+  assert.deepEqual(logged.map(({ update }) => [update.sessionUpdate, update.title, update.state ?? null]), [
+    ["async_task_spawned", "sleep 30", null],
+    ["async_task_state_update", "sleep 30", "stopped"],
+  ]);
 });

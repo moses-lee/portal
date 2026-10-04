@@ -527,6 +527,27 @@ test("snapshotActivity treats a quietly offline session as idle and a lost agent
   assert.equal(snapshotActivity({ ...base, busy: true, link: { status: "live" } }), "working");
   assert.equal(snapshotActivity({ ...base, awaitingPermission: true, link: { status: "live" } }), "waiting");
   assert.equal(snapshotActivity({ ...base, link: { status: "connecting" } }), "connecting");
+  // Background tasks past the turn keep it working; a hung turn stays working by `busy`, not by liveness.
+  assert.equal(snapshotActivity({ ...base, link: { status: "live" }, liveness: liveness("background", "1 background task running") }), "working");
+  assert.equal(snapshotActivity({ ...base, busy: true, link: { status: "live" }, liveness: liveness("hung") }), "working");
+  assert.equal(snapshotActivity({ ...base, link: { status: "live" }, liveness: liveness("idle") }), "idle");
+});
+
+test("a turn that ends with background tasks running finishes only when the tasks end", async () => {
+  const task = { id: "task-1", title: "sleep 300", startedAt: T0 - 10_000, canStop: true };
+  const read = async (meta, previous, now) => {
+    const { deps } = fakeDeps({ sessions: [meta], events: { s1: [{ type: "turn_start", seq: 0, ts: 0 }, { type: "turn_end", stopReason: "end_turn", seq: 1, ts: 0 }] } });
+    return collectSnapshot({ deps, previous, now, log: [] });
+  };
+  const turn = await read(sessionMeta({ busy: true, liveness: liveness("busy", "working for 1m") }), null, T0);
+  const background = await read(
+    sessionMeta({ liveness: liveness("background", "1 background task running", { backgroundTasks: [task] }), backgroundTasks: [task] }), turn, T0 + 1_000,
+  );
+  assert.equal(background.sessions.s1.activity, "working");
+  assert.equal(background.sessions.s1.liveness, "background");
+  assert.deepEqual(diffSnapshots(turn, background, []), [], "the turn ended, but the session is not finished");
+  const done = await read(sessionMeta({ liveness: liveness("idle") }), background, T0 + 2_000);
+  assert.deepEqual(kinds(diffSnapshots(background, done, [])), ["session_finished"]);
 });
 
 test("the diff sees snoozed items too: a snoozed item whose condition cleared is named for resolving", async () => {

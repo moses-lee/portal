@@ -149,6 +149,7 @@ export function makeSession(
     titleSource: "prompt",
     idleSince: now - 3600000,
     turnEndedAt: now - 3600000,
+    backgroundTasks: [],
     cwd: p.path,
     displayCwd: p.displayPath,
     cwdMissing: false,

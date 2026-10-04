@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createAcpRuntime, toMeta } from "../src/lib/acp-runtime.ts";
 import { createBlobStore } from "../src/lib/blobs.ts";
+import { readProcessTable } from "../src/lib/process-probe.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/store.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
@@ -306,6 +310,8 @@ test("initialize advertises boolean config options and session/new state is capt
   const session = await runtime.createSession(cwd, "claude");
   assert.deepEqual(messages("claude", "initialize")[0].message.params.clientCapabilities, {
     session: { configOptions: { boolean: {} } },
+    // JetBrains' AIR extension: the adapters report background tasks only to a client that asks.
+    _meta: { jetbrains: { air: { version: 1, capabilities: ["asyncTasks"] } } },
   });
   assert.deepEqual(session.state.modes, {
     currentModeId: "default",
@@ -883,7 +889,7 @@ test("list subscribers hear sessions being created, working, waiting on permissi
   await until(() => !session.busy, "cancellation");
   assert.deepEqual(patches().at(-1), {
     busy: false, awaitingPermission: false, link: { status: "live" }, title: "hold", titleSource: "prompt", lastActiveAt: session.lastActiveAt,
-    idleSince: session.idleSince, turnEndedAt: session.turnEndedAt, liveness: "idle",
+    idleSince: session.idleSince, turnEndedAt: session.turnEndedAt, backgroundTasks: [], liveness: "idle",
   });
   assert.equal(typeof session.idleSince, "number");
   assert.equal(typeof session.turnEndedAt, "number");
@@ -1401,6 +1407,154 @@ test("shutdown leaves the idle clock of a running turn alone, so the restart clo
   const row = await first.store.getSession(session.id);
   assert.equal(row.turnOpen, true);
   assert.equal(row.idleSince, null);
+});
+
+/** The `update` events of the AIR task kinds, as logged. */
+const taskUpdates = (events) => events.filter((event) => event.type === "update" && event.update.sessionUpdate.startsWith("async_task")).map(({ update }) => update);
+
+test("a task the turn leaves running reads as background until the agent ends it; its start and end are logged", async (t) => {
+  const { runtime, cwd, store } = await persistentSetup(t);
+  const changes = [];
+  runtime.onSessionsChange((change) => changes.push(change));
+  const patches = () => changes.filter(({ type }) => type === "updated").map(({ patch }) => patch);
+  const session = await runtime.createSession(cwd, "claude");
+
+  await runtime.sendPrompt(session.id, "background");
+  await until(() => session.backgroundTasks.size === 1, "the background task");
+  assert.equal(session.busy, false);
+  let meta = toMeta(session);
+  assert.equal(meta.liveness.state, "background");
+  assert.equal(meta.liveness.summary, "1 background task running");
+  assert.equal(meta.liveness.turnOpen, false);
+  assert.deepEqual(meta.backgroundTasks.map(({ id, title, canStop }) => ({ id, title, canStop })), [{ id: "task-1", title: "sleep 30", canStop: true }]);
+  assert.ok(meta.backgroundTasks[0].startedAt >= session.turnEndedAt);
+  assert.deepEqual(meta.liveness.backgroundTasks, meta.backgroundTasks);
+  // Not idle while it runs: in memory, on disk, and in the list patch, which carries the tasks.
+  assert.equal(session.idleSince, null);
+  assert.equal((await persisted(store, session)).idleSince, null);
+  assert.equal(patches().at(-1).liveness, "background");
+  assert.equal(patches().at(-1).idleSince, null);
+  assert.deepEqual(patches().at(-1).backgroundTasks, meta.backgroundTasks);
+  assert.equal(runtime.listSessions()[0].backgroundTasks.length, 1);
+
+  // Progress and a non-final state change nothing (and are not logged); a new turn does not clear the task.
+  await runtime.sendPrompt(session.id, "background");
+  await until(() => session.backgroundTasks.size === 2, "the second task");
+  await until(() => !session.busy, "the second turn");
+  meta = toMeta(session);
+  assert.equal(meta.liveness.summary, "2 background tasks running");
+  assert.deepEqual(meta.backgroundTasks.map(({ id }) => id), ["task-1", "task-2"]);
+
+  // The agent ends them (the fixture does on the next set_mode): idle from then, announced.
+  await runtime.setMode(session.id, "plan");
+  await until(() => session.backgroundTasks.size === 0, "the tasks to finish");
+  meta = toMeta(session);
+  assert.equal(meta.liveness.state, "idle");
+  assert.deepEqual(meta.backgroundTasks, []);
+  assert.ok(session.idleSince >= session.turnEndedAt);
+  assert.equal(patches().at(-1).liveness, "idle");
+  assert.deepEqual(patches().at(-1).backgroundTasks, []);
+  assert.equal(patches().at(-1).idleSince, session.idleSince);
+  assert.equal((await persisted(store, session)).idleSince, session.idleSince);
+
+  const expected = [
+    { sessionUpdate: "async_task_spawned", asyncTaskId: "task-1", title: "sleep 30", taskType: "shell", toolCallId: "call-bg-1" },
+    { sessionUpdate: "async_task_spawned", asyncTaskId: "task-2", title: "sleep 30", taskType: "shell", toolCallId: "call-bg-2" },
+    { sessionUpdate: "async_task_state_update", asyncTaskId: "task-1", title: "sleep 30", state: "completed", summary: "exited 0" },
+    { sessionUpdate: "async_task_state_update", asyncTaskId: "task-2", title: "sleep 30", state: "completed", summary: "exited 0" },
+  ];
+  assert.deepEqual(taskUpdates(session.events), expected);
+  assert.deepEqual(taskUpdates((await runtime.readEvents(session.id, { limit: 100 })).events), expected, "and on disk");
+});
+
+test("stopping a task asks the agent; unknown tasks are refused; a lost agent or a delete ends the tasks", async (t) => {
+  const { runtime, cwd, messages } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "background");
+  await until(() => session.backgroundTasks.size === 1, "the background task");
+
+  await assert.rejects(runtime.stopBackgroundTask(session.id, "task-9"), /No such background task/);
+  await assert.rejects(runtime.stopBackgroundTask("nope", "task-1"), /No such session/);
+  assert.equal(messages("claude", "_session/async_task/stop").length, 0);
+  assert.equal(await runtime.stopBackgroundTask(session.id, "task-1"), true);
+  assert.deepEqual(messages("claude", "_session/async_task/stop").map(({ message }) => message.params), [{ sessionId: session.upstreamId, asyncTaskId: "task-1" }]);
+  await until(() => session.backgroundTasks.size === 0, "the stopped task");
+  assert.deepEqual(taskUpdates(session.events).at(-1), { sessionUpdate: "async_task_state_update", asyncTaskId: "task-1", title: "sleep 30", state: "stopped" });
+  assert.equal(toMeta(session).liveness.state, "idle");
+
+  // The agent process exits: its tasks went with it.
+  await runtime.sendPrompt(session.id, "background");
+  await until(() => session.backgroundTasks.size === 1, "another task");
+  await runtime.sendPrompt(session.id, "exit");
+  await until(() => session.link.status === "offline", "the agent gone");
+  assert.equal(session.backgroundTasks.size, 0);
+  assert.deepEqual(toMeta(session).backgroundTasks, []);
+  assert.equal(toMeta(session).liveness.state, "dead");
+  assert.equal(typeof session.idleSince, "number");
+
+  // A deleted session's tasks are forgotten too.
+  const other = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(other.id, "background");
+  await until(() => other.backgroundTasks.size === 1, "a task on the other session");
+  assert.equal(await runtime.deleteSession(other.id), true);
+  assert.equal(other.backgroundTasks.size, 0);
+});
+
+test("between turns the probe samples sessions with background tasks and lists their processes", { skip: process.platform === "win32" }, async (t) => {
+  const { spawnRuntime, cwd } = setup(t);
+  let reads = 0;
+  const runtime = spawnRuntime({ probeEveryMs: 25, readProcesses: () => { reads++; return readProcessTable(); } });
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "finish-tool");
+  await until(() => !session.busy, "a plain turn");
+  const quiet = reads;
+  await delay(100);
+  assert.equal(reads, quiet, "an idle session is not probed");
+
+  await runtime.sendPrompt(session.id, "background");
+  await until(() => session.backgroundTasks.size === 1, "the background task");
+  await until(() => toMeta(session).liveness.process?.children.some((child) => child.command.startsWith("sleep 30")), "the task's shell in the probe");
+  const liveness = toMeta(session).liveness;
+  assert.equal(liveness.state, "background");
+  assert.equal(liveness.turnOpen, false);
+  assert.equal(liveness.process.alive, true);
+  assert.equal(liveness.process.scope, "session");
+
+  await runtime.setMode(session.id, "plan");
+  await until(() => session.backgroundTasks.size === 0, "the task to finish");
+  assert.equal(toMeta(session).liveness.process, null, "the probe is reset once nothing runs");
+  const after = reads;
+  await delay(100);
+  assert.equal(reads, after, "nothing is probed once the tasks ended");
+});
+
+test("the fake agent announces background tasks only to a client that advertised AIR asyncTasks, like the adapters", async (t) => {
+  const { cwd } = setup(t);
+  /** One "background" turn over raw stdio; returns the update kinds the agent sent. */
+  const backgroundTurn = async (clientCapabilities) => {
+    const child = spawn(process.execPath, [fixturePath, "claude", path.join(cwd, "agent.jsonl"), path.join(cwd, "config.json")], { stdio: ["pipe", "pipe", "inherit"] });
+    const received = [];
+    createInterface({ input: child.stdout }).on("line", (line) => received.push(JSON.parse(line)));
+    const send = (message) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+    const answered = (id) => until(() => received.some((message) => message.id === id), `response ${id}`);
+    send({ id: 1, method: "initialize", params: { protocolVersion: 1, clientCapabilities } });
+    send({ id: 2, method: "session/new", params: { cwd, mcpServers: [] } });
+    await answered(2);
+    const { sessionId } = received.find((message) => message.id === 2).result;
+    send({ id: 3, method: "session/prompt", params: { sessionId, prompt: [{ type: "text", text: "background" }] } });
+    await answered(3);
+    // The task ends on set_mode; then the agent is let go.
+    send({ id: 4, method: "session/set_mode", params: { sessionId, modeId: "plan" } });
+    await answered(4);
+    child.stdin.end();
+    await once(child, "exit");
+    return received.filter((message) => message.method === "session/update").map((message) => message.params.update.sessionUpdate);
+  };
+  const plain = await backgroundTurn({ session: { configOptions: { boolean: {} } } });
+  assert.ok(plain.includes("tool_call"));
+  assert.deepEqual(plain.filter((kind) => kind.startsWith("async_task")), []);
+  const air = await backgroundTurn({ _meta: { jetbrains: { air: { version: 1, capabilities: ["asyncTasks"] } } } });
+  assert.deepEqual(air.filter((kind) => kind.startsWith("async_task")), ["async_task_spawned", "async_task_progress", "async_task_state_update", "async_task_state_update"]);
 });
 
 test("the agent's title replaces the prompt's but never one the user or Portal set", async (t) => {

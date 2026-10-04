@@ -3,7 +3,7 @@ import { z } from "zod";
 import { displayPath } from "../../lib/git-info.ts";
 import { type Block, reduce, segment } from "@portal/shared/transcript";
 import { isStall } from "../../lib/liveness.ts";
-import { SESSION_TITLE_MAX, type SessionLiveness, type SessionMeta, type SessionState } from "../../lib/types.ts";
+import { SESSION_TITLE_MAX, type LivenessState, type SessionLiveness, type SessionMeta, type SessionState } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
 import type { DomainToolContext } from "../hub.ts";
 import { lastTurnEnd, snapshotActivity } from "../digest.ts";
@@ -27,7 +27,7 @@ export const STOP_WAIT_SECONDS = 30;
 /** Events read to find how the last turn ended; its end is the last event of the turn. */
 const TURN_END_WINDOW = 20;
 
-const livenessStates = ["dead", "blocked", "busy", "hung", "idle"] as const;
+const livenessStates = ["dead", "blocked", "busy", "hung", "background", "idle"] as const satisfies readonly LivenessState[];
 
 /** A session as the list tools answer it (list_sessions, list_tracked_sessions, ...). */
 export function sessionRow(meta: SessionMeta) {
@@ -65,6 +65,8 @@ export function livenessDetail(liveness: SessionLiveness, now = Date.now()) {
     } : null,
     lost: lost ? { reason: lost.reason, detail: lost.detail, secondsAgo: secondsSince(lost.at, now), exitCode: lost.exitCode ?? null, signal: lost.signal ?? null } : null,
     hungAfterMinutes: Math.round(liveness.hungAfterMs / 60_000),
+    // Liveness from before background tasks were tracked has none.
+    backgroundTasks: (liveness.backgroundTasks ?? []).map((task) => ({ id: task.id, title: task.title, runningForSeconds: secondsSince(task.startedAt, now) })),
   };
 }
 
@@ -111,7 +113,7 @@ export function sessionTools(ctx: ToolContext) {
   const full = async (id: string) => (await requireSession(deps, id)).id;
   return {
     list_sessions: define(
-      "Sessions (conversations with a coding agent), most recently prompted first. Filter by project, activity (idle, working, waiting on a permission, connecting, error), or liveness: dead (agent process or connection gone), blocked (on a permission), busy (turn open and moving), hung (turn open, no CPU and no output for a while), idle. Only dead and hung are stalls; lastActiveAt is when the user last prompted, not when the agent last did anything.",
+      "Sessions (conversations with a coding agent), most recently prompted first. Filter by project, activity (idle, working, waiting on a permission, connecting, error), or liveness: dead (agent process or connection gone), blocked (on a permission), busy (turn open and moving), hung (turn open, no CPU and no output for a while), background (turn ended, background tasks such as a backgrounded shell still running), idle. Only dead and hung are stalls; lastActiveAt is when the user last prompted, not when the agent last did anything.",
       z.object({
         projectId: z.string().optional(),
         status: z.enum(["idle", "working", "waiting", "connecting", "error"]).optional(),
@@ -131,18 +133,18 @@ export function sessionTools(ctx: ToolContext) {
       },
     ),
     list_active_sessions: define(
-      "Sessions with a turn open right now: busy, blocked on a permission, or hung.",
+      "Sessions at work right now: a turn open (busy, blocked on a permission, or hung), or the turn ended with background tasks still running (background).",
       z.object({}),
       async () => {
         const active = (await deps.sessions.list()).filter((meta) => (meta.liveness
-          ? ["busy", "blocked", "hung"].includes(meta.liveness.state)
+          ? ["busy", "blocked", "hung", "background"].includes(meta.liveness.state)
           : ["working", "waiting"].includes(snapshotActivity(meta))));
         const { rows, truncated } = capped(active);
         return { sessions: rows.map(sessionRow), truncated };
       },
     ),
     get_session: define(
-      "One session: agent, project, folder, activity, connection, current mode, and liveness: the state (dead, blocked, busy, hung, idle; only dead and hung are stalls), the tool calls still running and for how long, the agent's process (alive, the child processes the turn started with their commands and run times, CPU over the last minutes), seconds since the last output and CPU, and why the agent was lost.",
+      "One session: agent, project, folder, activity, connection, current mode, and liveness: the state (dead, blocked, busy, hung, background, idle; only dead and hung are stalls), the tool calls still running and for how long, the background tasks still running past the turn, the agent's process (alive, the child processes the turn started with their commands and run times, CPU over the last minutes), seconds since the last output and CPU, and why the agent was lost.",
       z.object({ sessionId }),
       async ({ sessionId }) => {
         const meta = await requireSession(deps, sessionId);

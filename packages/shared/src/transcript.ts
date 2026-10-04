@@ -5,7 +5,7 @@
  * streamed event updates only the block it touches, as a new object, so memoised renderers of the
  * other blocks are left alone and a long turn costs the same per event at its end as at its start.
  */
-import type { PermissionOption, SessionUpdate, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PermissionOption, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { StoredEvent, PermissionAnswerer } from "@portal/contracts/types";
 
 export type PermissionResponse =
@@ -116,7 +116,8 @@ export function createTurnReducer(): TurnReducer {
       case "turn_start":
         return false;
       case "update": {
-        const u: SessionUpdate = ev.update;
+        // Background task starts and ends (`async_task_*`) are logged here too; they add no block yet.
+        const u = ev.update;
         switch (u.sessionUpdate) {
           case "agent_message_chunk":
             if (u.content.type !== "text") return false;

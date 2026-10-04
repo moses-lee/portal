@@ -319,7 +319,7 @@ export type TickSnapshot = {
     /** Set when the session went idle since the previous snapshot because its turn was cancelled. */
     stopped?: true;
     /** The derived liveness state (see `SessionLiveness`). Absent in snapshots from before this field. */
-    liveness?: "dead" | "blocked" | "busy" | "hung" | "idle";
+    liveness?: "dead" | "blocked" | "busy" | "hung" | "background" | "idle";
     /** For a dead or hung session, what its liveness summary said (why the agent was lost, or how long it has been quiet). */
     stall?: string;
   }>;
