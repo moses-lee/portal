@@ -606,6 +606,10 @@ test("session tools report liveness: rows carry the state and its line, get_sess
     sessionMeta({ id: "s1", busy: true, liveness: liveness("busy", "stale line") }),
     sessionMeta({ id: "s2", busy: true, liveness: liveness("hung", "hung: no CPU or output for 20m") }),
     sessionMeta({ id: "s3", liveness: liveness("idle") }),
+    sessionMeta({
+      id: "s4",
+      liveness: liveness("background", "1 background task running", { backgroundTasks: [{ id: "task-1", title: "npm run dev", startedAt: now - 120_000, canStop: true }] }),
+    }),
   ];
   const { tools, deps } = setup({ sessions });
   const probed = [];
@@ -634,7 +638,13 @@ test("session tools report liveness: rows carry the state and its line, get_sess
   assert.deepEqual(hung.sessions.map((row) => [row.id, row.liveness, row.status]), [["s2", "hung", "hung: no CPU or output for 20m"]]);
   assert.equal((await run(tools.list_sessions, { liveness: "asleep" })).invalidInput, true);
   const active = await run(tools.list_active_sessions, {});
-  assert.deepEqual(active.sessions.map((row) => row.id).sort(), ["s1", "s2"]);
+  assert.deepEqual(active.sessions.map((row) => row.id).sort(), ["s1", "s2", "s4"], "a turn that ended with background tasks running is still at work");
+  const background = await run(tools.get_session, { sessionId: "s4" });
+  assert.equal(background.activity, "working");
+  assert.equal(background.liveness.state, "background");
+  assert.equal(background.liveness.stall, false);
+  assert.deepEqual(background.liveness.backgroundTasks, [{ id: "task-1", title: "npm run dev", runningForSeconds: 120 }]);
+  assert.deepEqual((await run(tools.list_sessions, { liveness: "background" })).sessions.map((row) => row.id), ["s4"]);
 });
 
 // ---------------------------------------------------------------------------------------------

@@ -156,6 +156,25 @@ test("dead, blocked, and idle", () => {
   assert.equal(deriveLiveness({ ...base, link: "connecting", turnOpen: false }).state, "busy");
 });
 
+test("background tasks past the turn read as background, never as a stall; an open turn or a prompt still comes first", () => {
+  const task = (id, title, startedAt) => ({ id, title, startedAt, canStop: true });
+  const between = { ...base, turnOpen: false, turnStartedAt: null, openTools: [], now: T0 + 5 * 60 * MIN, probe: probed({ lastCpuAt: T0 }) };
+  const one = deriveLiveness({ ...between, backgroundTasks: [task("t1", "npm run dev", T0)] });
+  assert.equal(one.state, "background");
+  assert.equal(one.summary, "1 background task running");
+  assert.deepEqual(one.backgroundTasks.map(({ title }) => title), ["npm run dev"]);
+  assert.equal(isStall(one.state), false);
+  const two = deriveLiveness({ ...between, backgroundTasks: [task("t1", "npm run dev", T0), task("t2", "sleep 300", T0 + MIN)] });
+  assert.equal(two.summary, "2 background tasks running");
+  // An open turn, a permission prompt, and a dead agent all say more than the tasks do.
+  assert.equal(deriveLiveness({ ...base, backgroundTasks: [task("t1", "x", T0)] }).state, "busy");
+  assert.equal(deriveLiveness({ ...between, awaitingPermission: true, backgroundTasks: [task("t1", "x", T0)] }).state, "blocked");
+  assert.equal(deriveLiveness({ ...between, probe: probed({ alive: false }), backgroundTasks: [task("t1", "x", T0)] }).state, "dead");
+  // None, or none given: idle.
+  assert.equal(deriveLiveness({ ...between, backgroundTasks: [] }).state, "idle");
+  assert.deepEqual(deriveLiveness(between).backgroundTasks, []);
+});
+
 test("durations read the way a person would say them", () => {
   assert.equal(formatDuration(45_000), "45s");
   assert.equal(formatDuration(39 * MIN), "39m");

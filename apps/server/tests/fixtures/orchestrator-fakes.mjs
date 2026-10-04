@@ -24,7 +24,7 @@ export function sessionMeta(overrides = {}) {
 export function liveness(state, summary = state, overrides = {}) {
   return {
     state, summary, turnOpen: state === "busy" || state === "hung" || state === "blocked", turnStartedAt: null, openTools: [],
-    lastOutputAt: null, lastCpuAt: null, process: null, lost: null, hungAfterMs: 15 * 60_000, ...overrides,
+    lastOutputAt: null, lastCpuAt: null, process: null, lost: null, hungAfterMs: 15 * 60_000, backgroundTasks: [], ...overrides,
   };
 }
 

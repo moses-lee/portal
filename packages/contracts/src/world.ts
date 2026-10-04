@@ -41,7 +41,7 @@ export type WorldSession = {
   createdAt: number;
   /** When the user last prompted it (or it was created); not when the agent last did anything. */
   lastActiveAt: number;
-  /** Whether the agent is dead, blocked, busy, hung, or idle, and a line saying so ("running tool: bazel test for 45m"). Absent in worlds from before this field. */
+  /** Whether the agent is dead, blocked, busy, hung, running background tasks, or idle, and a line saying so ("running tool: bazel test for 45m"). Absent in worlds from before this field. */
   liveness?: LivenessState;
   status?: string;
 };

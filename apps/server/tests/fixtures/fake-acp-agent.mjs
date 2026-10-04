@@ -17,9 +17,35 @@ const children = new Map();
 const killGroup = (child) => {
   try { if (child) process.kill(-child.pid, "SIGKILL"); } catch {}
 };
-process.on("exit", () => { for (const child of children.values()) killGroup(child); });
+/**
+ * Background tasks a "background" prompt left running, by task id: `{ sessionId, child, title }`.
+ * Announced over AIR only to a client that advertised `asyncTasks`, as the real adapters do.
+ */
+const backgroundTasks = new Map();
+process.on("exit", () => {
+  for (const child of children.values()) killGroup(child);
+  for (const task of backgroundTasks.values()) killGroup(task.child);
+});
 let sessionCount = 0;
 let permissionCount = 0;
+let taskCount = 0;
+/** Whether the client advertised AIR `asyncTasks` at initialize (the adapters' `clientSupportsAirCapability`). */
+let airTasks = false;
+
+function supportsAirTasks(capabilities) {
+  const air = capabilities?._meta?.jetbrains?.air;
+  return Number.isInteger(air?.version) && air.version >= 1 && Array.isArray(air.capabilities) && air.capabilities.includes("asyncTasks");
+}
+
+/** End a background task: its process goes, and an AIR client hears the terminal state. */
+function finishTask(taskId, state) {
+  const task = backgroundTasks.get(taskId);
+  if (!task) return false;
+  backgroundTasks.delete(taskId);
+  killGroup(task.child);
+  if (airTasks) update(task.sessionId, { sessionUpdate: "async_task_state_update", asyncTaskId: taskId, state, ...(state === "completed" ? { summary: "exited 0" } : {}) });
+  return true;
+}
 
 const COMMANDS = [
   { name: "help", description: "Show help" },
@@ -67,6 +93,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const { id, method, params } = message;
 
   if (method === "initialize") {
+    airTasks = supportsAirTasks(params.clientCapabilities);
     if (mode() === "hang") return;
     if (mode() === "error") {
       send({ id, error: { code: -32603, message: "Fixture initialization failed" } });
@@ -145,6 +172,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (talkers.delete(params.sessionId)) {
       update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "still here" } });
     }
+    // The session's background tasks finish (the test's signal, like the talkers').
+    for (const [taskId, task] of backgroundTasks) if (task.sessionId === params.sessionId) finishTask(taskId, "completed");
     respond(id, {});
     update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.modeId });
   } else if (method === "session/prompt") {
@@ -209,6 +238,29 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       respond(id, { stopReason: "end_turn" });
       return;
     }
+    if (text === "background") {
+      // A shell backgrounded by the turn, as Claude Code's Bash with run_in_background does: the turn
+      // ends at once, the shell keeps running below the session's process, and an AIR client hears
+      // of it after the turn ended, with a progress report, until it finishes (on the next set_mode)
+      // or is stopped (`_session/async_task/stop`).
+      const taskId = `task-${++taskCount}`;
+      const toolCallId = `call-bg-${taskCount}`;
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId, title: "sleep 30", kind: "execute", status: "pending" });
+      const child = spawn("sh", ["-c", `sleep 30; : ${params.sessionId}`], { stdio: "ignore", detached: true });
+      log({ event: "child", childPid: child.pid, taskId });
+      backgroundTasks.set(taskId, { sessionId: params.sessionId, child });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId, status: "completed", content: [{ type: "content", content: { type: "text", text: `Command running in background with ID: ${taskId}.` } }] });
+      respond(id, { stopReason: "end_turn" });
+      if (airTasks) {
+        update(params.sessionId, {
+          sessionUpdate: "async_task_spawned", asyncTaskId: taskId, name: "sleep 30", taskType: "shell", description: "sleep 30",
+          showInTranscript: false, canStop: true, toolCallId,
+        });
+        update(params.sessionId, { sessionUpdate: "async_task_progress", asyncTaskId: taskId, description: "still sleeping" });
+        update(params.sessionId, { sessionUpdate: "async_task_state_update", asyncTaskId: taskId, state: "running" });
+      }
+      return;
+    }
     if (text === "ask-on-mode") {
       askers.add(params.sessionId);
       respond(id, { stopReason: "end_turn" });
@@ -242,6 +294,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ],
       },
     });
+  } else if (method === "_session/async_task/stop") {
+    const task = backgroundTasks.get(params.asyncTaskId);
+    const stopped = !!task && task.sessionId === params.sessionId && finishTask(params.asyncTaskId, "stopped");
+    respond(id, { stopped });
   } else if (method === "session/cancel") {
     const promptId = prompts.get(params.sessionId);
     killGroup(children.get(params.sessionId));

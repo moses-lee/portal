@@ -10,8 +10,9 @@ import { DEFAULT_HUNG_AFTER_MS, type ProbeState, createProbeState, deriveLivenes
 import { type ProcessTable, readProcessTable } from "./process-probe.ts";
 import { coalesceTextChunks, isTextChunk, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
+import { AIR_CLIENT_META, AIR_UPDATE_METHOD, ASYNC_TASK_STOP_METHOD, type AirNotification, parseAirNotification, routeAirUpdates } from "./air-tasks.ts";
 import {
-  type EventPage, type LivenessState, type OpenToolCall, type PermissionAnswerer, type PortalEvent, type SessionLink, type SessionListPatch,
+  type BackgroundTask, type BackgroundTaskUpdate, type EventPage, type LivenessState, type OpenToolCall, type PermissionAnswerer, type PortalEvent, type SessionLink, type SessionListPatch,
   type SessionLiveness, type SessionLoss, type SessionMeta, type SessionState, type StoredEvent, type TitleSource, titleMayReplace,
 } from "./types.ts";
 
@@ -21,7 +22,7 @@ export type SessionListChange =
   | { type: "updated"; id: string; patch: SessionListPatch }
   | { type: "deleted"; id: string };
 
-export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
+export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness" | "backgroundTasks"> & {
   /** The most recent events, oldest first; `eventBase` is the seq of `events[0]`. Older events live in the store. */
   events: PortalEvent[];
   /** Epoch ms timestamps parallel to `events`. */
@@ -41,10 +42,11 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
   /** Request IDs of permission prompts the agent is still waiting on. Server-only. */
   pendingPermissions: Set<string>;
   /**
-   * Work the agent runs past the end of a turn (background shells), by task id. Always empty
-   * until the agent reports such tasks; any entry keeps the session from counting as idle.
+   * Work the agent runs past the end of a turn (background shells), by the agent's task id, as it
+   * reports them over AIR (see `air-tasks.ts`). Any entry keeps the session from counting as idle.
+   * In memory only: a task ends when the agent says so, or with the agent process.
    */
-  backgroundTasks: Map<string, BackgroundTask>;
+  backgroundTasks: Map<string, RunningTask>;
   /** Store writes issued so far; awaited before reading pages so they include the newest events. */
   writes: Promise<void>;
   /** Events numbered but not yet handed to the store; flushed as one write (see `flush`). */
@@ -76,7 +78,19 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness"> & {
 };
 
 /** A task the agent keeps running after its turn ended. */
-export type BackgroundTask = { title: string; startedAt: number };
+export type RunningTask = {
+  title: string;
+  /** When Portal heard of it. */
+  startedAt: number;
+  /**
+   * The earliest its processes can have started, for the probe: the start of the turn it was
+   * announced in (an agent announces a backgrounded shell once the shell is already running), or
+   * `startedAt` when no turn was open.
+   */
+  processesSince: number;
+  taskType: string | null;
+  canStop: boolean;
+};
 
 /** Liveness settings; `setLivenessOptions` changes them for every session at once. */
 export type LivenessConfig = { hungAfterMs: number };
@@ -172,7 +186,22 @@ export function livenessOf(session: Session, now = Date.now()): SessionLiveness 
     probe: session.process && !session.process.failure ? session.probe : null,
     lost: session.lost,
     hungAfterMs: session.livenessConfig.hungAfterMs,
+    backgroundTasks: backgroundTaskList(session),
   });
+}
+
+/** Since when the background tasks' processes can have run (see `RunningTask.processesSince`); null when none runs. */
+function oldestTaskStart(session: Pick<Session, "backgroundTasks">): number | null {
+  let oldest: number | null = null;
+  for (const { processesSince } of session.backgroundTasks.values()) if (oldest === null || processesSince < oldest) oldest = processesSince;
+  return oldest;
+}
+
+/** The session's background tasks, oldest first. */
+export function backgroundTaskList(session: Pick<Session, "backgroundTasks">): BackgroundTask[] {
+  return [...session.backgroundTasks]
+    .map(([id, { title, startedAt, canStop }]) => ({ id, title, startedAt, canStop }))
+    .sort((a, b) => a.startedAt - b.startedAt);
 }
 
 /** The session's browser-facing metadata, without the runtime's own bookkeeping. */
@@ -180,7 +209,7 @@ export function toMeta(session: Session): SessionMeta {
   const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, idleSince, turnEndedAt, busy, link, state } = session;
   return {
     id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, idleSince, turnEndedAt, busy,
-    awaitingPermission: session.pendingPermissions.size > 0, link, state, liveness: livenessOf(session),
+    awaitingPermission: session.pendingPermissions.size > 0, link, state, backgroundTasks: backgroundTaskList(session), liveness: livenessOf(session),
   };
 }
 
@@ -262,7 +291,7 @@ export function createAcpRuntime(
     const { busy, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt } = session;
     return {
       busy, awaitingPermission: session.pendingPermissions.size > 0, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt,
-      liveness: livenessOf(session).state,
+      backgroundTasks: backgroundTaskList(session), liveness: livenessOf(session).state,
     };
   }
 
@@ -531,6 +560,8 @@ export function createAcpRuntime(
       const wasBusy = session.busy;
       session.busy = false;
       endTurn(session);
+      // Background tasks run under the agent; they went with it.
+      session.backgroundTasks.clear();
       cancelPermissions(session, false); // `detach` below announces the session once, dead or offline.
       if (wasBusy && !disposed) session.turnEndedAt = Date.now();
       // No-op on shutdown; otherwise persisted just below with the loss or the closed turn, and `detach` announces.
@@ -546,6 +577,47 @@ export function createAcpRuntime(
     // Closing ACP rejects pending initialize/new/prompt requests immediately.
     instance.conn.close(error);
     instance.proc.kill();
+  }
+
+  /**
+   * A background task started or ended (AIR, see `air-tasks.ts`). The task set changes, the start
+   * and the end are logged as `update` events so the transcript has them, and the idle clock and
+   * the list entry follow. A task Portal already knows is not logged twice (an adapter may announce
+   * running tasks again after a resume); progress and non-final states change nothing shown.
+   */
+  function onAirUpdate(instance: AgentProcess, { sessionId, update }: AirNotification) {
+    const session = instance.sessions.get(sessionId);
+    if (!session || instance.failure || !current(session)) return;
+    const tasks = session.backgroundTasks;
+    let logged: BackgroundTaskUpdate;
+    if (update.kind === "spawned") {
+      const { taskId, title, taskType, canStop, toolCallId } = update;
+      const known = tasks.get(taskId);
+      if (known) {
+        Object.assign(known, { title, taskType, canStop });
+        announce(session);
+        return;
+      }
+      // Between turns the probe measures from the oldest task's start; begin its samples afresh.
+      if (!session.busy && tasks.size === 0) resetProbe(session.probe);
+      const now = Date.now();
+      tasks.set(taskId, { title, startedAt: now, processesSince: session.busy ? session.turnStartedAt ?? now : now, taskType, canStop });
+      logged = { sessionUpdate: "async_task_spawned", asyncTaskId: taskId, title, taskType, ...(toolCallId ? { toolCallId } : {}) };
+    } else if (update.kind === "state" && update.end) {
+      const task = tasks.get(update.taskId);
+      if (!task) return;
+      tasks.delete(update.taskId);
+      if (!session.busy && tasks.size === 0) resetProbe(session.probe);
+      logged = {
+        sessionUpdate: "async_task_state_update", asyncTaskId: update.taskId, title: task.title, state: update.end,
+        ...(update.summary ? { summary: update.summary } : {}),
+      };
+    } else {
+      return;
+    }
+    // `session/load` replays history Portal already logged; the task set still follows.
+    if (!session.replaying) emit(session, { type: "update", update: logged });
+    if (!settleIdle(session)) announce(session);
   }
 
   /** The update as it is logged and streamed: inline images moved to the blob store when there is one. */
@@ -570,10 +642,12 @@ export function createAcpRuntime(
       throw agentError(agent, "could not start", error);
     }
 
-    const stream = acp.ndJsonStream(
+    // AIR background task updates are moved off `session/update` before the SDK's closed schema
+    // would drop them, and handled under `AIR_UPDATE_METHOD` below (see `air-tasks.ts`).
+    const stream = routeAirUpdates(acp.ndJsonStream(
       Writable.toWeb(proc.stdin) as WritableStream<Uint8Array>,
       Readable.toWeb(proc.stdout) as ReadableStream<Uint8Array>,
-    );
+    ));
     const conn = acp
       .client({ name: "portal" })
       .onRequest(acp.methods.client.session.requestPermission, ({ params }) => {
@@ -634,6 +708,7 @@ export function createAcpRuntime(
           }
         }
       })
+      .onNotification(AIR_UPDATE_METHOD, { parse: parseAirNotification }, ({ params }) => onAirUpdate(instance, params))
       .connect(stream);
 
     const instance: AgentProcess = {
@@ -683,8 +758,9 @@ export function createAcpRuntime(
     instance.ready = conn.agent.request(acp.methods.agent.initialize, {
       protocolVersion: acp.PROTOCOL_VERSION,
       clientInfo: { name: "portal", version: "0.1.0" },
-      // `{}` advertises support; agents may then offer boolean config options.
-      clientCapabilities: { session: { configOptions: { boolean: {} } } },
+      // `{}` advertises support; agents may then offer boolean config options. The AIR meta asks
+      // the adapters to report background tasks (see `air-tasks.ts`).
+      clientCapabilities: { session: { configOptions: { boolean: {} } }, _meta: AIR_CLIENT_META },
     }).then((response) => {
       if (response.protocolVersion !== acp.PROTOCOL_VERSION) {
         throw new Error(`unsupported ACP protocol version ${response.protocolVersion}`);
@@ -1032,6 +1108,25 @@ export function createAcpRuntime(
     await instance.conn.agent.notify(acp.methods.agent.session.cancel, { sessionId: upstreamId });
   }
 
+  /**
+   * Ask the agent to stop one of the session's background tasks (`_session/async_task/stop`). The
+   * task leaves the set when the agent reports it stopped, not here. Resolves to the agent's answer
+   * (false when it had nothing to stop, as when the task ended meanwhile); throws "No such session"
+   * or "No such background task" for an unknown id.
+   */
+  async function stopBackgroundTask(id: string, taskId: string): Promise<boolean> {
+    await ready;
+    if (!requireSession(id).backgroundTasks.has(taskId)) throw new Error("No such background task");
+    const { process: instance, upstreamId } = sessionOwner(id);
+    try {
+      const response = await instance.conn.agent.request<{ stopped?: unknown } | null>(ASYNC_TASK_STOP_METHOD, { sessionId: upstreamId, asyncTaskId: taskId });
+      if (instance.failure) throw instance.failure;
+      return response?.stopped === true;
+    } catch (error) {
+      throw instance.failure ?? agentError(instance.agent, "could not stop the background task", error);
+    }
+  }
+
   /** Answer an open permission prompt; `optionId: null` cancels it. */
   function respondPermission(id: string, requestId: string, optionId: string | null): void {
     const { session } = sessionOwner(id);
@@ -1195,6 +1290,7 @@ export function createAcpRuntime(
     detach(session, null);
     session.busy = false;
     endTurn(session);
+    session.backgroundTasks.clear();
     for (const listener of session.closeListeners) listener();
     notifyList({ type: "deleted", id });
     discardWrites(session);
@@ -1237,7 +1333,7 @@ export function createAcpRuntime(
       sampleProbe(session.probe, table, {
         agentPid: session.process.proc.pid!,
         marker: session.upstreamId,
-        turnStartedAt: session.busy ? session.turnStartedAt : null,
+        turnStartedAt: session.busy ? session.turnStartedAt : oldestTaskStart(session),
       });
     }
   }
@@ -1253,12 +1349,14 @@ export function createAcpRuntime(
     return livenessOf(session);
   }
 
-  // While any turn is open, sample every session with one: CPU and child processes are only
-  // measurable as a change between samples.
+  // While any turn is open or any background task runs, sample every such session: CPU and child
+  // processes are only measurable as a change between samples. Between turns this lists the
+  // processes the background tasks run (Claude Code's per-session process has them as children),
+  // a cross-check on what the agent reports.
   const probeTimer = probeEveryMs > 0
     ? setInterval(() => {
-      const busy = [...sessions.values()].filter((session) => session.busy);
-      if (busy.length) void probe(busy);
+      const working = [...sessions.values()].filter((session) => session.busy || session.backgroundTasks.size > 0);
+      if (working.length) void probe(working);
     }, probeEveryMs)
     : null;
   probeTimer?.unref();
@@ -1279,7 +1377,7 @@ export function createAcpRuntime(
   }
 
   return {
-    ready, listSessions, getSession, createSession, attach, sendPrompt, setTitle, cancel,
+    ready, listSessions, getSession, createSession, attach, sendPrompt, setTitle, cancel, stopBackgroundTask,
     respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
     probe, probeSession, setLivenessOptions,
   };

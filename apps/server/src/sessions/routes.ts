@@ -115,8 +115,8 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     const send = (event: SessionListEvent) => stream.send(event);
     send({
       type: "snapshot",
-      sessions: ctx.sessions.listSessions().map(({ id, busy, awaitingPermission, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt, liveness }) => ({
-        id, busy, awaitingPermission, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt, liveness: liveness.state,
+      sessions: ctx.sessions.listSessions().map(({ id, busy, awaitingPermission, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt, backgroundTasks, liveness }) => ({
+        id, busy, awaitingPermission, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt, backgroundTasks, liveness: liveness.state,
       })),
     });
     // `created` carries the full list entry, which needs the folder's git state; keep those in
@@ -322,6 +322,18 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
       return { state };
     } catch (err) {
       return reply.code(409).send({ error: errorMessage(err) });
+    }
+  });
+
+  /** Ask the agent to stop one background task; the task ends when the agent reports it stopped (list `updated` patch). */
+  app.post<{ Params: { id: string; taskId: string } }>("/api/sessions/:id/tasks/:taskId/stop", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    try {
+      await ctx.sessions.stopBackgroundTask(req.params.id, req.params.taskId);
+      return { ok: true };
+    } catch (err) {
+      const message = errorMessage(err);
+      return reply.code(/^no such (session|background task)$/i.test(message) ? 404 : 409).send({ error: message });
     }
   });
 

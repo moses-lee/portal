@@ -69,6 +69,8 @@ const activityText: Record<WorldSession["activity"], string> = {
 
 /** What the session is doing: its liveness line when the world has one, else the older activity word. */
 function sessionStatus(session: WorldSession): string {
+  // "turn ended, 2 background tasks running": the agent answered, but work it started runs on.
+  if (session.liveness === "background") return `turn ended, ${clip(session.status ?? "background tasks running", 100)}`;
   if (session.status) return clip(session.status, 120);
   const offline = session.link === "offline" && session.activity === "idle" ? ", offline" : "";
   return `${activityText[session.activity]}${offline}`;
@@ -79,8 +81,9 @@ function sessionActive(session: WorldSession): boolean {
   return session.liveness ? session.liveness !== "idle" : session.activity !== "idle";
 }
 
-// Stalls first: blocked on the user, then hung, then dead, then the ones getting on with it.
-const livenessOrder: Record<string, number> = { blocked: 0, hung: 1, dead: 2, busy: 3 };
+// Stalls first: blocked on the user, then hung, then dead, then the ones getting on with it, then
+// those whose turn ended with background tasks still running.
+const livenessOrder: Record<string, number> = { blocked: 0, hung: 1, dead: 2, busy: 3, background: 4 };
 const activityOrder: Record<string, number> = { waiting: 0, error: 2, working: 3, connecting: 4 };
 const activeOrder = (session: WorldSession) => (session.liveness ? livenessOrder[session.liveness] : activityOrder[session.activity]) ?? 5;
 

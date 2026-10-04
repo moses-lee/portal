@@ -138,7 +138,7 @@ export type SessionMatch = {
 
 /** Words that name liveness states; "stalled" and "stuck" mean either stall. */
 const livenessWords: Record<string, (s: WorldSession) => boolean> = {
-  hung: (s) => s.liveness === "hung", dead: (s) => s.liveness === "dead",
+  hung: (s) => s.liveness === "hung", dead: (s) => s.liveness === "dead", background: (s) => s.liveness === "background",
   stalled: (s) => s.liveness === "hung" || s.liveness === "dead", stuck: (s) => s.liveness === "hung" || s.liveness === "dead",
 };
 

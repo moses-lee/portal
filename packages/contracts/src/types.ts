@@ -200,9 +200,37 @@ export type SessionProcessProbe = {
  * - blocked: waiting on a permission answer.
  * - busy: a turn is open and something is moving (tool processes use CPU, or the agent sent output recently).
  * - hung: a turn is open but nothing used CPU or produced output for `hungAfterMs`.
- * - idle: no turn is open.
+ * - background: no turn is open, but work the agent started keeps running (see `backgroundTasks`).
+ * - idle: no turn is open and nothing runs.
  */
-export type LivenessState = "dead" | "blocked" | "busy" | "hung" | "idle";
+export type LivenessState = "dead" | "blocked" | "busy" | "hung" | "background" | "idle";
+
+/**
+ * Work the agent keeps running after its turn ended (a backgrounded shell), as the agent reported
+ * it over JetBrains' AIR `asyncTasks` extension. A task lasts until the agent reports it
+ * completed, failed, or stopped, or until the agent goes away.
+ */
+export type BackgroundTask = {
+  /** The agent's task id (AIR `asyncTaskId`); what the stop route takes. */
+  id: string;
+  title: string;
+  /** Epoch ms Portal heard of it. */
+  startedAt: number;
+  /** Whether the agent offers to stop it (`POST /api/sessions/:id/tasks/:taskId/stop`). */
+  canStop: boolean;
+};
+
+/** How a background task ended (AIR's terminal states). */
+export type BackgroundTaskEnd = "completed" | "failed" | "stopped";
+
+/**
+ * A background task's start and end as logged in the session's event log, under `update` like the
+ * agent's own updates. Portal's own shape: the AIR notifications carry more (output paths,
+ * transcript hints) than the transcript needs.
+ */
+export type BackgroundTaskUpdate =
+  | { sessionUpdate: "async_task_spawned"; asyncTaskId: string; title: string; taskType: string | null; toolCallId?: string }
+  | { sessionUpdate: "async_task_state_update"; asyncTaskId: string; title: string; state: BackgroundTaskEnd; summary?: string };
 
 export type SessionLiveness = {
   state: LivenessState;
@@ -219,6 +247,8 @@ export type SessionLiveness = {
   process: SessionProcessProbe | null;
   lost: SessionLoss | null;
   hungAfterMs: number;
+  /** Tasks still running past the turn, oldest first. */
+  backgroundTasks: BackgroundTask[];
 };
 
 /**
@@ -270,7 +300,9 @@ export type SessionMeta = {
   awaitingPermission: boolean;
   link: SessionLink;
   state: SessionState;
-  /** Derived when read, from the open turn, its tool calls, and the process probe. */
+  /** Work the agent keeps running past its turn, oldest first; empty when none. Kept in memory only. */
+  backgroundTasks: BackgroundTask[];
+  /** Derived when read, from the open turn, its tool calls, the background tasks, and the process probe. */
   liveness: SessionLiveness;
 };
 
@@ -279,7 +311,7 @@ export type SessionMeta = {
  * `liveness` is only the derived state (the detail stays on the session page).
  */
 export type SessionListPatch = Pick<
-  SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "titleSource" | "lastActiveAt" | "idleSince" | "turnEndedAt"
+  SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "titleSource" | "lastActiveAt" | "idleSince" | "turnEndedAt" | "backgroundTasks"
 > & {
   liveness: LivenessState;
 };
@@ -334,7 +366,8 @@ export type SessionListEvent =
   | { type: "deleted"; id: string };
 
 export type PortalEvent =
-  | { type: "update"; update: SessionUpdate }
+  /** One of the agent's updates, or a background task starting or ending. */
+  | { type: "update"; update: SessionUpdate | BackgroundTaskUpdate }
   | { type: "user"; text: string }
   | { type: "turn_start" }
   | { type: "turn_end"; stopReason: StopReason }

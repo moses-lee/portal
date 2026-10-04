@@ -20,15 +20,12 @@ export const sessionStateLabels: Record<SessionState, string> = {
   finished: "Finished",
 };
 
-/**
- * The fields the state reads. `liveness` accepts `"background"` ahead of the server producing it
- * (a turn ended with background tasks still running); absent liveness reads as no signal.
- */
+/** The fields the state reads; absent liveness reads as no signal. */
 export type SessionStateInput = {
   busy: boolean;
   awaitingPermission: boolean;
   link?: SessionLink | null;
-  liveness?: LivenessState | "background" | null;
+  liveness?: LivenessState | null;
 };
 
 /**

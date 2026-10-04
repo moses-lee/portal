@@ -7,7 +7,7 @@
  * one state. Everything here is pure; the runtime owns the timers and the `ps` reads.
  */
 import type * as acp from "@agentclientprotocol/sdk";
-import type { LivenessState, OpenToolCall, SessionLiveness, SessionLoss, SessionProcessProbe } from "@portal/contracts/types";
+import type { BackgroundTask, LivenessState, OpenToolCall, SessionLiveness, SessionLoss, SessionProcessProbe } from "@portal/contracts/types";
 import { type ProcessRow, type ProcessTable, descendants, findSessionRoot } from "./process-probe.ts";
 
 /** Default for how long a turn may show no CPU and no output before it counts as hung. */
@@ -132,7 +132,10 @@ export type ProbeTarget = {
   agentPid: number;
   /** A string only the session's own process has on its command line (the agent's session id). */
   marker: string;
-  /** Processes started since then (less `START_SLACK_MS`) are the turn's; null when no turn is open. */
+  /**
+   * Processes started since then (less `START_SLACK_MS`) are the turn's; null when nothing runs.
+   * Between turns the runtime passes the start of the oldest background task instead.
+   */
   turnStartedAt: number | null;
   windowMs?: number;
 };
@@ -219,6 +222,8 @@ export type LivenessInput = {
   probe: ProbeState | null;
   lost: SessionLoss | null;
   hungAfterMs: number;
+  /** Work the agent keeps running past its turn, oldest first; none when absent. */
+  backgroundTasks?: BackgroundTask[];
 };
 
 /** "45s", "12m", "3h 5m", "2d 4h". */
@@ -239,12 +244,12 @@ function waitingOn(tools: OpenToolCall[]): OpenToolCall | null {
 }
 
 export function deriveLiveness(input: LivenessInput): SessionLiveness {
-  const { now, turnOpen, openTools, lost, hungAfterMs } = input;
+  const { now, turnOpen, openTools, lost, hungAfterMs, backgroundTasks = [] } = input;
   const probe = input.probe?.last ?? null;
   const lastCpuAt = input.probe?.lastCpuAt ?? null;
   const base = {
     turnOpen, turnStartedAt: input.turnStartedAt, openTools, lastOutputAt: input.lastOutputAt, lastCpuAt,
-    process: probe, lost, hungAfterMs,
+    process: probe, lost, hungAfterMs, backgroundTasks,
   };
   const result = (state: LivenessState, summary: string): SessionLiveness => ({ state, summary, ...base });
 
@@ -255,7 +260,13 @@ export function deriveLiveness(input: LivenessInput): SessionLiveness {
   if (input.link === "live" && probe && !probe.alive) return result("dead", "dead: the agent process is gone");
   if (input.awaitingPermission) return result("blocked", `waiting on a permission${input.permissionTitle ? `: ${clip(input.permissionTitle, TITLE_LENGTH)}` : ""}`);
   if (input.link === "connecting") return result("busy", "connecting to the agent");
-  if (!turnOpen) return result("idle", "idle");
+  if (!turnOpen) {
+    // The turn ended but work it started runs on (a backgrounded shell). Not a stall: nothing
+    // says how long such a task should take, so it is never called hung.
+    const count = backgroundTasks.length;
+    if (count) return result("background", `${count} background task${count === 1 ? "" : "s"} running`);
+    return result("idle", "idle");
+  }
 
   const started = input.turnStartedAt ?? now;
   const tool = waitingOn(openTools);
