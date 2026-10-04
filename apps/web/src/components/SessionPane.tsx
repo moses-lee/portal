@@ -10,7 +10,7 @@ import ChatComposer from "./ChatComposer";
 import Conversation from "./Conversation";
 import SessionHeader from "./SessionHeader";
 import SessionLinkBanner from "./SessionLinkBanner";
-import AuroraBackground from "./AuroraBackground";
+import RoomBackground from "./RoomBackground";
 import { Button } from "@/components/ui/button";
 import { useSessions } from "./SessionsProvider";
 import { sessionUrl, useSessionStream } from "./useSessionStream";
@@ -131,7 +131,7 @@ export default function SessionPane({
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <AuroraBackground activity={sessionId ? activity : "idle"} />
+      <RoomBackground activity={sessionId ? activity : "idle"} sessionId={sessionId} />
       <SessionHeader
         title={
           session

@@ -128,9 +128,9 @@ export function runDuration(run: Pick<JobRun, "startedAt" | "finishedAt">, now: 
 }
 
 /**
- * What the aurora shows on Talk to Portal, matching the session pages: working while Portal answers
- * the user in any thread, waiting (amber) while an approval is pending, idle otherwise, background
- * jobs included (they never make the user wait).
+ * The room backdrop's activity marker on Talk to Portal, matching the session pages: working while Portal
+ * answers the user in any thread, waiting while an approval is pending, idle otherwise. Background
+ * jobs do not make the user wait.
  */
 export function portalActivity(status: OrchestratorStatus | null, approvals: readonly Pick<Approval, "status">[]): AgentActivity {
   if (approvals.some((approval) => approval.status === "pending")) return "waiting";

@@ -127,7 +127,7 @@ test("the status line keeps the server's words and adds the countdown", () => {
   });
 });
 
-test("the aurora follows the user's turn and pending approvals, never background jobs", () => {
+test("the room's activity marker follows the user's turn and pending approvals, never background jobs", () => {
   const status = (busyThreads, runs = []) => ({ ready: true, busy: runs.length > 0 || busyThreads.length > 0, busyThreads, runs });
   assert.equal(portalActivity(null, []), "idle");
   assert.equal(portalActivity(status([]), []), "idle");

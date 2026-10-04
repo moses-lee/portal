@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { LoaderCircle, PanelLeft } from "lucide-react";
-import AuroraBackground from "./AuroraBackground";
+import RoomBackground from "./RoomBackground";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import ResponsiveDialog from "./ResponsiveDialog";
@@ -54,8 +54,7 @@ const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewL
  * Goals the intents, upcoming jobs, and recent runs, Activity the audit log, Memory the curated
  * records, and System what the model is shown (CORE.md, the world) plus approval grants. The
  * sidebar switches between them and the URL says which, so reloads and links land in place. The
- * session pages' aurora sits behind every view: working while Portal answers the user, amber while
- * an approval waits.
+ * room scene sits behind every view and follows the viewer's local time.
  */
 export default function PortalPage({
   pathname,
@@ -187,7 +186,7 @@ export default function PortalPage({
   return (
     <>
       <main className="flex min-w-0 flex-1 flex-col">
-        <AuroraBackground activity={portalActivity(status, approvals)} />
+        <RoomBackground activity={portalActivity(status, approvals)} />
         <header className="workspace-header !items-start max-sm:!items-center">
           <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={onOpenSidebar} className="text-muted-foreground">
             <PanelLeft className="size-4" />
