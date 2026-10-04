@@ -858,26 +858,39 @@ export function createAcpRuntime(
       const count = await store.eventCount(record.id);
       const session = makeSession(record, count, { status: "offline", error: null });
       let open: boolean | null = record.turnOpen ?? null;
+      // When the last stored event was written: about when a cut-off turn actually stopped.
+      let lastEventAt: number | null = null;
       // Look back through the tail until a turn marker says whether a turn was cut off.
       for (let before = count, scanned = 0; open === null && before > 0 && scanned < 5_000;) {
         const { events: tail } = await store.readTail(record.id, { beforeSeq: before, limit: 256 });
         if (tail.length === 0) break;
+        lastEventAt ??= tail[tail.length - 1].ts;
         open = turnOpen(tail);
         before = tail[0].seq;
         scanned += tail.length;
       }
-      // Every session comes back with no turn. A stored `idleSince` is kept, so the clock does not
-      // reset on restart; one the record does not have (a turn the restart cut off) starts now.
-      // Not yet listed to anyone, so nothing is announced: the first snapshot or list read carries it.
-      const settled = settleIdle(session, { quiet: true });
+      if (open && lastEventAt === null && count > 0) {
+        const { events: tail } = await store.readTail(record.id, { limit: 1 });
+        lastEventAt = tail.at(-1)?.ts ?? null;
+      }
       if (open) {
-        session.turnEndedAt = Date.now();
+        // The turn stopped when the old process did, not now: date it from its last event, so the
+        // downtime neither lifts it to the top of Finished nor counts toward its idle clocks. A
+        // stored `idleSince` (a migration backfill, say) is older than the turn and is replaced.
+        const endedAt = lastEventAt ?? record.lastActiveAt ?? Date.now();
+        session.turnEndedAt = endedAt;
+        session.idleSince = endedAt;
         emit(session, { type: "error", message: "Portal restarted while this turn was running. Send a message to continue." });
+        // Persists the closed turn, its end time, and its idle clock along with the loss.
         setLost(session, { reason: "portal_restarted", detail: "Portal restarted while the turn was running", at: Date.now() });
         session.listedLiveness = livenessOf(session).state;
-      } else if (record.turnOpen == null || settled) {
-        persistMeta(session);
+        return;
       }
+      // Every session comes back with no turn. A stored `idleSince` is kept, so the clock does not
+      // reset on restart; one the record does not have starts now.
+      // Not yet listed to anyone, so nothing is announced: the first snapshot or list read carries it.
+      const settled = settleIdle(session, { quiet: true });
+      if (record.turnOpen == null || settled) persistMeta(session);
     };
     let next = 0;
     const worker = async () => {
@@ -1028,8 +1041,9 @@ export function createAcpRuntime(
           ...(replaced ? { commands: [] } : {}),
         });
         setLost(session, null);
-        // A resume that finds the agent still at work leaves the session not idle; one that finds
-        // nothing running keeps the clock it came back with.
+        // Nothing in the resume itself says whether the agent is at work, so the session keeps the
+        // clock it came back with. Background tasks the agent reports afterwards (AIR
+        // `async_task_spawned` updates, see `backgroundTasks`) are what clear it again.
         if (settleIdle(session, { quiet: true })) persistMeta(session);
         setLink(session, { status: "live" }); // announces
       } catch (error) {

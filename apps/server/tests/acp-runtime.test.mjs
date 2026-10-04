@@ -1351,8 +1351,8 @@ test("a permission request after the turn ended keeps the session from idling un
   assert.equal((await persisted(store, session)).idleSince, session.idleSince);
 });
 
-test("a failed turn sets turnEndedAt and idleSince; the background task set starts empty", async (t) => {
-  const { runtime, cwd } = setup(t);
+test("a failed turn sets turnEndedAt and idleSince, on disk too; the background task set starts empty", async (t) => {
+  const { runtime, cwd, store } = await persistentSetup(t);
   const session = await runtime.createSession(cwd, "claude");
   assert.ok(session.backgroundTasks instanceof Map);
   assert.equal(session.backgroundTasks.size, 0);
@@ -1362,18 +1362,30 @@ test("a failed turn sets turnEndedAt and idleSince; the background task set star
   assert.equal(session.busy, false);
   assert.ok(session.turnEndedAt >= before);
   assert.ok(session.idleSince >= before);
+  const row = await persisted(store, session);
+  assert.deepEqual(
+    { idleSince: row.idleSince, turnEndedAt: row.turnEndedAt, turnOpen: row.turnOpen },
+    { idleSince: session.idleSince, turnEndedAt: session.turnEndedAt, turnOpen: false },
+  );
 });
 
-test("a restart keeps the stored idle clock; a turn the restart cut off starts one", async (t) => {
+test("a restart keeps the stored idle clock; a turn the restart cut off is dated from its last event", async (t) => {
   const store = createMemorySessionStore();
   const record = (id, extra) => ({
     id, agentId: "claude", agentName: "Claude Code", cwd: os.tmpdir(), projectId: "", createdAt: 1, lastActiveAt: 1,
     title: "t", upstreamId: `up-${id}`, state: { modes: null, configOptions: [], commands: [] }, ...extra,
   });
   await store.putSession(record("idle", { turnOpen: false, idleSince: 1234, turnEndedAt: 1200, titleSource: "user" }));
-  await store.putSession(record("cut", { turnOpen: true, idleSince: null, turnEndedAt: 900 }));
-  for (const [seq, event] of [{ type: "user", text: "hi" }, { type: "turn_start" }].entries()) await store.appendEvent("cut", { ...event, seq, ts: 0 });
-  const before = Date.now();
+  // Prompted at 2000, cut off after its last event at 5000; a backfill left the prompt time as its idle clock.
+  await store.putSession(record("cut", { lastActiveAt: 2000, turnOpen: true, idleSince: 2000, turnEndedAt: 900 }));
+  for (const [seq, event] of [{ type: "user", text: "hi" }, { type: "turn_start" }, { type: "update", update: { sessionUpdate: "usage_update", used: 1, size: 2 } }].entries()) {
+    await store.appendEvent("cut", { ...event, seq, ts: [2000, 2001, 5000][seq] });
+  }
+  // Settled from the log (no `turnOpen` on the record): the same last event dates it.
+  await store.putSession(record("unsettled", { lastActiveAt: 2000, idleSince: 2000, turnEndedAt: 900 }));
+  for (const [seq, event] of [{ type: "user", text: "hi" }, { type: "turn_start" }].entries()) await store.appendEvent("unsettled", { ...event, seq, ts: [2000, 4000][seq] });
+  // No events to read: the last activity stands in.
+  await store.putSession(record("silent", { lastActiveAt: 3000, turnOpen: true, idleSince: null, turnEndedAt: null }));
   const runtime = createAcpRuntime([], { store });
   t.after(() => runtime.dispose());
   await runtime.ready;
@@ -1382,13 +1394,17 @@ test("a restart keeps the stored idle clock; a turn the restart cut off starts o
   assert.equal(idle.idleSince, 1234);
   assert.equal(idle.turnEndedAt, 1200);
   assert.equal(idle.titleSource, "user");
+  const clocks = (session) => ({ idleSince: session.idleSince, turnEndedAt: session.turnEndedAt });
   const cut = runtime.getSession("cut");
-  assert.ok(cut.idleSince >= before);
-  assert.ok(cut.turnEndedAt >= before);
-  await Promise.all([idle.writes, cut.writes]);
+  assert.deepEqual(clocks(cut), { idleSince: 5000, turnEndedAt: 5000 });
+  assert.deepEqual(clocks(runtime.getSession("unsettled")), { idleSince: 4000, turnEndedAt: 4000 });
+  assert.deepEqual(clocks(runtime.getSession("silent")), { idleSince: 3000, turnEndedAt: 3000 });
+  await Promise.all(["idle", "cut", "unsettled", "silent"].map((id) => runtime.getSession(id).writes));
   assert.equal((await store.getSession("idle")).idleSince, 1234);
-  assert.equal((await store.getSession("cut")).idleSince, cut.idleSince);
-  assert.equal((await store.getSession("cut")).turnEndedAt, cut.turnEndedAt);
+  for (const [id, at] of [["cut", 5000], ["unsettled", 4000], ["silent", 3000]]) {
+    const row = await store.getSession(id);
+    assert.deepEqual({ ...clocks(row), turnOpen: row.turnOpen }, { idleSince: at, turnEndedAt: at, turnOpen: false }, id);
+  }
 
   // Records from before the columns come back prompt-titled.
   await store.putSession(record("old", { turnOpen: false }));

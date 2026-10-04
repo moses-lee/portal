@@ -341,9 +341,19 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
   assert.equal(updated.data.patch.busy, true);
   assert.equal(updated.data.patch.title, "hold");
   assert.equal(updated.data.patch.liveness, "busy");
+  // The idle clock stops while the turn runs and restarts when it ends.
+  assert.equal(updated.data.patch.idleSince, null);
+  assert.equal(updated.data.patch.turnEndedAt, null);
+  const stopped = Date.now();
+  await app.inject({ method: "POST", url: `/api/sessions/${created.id}/cancel` });
+  let frame;
+  do frame = await stream.next(); while (!(frame.data.type === "updated" && frame.data.patch.busy === false));
+  assert.equal(frame.data.id, created.id);
+  assert.equal(typeof frame.data.patch.idleSince, "number");
+  assert.ok(frame.data.patch.idleSince >= stopped);
+  assert.ok(frame.data.patch.turnEndedAt >= stopped);
 
   await app.inject({ method: "DELETE", url: `/api/sessions/${existing.id}` });
-  let frame;
   do frame = await stream.next(); while (frame.data.type !== "deleted");
   assert.deepEqual(frame.data, { type: "deleted", id: existing.id });
 

@@ -64,12 +64,12 @@ test("title sources rank user over portal over agent over prompt", () => {
   assert.equal(titleMayReplace("portal", "user"), true);
 });
 
-test("migration 0013 adds the lifecycle columns and starts every existing session's clocks at its last activity", async (t) => {
+test("migration 0013 adds the lifecycle columns and starts every existing session's clocks at its last activity, except an open turn's", async (t) => {
   const { sql, rest, db } = await databaseBefore(t);
   const state = JSON.stringify({ modes: null, configOptions: [], commands: [] });
-  for (const [id, lastActiveAt, title] of [["s1", 1000, null], ["s2", 2500, "Named"]]) {
+  for (const [id, lastActiveAt, title, turnOpen] of [["s1", 1000, null, false], ["s2", 2500, "Named", null], ["s3", 3000, null, true]]) {
     await sql`insert into sessions (id, agent_id, agent_name, cwd, project_id, created_at, last_active_at, title, upstream_id, state, turn_open)
-      values (${id}, 'claude', 'Claude Code', '/repos/x', 'p1', 10, ${lastActiveAt}, ${title}, ${`up-${id}`}, ${state}::jsonb, false)`;
+      values (${id}, 'claude', 'Claude Code', '/repos/x', 'p1', 10, ${lastActiveAt}, ${title}, ${`up-${id}`}, ${state}::jsonb, ${turnOpen})`;
   }
   await sql`insert into projects (id, name, path, created_at) values ('p1', 'one', '/repos/x', 5)`;
 
@@ -79,6 +79,8 @@ test("migration 0013 adds the lifecycle columns and starts every existing sessio
   assert.deepEqual(sessions.map((row) => ({ ...row })), [
     { id: "s1", idle_since: "1000", turn_ended_at: "1000", title_source: "prompt", title: null },
     { id: "s2", idle_since: "2500", turn_ended_at: "2500", title_source: "prompt", title: "Named" },
+    // A turn this restart cut off gets its clocks on the next start, from its last event.
+    { id: "s3", idle_since: null, turn_ended_at: null, title_source: "prompt", title: null },
   ]);
   const [project] = await sql`select pinned_at, kept_reason from projects`;
   assert.deepEqual({ ...project }, { pinned_at: null, kept_reason: null });
