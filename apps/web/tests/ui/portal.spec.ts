@@ -773,7 +773,9 @@ test("settings sections live in a sidebar, the last one viewed is remembered, an
   await expect(nav.getByRole("button")).toHaveText([
     "Git actions",
     "Talk to Portal",
+    "Sessions",
     "Scripts",
+    "Data",
   ]);
   // Opening with nothing remembered lands on the first section; only its pane is on screen.
   await expect(dialog.getByRole("heading", { name: "Git actions" })).toBeVisible();

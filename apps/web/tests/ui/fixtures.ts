@@ -512,6 +512,8 @@ export async function setupPortal(
   let sendDelay = 0;
   /** When set, `POST /api/portal/messages` answers 409 `{ error }` the way the runtime does while a check is running. */
   let failPortalSend: string | null = null;
+  /** When set, `PATCH /api/sessions/:id` answers 400 `{ error }`, as the server does for a title it refuses. */
+  let failRename: string | null = null;
   /** Sends to these threads wait until the test releases them: a turn that stays "running". */
   const sendHolds = new Map<string, Promise<void>>();
   await page.addInitScript(
@@ -682,6 +684,21 @@ export async function setupPortal(
       return json({ projects: currentProjects });
     if (path === "/api/projects/removed")
       return json({ removed: currentRemoved });
+    // Pin, unpin, or rename: re-pinning keeps the first pin time; answers with the full project.
+    const projectMatch = path.match(/^\/api\/projects\/([^/]+)$/);
+    if (projectMatch && method === "PATCH") {
+      const row = currentProjects.find((p) => p.id === decodeURIComponent(projectMatch[1]));
+      if (!row) return json({ error: "Unknown project." }, 404);
+      const input = (body ?? {}) as { pinned?: boolean; name?: string };
+      if (typeof input.pinned === "boolean") row.pinnedAt = input.pinned ? (row.pinnedAt ?? Date.now()) : null;
+      if (typeof input.name === "string") {
+        const name = input.name.trim();
+        if (!name) return json({ error: "A project name cannot be blank." }, 400);
+        row.name = name;
+      }
+      const { id, name, path: dir, createdAt, worktree: meta, pinnedAt, keptReason } = row;
+      return json({ id, name, path: dir, createdAt, ...(meta ? { worktree: meta } : {}), pinnedAt, keptReason });
+    }
     const removedMatch = path.match(/^\/api\/projects\/removed\/([^/]+)(\/restore)?$/);
     if (removedMatch) {
       const index = currentRemoved.findIndex((row) => row.id === removedMatch[1]);
@@ -866,6 +883,7 @@ export async function setupPortal(
     if (renameMatch && method === "PATCH") {
       const session = currentSessions.find((s) => s.id === renameMatch[1]);
       if (!session) return json({ error: "Unknown session." }, 404);
+      if (failRename) return json({ error: failRename }, 400);
       const title = typeof (body as { title?: unknown })?.title === "string" ? (body as { title: string }).title.trim() : "";
       if (!title || title.length > 120) return json({ error: "A title is 1 to 120 characters." }, 400);
       session.title = title;
@@ -888,6 +906,9 @@ export async function setupPortal(
     },
     failPortalSend: (error: string | null = "Portal is running a check. Try again in a moment.") => {
       failPortalSend = error;
+    },
+    failRename: (error: string | null = "A title is 1 to 120 characters.") => {
+      failRename = error;
     },
     /** Adds to the thread `GET /api/portal/messages` answers with, the way a background job does; pair with a `messages` stream event. */
     appendPortalMessage: (message: OrchestratorMessage, threadId = "main") => {

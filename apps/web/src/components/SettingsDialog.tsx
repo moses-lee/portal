@@ -1114,11 +1114,10 @@ function HoursField({
       <div className="flex items-center gap-2">
         <Input
           id={id}
-          type="number"
+          // Text, not number: a number input reads an unparsable entry ("5e") as "", which would save
+          // the default; as text, saveSessionsField's digits check rejects it.
+          type="text"
           inputMode="numeric"
-          min={sessionsLimits.minHours}
-          max={sessionsLimits.maxHours}
-          step={1}
           autoComplete="off"
           value={value}
           placeholder={String(meta.default)}
@@ -1217,9 +1216,22 @@ function DeleteRemovedSessions({ onDeleted }: { onDeleted?: () => void }) {
               : `${plural(count, "removed session", "removed sessions")}.`}
       </p>
       {loadError && (
-        <p role="alert" className="text-[11px] text-destructive">
-          {loadError}
-        </p>
+        <div className="flex items-center gap-2">
+          <p role="alert" className="text-[11px] text-destructive">
+            {loadError}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setLoadError(null);
+              setReload((n) => n + 1);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
       )}
       {confirming ? (
         <div

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ProjectRequestError, type RemoveProjectOptions } from "./useProjects";
 import { useSettings } from "./useSettings";
 import { isScriptEnabled } from "@/lib/scripts";
@@ -8,7 +8,8 @@ import type { ProjectSummary } from "@/lib/types";
 
 /**
  * An inline name editor: Enter or leaving the field commits a changed, non-blank name (trimmed);
- * Escape, or an unchanged or blank name, cancels.
+ * Escape, or an unchanged or blank name, cancels. With `maxLength`, a longer name keeps the field
+ * open with an inline error instead of committing.
  */
 export function RenameField({
   initial,
@@ -29,11 +30,19 @@ export function RenameField({
   className?: string;
 }) {
   const [draft, setDraft] = useState(initial);
+  const [tooLong, setTooLong] = useState(false);
+  const errorId = useId();
   const doneRef = useRef(false);
   const finish = (commit: boolean) => {
     if (doneRef.current) return;
-    doneRef.current = true;
     const name = draft.trim();
+    // Over the limit (an agent's long title, say): stay open with the draft and say why, rather
+    // than close and have the server reject it.
+    if (commit && maxLength !== undefined && name.length > maxLength && name !== initial.trim()) {
+      setTooLong(true);
+      return;
+    }
+    doneRef.current = true;
     if (commit && name && name !== initial) onCommit(name);
     else onCancel();
   };
@@ -47,18 +56,31 @@ export function RenameField({
       finish(false);
     }
   };
+  // No native maxLength: it would block typing into a title already over the limit, so the length
+  // is checked on commit instead.
   return (
-    <input
-      ref={inputRef}
-      aria-label={ariaLabel}
-      value={draft}
-      maxLength={maxLength}
-      onChange={(e) => setDraft(e.target.value)}
-      onKeyDown={onKeyDown}
-      onBlur={() => finish(true)}
-      onFocus={(e) => e.target.select()}
-      className={className}
-    />
+    <>
+      <input
+        ref={inputRef}
+        aria-label={ariaLabel}
+        aria-invalid={tooLong || undefined}
+        aria-describedby={tooLong ? errorId : undefined}
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          if (tooLong && maxLength !== undefined && e.target.value.trim().length <= maxLength) setTooLong(false);
+        }}
+        onKeyDown={onKeyDown}
+        onBlur={() => finish(true)}
+        onFocus={(e) => e.target.select()}
+        className={className}
+      />
+      {tooLong && maxLength !== undefined && (
+        <p id={errorId} role="alert" className="mt-1 text-[11px] text-destructive">
+          Keep it to {maxLength} characters ({draft.trim().length} now), or press Escape to cancel.
+        </p>
+      )}
+    </>
   );
 }
 

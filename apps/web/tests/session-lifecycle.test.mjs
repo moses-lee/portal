@@ -41,6 +41,16 @@ test("a finished tracked session untracks untrackAfterHours after it went idle",
   assert.equal(untrackCountdown({}, 48, now), null);
 });
 
+test("tracking an old finished session starts its untrack clock when it was tracked", () => {
+  const now = 1_000 * DAY;
+  // Idle for 5 days, tracked an hour ago: 47h left, not "soon".
+  assert.equal(untrackCountdown({ idleSince: now - 5 * DAY }, 48, now, now - HOUR), "untracks in 1d 23h");
+  // Tracked before it went idle: the idle clock wins.
+  assert.equal(untrackCountdown({ idleSince: now - 20 * HOUR - 30 * MIN }, 48, now, now - 3 * DAY), "untracks in 1d 3h");
+  // Still no clock while it is not idle.
+  assert.equal(untrackCountdown({ idleSince: null }, 48, now, now), null);
+});
+
 const worktree = { parentId: "parent", branch: "feat" };
 
 function project(patch = {}) {
@@ -79,6 +89,8 @@ test("a kept worktree says why; pinned, busy, and plain projects say nothing", (
   const now = 100 * DAY;
   const idle = [{ projectId: "p", idleSince: now - 100 * HOUR }];
   assert.equal(worktreeRetention(project({ keptReason: "uncommitted changes" }), idle, 72, now), "kept: uncommitted changes");
+  // Held only by an open terminal: the reason, never "removes soon".
+  assert.equal(worktreeRetention(project({ keptReason: "open terminal" }), idle, 72, now), "kept: open terminal");
   assert.equal(worktreeRetention(project({ pinnedAt: 1, keptReason: "uncommitted changes" }), idle, 72, now), null);
   assert.equal(worktreeRetention(project({ pinnedAt: 1 }), idle, 72, now), null);
   // A session still doing something: no clock runs, whatever the last sweep said.

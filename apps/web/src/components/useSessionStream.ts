@@ -7,6 +7,8 @@ import { useSessions } from "./SessionsProvider";
 import { sessionHistoryKey } from "@/lib/prompt-history";
 import { applyConfigChange } from "@/lib/session-config";
 import { agentActivity } from "@/lib/agent-activity";
+import { sessionState as deriveSessionState } from "@/lib/session-state";
+import { sessionStatusLabel } from "@/lib/session-status";
 import type {
   EventPage,
   PortalEvent,
@@ -446,12 +448,22 @@ export function useSessionStream(
     !!lastTurn?.blocks.some(
       (b) => b.kind === "permission" && b.response === null,
     );
+  // The list entry's liveness (kept current by the list stream; `meta` does not carry it) folds
+  // hung and background in the way the sidebar dot does.
+  const liveness = session?.liveness ?? null;
   const activity = agentActivity({
     busy,
     awaitingPermission,
     link,
+    liveness,
     failed: lastTurn?.blocks.at(-1)?.kind === "error",
   });
+  const backgroundTasks = session?.backgroundTasks;
+  const statusLabel = sessionStatusLabel(
+    activity,
+    deriveSessionState({ busy, awaitingPermission, link, liveness }),
+    backgroundTasks,
+  );
   const meta = useMemo<SessionStreamMeta>(
     () => ({ busy, link, state: sessionState }),
     [busy, link, sessionState],
@@ -485,6 +497,8 @@ export function useSessionStream(
     configError,
     retryAttach,
     activity,
+    /** The header's status line: the activity, hung and background as the sidebar says them, and background task titles. */
+    statusLabel,
     awaitingPermission,
     /** Bumped after each accepted send; `Conversation` scrolls to the end on a change. */
     scrollRequest,

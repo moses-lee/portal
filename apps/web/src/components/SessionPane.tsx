@@ -109,6 +109,7 @@ export default function SessionPane({
     configError,
     retryAttach,
     activity,
+    statusLabel,
     scrollRequest,
   } = useSessionStream(sessionId, historyCache, {
     onDeleted: onSessionDeleted,
@@ -140,6 +141,7 @@ export default function SessionPane({
               : "Your workspace"
         }
         activity={activity}
+        statusLabel={statusLabel}
         hasSession={!!sessionId}
         showShell={showShell && !!sessionId}
         showGithub={showGithub}
