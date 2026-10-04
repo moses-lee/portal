@@ -19,7 +19,7 @@ import PortalPage from "./PortalPage";
 import { PortalLiveProvider } from "./portal/PortalLive";
 import { SessionsProvider, useSessions } from "./SessionsProvider";
 import AddProjectDialog from "./AddProjectDialog";
-import { usePins } from "./usePins";
+import { useSessionPins } from "./usePins";
 import { useProjects } from "./useProjects";
 import { useRemovedProjects } from "./useRemovedProjects";
 import {
@@ -30,7 +30,7 @@ import {
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
-import { pinnedFirst } from "@/lib/pins";
+import { pinnedFirst, projectPinsOf } from "@/lib/pins";
 import { byRecentActivity, orderProjectsByActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
@@ -145,6 +145,7 @@ function ChatShell() {
     loading: projectsLoading,
     addProject,
     renameProject,
+    setProjectPinned,
     removeProject,
     refresh: refreshProjects,
   } = useProjects();
@@ -157,12 +158,19 @@ function ChatShell() {
     discard: discardRemoved,
   } = useRemovedProjects();
   const {
-    projectPins,
     sessionPins,
-    toggleProjectPin,
     toggleSessionPin,
-    prune: prunePins,
-  } = usePins();
+    prune: pruneSessionPins,
+  } = useSessionPins();
+  /** Project pins come from the server (`pinnedAt`); pinned worktrees are never removed for being idle. */
+  const projectPins = useMemo(() => projectPinsOf(projects), [projects]);
+  const toggleProjectPin = useCallback(
+    (id: string) => {
+      // A refusal is undone by the refetch `setProjectPinned` runs; there is nothing more to show.
+      void setProjectPinned(id, !(id in projectPins)).catch(() => {});
+    },
+    [setProjectPinned, projectPins],
+  );
   /** Pinned projects first (most recently pinned on top), then most recently worked in: the sidebar's and the start page's order. */
   const orderedProjects = useMemo(
     () => pinnedFirst(orderProjectsByActivity(projects, sessions), projectPins),
@@ -210,14 +218,11 @@ function ChatShell() {
     error: string | null;
   } | null>(null);
   const creatingRef = useRef(false);
-  // Pins outlive their projects and sessions in storage; forget the ones for things that are gone.
+  // Session pins outlive their sessions in storage; forget the ones for sessions that are gone.
   useEffect(() => {
-    if (loading || sessionError || projectsLoading) return;
-    prunePins(
-      projects.map((p) => p.id),
-      sessions.map((s) => s.id),
-    );
-  }, [loading, sessionError, projectsLoading, projects, sessions, prunePins]);
+    if (loading || sessionError) return;
+    pruneSessionPins(sessions.map((s) => s.id));
+  }, [loading, sessionError, sessions, pruneSessionPins]);
 
   // The project new sessions start in: the chosen one while it exists, else the remembered one, else the newest.
   // Projects only arrive after mount, so this stays "" during server rendering and hydration.

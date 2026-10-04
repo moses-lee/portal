@@ -18,6 +18,7 @@ import type { ScriptKind } from "@portal/shared/scripts";
 import { toMeta } from "../lib/acp-runtime.ts";
 import type { AppContext } from "../context.ts";
 import { summarizeProject } from "../projects/store.ts";
+import { deleteSessionFully } from "../sessions/delete.ts";
 import { loadServerKey } from "../settings/crypto.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
@@ -202,7 +203,8 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       setMode: async (id, modeId) => (await acp()).setMode(id, modeId),
       readEvents: async (id, opts) => (await acp()).readEvents(id, opts),
       attach: async (id) => (await acp()).attach(id),
-      remove: async (id) => (await acp()).deleteSession(id),
+      // The same deletion as the HTTP route: terminals close and an emptied removed project is forgotten.
+      remove: (id) => deleteSessionFully(ctx, id),
       liveness: async (id) => {
         const runtime = await acp();
         return runtime.getSession(id) ? runtime.probeSession(id) : null;

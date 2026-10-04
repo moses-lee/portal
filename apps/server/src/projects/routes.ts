@@ -17,6 +17,7 @@ import type { BranchListing, Project, RemovedProject, RemovedProjectSummary, Wor
 import {
   WorktreeError, ensureWorktree, getPull, hasBranch, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf,
 } from "../lib/worktrees.ts";
+import { deleteSessionFully } from "../sessions/delete.ts";
 import { type ProjectError, summarizeProject } from "./store.ts";
 
 type IdParams = { Params: { id: string } };
@@ -110,7 +111,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
     const projectId = projectIdOfRow(id);
     try {
       for (const session of ctx.sessions.listSessions().filter((s) => s.projectId === projectId)) {
-        if (await ctx.sessions.deleteSession(session.id)) ctx.terminals.closeSession(session.id);
+        await deleteSessionFully(ctx, session.id);
       }
       await ctx.projects.forgetRemoved(id);
     } catch (err) {
@@ -147,10 +148,22 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.patch<IdParams>("/api/projects/:id", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     await ctx.projects.ready;
-    const name = bodyObject(req)?.name;
-    if (typeof name !== "string") return reply.code(400).send({ error: "Expected {name}." });
+    const body = bodyObject(req);
+    const { name, pinned } = body ?? {};
+    const valid = body && (name !== undefined || pinned !== undefined)
+      && (name === undefined || typeof name === "string") && (pinned === undefined || typeof pinned === "boolean");
+    if (!valid) return reply.code(400).send({ error: "Expected {name} and/or {pinned}." });
     try {
-      return await ctx.projects.rename(req.params.id, name);
+      const { id } = req.params;
+      let project = typeof name === "string" ? await ctx.projects.rename(id, name) : undefined;
+      // Pinning again keeps the original time, so the order among pinned projects does not jump.
+      if (typeof pinned === "boolean") {
+        const current = project ?? ctx.projects.get(id);
+        const pinnedAt = pinned ? (current?.pinnedAt ?? Date.now()) : null;
+        if (!current || current.pinnedAt !== pinnedAt) project = await ctx.projects.setPinned(id, pinnedAt);
+        else project = current;
+      }
+      return project;
     } catch (err) {
       return fail(reply, err);
     }

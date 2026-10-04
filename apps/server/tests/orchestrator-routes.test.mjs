@@ -222,20 +222,37 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
   const deps = liveDeps(ctx);
   const settings = liveSettingsStore(ctx);
   // Services attached after the deps were built, as buildApp may do.
+  let sessions = [{ id: "s1", projectId: "gone" }];
   ctx.sessions = {
     ready: Promise.resolve(),
-    listSessions: () => [{ id: "s1" }],
+    listSessions: () => sessions,
+    getSession: (id) => sessions.find((s) => s.id === id),
     sendPrompt: async (id, text) => { calls.push(["prompt", id, text]); },
-    deleteSession: async (id) => id === "s1",
+    deleteSession: async (id) => {
+      const before = sessions.length;
+      sessions = sessions.filter((s) => s.id !== id);
+      return sessions.length < before;
+    },
     listAgents: () => [{ id: "fake", name: "Fake agent" }],
     defaultAgentId: "fake",
   };
-  ctx.projects = { ready: Promise.resolve(), list: () => [{ id: "p1" }], get: (id) => (id === "p1" ? { id } : undefined) };
+  const removed = new Set(["gone"]);
+  ctx.projects = {
+    ready: Promise.resolve(), list: () => [{ id: "p1" }], get: (id) => (id === "p1" ? { id } : undefined),
+    getRemoved: (id) => (removed.has(id) ? { id } : undefined),
+    forgetRemoved: async (id) => removed.delete(id),
+  };
+  ctx.terminals = { closeSession: (id) => calls.push(["closeTerminals", id]) };
   ctx.settings = { read: async () => ({ scripts: { preWorktreeDelete: { command: "", timeoutSeconds: 60, abortOnFailure: false } } }), orchestrator: async () => ({ provider: "openai" }), apiKey: async (p) => `key-${p}`, subscribe: () => () => {} };
-  assert.deepEqual(await deps.sessions.list(), [{ id: "s1" }]);
+  assert.deepEqual(await deps.sessions.list(), [{ id: "s1", projectId: "gone" }]);
   await deps.sessions.prompt("s1", "hi");
   assert.deepEqual(calls, [["prompt", "s1", "hi"]]);
+  // delete_session deletes like the HTTP route: terminals close, and the emptied removed project is forgotten.
   assert.equal(await deps.sessions.remove("s1"), true);
+  assert.deepEqual(calls.at(-1), ["closeTerminals", "s1"]);
+  assert.equal(removed.has("gone"), false);
+  assert.equal(await deps.sessions.remove("s1"), false);
+  assert.equal(calls.length, 2, "an unknown session closes nothing");
   assert.deepEqual(await deps.projects.list(), [{ id: "p1" }]);
   assert.equal(await deps.projects.get("zz"), undefined);
   assert.deepEqual(await deps.agents.list(), [{ id: "fake", name: "Fake agent" }], "the sessions service's agents, not the built-in ones");

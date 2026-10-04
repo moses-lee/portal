@@ -56,6 +56,7 @@ async function setup(t) {
   ctx.sessions = {
     ready: Promise.resolve(),
     listSessions: () => sessions,
+    getSession: (id) => sessions.find((s) => s.id === id),
     deleteSession: async (id) => {
       const index = sessions.findIndex((s) => s.id === id);
       if (index < 0) return false;
@@ -111,7 +112,9 @@ test("project CRUD: add, list, rename, remove", async (t) => {
   const listed = (await call("GET", "/api/projects")).json().projects;
   assert.deepEqual(listed, [{ ...project, displayPath: dir, git: null, exists: true }]);
 
-  assert.deepEqual((await call("PATCH", `/api/projects/${project.id}`, { nope: 1 })).json(), { error: "Expected {name}." });
+  for (const payload of [{ nope: 1 }, { name: 3 }, { pinned: "yes" }, { name: "x", pinned: 1 }]) {
+    assert.deepEqual((await call("PATCH", `/api/projects/${project.id}`, payload)).json(), { error: "Expected {name} and/or {pinned}." });
+  }
   const blank = await call("PATCH", `/api/projects/${project.id}`, { name: " " });
   assert.equal(blank.statusCode, 400);
   assert.deepEqual(blank.json(), { error: "Project name cannot be empty." });
@@ -119,6 +122,17 @@ test("project CRUD: add, list, rename, remove", async (t) => {
   const renamed = await call("PATCH", `/api/projects/${project.id}`, { name: "First" });
   assert.equal(renamed.statusCode, 200);
   assert.deepEqual(renamed.json(), { ...project, name: "First" });
+
+  // Pins live on the server: pinning stamps the time (pinning again keeps it), unpinning clears it.
+  assert.equal(project.pinnedAt, null);
+  const pinned = (await call("PATCH", `/api/projects/${project.id}`, { pinned: true })).json();
+  assert.equal(typeof pinned.pinnedAt, "number");
+  assert.deepEqual(pinned, { ...project, name: "First", pinnedAt: pinned.pinnedAt });
+  assert.equal((await call("PATCH", `/api/projects/${project.id}`, { pinned: true })).json().pinnedAt, pinned.pinnedAt);
+  assert.equal((await call("GET", "/api/projects")).json().projects[0].pinnedAt, pinned.pinnedAt);
+  const both = (await call("PATCH", `/api/projects/${project.id}`, { name: "Uno", pinned: false })).json();
+  assert.deepEqual(both, { ...project, name: "Uno", pinnedAt: null });
+  assert.equal((await call("PATCH", "/api/projects/nope", { pinned: true })).statusCode, 404);
 
   assert.deepEqual((await call("DELETE", "/api/projects/nope")).json(), { error: "Unknown project." });
   const notWorktree = await call("DELETE", `/api/projects/${project.id}?worktree=delete`);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -267,6 +267,41 @@ test("prompt, permission, config, cancel, attach, events, and delete behave like
   assert.equal(again.statusCode, 404);
   assert.deepEqual(again.json(), { error: "Unknown session." });
   assert.equal((await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })).statusCode, 404);
+});
+
+test("deleting a removed project's last session drops its record; DELETE /api/sessions/removed empties Removed", async (t) => {
+  const { app, scratch } = await setup(t);
+  const ctx = appContext(app);
+  const closed = [];
+  const realClose = ctx.terminals.closeSession;
+  ctx.terminals.closeSession = (id) => { closed.push(id); return realClose(id); };
+  mkdirSync(path.join(scratch, "kept"));
+  const kept = (await app.inject({ method: "POST", url: "/api/projects", payload: { path: path.join(scratch, "kept") } })).json();
+  const [a, b, c, d] = [await createSession(app), await createSession(app), await createSession(app), await createSession(app, { projectId: kept.id })];
+  // proj-1 is removed while conversations point at it, so a removed record is kept.
+  assert.equal((await app.inject({ method: "DELETE", url: "/api/projects/proj-1" })).statusCode, 204);
+  assert.ok(ctx.projects.getRemoved("proj-1"));
+
+  // One by one: the record stays while a session is left (the orchestrator tests cover the last one).
+  assert.equal((await app.inject({ method: "DELETE", url: `/api/sessions/${a.id}` })).statusCode, 204);
+  assert.ok(ctx.projects.getRemoved("proj-1"), "two sessions still point at it");
+  assert.deepEqual(closed, [a.id]);
+
+  // The bulk route: origin-checked, not taken for a session id, and it deletes through the runtime.
+  const refused = await app.inject({ method: "DELETE", url: "/api/sessions/removed", headers: EVIL });
+  assert.equal(refused.statusCode, 403);
+  const changes = [];
+  const unsubscribe = ctx.sessions.onSessionsChange((change) => changes.push(change));
+  const emptied = await app.inject({ method: "DELETE", url: "/api/sessions/removed" });
+  unsubscribe();
+  assert.equal(emptied.statusCode, 200, emptied.body);
+  assert.deepEqual(emptied.json(), { deleted: 2 });
+  assert.deepEqual(changes.filter((change) => change.type === "deleted").map((change) => change.id).sort(), [b.id, c.id].sort());
+  assert.deepEqual(closed.slice(1).sort(), [b.id, c.id].sort());
+  assert.equal(ctx.projects.getRemoved("proj-1"), undefined);
+  assert.deepEqual(ctx.sessions.listSessions().map((session) => session.id), [d.id], "sessions of listed projects stay");
+  assert.deepEqual((await app.inject({ method: "GET", url: "/api/projects/removed" })).json(), { removed: [] });
+  assert.deepEqual((await app.inject({ method: "DELETE", url: "/api/sessions/removed" })).json(), { deleted: 0 });
 });
 
 test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted changes, and counts presence", async (t) => {
