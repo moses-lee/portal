@@ -23,13 +23,18 @@ export type Project = {
   createdAt: number;
   /** Present when this project is a worktree of another project. */
   worktree?: WorktreeMeta;
+  /** Epoch ms the project was pinned; null when it is not. Pinned worktrees are never removed for being idle. */
+  pinnedAt: number | null;
+  /** Why the lifecycle sweep last kept this worktree although it was due ("uncommitted changes"); null once nothing holds it. */
+  keptReason: string | null;
 };
 
 /**
  * A project the user removed while conversations still referenced it. Kept, with its original
- * `id`, so restoring it relinks those conversations without touching their records.
+ * `id`, so restoring it relinks those conversations without touching their records. Pins and the
+ * sweep's kept reason belong to listed projects only.
  */
-export type RemovedProject = Project & {
+export type RemovedProject = Omit<Project, "pinnedAt" | "keptReason"> & {
   removedAt: number;
   /** For a worktree: the parent project's folder at removal time, so a re-added parent (new id) is still found. */
   parentPath?: string;
@@ -216,6 +221,29 @@ export type SessionLiveness = {
   hungAfterMs: number;
 };
 
+/**
+ * Who set a session's title. A lower source never overwrites a higher one:
+ * `user` > `portal` > `agent` > `prompt` (see `titleSourceRank`).
+ */
+export type TitleSource = "prompt" | "agent" | "portal" | "user";
+
+/** Every title source, lowest precedence first. */
+export const titleSources: readonly TitleSource[] = ["prompt", "agent", "portal", "user"];
+
+/** Precedence of a title source: higher wins. */
+export function titleSourceRank(source: TitleSource): number {
+  return titleSources.indexOf(source);
+}
+
+/** Whether a title from `next` may replace one set by `current` (same or higher precedence). */
+export function titleMayReplace(current: TitleSource, next: TitleSource): boolean {
+  return titleSourceRank(next) >= titleSourceRank(current);
+}
+
+export function isTitleSource(value: unknown): value is TitleSource {
+  return typeof value === "string" && (titleSources as readonly string[]).includes(value);
+}
+
 export type SessionMeta = {
   id: string;
   agentId: string;
@@ -226,8 +254,17 @@ export type SessionMeta = {
   createdAt: number;
   /** Epoch ms of the last user prompt (or creation). Drives sidebar order. */
   lastActiveAt: number;
-  /** First user prompt, trimmed; null until the first message. */
+  /** The session's name: the first user prompt, trimmed, until the agent, Portal, or the user names it; null until the first message. */
   title: string | null;
+  /** Who set `title`. */
+  titleSource: TitleSource;
+  /**
+   * Epoch ms since the session last had no open turn, no pending approval, and no background
+   * work; null while it has any of those. Kept across restarts.
+   */
+  idleSince: number | null;
+  /** Epoch ms the last turn ended (completed, cancelled, or failed); null before the first. */
+  turnEndedAt: number | null;
   busy: boolean;
   /** True while the agent is blocked on a permission prompt no viewer has answered yet. */
   awaitingPermission: boolean;
@@ -241,7 +278,9 @@ export type SessionMeta = {
  * The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`.
  * `liveness` is only the derived state (the detail stays on the session page).
  */
-export type SessionListPatch = Pick<SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "lastActiveAt"> & {
+export type SessionListPatch = Pick<
+  SessionMeta, "busy" | "awaitingPermission" | "link" | "title" | "titleSource" | "lastActiveAt" | "idleSince" | "turnEndedAt"
+> & {
   liveness: LivenessState;
 };
 
@@ -274,6 +313,7 @@ export type SessionMetaEvent = {
   busy: boolean;
   link: SessionLink;
   title: string | null;
+  titleSource: TitleSource;
   cwd: string;
   agentId: string;
   agentName: string;

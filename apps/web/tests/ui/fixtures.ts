@@ -39,6 +39,8 @@ export const project: ProjectSummary = {
   path: "/workspace/portal",
   displayPath: "~/repos/portal",
   createdAt: now,
+  pinnedAt: null,
+  keptReason: null,
   exists: true,
   git: {
     root: "/workspace/portal",
@@ -144,6 +146,9 @@ export function makeSession(
     project: { id: p.id, name: p.name },
     createdAt: now,
     lastActiveAt: now - 3600000,
+    titleSource: "prompt",
+    idleSince: now - 3600000,
+    turnEndedAt: now - 3600000,
     cwd: p.path,
     displayCwd: p.displayPath,
     cwdMissing: false,
@@ -688,6 +693,8 @@ export async function setupPortal(
           path: row.path,
           displayPath: row.displayPath,
           createdAt: now,
+          pinnedAt: null,
+          keptReason: null,
           exists: true,
           worktree: row.worktree,
           git: {

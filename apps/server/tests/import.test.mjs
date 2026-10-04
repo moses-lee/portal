@@ -149,7 +149,8 @@ test("imports every domain and reads back through the real stores", async (t) =>
   const sessions = createPgSessionStore({ db });
   assert.deepEqual((await sessions.listSessions()).map((s) => s.id), ["s2", "s1", "s3"]);
   assert.equal((await sessions.getSession("s2")).title, "nultitle");
-  assert.deepEqual(await sessions.getSession("s1"), session("s1"));
+  // The old files had no idle clocks or title sources: both clocks start at the last activity.
+  assert.deepEqual(await sessions.getSession("s1"), session("s1", { titleSource: "prompt", idleSince: 200, turnEndedAt: 200 }));
   const s2 = await sessions.readTail("s2", { limit: 10 });
   assert.deepEqual(s2.events.map((e) => e.seq), [0, 1, 3]);
   assert.equal(s2.events[1].text, "badbyte");

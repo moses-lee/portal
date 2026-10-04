@@ -38,6 +38,10 @@ export interface ProjectsStore {
    */
   add(input: { path: string; name?: string; worktree?: WorktreeMeta }): Promise<Project>;
   rename(id: string, name: string): Promise<Project>;
+  /** Pin (an epoch ms) or unpin (null) a project. Pinned worktrees are never removed for being idle. */
+  setPinned(id: string, pinnedAt: number | null): Promise<Project>;
+  /** Record why the lifecycle sweep kept a due worktree, or clear it with null. */
+  setKeptReason(id: string, reason: string | null): Promise<Project>;
   /**
    * Take a project out of the list. With `keep`, a removed record is written so the project can be
    * restored later (for when conversations still reference it); otherwise it is forgotten.
@@ -63,11 +67,22 @@ export interface ProjectsBackend {
   load(): Promise<{ projects: Project[]; removed: RemovedProject[] }>;
   insert(project: Project): Promise<void>;
   rename(id: string, name: string): Promise<void>;
+  /** Write the given lifecycle fields of a listed project. */
+  patch(id: string, fields: ProjectLifecyclePatch): Promise<void>;
   /** Delete the project and, when given, write its removed record in the same change. */
   remove(id: string, record: RemovedProject | null): Promise<void>;
   /** Delete the removed record and insert `project` (same id) in the same change. */
   revive(project: Project): Promise<void>;
   forgetRemoved(id: string): Promise<void>;
+}
+
+/** The lifecycle fields of a project that change after it is added. */
+export type ProjectLifecyclePatch = Partial<Pick<Project, "pinnedAt" | "keptReason">>;
+
+/** The removed record of a listed project: pins and the kept reason do not outlive the listing. */
+export function removedRecordOf(project: Project, removedAt: number, parentPath?: string): RemovedProject {
+  const { pinnedAt: _pinnedAt, keptReason: _keptReason, ...rest } = project;
+  return { ...rest, removedAt, ...(parentPath ? { parentPath } : {}) };
 }
 
 /** Attach the folder's display form and current state for the browser. */
@@ -132,12 +147,23 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
       path: record.path,
       createdAt: record.createdAt,
       ...cleanWorktree(patch.worktree ?? record.worktree),
+      pinnedAt: null,
+      keptReason: null,
     };
     await backend.revive(project);
     removed.delete(project.id);
     projects.set(project.id, project);
     projects = new Map([...projects.values()].sort(byCreation).map((p) => [p.id, p]));
     return project;
+  }
+
+  function update(id: string, fields: ProjectLifecyclePatch): Promise<Project> {
+    return mutate(async () => {
+      const project = { ...require(id), ...fields };
+      await backend.patch(id, fields);
+      projects.set(id, project);
+      return project;
+    });
   }
 
   return {
@@ -158,6 +184,8 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
           path: real,
           createdAt: Date.now(),
           ...cleanWorktree(worktree),
+          pinnedAt: null,
+          keptReason: null,
         };
         await backend.insert(project);
         projects.set(project.id, project);
@@ -175,13 +203,19 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
         return project;
       });
     },
+    setPinned(id, pinnedAt) {
+      return update(id, { pinnedAt });
+    },
+    setKeptReason(id, keptReason) {
+      return update(id, { keptReason });
+    },
     remove(id, { keep = false } = {}) {
       return mutate(async () => {
         const project = require(id);
         let record: RemovedProject | null = null;
         if (keep) {
           const parent = project.worktree ? projects.get(project.worktree.parentId) : undefined;
-          record = { ...project, removedAt: Date.now(), ...(parent ? { parentPath: parent.path } : {}) };
+          record = removedRecordOf(project, Date.now(), parent?.path);
         }
         await backend.remove(id, record);
         projects.delete(id);
@@ -221,6 +255,7 @@ export function createMemoryProjectsStore(
     load: async () => ({ projects, removed }),
     insert: noop,
     rename: noop,
+    patch: noop,
     remove: noop,
     revive: noop,
     forgetRemoved: noop,

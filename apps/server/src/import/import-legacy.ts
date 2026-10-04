@@ -282,7 +282,9 @@ async function writeSessions(db: Db, legacy: LegacySessions, counts: ImportCount
   // One insert in index order, so `ordinal` (the listing order) follows the old index.
   const inserted = new Set<string>();
   for (const slice of chunks(legacy.sessions)) {
-    for (const row of await db.insert(sessions).values(slice).onConflictDoNothing().returning({ id: sessions.id })) inserted.add(row.id);
+    // The old files had no idle clocks; start them at the last activity, as migration 0013 did.
+    const rows = slice.map((record) => ({ ...record, idleSince: record.idleSince ?? record.lastActiveAt, turnEndedAt: record.turnEndedAt ?? record.lastActiveAt }));
+    for (const row of await db.insert(sessions).values(rows).onConflictDoNothing().returning({ id: sessions.id })) inserted.add(row.id);
   }
   for (const record of legacy.sessions) {
     // A session that already existed (a forced re-run) keeps its own log.

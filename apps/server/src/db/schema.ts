@@ -5,7 +5,7 @@
  */
 import { sql } from "drizzle-orm";
 import { bigint, bigserial, boolean, customType, index, integer, jsonb, pgTable, primaryKey, real, text, uniqueIndex } from "drizzle-orm/pg-core";
-import type { SessionLoss, SessionState, StoredEvent, WorktreeMeta } from "@portal/contracts/types";
+import type { SessionLoss, SessionState, StoredEvent, TitleSource, WorktreeMeta } from "@portal/contracts/types";
 
 /** Milliseconds since the epoch, as JavaScript numbers. */
 const epochMs = (name: string) => bigint(name, { mode: "number" });
@@ -27,6 +27,12 @@ export const sessions = pgTable("sessions", {
   lost: jsonb("lost").$type<SessionLoss>(),
   /** Whether a turn was open at the last write; null for rows from before the column (settled from the log at the next boot). */
   turnOpen: boolean("turn_open"),
+  /** Since when the session has had no open turn, no pending approval and no background work; null while it is doing anything. */
+  idleSince: epochMs("idle_since"),
+  /** When the last turn ended (any outcome); null before the first one. */
+  turnEndedAt: epochMs("turn_ended_at"),
+  /** Who set `title`: "prompt", "agent", "user" or "portal". A lower source never overwrites a higher one. */
+  titleSource: text("title_source").$type<TitleSource>().notNull().default("prompt"),
 });
 
 export const sessionEvents = pgTable(
@@ -70,6 +76,10 @@ export const projects = pgTable("projects", {
   createdAt: epochMs("created_at").notNull(),
   /** Present when this project is a worktree of another project. */
   worktree: jsonb("worktree").$type<WorktreeMeta>(),
+  /** Set means pinned; pinned worktrees are never removed by the lifecycle sweep. */
+  pinnedAt: epochMs("pinned_at"),
+  /** Why the last sweep kept an otherwise due worktree; cleared when the guard clears. */
+  keptReason: text("kept_reason"),
 });
 
 /** Projects taken out of the list while sessions still referenced them; restoring relinks by id. */

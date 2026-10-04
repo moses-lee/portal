@@ -182,7 +182,9 @@ for (const [name, make] of backends) {
     assert.equal(store.get(wt.id), undefined);
     const record = store.getRemoved(wt.id);
     assert.ok(record && typeof record.removedAt === "number");
-    assert.deepEqual({ ...record, removedAt: undefined }, { ...wt, parentPath: parent.path, removedAt: undefined });
+    // Pins and the sweep's kept reason belong to listed projects; the record leaves them behind.
+    const { pinnedAt: _pinnedAt, keptReason: _keptReason, ...listedOnly } = wt;
+    assert.deepEqual({ ...record, removedAt: undefined }, { ...listedOnly, parentPath: parent.path, removedAt: undefined });
 
     const target = reopen ? await opened(reopen) : store;
     assert.deepEqual(target.listRemoved(), [record]);

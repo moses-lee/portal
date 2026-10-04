@@ -6,7 +6,7 @@
  * run's last seq, and a heartbeat gets no seq at all. `eventCount` is therefore "one past the
  * highest stored seq", which is what the runtime resumes numbering from after a restart.
  */
-import type { SessionLoss, SessionState, StoredEvent } from "@portal/contracts/types";
+import { isTitleSource, type SessionLoss, type SessionState, type StoredEvent, type TitleSource } from "@portal/contracts/types";
 
 /** The persisted half of a session: what Portal needs to list it and reattach its agent. */
 export type SessionRecord = {
@@ -31,6 +31,12 @@ export type SessionRecord = {
    * the tail once and writes the answer back.
    */
   turnOpen?: boolean | null;
+  /** Who set `title`; absent in records from before this field, which count as `prompt`. */
+  titleSource?: TitleSource;
+  /** Since when the session has been idle (no turn, approval, or background work); null while it is not. */
+  idleSince?: number | null;
+  /** When the last turn ended; null before the first. */
+  turnEndedAt?: number | null;
 };
 
 export type TailQuery = {
@@ -91,7 +97,13 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     && typeof r.createdAt === "number" && typeof r.lastActiveAt === "number"
     && (r.title === null || typeof r.title === "string") && typeof r.upstreamId === "string"
     && isSessionState(r.state) && (r.lost === undefined || r.lost === null || (typeof r.lost === "object" && typeof (r.lost as SessionLoss).reason === "string"))
-    && (r.turnOpen === undefined || r.turnOpen === null || typeof r.turnOpen === "boolean");
+    && (r.turnOpen === undefined || r.turnOpen === null || typeof r.turnOpen === "boolean")
+    && (r.titleSource === undefined || isTitleSource(r.titleSource))
+    && isOptionalEpoch(r.idleSince) && isOptionalEpoch(r.turnEndedAt);
+}
+
+function isOptionalEpoch(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "number";
 }
 
 /** Shape check for events read back from storage. */

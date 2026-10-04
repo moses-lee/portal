@@ -15,7 +15,10 @@ function isWorktreeMeta(value: unknown): value is WorktreeMeta {
   return !!w && typeof w === "object" && typeof w.parentId === "string" && typeof w.branch === "string";
 }
 
-function isProject(value: unknown): value is Project {
+/** What the file kept per project: everything but the lifecycle fields, which postdate it. */
+type FileProject = Omit<Project, "pinnedAt" | "keptReason">;
+
+function isProject(value: unknown): value is FileProject {
   const p = value as Record<string, unknown> | null;
   return !!p && typeof p === "object" && typeof p.id === "string" && typeof p.name === "string"
     && typeof p.path === "string" && typeof p.createdAt === "number"
@@ -28,7 +31,7 @@ function isRemovedProject(value: unknown): value is RemovedProject {
 }
 
 /** Only the fields Portal knows, so unknown keys the file tolerated are not carried into the database. */
-function pick<T extends Project>(value: T, extra: (value: T) => Partial<T>): T {
+function pick<T extends FileProject>(value: T, extra: (value: T) => Partial<T>): T {
   return {
     id: value.id,
     name: value.name,
@@ -60,7 +63,8 @@ export function parseLegacyProjectsFile(text: string): { projects: Project[]; re
       droppedRemoved++;
     }
   }
-  return { projects: (data.projects as Project[]).map((p) => pick(p, () => ({}))), removed, droppedRemoved };
+  const projects = (data.projects as FileProject[]).map((p): Project => ({ ...pick(p, () => ({})), pinnedAt: null, keptReason: null }));
+  return { projects, removed, droppedRemoved };
 }
 
 /**
