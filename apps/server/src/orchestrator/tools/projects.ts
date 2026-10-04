@@ -6,8 +6,13 @@ import { type ToolContext, capped, define } from "./context.ts";
 
 const id = z.string().min(1);
 
-function row(project: Pick<Project, "id" | "name" | "path" | "worktree">) {
-  return { id: project.id, name: project.name, path: displayPath(project.path), ...(project.worktree ? { worktree: project.worktree } : {}) };
+function row(project: Pick<Project, "id" | "name" | "path" | "worktree"> & { pinnedAt?: number | null }) {
+  return {
+    id: project.id, name: project.name, path: displayPath(project.path),
+    ...(project.worktree ? { worktree: project.worktree } : {}),
+    // Pinned worktrees are never removed for being idle.
+    ...(project.pinnedAt ? { pinned: true } : {}),
+  };
 }
 
 export function projectTools({ deps }: ToolContext) {

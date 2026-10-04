@@ -12,6 +12,7 @@ import { errorStatus, resolveDirectory } from "../lib/fs-paths.ts";
 import { sameGitInfo } from "@portal/shared/git-info";
 import { displayPath, readGitInfo, type GitInfo } from "../lib/git-info.ts";
 import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
+import { deleteRemovedSessions, deleteSessionFully } from "./delete.ts";
 import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type PortalEvent, type SessionListEvent, type SessionMetaEvent, type SetConfigRequest } from "../lib/types.ts";
 
 const META_POLL_MS = 1000;
@@ -146,6 +147,17 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     stream.onClose(ctx.sessions.onSessionsChange(onChange));
   });
 
+  // Above the `:id` routes so the literal path is never read as a session id.
+  /** Delete every session whose project is gone, and the removed-project records. Answers `{ deleted }`. */
+  app.delete("/api/sessions/removed", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    try {
+      return { deleted: await deleteRemovedSessions(ctx) };
+    } catch (err) {
+      return reply.code(500).send({ error: errorMessage(err) });
+    }
+  });
+
   app.get<IdParams>("/api/sessions/:id", async (req, reply) => {
     await ready();
     const session = ctx.sessions.getSession(req.params.id);
@@ -187,11 +199,10 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (rejectCrossOrigin(req, reply)) return reply;
     const { id } = req.params;
     try {
-      if (!(await ctx.sessions.deleteSession(id))) return reply.code(404).send({ error: "Unknown session." });
+      if (!(await deleteSessionFully(ctx, id))) return reply.code(404).send({ error: "Unknown session." });
     } catch (err) {
       return reply.code(500).send({ error: errorMessage(err) });
     }
-    ctx.terminals.closeSession(id);
     return reply.code(204).send();
   });
 

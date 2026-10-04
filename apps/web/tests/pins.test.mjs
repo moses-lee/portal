@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EMPTY_PINS, parsePins, partitionPinned, pinnedFirst, prunePins, togglePin } from "../src/lib/pins.ts";
+import {
+  EMPTY_PINS, LEGACY_PROJECT_PINS_KEY, migrateProjectPins, parsePins, partitionPinned, pinnedFirst, projectPinsOf, prunePins, togglePin,
+} from "../src/lib/pins.ts";
 
 test("parsePins accepts only an object of finite numbers", () => {
   assert.deepEqual(parsePins(null), {});
@@ -39,4 +41,66 @@ test("partitionPinned keeps each part's order", () => {
   const items = [{ id: "w" }, { id: "x" }, { id: "y" }, { id: "z" }];
   assert.deepEqual(partitionPinned(items, { z: 1, x: 2 }).map((i) => i.id), ["x", "z", "w", "y"]);
   assert.deepEqual(partitionPinned(items, EMPTY_PINS).map((i) => i.id), ["w", "x", "y", "z"]);
+});
+
+test("projectPinsOf maps the server's pinnedAt, leaving out unpinned and old-server projects", () => {
+  assert.deepEqual(projectPinsOf([{ id: "a", pinnedAt: 5 }, { id: "b", pinnedAt: null }, { id: "c" }]), { a: 5 });
+  assert.deepEqual(pinnedFirst([{ id: "a" }, { id: "b" }], projectPinsOf([{ id: "b", pinnedAt: 1 }])).map((p) => p.id), ["b", "a"]);
+});
+
+/** A localStorage stand-in holding both pin keys, and a fetch stand-in that records PATCH bodies. */
+function fakes({ projectPins, failOn = null } = {}) {
+  const items = new Map([["portal.pins.sessions", JSON.stringify({ s1: 1 })]]);
+  if (projectPins !== undefined) items.set(LEGACY_PROJECT_PINS_KEY, JSON.stringify(projectPins));
+  const storage = { getItem: (key) => items.get(key) ?? null, removeItem: (key) => { items.delete(key); } };
+  const requests = [];
+  const fetch = async (url, options) => {
+    requests.push([options.method, url, JSON.parse(options.body)]);
+    return url.endsWith(`/${failOn}`) ? { ok: false, status: 500 } : { ok: true, status: 200 };
+  };
+  // The same request `useProjects` sends, throwing on a refusal like it does.
+  const pin = async (id) => {
+    const r = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ pinned: true }) });
+    if (!r.ok) throw new Error("refused");
+  };
+  return { items, storage, requests, pin };
+}
+
+test("migrateProjectPins pushes local project pins oldest first, skips gone and pinned ids, then deletes only the project key", async () => {
+  const { items, storage, requests, pin } = fakes({ projectPins: { b: 30, gone: 5, a: 10, c: 20 } });
+  const projects = [{ id: "a", pinnedAt: null }, { id: "b", pinnedAt: null }, { id: "c", pinnedAt: 99 }];
+  assert.deepEqual(await migrateProjectPins(projects, storage, pin), { status: "done", pushed: 2 });
+  assert.deepEqual(requests, [["PATCH", "/api/projects/a", { pinned: true }], ["PATCH", "/api/projects/b", { pinned: true }]]);
+  assert.equal(items.has(LEGACY_PROJECT_PINS_KEY), false);
+  assert.equal(items.get("portal.pins.sessions"), JSON.stringify({ s1: 1 }), "session pins are untouched");
+});
+
+test("migrateProjectPins waits for a server that reports pinnedAt, and for a non-empty list", async () => {
+  const { items, storage, requests, pin } = fakes({ projectPins: { a: 1 } });
+  assert.deepEqual(await migrateProjectPins([{ id: "a" }, { id: "b", pinnedAt: null }], storage, pin), { status: "waiting", pushed: 0 });
+  assert.deepEqual(await migrateProjectPins([], storage, pin), { status: "waiting", pushed: 0 });
+  assert.deepEqual(requests, []);
+  assert.ok(items.has(LEGACY_PROJECT_PINS_KEY));
+});
+
+test("migrateProjectPins keeps the key after a refused push, and a rerun finishes without pinning twice", async () => {
+  const { items, storage, requests, pin } = fakes({ projectPins: { a: 1, b: 2 }, failOn: "b" });
+  const projects = [{ id: "a", pinnedAt: null }, { id: "b", pinnedAt: null }];
+  assert.deepEqual(await migrateProjectPins(projects, storage, pin), { status: "waiting", pushed: 1 });
+  assert.equal(requests.length, 2);
+  assert.ok(items.has(LEGACY_PROJECT_PINS_KEY));
+  // The next list shows `a` pinned by the first run, so only `b` goes again.
+  const { pin: working, requests: later } = fakes();
+  assert.deepEqual(await migrateProjectPins([{ id: "a", pinnedAt: 7 }, { id: "b", pinnedAt: null }], storage, working), { status: "done", pushed: 1 });
+  assert.deepEqual(later, [["PATCH", "/api/projects/b", { pinned: true }]]);
+  assert.equal(items.has(LEGACY_PROJECT_PINS_KEY), false);
+});
+
+test("migrateProjectPins with no local pins, or no storage, is done at once", async () => {
+  const { items, storage, requests, pin } = fakes();
+  assert.deepEqual(await migrateProjectPins([{ id: "a", pinnedAt: null }], storage, pin), { status: "done", pushed: 0 });
+  const blocked = { getItem: () => { throw new Error("SecurityError"); }, removeItem: () => { throw new Error("SecurityError"); } };
+  assert.deepEqual(await migrateProjectPins([{ id: "a", pinnedAt: null }], blocked, pin), { status: "done", pushed: 0 });
+  assert.deepEqual(requests, []);
+  assert.ok(items.has("portal.pins.sessions"));
 });

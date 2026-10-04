@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { migrateProjectPins } from "@/lib/pins";
 import type { Project, ProjectSummary } from "@/lib/types";
 
 export type AddProjectInput = { path: string; name?: string };
@@ -40,6 +41,8 @@ export type UseProjects = {
   addProject: (input: AddProjectInput) => Promise<Project>;
   /** `PATCH /api/projects/[id]`. Rejects with the server's message. */
   renameProject: (id: string, name: string) => Promise<Project>;
+  /** `PATCH /api/projects/[id]` with `{pinned}`; shown at once, refetched if the server refuses. Rejects with the server's message. */
+  setProjectPinned: (id: string, pinned: boolean) => Promise<Project>;
   /**
    * `DELETE /api/projects/[id]`, with `?worktree=delete[&force=1]` per `opts`. Sessions stay.
    * Rejects with a `ProjectRequestError` carrying the server's message (and `dirty` for a 409).
@@ -61,13 +64,34 @@ async function readError(r: Response, fallback: string) {
   return new ProjectRequestError(j.error ?? fallback, r.status, j.dirty === true);
 }
 
-/** The project list and its mutations; refetches when the tab becomes visible again. */
+/** `PATCH /api/projects/[id]` with `{pinned}`, answering the updated project. */
+async function patchPinned(id: string, pinned: boolean): Promise<Project> {
+  let r: Response;
+  try {
+    r = await fetch(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned }),
+    });
+  } catch {
+    throw new Error(NETWORK_ERROR);
+  }
+  if (!r.ok) throw await readError(r, pinned ? "Could not pin the project. Try again." : "Could not unpin the project. Try again.");
+  return (await r.json()) as Project;
+}
+
+/**
+ * The project list and its mutations; refetches when the tab becomes visible again. The first list
+ * from a server with project pins also moves this browser's old local project pins there.
+ */
 export function useProjects(): UseProjects {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
   const mountedRef = useRef(true);
+  /** The one-time push of local project pins: still to do, running, or finished. */
+  const pinMigrationRef = useRef<"pending" | "running" | "done">("pending");
 
   const refresh = useCallback(async () => {
     const request = ++requestRef.current;
@@ -102,6 +126,19 @@ export function useProjects(): UseProjects {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [refresh]);
+
+  // Once a list is in, push the project pins this browser kept locally (a no-op after the first
+  // time, or until the server reports `pinnedAt`), then refetch so the pushed pins show.
+  useEffect(() => {
+    if (loading || pinMigrationRef.current !== "pending") return;
+    pinMigrationRef.current = "running";
+    void migrateProjectPins(projects, localStorage, (id) => patchPinned(id, true))
+      .catch(() => ({ status: "waiting" as const, pushed: 0 }))
+      .then((outcome) => {
+        pinMigrationRef.current = outcome.status === "done" ? "done" : "pending";
+        if (outcome.pushed > 0) void refresh();
+      });
+  }, [loading, projects, refresh]);
 
   const merge = useCallback((project: Project) => {
     setProjects((prev) => {
@@ -154,6 +191,19 @@ export function useProjects(): UseProjects {
     return project;
   }, [merge, refresh]);
 
+  const setProjectPinned = useCallback(async (id: string, pinned: boolean) => {
+    // Shown at once; the server's answer replaces the guessed time, and after a refusal a refetch puts its value back.
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, pinnedAt: pinned ? (p.pinnedAt ?? Date.now()) : null } : p)));
+    try {
+      const project = await patchPinned(id, pinned);
+      merge(project);
+      return project;
+    } catch (e) {
+      void refresh();
+      throw e;
+    }
+  }, [merge, refresh]);
+
   const removeProject = useCallback(async (id: string, opts: RemoveProjectOptions = {}) => {
     const params = new URLSearchParams();
     if (opts.deleteWorktree) {
@@ -172,5 +222,5 @@ export function useProjects(): UseProjects {
     await refresh();
   }, [refresh]);
 
-  return { projects, loading, error, addProject, renameProject, removeProject, refresh };
+  return { projects, loading, error, addProject, renameProject, setProjectPinned, removeProject, refresh };
 }
