@@ -1442,8 +1442,10 @@ test("a task the turn leaves running reads as background until the agent ends it
   assert.equal(meta.liveness.state, "background");
   assert.equal(meta.liveness.summary, "1 background task running");
   assert.equal(meta.liveness.turnOpen, false);
-  assert.deepEqual(meta.backgroundTasks.map(({ id, title, canStop }) => ({ id, title, canStop })), [{ id: "task-1", title: "sleep 30", canStop: true }]);
+  assert.deepEqual(meta.backgroundTasks.map(({ id, title, taskType, canStop }) => ({ id, title, taskType, canStop })), [{ id: "task-1", title: "sleep 30", taskType: "shell", canStop: true }]);
   assert.ok(meta.backgroundTasks[0].startedAt >= session.turnEndedAt);
+  // Announced between turns: the probe looks back to the start of the turn that started the shell.
+  assert.equal(session.backgroundTasks.get("task-1").processesSince, session.lastTurnStartedAt);
   assert.deepEqual(meta.liveness.backgroundTasks, meta.backgroundTasks);
   // Not idle while it runs: in memory, on disk, and in the list patch, which carries the tasks.
   assert.equal(session.idleSince, null);
@@ -1512,8 +1514,32 @@ test("stopping a task asks the agent; unknown tasks are refused; a lost agent or
   const other = await runtime.createSession(cwd, "claude");
   await runtime.sendPrompt(other.id, "background");
   await until(() => other.backgroundTasks.size === 1, "a task on the other session");
+  const [otherTask] = other.backgroundTasks.keys();
+  const stopsBefore = messages("claude", "_session/async_task/stop").length;
   assert.equal(await runtime.deleteSession(other.id), true);
   assert.equal(other.backgroundTasks.size, 0);
+  // The agent is asked to stop them first, since they can outlive its session.
+  assert.deepEqual(
+    messages("claude", "_session/async_task/stop").slice(stopsBefore).map(({ message }) => message.params),
+    [{ sessionId: other.upstreamId, asyncTaskId: otherTask }],
+  );
+});
+
+test("a task announced during its turn is logged before the turn ends and probed from the turn's start", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  let turnStartedAt = null;
+  runtime.subscribe(session.id, { onEvent: (_seq, event) => {
+    if (event.type === "turn_start") turnStartedAt = session.turnStartedAt;
+  } });
+  await runtime.sendPrompt(session.id, "background-first");
+  await until(() => !session.busy && session.backgroundTasks.size === 1, "the turn and its task");
+  assert.equal(typeof turnStartedAt, "number");
+  assert.equal(session.backgroundTasks.get("task-1").processesSince, turnStartedAt);
+  const order = session.events
+    .filter((event) => event.type === "turn_end" || (event.type === "update" && event.update.sessionUpdate === "async_task_spawned"))
+    .map((event) => event.type === "turn_end" ? "turn_end" : event.update.sessionUpdate);
+  assert.deepEqual(order, ["async_task_spawned", "turn_end"]);
 });
 
 test("between turns the probe samples sessions with background tasks and lists their processes", { skip: process.platform === "win32" }, async (t) => {

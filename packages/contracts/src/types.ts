@@ -214,6 +214,11 @@ export type BackgroundTask = {
   /** The agent's task id (AIR `asyncTaskId`); what the stop route takes. */
   id: string;
   title: string;
+  /**
+   * The agent's kind of task (AIR `taskType`, e.g. "shell"), null when it gave none. Every type
+   * keeps the session from counting as idle.
+   */
+  taskType: string | null;
   /** Epoch ms Portal heard of it. */
   startedAt: number;
   /** Whether the agent offers to stop it (`POST /api/sessions/:id/tasks/:taskId/stop`). */

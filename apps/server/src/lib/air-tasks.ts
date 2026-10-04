@@ -13,7 +13,8 @@
  * So `routeAirUpdates` renames AIR notifications on the incoming message stream, before the SDK
  * sees them, to a Portal-local method (`AIR_UPDATE_METHOD`, never on the wire) that the runtime
  * registers with `parseAirNotification`. Every standard kind still goes through the SDK's schema
- * untouched, and both kinds keep their arrival order since they share the SDK's one dispatch queue.
+ * untouched. The two keep their arrival order without any queue: each incoming message runs through
+ * an async chain of handlers, and the AIR handler sits one step after the `session/update` handler.
  */
 import * as acp from "@agentclientprotocol/sdk";
 import type { BackgroundTaskEnd } from "./types.ts";

@@ -380,8 +380,9 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   app.post<{ Params: { id: string; taskId: string } }>("/api/sessions/:id/tasks/:taskId/stop", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     try {
-      await ctx.sessions.stopBackgroundTask(req.params.id, req.params.taskId);
-      return { ok: true };
+      const stopped = await ctx.sessions.stopBackgroundTask(req.params.id, req.params.taskId);
+      if (!stopped) return reply.code(409).send({ error: "The agent had nothing to stop." });
+      return { stopped };
     } catch (err) {
       const message = errorMessage(err);
       return reply.code(/^no such (session|background task)$/i.test(message) ? 404 : 409).send({ error: message });

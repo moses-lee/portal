@@ -64,6 +64,8 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness" | "bac
   permissionTitle: string | null;
   /** When the open turn started; null between turns. */
   turnStartedAt: number | null;
+  /** When the latest turn this process saw started, kept past its end; null before the first. */
+  lastTurnStartedAt: number | null;
   /** Tool calls of the open turn that have not finished, by tool call ID. */
   openTools: Map<string, OpenToolCall>;
   /** The last output of the open turn (heartbeats excluded). */
@@ -84,8 +86,9 @@ export type RunningTask = {
   startedAt: number;
   /**
    * The earliest its processes can have started, for the probe: the start of the turn it was
-   * announced in (an agent announces a backgrounded shell once the shell is already running), or
-   * `startedAt` when no turn was open.
+   * announced in (an agent announces a backgrounded shell once the shell is already running); when
+   * no turn is open, the start of the last turn (an agent may announce, or announce again after a
+   * reconnect, a shell an earlier turn started), or `startedAt` when there was none.
    */
   processesSince: number;
   taskType: string | null;
@@ -200,7 +203,7 @@ function oldestTaskStart(session: Pick<Session, "backgroundTasks">): number | nu
 /** The session's background tasks, oldest first. */
 export function backgroundTaskList(session: Pick<Session, "backgroundTasks">): BackgroundTask[] {
   return [...session.backgroundTasks]
-    .map(([id, { title, startedAt, canStop }]) => ({ id, title, startedAt, canStop }))
+    .map(([id, { title, taskType, startedAt, canStop }]) => ({ id, title, taskType, startedAt, canStop }))
     .sort((a, b) => a.startedAt - b.startedAt);
 }
 
@@ -213,7 +216,12 @@ export function toMeta(session: Session): SessionMeta {
   };
 }
 
-/** Idle: no open turn, no permission prompt waiting, and no background work. */
+/**
+ * Idle: no open turn, no permission prompt waiting, and no background work. Every announced task
+ * type counts as background work on purpose, not only shells: Claude's adapter announces all but
+ * `local_bash`/`local_agent` (monitors, MCP tasks, workflows, plain tasks), and each of them keeps
+ * the session from idling until Moses decides otherwise.
+ */
 export function isIdle(session: Pick<Session, "busy" | "pendingPermissions" | "backgroundTasks">): boolean {
   return !session.busy && session.pendingPermissions.size === 0 && session.backgroundTasks.size === 0;
 }
@@ -358,7 +366,7 @@ export function createAcpRuntime(
   }
 
   function startTurn(session: Session) {
-    session.turnStartedAt = Date.now();
+    session.turnStartedAt = session.lastTurnStartedAt = Date.now();
     session.openTools.clear();
     session.progressing.clear();
     session.lastOutputAt = null;
@@ -601,7 +609,8 @@ export function createAcpRuntime(
       // Between turns the probe measures from the oldest task's start; begin its samples afresh.
       if (!session.busy && tasks.size === 0) resetProbe(session.probe);
       const now = Date.now();
-      tasks.set(taskId, { title, startedAt: now, processesSince: session.busy ? session.turnStartedAt ?? now : now, taskType, canStop });
+      const processesSince = (session.busy ? session.turnStartedAt : session.lastTurnStartedAt) ?? now;
+      tasks.set(taskId, { title, startedAt: now, processesSince, taskType, canStop });
       logged = { sessionUpdate: "async_task_spawned", asyncTaskId: taskId, title, taskType, ...(toolCallId ? { toolCallId } : {}) };
     } else if (update.kind === "state" && update.end) {
       const task = tasks.get(update.taskId);
@@ -833,6 +842,7 @@ export function createAcpRuntime(
       attaching: null,
       permissionTitle: null,
       turnStartedAt: null,
+      lastTurnStartedAt: null,
       openTools: new Map(),
       lastOutputAt: null,
       probe: createProbeState(),
@@ -1307,6 +1317,13 @@ export function createAcpRuntime(
       if (session.busy) {
         await settleWithin(instance.conn.agent.notify(acp.methods.agent.session.cancel, { sessionId: session.upstreamId }), agentCallTimeoutMs, undefined);
       }
+      // Background work can outlive the agent's session (Codex's background terminals do): ask for it to stop first.
+      const stoppable = [...session.backgroundTasks].filter(([, task]) => task.canStop).map(([taskId]) => taskId);
+      await Promise.all(stoppable.map((taskId) => settleWithin(
+        instance.conn.agent.request(ASYNC_TASK_STOP_METHOD, { sessionId: session.upstreamId, asyncTaskId: taskId })
+          .catch((error: unknown) => console.error(`Could not stop background task ${taskId} of deleted session ${id}: ${errorMessage(error)}`)),
+        agentCallTimeoutMs, undefined,
+      )));
       if (instance.capabilities.sessionCapabilities?.close) {
         await settleWithin(instance.conn.agent.request(acp.methods.agent.session.close, { sessionId: session.upstreamId }), agentCallTimeoutMs, null);
       }

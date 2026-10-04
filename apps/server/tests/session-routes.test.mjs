@@ -605,7 +605,7 @@ test("stopping a background task forwards the agent's stop request; unknown sess
 
   const stopped = await stop(session.id, "task-1");
   assert.equal(stopped.statusCode, 200, stopped.body);
-  assert.deepEqual(stopped.json(), { ok: true });
+  assert.deepEqual(stopped.json(), { stopped: true });
   const [sent] = messages("_session/async_task/stop");
   assert.equal(sent.message.params.asyncTaskId, "task-1");
   assert.equal(typeof sent.message.params.sessionId, "string");
@@ -617,4 +617,11 @@ test("stopping a background task forwards the agent's stop request; unknown sess
     ["async_task_spawned", "sleep 30", null],
     ["async_task_state_update", "sleep 30", "stopped"],
   ]);
+
+  // A task the agent no longer has (it ended meanwhile): nothing was stopped, and the route says so.
+  await app.inject({ method: "POST", url: `/api/sessions/${session.id}/prompt`, payload: { text: "phantom-task" } });
+  await until(async () => (await detail()).backgroundTasks.length === 1, "the phantom task");
+  const nothing = await stop(session.id, (await detail()).backgroundTasks[0].id);
+  assert.equal(nothing.statusCode, 409, nothing.body);
+  assert.deepEqual(nothing.json(), { error: "The agent had nothing to stop." });
 });

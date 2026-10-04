@@ -238,27 +238,36 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       respond(id, { stopReason: "end_turn" });
       return;
     }
-    if (text === "background") {
+    if (text === "background" || text === "background-first") {
       // A shell backgrounded by the turn, as Claude Code's Bash with run_in_background does: the turn
       // ends at once, the shell keeps running below the session's process, and an AIR client hears
       // of it after the turn ended, with a progress report, until it finishes (on the next set_mode)
-      // or is stopped (`_session/async_task/stop`).
+      // or is stopped (`_session/async_task/stop`). "background-first" announces the task while the
+      // turn is still open, before the reply.
       const taskId = `task-${++taskCount}`;
       const toolCallId = `call-bg-${taskCount}`;
+      const announce = () => update(params.sessionId, {
+        sessionUpdate: "async_task_spawned", asyncTaskId: taskId, name: "sleep 30", taskType: "shell", description: "sleep 30",
+        showInTranscript: false, canStop: true, toolCallId,
+      });
       update(params.sessionId, { sessionUpdate: "tool_call", toolCallId, title: "sleep 30", kind: "execute", status: "pending" });
       const child = spawn("sh", ["-c", `sleep 30; : ${params.sessionId}`], { stdio: "ignore", detached: true });
       log({ event: "child", childPid: child.pid, taskId });
       backgroundTasks.set(taskId, { sessionId: params.sessionId, child });
+      if (airTasks && text === "background-first") announce();
       update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId, status: "completed", content: [{ type: "content", content: { type: "text", text: `Command running in background with ID: ${taskId}.` } }] });
       respond(id, { stopReason: "end_turn" });
       if (airTasks) {
-        update(params.sessionId, {
-          sessionUpdate: "async_task_spawned", asyncTaskId: taskId, name: "sleep 30", taskType: "shell", description: "sleep 30",
-          showInTranscript: false, canStop: true, toolCallId,
-        });
+        if (text === "background") announce();
         update(params.sessionId, { sessionUpdate: "async_task_progress", asyncTaskId: taskId, description: "still sleeping" });
         update(params.sessionId, { sessionUpdate: "async_task_state_update", asyncTaskId: taskId, state: "running" });
       }
+      return;
+    }
+    if (text === "phantom-task") {
+      // A task announced but no longer known to the agent (it ended meanwhile), so stopping it stops nothing.
+      respond(id, { stopReason: "end_turn" });
+      if (airTasks) update(params.sessionId, { sessionUpdate: "async_task_spawned", asyncTaskId: `phantom-${++taskCount}`, name: "gone", canStop: true });
       return;
     }
     if (text === "ask-on-mode") {
