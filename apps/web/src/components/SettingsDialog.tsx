@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Bot, GitBranch, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Bot, Database, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -68,10 +68,14 @@ import {
   defaultSettings,
   gitActionKinds,
   isHungAfterMinutes,
+  isLifecycleHours,
   orchestratorLimits,
+  sessionsLimits,
   type GitActionKind,
+  type Settings,
   type SettingsPatch,
 } from "@/lib/settings";
+import type { RemovedProjectSummary } from "@/lib/types";
 import { useMediaQuery } from "./useMediaQuery";
 import { usePreference } from "./usePreference";
 import {
@@ -98,13 +102,48 @@ const sectionMeta: Record<
       "The assistant that keeps an eye on your sessions and pull requests. Choose the models it runs on and the API keys it uses. Keys never leave this machine.",
     icon: Bot,
   },
+  sessions: {
+    label: "Sessions",
+    description:
+      "How long finished work stays around. Portal checks every few minutes, whether or not a browser is open.",
+    icon: Timer,
+  },
   scripts: {
     label: "Scripts",
     description:
       "Shell commands Portal runs on this machine before certain actions. Leave a command empty to turn its script off.",
     icon: SquareTerminal,
   },
+  data: {
+    label: "Data",
+    description: "Conversations Portal keeps after their project is gone.",
+    icon: Database,
+  },
 };
+
+/** The sessions section's two clocks, in hours. */
+type SessionsField = "untrackAfterHours" | "removeAfterHours";
+const sessionsFields: readonly SessionsField[] = ["untrackAfterHours", "removeAfterHours"];
+const sessionsFieldMeta: Record<SessionsField, { label: string; description: string; default: number }> = {
+  untrackAfterHours: {
+    label: "Untrack a finished session after … hours",
+    description:
+      "A tracked session leaves the tracked list this long after it last did anything. Untracking hides nothing and deletes nothing.",
+    default: defaultSettings.sessions.tracked.untrackAfterHours,
+  },
+  removeAfterHours: {
+    label: "Remove an idle worktree after … hours",
+    description:
+      "A worktree Portal created is removed this long after all its sessions went idle, unless it is pinned or has uncommitted changes. Its branch stays unless merged, and its conversations move to Removed.",
+    default: defaultSettings.sessions.worktrees.removeAfterHours,
+  },
+};
+
+function sessionsValue(settings: Settings, field: SessionsField): number {
+  return field === "untrackAfterHours"
+    ? settings.sessions.tracked.untrackAfterHours
+    : settings.sessions.worktrees.removeAfterHours;
+}
 
 /** The section shown when nothing asked for one and none is remembered. */
 const defaultSection: SettingsSection = "gitActions";
@@ -167,6 +206,7 @@ type FieldKey =
   | "bookkeepingProvider"
   | OrchestratorTextField
   | "reviews.answerReadOnly"
+  | SessionsField
   | `apiKey.${OrchestratorProvider}`
   | `script.${ScriptKind}.${keyof ScriptSettings}`;
 
@@ -246,11 +286,14 @@ export default function SettingsDialog({
   open,
   section = null,
   onClose,
+  onRemovedDeleted,
 }: {
   open: boolean;
   /** The section to show and focus when opening; null reopens the last one viewed. */
   section?: SettingsSection | null;
   onClose: () => void;
+  /** Removed sessions were deleted for good (the Data section): the sidebar's Removed list is stale. */
+  onRemovedDeleted?: () => void;
 }) {
   const { settings, error, update } = useSettings();
   const {
@@ -276,6 +319,9 @@ export default function SettingsDialog({
   >({});
   const [scriptDrafts, setScriptDrafts] = useState<
     Partial<Record<ScriptTextKey, string>>
+  >({});
+  const [sessionsDrafts, setSessionsDrafts] = useState<
+    Partial<Record<SessionsField, string>>
   >({});
   const paneRef = useRef<HTMLDivElement>(null);
 
@@ -309,6 +355,7 @@ export default function SettingsDialog({
       setOrchestratorDrafts({});
       setApiKeyDrafts({});
       setScriptDrafts({});
+      setSessionsDrafts({});
       setActive(section ?? rememberedSection);
     }
   }
@@ -560,6 +607,42 @@ export default function SettingsDialog({
     if (ok) clearScriptDraft(key);
   };
 
+  const clearSessionsDraft = (field: SessionsField) =>
+    setSessionsDrafts((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+
+  /** Checks a typed lifecycle clock client-side, then persists it. Blank puts the default back. */
+  const saveSessionsField = async (field: SessionsField, value: string) => {
+    if (!settings) return;
+    const trimmed = value.trim();
+    const hours = trimmed ? Number(trimmed) : sessionsFieldMeta[field].default;
+    if (!/^\d*$/.test(trimmed) || !isLifecycleHours(hours)) {
+      setStatusFor(field, {
+        kind: "error",
+        message: `Enter a whole number of hours from ${sessionsLimits.minHours} to ${sessionsLimits.maxHours}.`,
+      });
+      return;
+    }
+    if (hours === sessionsValue(settings, field)) {
+      clearSessionsDraft(field);
+      return;
+    }
+    const patch: SettingsPatch["sessions"] =
+      field === "untrackAfterHours"
+        ? { tracked: { untrackAfterHours: hours } }
+        : { worktrees: { removeAfterHours: hours } };
+    const ok = await run(
+      field,
+      () => update({ sessions: patch }),
+      "Could not save the setting.",
+    );
+    if (ok) clearSessionsDraft(field);
+  };
+
   const saveScriptToggle = (kind: ScriptKind, abortOnFailure: boolean) => {
     if (!settings || abortOnFailure === settings.scripts[kind].abortOnFailure)
       return;
@@ -588,6 +671,10 @@ export default function SettingsDialog({
         const draft = scriptDrafts[scriptTextKey(kind, field)];
         if (draft !== undefined) void saveScriptField(kind, field, draft);
       }
+    }
+    for (const field of sessionsFields) {
+      const draft = sessionsDrafts[field];
+      if (draft !== undefined) void saveSessionsField(field, draft);
     }
   };
 
@@ -835,6 +922,37 @@ export default function SettingsDialog({
         </section>
       )}
 
+      {active === "sessions" && (
+        <section aria-labelledby="settings-sessions" className="space-y-4">
+          <SectionHeading id="settings-sessions" section="sessions" />
+          {settings &&
+            sessionsFields.map((field) => (
+              <HoursField
+                key={field}
+                field={field}
+                value={sessionsDrafts[field] ?? String(sessionsValue(settings, field))}
+                dirty={sessionsDrafts[field] !== undefined}
+                saving={!!saving[field]}
+                status={status[field] ?? null}
+                onChange={(value) =>
+                  setSessionsDrafts((prev) => ({ ...prev, [field]: value }))
+                }
+                onBlur={() => {
+                  const draft = sessionsDrafts[field];
+                  if (draft !== undefined) void saveSessionsField(field, draft);
+                }}
+              />
+            ))}
+        </section>
+      )}
+
+      {active === "data" && (
+        <section aria-labelledby="settings-data" className="space-y-4">
+          <SectionHeading id="settings-data" section="data" />
+          <DeleteRemovedSessions onDeleted={onRemovedDeleted} />
+        </section>
+      )}
+
       {active === "scripts" && (
         <section aria-labelledby="settings-scripts" className="space-y-6">
           <SectionHeading id="settings-scripts" section="scripts" />
@@ -960,6 +1078,194 @@ export default function SettingsDialog({
         </SidebarProvider>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One lifecycle clock: a whole number of hours, the default as the placeholder; blank saves the default. */
+function HoursField({
+  field,
+  value,
+  dirty,
+  saving,
+  status,
+  onChange,
+  onBlur,
+}: {
+  field: SessionsField;
+  value: string;
+  dirty: boolean;
+  saving: boolean;
+  status: FieldStatus | null;
+  onChange: (value: string) => void;
+  onBlur: () => void;
+}) {
+  const id = useId();
+  const statusId = `${id}-status`;
+  const descriptionId = `${id}-description`;
+  const meta = sessionsFieldMeta[field];
+  return (
+    <div className="space-y-2 rounded-xl border border-border/60 p-4">
+      <label htmlFor={id} className="text-xs font-medium">
+        {meta.label}
+      </label>
+      <p id={descriptionId} className="text-xs leading-relaxed text-muted-foreground">
+        {meta.description}
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          id={id}
+          type="number"
+          inputMode="numeric"
+          min={sessionsLimits.minHours}
+          max={sessionsLimits.maxHours}
+          step={1}
+          autoComplete="off"
+          value={value}
+          placeholder={String(meta.default)}
+          disabled={saving}
+          aria-describedby={status ? `${descriptionId} ${statusId}` : descriptionId}
+          aria-invalid={status?.kind === "error" || undefined}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
+          className="w-28 text-xs md:text-xs"
+        />
+        <span className="text-xs text-muted-foreground">hours</span>
+      </div>
+      <FieldStatusText id={statusId} status={status} saving={saving} dirty={dirty} />
+    </div>
+  );
+}
+
+async function errorOf(r: Response, fallback: string): Promise<Error> {
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  return new Error(j.error || fallback);
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * Rule 3: Removed is emptied by hand. Counts the conversations of removed projects
+ * (`GET /api/projects/removed`), asks once inline, then `DELETE /api/sessions/removed` and says how many went.
+ */
+function DeleteRemovedSessions({ onDeleted }: { onDeleted?: () => void }) {
+  const [count, setCount] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/projects/removed", { signal: controller.signal })
+      .then(async (r) => {
+        if (!r.ok) throw await errorOf(r, "Could not count removed sessions.");
+        const { removed } = (await r.json()) as { removed: RemovedProjectSummary[] };
+        setCount(removed.reduce((n, row) => n + row.sessionCount, 0));
+        setLoadError(null);
+      })
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
+        setLoadError(
+          e instanceof Error && e.message !== "Failed to fetch"
+            ? e.message
+            : "Could not reach the server. Check the connection and try again.",
+        );
+      });
+    return () => controller.abort();
+  }, [reload]);
+
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/sessions/removed", { method: "DELETE" });
+      if (!r.ok) throw await errorOf(r, "Could not delete removed sessions. Try again.");
+      const { deleted } = (await r.json()) as { deleted: number };
+      setResult(`Deleted ${plural(deleted, "session", "sessions")}.`);
+      setConfirming(false);
+      setReload((n) => n + 1);
+      onDeleted?.();
+    } catch (e) {
+      setError(
+        e instanceof Error && e.message !== "Failed to fetch"
+          ? e.message
+          : "Could not reach the server. Check the connection and try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const none = count === 0;
+  return (
+    <div className="space-y-3 rounded-xl border border-border/60 p-4">
+      <div className="space-y-1">
+        <p className="text-xs font-medium">Delete removed sessions</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Permanently deletes every conversation whose project was removed, transcripts included,
+          and empties the Removed list. Conversations in listed projects are never touched.
+        </p>
+      </div>
+      <p role="status" className="text-xs text-muted-foreground">
+        {loadError
+          ? null
+          : count === null
+            ? "Counting removed sessions…"
+            : none
+              ? "No removed sessions."
+              : `${plural(count, "removed session", "removed sessions")}.`}
+      </p>
+      {loadError && (
+        <p role="alert" className="text-[11px] text-destructive">
+          {loadError}
+        </p>
+      )}
+      {confirming ? (
+        <div
+          role="group"
+          aria-label="Delete removed sessions?"
+          className="space-y-3 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-xs"
+        >
+          <p className="leading-relaxed">
+            Delete {count === null ? "all removed sessions" : plural(count, "removed session", "removed sessions")} for good?
+            This cannot be undone.
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove()}>
+              {busy ? "Deleting…" : "Delete"}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={none || count === null}
+          onClick={() => {
+            setResult(null);
+            setError(null);
+            setConfirming(true);
+          }}
+        >
+          Delete removed sessions
+        </Button>
+      )}
+      {error && (
+        <p role="alert" className="text-[11px] text-destructive">
+          {error}
+        </p>
+      )}
+      {result && (
+        <p role="status" className="text-[11px] text-muted-foreground">
+          {result}
+        </p>
+      )}
+    </div>
   );
 }
 

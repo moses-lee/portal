@@ -849,6 +849,28 @@ export async function setupPortal(
         201,
       );
     if (path.endsWith("/terminals")) return json({ terminals: [] });
+    // Rule 3: deletes every conversation whose project is gone and forgets the removed projects.
+    if (path === "/api/sessions/removed" && method === "DELETE") {
+      // The removed rows' counts are the conversations that go (the fixture's rows may name sessions it does not list).
+      const deleted = currentRemoved.reduce((n, row) => n + row.sessionCount, 0);
+      const listed = new Set(currentProjects.map((p) => p.id));
+      for (let i = currentSessions.length - 1; i >= 0; i--) {
+        if (!listed.has(currentSessions[i].projectId)) currentSessions.splice(i, 1);
+      }
+      currentRemoved.splice(0, currentRemoved.length);
+      return json({ deleted });
+    }
+    // Rename: the user's title wins (titleSource "user"); answers with the updated session.
+    const renameMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
+    if (renameMatch && method === "PATCH") {
+      const session = currentSessions.find((s) => s.id === renameMatch[1]);
+      if (!session) return json({ error: "Unknown session." }, 404);
+      const title = typeof (body as { title?: unknown })?.title === "string" ? (body as { title: string }).title.trim() : "";
+      if (!title || title.length > 120) return json({ error: "A title is 1 to 120 characters." }, 400);
+      session.title = title;
+      session.titleSource = "user";
+      return json(session);
+    }
     if (path.startsWith("/api/sessions/") && method === "GET")
       return json(
         currentSessions.find((session) => path.endsWith(session.id)) ?? {},

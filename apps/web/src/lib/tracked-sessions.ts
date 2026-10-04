@@ -13,19 +13,21 @@ export const TRACKED_WIDTH_KEY = "portal.tracked.width";
 
 /** A tracked session's state, as its badge shows it: the shared `sessionState`, the same one the sidebar dot shows. */
 export type TrackedState = SessionState;
-/** The panel's groups, in list order; offline and hung share the last one, background sits with working. */
-export type TrackedGroupId = "approval" | "finished" | "working" | "connecting" | "stalled";
+/** The panel's groups, in list order; offline and hung share "stalled". */
+export type TrackedGroupId = "approval" | "stalled" | "working" | "background" | "connecting" | "finished";
 
 export const trackedStateLabels: Record<TrackedState, string> = sessionStateLabels;
 
-export const trackedGroupOrder: readonly TrackedGroupId[] = ["approval", "finished", "working", "connecting", "stalled"];
+/** What needs the user first, then what still runs, then what is done (docs/SESSION-LIFECYCLE.md, decision 6). */
+export const trackedGroupOrder: readonly TrackedGroupId[] = ["approval", "stalled", "working", "background", "connecting", "finished"];
 
 export const trackedGroupLabels: Record<TrackedGroupId, string> = {
   approval: "Needs approval",
-  finished: "Finished",
-  working: "Working",
-  connecting: "Connecting",
   stalled: "Offline or hung",
+  working: "Working",
+  background: "Background",
+  connecting: "Connecting",
+  finished: "Finished",
 };
 
 /** The list fields the state reads. */
@@ -38,29 +40,38 @@ export function trackedState(session: TrackedStateInput): TrackedState {
 
 export function trackedGroupOf(state: TrackedState): TrackedGroupId {
   if (state === "offline" || state === "hung") return "stalled";
-  // Background work gets its own group with the new group order; until then it lists with working.
-  if (state === "background") return "working";
   return state;
 }
 
-export type TrackedRow<S extends TrackedStateInput & Pick<SessionSummary, "id" | "lastActiveAt"> = SessionSummary> = {
+/** The list fields grouping and sorting read; `turnEndedAt` orders the finished group. */
+export type TrackedSortInput = TrackedStateInput & Pick<SessionSummary, "id" | "lastActiveAt"> & { turnEndedAt?: number | null };
+
+export type TrackedRow<S extends TrackedSortInput = SessionSummary> = {
   session: S;
   tracked: TrackedSession;
   state: TrackedState;
 };
 
-export type TrackedGroup<S extends TrackedStateInput & Pick<SessionSummary, "id" | "lastActiveAt"> = SessionSummary> = {
+export type TrackedGroup<S extends TrackedSortInput = SessionSummary> = {
   id: TrackedGroupId;
   label: string;
   rows: TrackedRow<S>[];
 };
 
 /**
- * The tracked sessions in their groups, in `trackedGroupOrder`, most recently prompted first within
- * a group. Empty groups are left out, and so are tracked ids missing from `sessions` (not loaded yet,
- * or deleted before the stream said so).
+ * A row's place in its group, newest first: finished sessions by when their last turn ended (the
+ * last prompt for sessions without one), every other group by the last prompt.
  */
-export function groupTracked<S extends TrackedStateInput & Pick<SessionSummary, "id" | "lastActiveAt">>(
+export function trackedSortKey(group: TrackedGroupId, session: TrackedSortInput): number {
+  return group === "finished" ? (session.turnEndedAt ?? session.lastActiveAt) : session.lastActiveAt;
+}
+
+/**
+ * The tracked sessions in their groups, in `trackedGroupOrder`, newest first within a group (see
+ * `trackedSortKey`). Empty groups are left out, and so are tracked ids missing from `sessions` (not
+ * loaded yet, or deleted before the stream said so).
+ */
+export function groupTracked<S extends TrackedSortInput>(
   tracked: readonly TrackedSession[],
   sessions: readonly S[],
 ): TrackedGroup<S>[] {
@@ -78,14 +89,17 @@ export function groupTracked<S extends TrackedStateInput & Pick<SessionSummary, 
   return trackedGroupOrder.flatMap((id) => {
     const list = rows.get(id);
     if (!list) return [];
-    list.sort((a, b) => b.session.lastActiveAt - a.session.lastActiveAt);
+    list.sort((a, b) => trackedSortKey(id, b.session) - trackedSortKey(id, a.session));
     return [{ id, label: trackedGroupLabels[id], rows: list }];
   });
 }
 
-/** How many tracked sessions wait on the user (needs approval or finished): the collapsed toggle's badge. */
+/**
+ * How many tracked sessions are stuck on the user (needs approval, offline or hung): the collapsed
+ * toggle's badge. Finished sessions are done, not stuck, so they do not count.
+ */
 export function trackedAttentionCount(groups: readonly { id: TrackedGroupId; rows: readonly unknown[] }[]): number {
-  return groups.reduce((count, group) => count + (group.id === "approval" || group.id === "finished" ? group.rows.length : 0), 0);
+  return groups.reduce((count, group) => count + (group.id === "approval" || group.id === "stalled" ? group.rows.length : 0), 0);
 }
 
 /** The first eight characters of a session id: enough to tell sessions apart in a title fallback. */

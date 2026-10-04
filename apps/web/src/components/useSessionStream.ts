@@ -177,6 +177,7 @@ export function useSessionStream(
       if (meta.busy !== undefined) patch.busy = meta.busy;
       if (meta.link) patch.link = meta.link;
       if (meta.title !== undefined) patch.title = meta.title;
+      if (meta.titleSource !== undefined) patch.titleSource = meta.titleSource;
       if (meta.git !== undefined) patch.git = meta.git;
       if (meta.state) patch.state = meta.state;
       if (meta.project !== undefined) patch.project = meta.project;

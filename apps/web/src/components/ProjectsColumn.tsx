@@ -20,6 +20,7 @@ import {
   Folder,
   FolderGit2,
   MoreHorizontal,
+  PencilLine,
   Pin,
   PinOff,
   Plus,
@@ -30,7 +31,9 @@ import {
 import AgentLogo from "./AgentLogo";
 import IconButton from "./IconButton";
 import { RenameField, RemoveConfirm } from "./ProjectActions";
+import { SESSION_TITLE_MAX } from "./SessionsProvider";
 import { usePreference } from "./usePreference";
+import { useSettings } from "./useSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -53,6 +56,8 @@ import {
 } from "@/lib/collapsed-projects";
 import { sessionState, sessionStateLabels } from "@/lib/session-state";
 import { relativeAge } from "@/lib/relative-age";
+import { worktreeRetention } from "@/lib/session-lifecycle";
+import { defaultSettings } from "@/lib/settings";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
@@ -72,6 +77,8 @@ export type ProjectsColumnProps = {
   trackedIds: ReadonlySet<string>;
   /** Track (`true`) or untrack a session; rejects with the server's message. */
   onToggleTrack: (id: string, track: boolean) => Promise<void>;
+  /** `PATCH /api/sessions/:id {title}`; rejects with the server's message. */
+  onRenameSession: (id: string, title: string) => Promise<void>;
   onNewSession: (projectId: string) => void;
   onAddProject: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
@@ -102,6 +109,7 @@ const SessionRow = memo(function SessionRow({
   onDelete,
   onTogglePin,
   onToggleTrack,
+  onRename,
 }: {
   session: SessionSummary;
   active: boolean;
@@ -113,11 +121,15 @@ const SessionRow = memo(function SessionRow({
   onDelete: (id: string) => void | Promise<void>;
   onTogglePin: (id: string) => void;
   onToggleTrack: (id: string, track: boolean) => Promise<void>;
+  onRename: (id: string, title: string) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Errors from the menu's quick actions (track, rename), shown under the row. */
   const [trackError, setTrackError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const renameInput = useRef<HTMLInputElement>(null);
   const hover = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
     () => () => {
@@ -152,6 +164,26 @@ const SessionRow = memo(function SessionRow({
   };
   return (
     <div className="sidebar-row group" data-active={active}>
+      {renaming ? (
+        <div className="min-w-0 px-2.5 py-1">
+          <RenameField
+            inputRef={renameInput}
+            initial={session.title ?? ""}
+            ariaLabel="Session title"
+            maxLength={SESSION_TITLE_MAX}
+            onCancel={() => setRenaming(false)}
+            onCommit={(next) => {
+              setRenaming(false);
+              setTrackError(null);
+              onRename(session.id, next).catch((e: unknown) =>
+                setTrackError(
+                  e instanceof Error ? e.message : "Could not rename the session.",
+                ),
+              );
+            }}
+          />
+        </div>
+      ) : (
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -195,6 +227,7 @@ const SessionRow = memo(function SessionRow({
           {title}
         </TooltipContent>
       </Tooltip>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -207,7 +240,21 @@ const SessionRow = memo(function SessionRow({
             <MoreHorizontal />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="right">
+        <DropdownMenuContent
+          align="start"
+          side="right"
+          onCloseAutoFocus={(event) => {
+            // Rename swaps the row for its input: focus goes there, not back to the trigger.
+            if (renameInput.current) {
+              event.preventDefault();
+              renameInput.current.focus();
+            }
+          }}
+        >
+          <DropdownMenuItem onSelect={() => setRenaming(true)}>
+            <PencilLine />
+            Rename
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onTogglePin(session.id)}>
             {pinned ? <PinOff /> : <Pin />}
             {pinned ? "Unpin session" : "Pin session"}
@@ -298,6 +345,7 @@ const ProjectsColumn = memo(function ProjectsColumn({
   onTogglePinProject,
   trackedIds,
   onToggleTrack,
+  onRenameSession,
   onNewSession,
   onAddProject,
   onRenameProject,
@@ -306,6 +354,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
   onBack,
   onOpenRemoved,
 }: ProjectsColumnProps) {
+  const { settings } = useSettings();
+  const removeAfterHours = (settings ?? defaultSettings).sessions.worktrees.removeAfterHours;
   /** Collapsed projects, remembered per browser so decluttering survives a reload. */
   const [storedCollapsed, storeCollapsed] = usePreference(
     "portal.sidebar.collapsed",
@@ -484,6 +534,10 @@ const ProjectsColumn = memo(function ProjectsColumn({
             : null;
           const waiting = rows.some((s) => s.awaitingPermission);
           const working = rows.some((s) => s.busy);
+          // Read over every session of the project, not the search-filtered rows: the clock is the project's.
+          const retention = now
+            ? worktreeRetention(project, sessions, removeAfterHours, now)
+            : null;
           // A search shows every match; otherwise the list is cut until "Show more" asks for the rest.
           const capped = capSessions(rows, sessionPins, active);
           const hiddenCount = rows.length - capped.length;
@@ -533,6 +587,14 @@ const ProjectsColumn = memo(function ProjectsColumn({
                       {parent && (
                         <span className="block truncate text-[10px] text-muted-foreground">
                           {parent.name}
+                        </span>
+                      )}
+                      {retention && (
+                        <span
+                          data-testid="worktree-retention"
+                          className={`block truncate text-[10px] ${project.keptReason ? "text-amber-300/80" : "text-muted-foreground/80"}`}
+                        >
+                          {retention}
                         </span>
                       )}
                     </span>
@@ -643,6 +705,7 @@ const ProjectsColumn = memo(function ProjectsColumn({
                     onDelete={onDeleteSession}
                     onTogglePin={onTogglePinSession}
                     onToggleTrack={onToggleTrack}
+                    onRename={onRenameSession}
                   />
                 ))}
                 {rows.length === 0 && (

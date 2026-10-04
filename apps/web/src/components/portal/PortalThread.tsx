@@ -403,6 +403,12 @@ export default function PortalThread({
 
   return (
     <div hidden={!visible} className="flex min-h-0 flex-1 flex-col" data-thread={threadId}>
+      {/* Pinned above the scroller, not inside it: in the log it sat above the oldest loaded message and went unseen. */}
+      {isMain && (
+        <div className="needs-you-slot shrink-0">
+          <PortalNeedsYou items={needsYou} handlers={cardHandlers} />
+        </div>
+      )}
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={80}>
         <MessageScroller className="flex-1">
           <MessageScrollerViewport
@@ -427,7 +433,6 @@ export default function PortalThread({
               aria-live="off"
               aria-label="Messages"
             >
-              {isMain && <PortalNeedsYou items={needsYou} handlers={cardHandlers} />}
               {!isMain && thread && <ThreadIntro thread={thread} onOpenGoals={onOpenGoals} />}
               {isMain && status && !ready && (
                 <div className="glass flex flex-col items-start gap-3 rounded-2xl p-5">

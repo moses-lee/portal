@@ -133,7 +133,7 @@ function SidebarContent(props: SidebarProps) {
     onRestoreProject,
     onDiscardRemoved,
   } = props;
-  const { sessions, tracked, track, untrack } = useSessions();
+  const { sessions, tracked, track, untrack, renameSession } = useSessions();
   const trackedIds = useMemo(
     () => new Set(tracked.map((entry) => entry.sessionId)),
     [tracked],
@@ -246,6 +246,7 @@ function SidebarContent(props: SidebarProps) {
           onTogglePinProject={onTogglePinProject}
           trackedIds={trackedIds}
           onToggleTrack={toggleTrack}
+          onRenameSession={renameSession}
           onNewSession={onNewSession}
           onAddProject={onAddProject}
           onRenameProject={onRenameProject}

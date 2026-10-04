@@ -468,6 +468,13 @@
   margin-inline: auto;
   padding: 32px 28px 28px;
 }
+/* The Needs-you strip above the Portal thread's scroller, lined up with the messages under it. */
+.needs-you-slot {
+  width: 100%;
+  max-width: 840px;
+  margin-inline: auto;
+  padding: 16px 28px 0;
+}
 .conversation-turn {
   display: flex;
   flex-direction: column;
@@ -682,6 +689,9 @@
   }
   .conversation-content {
     padding: 24px 18px;
+  }
+  .needs-you-slot {
+    padding: 12px 18px 0;
   }
   .conversation-markdown {
     font-size: 15px;

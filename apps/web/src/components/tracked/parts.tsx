@@ -51,20 +51,34 @@ const badgeTone: Record<TrackedState, string> = {
   hung: "bg-destructive/15 text-red-200",
 };
 
-export function TrackedStateBadge({ state, className }: { state: TrackedState; className?: string }) {
+/**
+ * How many background tasks a session reports. Read through an optional field: the list entry only
+ * carries `backgroundTasks` once the server reports them, and older servers never do.
+ */
+export function backgroundTaskCount(session: object): number {
+  const tasks = (session as { backgroundTasks?: readonly unknown[] | null }).backgroundTasks;
+  return Array.isArray(tasks) ? tasks.length : 0;
+}
+
+/** A session's state badge; a background session adds its task count when it has one ("Background · 2"). */
+export function TrackedStateBadge({ state, tasks = 0, className }: { state: TrackedState; tasks?: number; className?: string }) {
+  const label = trackedStateLabels[state];
+  const count = state === "background" && tasks > 0 ? tasks : 0;
   return (
     <span
       data-state={state}
+      title={count ? `${count} background ${count === 1 ? "task" : "tasks"} running` : undefined}
       className={cn("shrink-0 rounded-full px-1.5 text-[10px] font-medium leading-4 whitespace-nowrap", badgeTone[state], className)}
     >
-      {trackedStateLabels[state]}
+      {label}
+      {count > 0 && ` · ${count}`}
     </span>
   );
 }
 
 /**
  * The button that shows the tracked list: the desktop panel's collapsed strip and the mobile
- * header's entry. The badge counts sessions that wait on the user (needs approval or finished).
+ * header's entry. The badge counts sessions stuck on the user (needs approval, offline or hung).
  */
 export function TrackedToggle({
   id,

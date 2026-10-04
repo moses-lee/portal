@@ -39,7 +39,15 @@ function Row({ item, handlers }: { item: Item; handlers: ItemCardHandlers }) {
   );
 }
 
-/** The "Needs you (n)" strip at the top of the thread: every open needs_you item, one line each; a single line when there are none. */
+/** Past this many items the strip starts collapsed to its one-line header, so it does not bury the thread. */
+export const NEEDS_YOU_COLLAPSE_AFTER = 5;
+
+/**
+ * The "Needs you (n)" strip pinned above the thread: every open needs_you item, one line each; a
+ * single line when there are none. Open by default up to `NEEDS_YOU_COLLAPSE_AFTER` items, collapsed
+ * past that until the user opens it; once toggled, the user's choice holds. A long open list scrolls
+ * inside the strip.
+ */
 export default function PortalNeedsYou({
   items: all,
   handlers,
@@ -47,10 +55,12 @@ export default function PortalNeedsYou({
   items: Item[];
   handlers: ItemCardHandlers;
 }) {
-  const [open, setOpen] = useState(true);
+  /** Null until the user toggles: the default follows the count. */
+  const [chosen, setOpen] = useState<boolean | null>(null);
   // Belt and braces: callers pass `isVisibleItem` rows, which already leave the retired kinds out.
   const items = all.filter((item) => !retiredItemKinds.has(item.kind));
   const count = items.length;
+  const open = chosen ?? count <= NEEDS_YOU_COLLAPSE_AFTER;
   return (
     <section
       aria-label={`Needs you (${count})`}
@@ -60,8 +70,7 @@ export default function PortalNeedsYou({
         <CollapsibleTrigger asChild>
           <button
             type="button"
-            disabled={count === 0}
-            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] font-medium disabled:cursor-default"
+            disabled={count === 0}            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] font-medium disabled:cursor-default"
           >
             <BellRing
               className={`size-3.5 shrink-0 ${count ? "text-amber-300" : "text-muted-foreground"}`}
@@ -82,7 +91,7 @@ export default function PortalNeedsYou({
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-1 space-y-0.5 border-t border-white/5 pt-1.5">
+          <div className="mt-1 max-h-[40dvh] space-y-0.5 overflow-y-auto border-t border-white/5 pt-1.5">
             {items.map((item) => (
               <Row key={item.id} item={item} handlers={handlers} />
             ))}
