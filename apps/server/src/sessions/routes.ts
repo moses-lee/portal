@@ -55,7 +55,20 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   const ready = () => Promise.all([ctx.projects.ready, ctx.sessions.ready]);
   const projectOf = (projectId: string) => ctx.projects.get(projectId) ?? null;
 
-  app.get("/api/agents", async () => ({ agents: ctx.sessions.listAgents(), defaultAgentId: ctx.sessions.defaultAgentId }));
+  /**
+   * Run the lifecycle sweep now (docs/SESSION-LIFECYCLE.md, "Sweep"): untrack idle tracked sessions,
+   * remove idle worktrees. Joins a sweep already running. Answers `{ untracked, removed, kept }`.
+   */
+  app.post("/api/lifecycle/sweep", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    try {
+      return await ctx.lifecycle.run();
+    } catch (err) {
+      return reply.code(500).send({ error: errorMessage(err) });
+    }
+  });
+
+  app.get("/api/agents", async () =>({ agents: ctx.sessions.listAgents(), defaultAgentId: ctx.sessions.defaultAgentId }));
 
   app.get("/api/sessions", async () => {
     await ready();
