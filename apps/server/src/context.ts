@@ -7,6 +7,7 @@ import type { FastifyBaseLogger } from "fastify";
 import type { Sql } from "postgres";
 import type { ServerConfig } from "./config.ts";
 import type { Db } from "./db/client.ts";
+import type { LifecycleSweeper } from "./lib/lifecycle-sweep.ts";
 import type { Presence } from "./lib/presence.ts";
 import type { OrchestratorService } from "./orchestrator/service.ts";
 import type { ProjectsService } from "./projects/service.ts";
@@ -26,4 +27,6 @@ export interface AppContext {
   settings: SettingsService;
   terminals: TerminalsService;
   orchestrator: OrchestratorService;
+  /** The lifecycle sweep (idle untracking, idle worktree removal); runs with or without the orchestrator. */
+  lifecycle: LifecycleSweeper;
 }

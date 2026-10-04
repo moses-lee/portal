@@ -12,11 +12,11 @@ import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
 import { displayPath, readGitInfo } from "../lib/git-info.ts";
 import { pullFastForward, readCommitPage, readGithubSummary, summaryEtag } from "../lib/github-summary.ts";
 import { type ProjectLookup, type RemovedFacts, parentOf, projectIdOfRow, summarizeOrphans, summarizeRemoved } from "../lib/removed-projects.ts";
-import { preWorktreeDeleteRun, runConfiguredScript } from "../lib/script-runner.ts";
 import type { BranchListing, Project, RemovedProject, RemovedProjectSummary, WorktreeMeta } from "../lib/types.ts";
 import {
   WorktreeError, ensureWorktree, getPull, hasBranch, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf,
 } from "../lib/worktrees.ts";
+import { liveProjectRemovalIo, removeProject } from "./remove-worktree.ts";
 import { type ProjectError, summarizeProject } from "./store.ts";
 
 type IdParams = { Params: { id: string } };
@@ -47,6 +47,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
     removed: (id) => ctx.projects.getRemoved(id),
     displayPath,
   };
+  const removalIo = liveProjectRemovalIo(ctx);
 
   /** Directory browser backend for the add-project dialog; only subdirectories are exposed. */
   app.get("/api/fs/dirs", async (req, reply) => {
@@ -165,15 +166,8 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
     const project = ctx.projects.get(id);
     if (!project) return reply.code(404).send({ error: "Unknown project." });
     try {
-      if (deleteWorktree) {
-        if (!project.worktree) return reply.code(400).send({ error: "This project is not a worktree." });
-        await deleteWorktreeFolder({ ...project, worktree: project.worktree }, force);
-      }
-      // Sessions created from this project keep running. While any exist, the project is kept as a
-      // removed record so the Removed view can bring it (and them) back; otherwise it is forgotten.
-      await ctx.sessions.ready;
-      const keep = ctx.sessions.listSessions().some((session) => session.projectId === id);
-      await ctx.projects.remove(id, { keep });
+      if (deleteWorktree && !project.worktree) return reply.code(400).send({ error: "This project is not a worktree." });
+      await removeProject(removalIo, project, { deleteWorktree, force });
       return reply.code(204).send();
     } catch (err) {
       const dirty = err instanceof Error && (err as { dirty?: unknown }).dirty === true;
@@ -348,28 +342,5 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
       `Branch ${record.worktree.branch} ${worktree.created ? "would be checked out" : "is checked out"} at ${displayPath(worktree.path)}, not at ${displayPath(record.path)} where its conversations ran.`,
       409,
     );
-  }
-
-  /**
-   * Remove the worktree folder behind a worktree project. The git commands run in the main checkout,
-   * found through the parent project or, when that is gone, through the worktree's own `.git` file.
-   * A folder that has already disappeared only needs its registration pruned.
-   */
-  async function deleteWorktreeFolder(project: Project & { worktree: WorktreeMeta }, force: boolean) {
-    const exists = await stat(project.path).then(() => true, () => false);
-    // The project may sit in a subfolder of the worktree; git needs the worktree's root.
-    const worktreeRoot = exists ? (await readGitInfo(project.path))?.root ?? null : null;
-    const parent = ctx.projects.get(project.worktree.parentId);
-    let repoRoot: string | null = null;
-    if (parent && await stat(parent.path).then(() => true, () => false)) {
-      repoRoot = (await readGitInfo(parent.path))?.root ?? null;
-    }
-    if (!repoRoot && worktreeRoot) repoRoot = await mainWorktreeOf(worktreeRoot);
-    // Without a folder and without a repository there is nothing left for git to clean up.
-    if (!repoRoot) return;
-    const worktreePath = worktreeRoot ?? project.path;
-    // The user's pre-deletion script runs first, while the folder is still there; a forced retry runs it again.
-    if (exists) await runConfiguredScript("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }), ctx.settings);
-    await removeWorktree({ repoRoot, path: worktreePath, branch: project.worktree.branch, force });
   }
 }

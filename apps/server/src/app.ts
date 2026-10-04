@@ -13,6 +13,7 @@ import { runMigrations } from "./db/migrate.ts";
 import { errorMessage, errorStatus } from "./http/errors.ts";
 import { closeEventStreams } from "./http/sse.ts";
 import { importLegacyAtBoot } from "./import/boot.ts";
+import { type LifecycleSweepDeps, createLifecycleSweeper, liveLifecycleSweepDeps } from "./lib/lifecycle-sweep.ts";
 import { createPresence } from "./lib/presence.ts";
 import type { Settings } from "@portal/shared/settings";
 import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
@@ -40,6 +41,11 @@ export interface AppOptions {
    * with an injected `database`: tests that build several apps over one database turn it off.
    */
   singleInstance?: boolean;
+  /**
+   * The lifecycle sweep's schedule and deps: `start: false` leaves only the manual trigger, and
+   * `deps` replaces live pieces (tests pass a fake clock).
+   */
+  lifecycle?: { start?: boolean; deps?: Partial<LifecycleSweepDeps> };
 }
 
 /** Each app's context, for tests that reach past the routes (swap a service, spy on a dispose). */
@@ -51,7 +57,7 @@ export function appContext(app: FastifyInstance): AppContext {
   return ctx;
 }
 
-export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true }: AppOptions = {}): Promise<FastifyInstance> {
+export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true, lifecycle = {} }: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger });
   await app.register(compress, { global: true, threshold: 1024, encodings: ["gzip"] });
 
@@ -89,6 +95,8 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   contexts.set(app, ctx);
   ctx.terminals = createTerminalsService(ctx);
   if (orchestrator) ctx.orchestrator = createOrchestratorService(ctx, typeof orchestrator === "object" ? orchestrator : {});
+  // Owned here with the sessions, not by the orchestrator's job worker: it runs without the orchestrator.
+  ctx.lifecycle = createLifecycleSweeper({ ...liveLifecycleSweepDeps(ctx), ...lifecycle.deps }, { start: lifecycle.start ?? true });
 
   app.setErrorHandler((err, _req, reply) => {
     const status = errorStatus(err) ?? (err as { statusCode?: number }).statusCode ?? 500;
@@ -109,6 +117,8 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   // `preClose` (registered above), which drops the WebSockets.
   app.addHook("preClose", async () => {
     const failed = (what: string) => (err: unknown) => app.log.error({ err }, `Could not stop ${what}`);
+    // A running sweep finishes before the services it reads and writes go away.
+    await ctx.lifecycle.dispose().catch(failed("the lifecycle sweep"));
     // Stop the scheduler and any running turn before the sessions it may be driving go away.
     if (orchestrator) await ctx.orchestrator.dispose().catch(failed("the orchestrator"));
     closeEventStreams(app.server);
