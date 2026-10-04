@@ -23,10 +23,11 @@ export type ActivityActor = "user" | "agent" | "system";
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
  * approval.requested · approval.decided · approval.executed · world.refreshed · session.tracked ·
- * session.untracked
+ * session.untracked · session.renamed
  *
  * `session.tracked` and `session.untracked` carry `refs.sessionId` and `detail.trackedBy` (who:
- * "user" or "portal"), plus `detail.reason` when one was given.
+ * "user" or "portal"), plus `detail.reason` when one was given. `session.renamed` (the
+ * orchestrator's `rename_session`) carries `refs.sessionId` and `detail.from`, `detail.to`.
  */
 export type ActivityKind = string;
 

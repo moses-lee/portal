@@ -3,7 +3,7 @@ import { z } from "zod";
 import { displayPath } from "../../lib/git-info.ts";
 import { type Block, reduce, segment } from "@portal/shared/transcript";
 import { isStall } from "../../lib/liveness.ts";
-import type { SessionLiveness, SessionMeta, SessionState } from "../../lib/types.ts";
+import { SESSION_TITLE_MAX, type SessionLiveness, type SessionMeta, type SessionState } from "../../lib/types.ts";
 import type { OrchestratorDeps } from "../deps.ts";
 import type { DomainToolContext } from "../hub.ts";
 import { lastTurnEnd, snapshotActivity } from "../digest.ts";
@@ -13,6 +13,8 @@ import { trackContext } from "../tracked/tools.ts";
 import { DEFAULT_LIMIT, type ToolContext, capped, define } from "./context.ts";
 
 const sessionId = z.string().min(1);
+/** A session title as a rename sets it: trimmed, 1 to `SESSION_TITLE_MAX` characters. */
+const sessionTitle = z.string().trim().min(1).max(SESSION_TITLE_MAX);
 
 /** Events read per session when rendering a transcript or searching it. */
 export const EVENT_WINDOW = 300;
@@ -200,10 +202,34 @@ export function sessionTools(ctx: ToolContext) {
       },
     ),
     create_session: define(
-      "Start a new session in a project, optionally sending a first prompt right away; it is tracked. Returns the session id.",
-      z.object({ projectId: z.string().min(1), agentId: z.string().optional(), prompt: z.string().optional() }),
+      "Start a new session in a project, optionally sending a first prompt right away; it is tracked. title names it for what it is for (otherwise the first prompt does). Returns the session id.",
+      z.object({ projectId: z.string().min(1), agentId: z.string().optional(), prompt: z.string().optional(), title: sessionTitle.optional() }),
       (input) => startSession(deps, input, tracker),
     ),
+    // Chat turns only: renaming is for when the user is in the loop, never background work.
+    ...(domain?.turn.origin === "chat" ? {
+      rename_session: define(
+        "Rename a session so its title says what it is for. A session the user named keeps its title.",
+        z.object({ sessionId, title: sessionTitle }),
+        async (input) => {
+          const before = await requireSession(deps, input.sessionId);
+          const id = before.id;
+          const title = input.title.trim();
+          if (before.title === title && before.titleSource === "portal") return { ...sessionRow(before), note: "It already had that title." };
+          if (!(await deps.sessions.setTitle(id, title, "portal"))) {
+            throw new Error(`The user named this session "${before.title ?? ""}", so it keeps that title; only the user renames it.`);
+          }
+          const after = (await deps.sessions.get(id)) ?? { ...before, title, titleSource: "portal" as const };
+          const from = before.title?.trim() || `${before.agentName} session ${id.slice(0, 8)}`;
+          await domain.hub.activity.log({
+            actor: "agent", kind: "session.renamed", summary: `Renamed "${from}" to "${title}"`,
+            refs: { sessionId: id, ...(before.projectId ? { projectId: before.projectId } : {}), ...trackContext(domain) },
+            detail: { from: before.title, to: title, titleSource: "portal" },
+          });
+          return { ...sessionRow(after), titleSource: after.titleSource };
+        },
+      ),
+    } : {}),
     send_prompt: define(
       "Send a prompt to a session; the agent works on it asynchronously. Fails while the session is busy.",
       z.object({ sessionId, text: z.string().min(1) }),

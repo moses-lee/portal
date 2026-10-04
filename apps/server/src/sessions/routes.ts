@@ -12,7 +12,7 @@ import { errorStatus, resolveDirectory } from "../lib/fs-paths.ts";
 import { sameGitInfo } from "@portal/shared/git-info";
 import { displayPath, readGitInfo, type GitInfo } from "../lib/git-info.ts";
 import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
-import type { PermissionAnswerRequest, PortalEvent, SessionListEvent, SessionMetaEvent, SetConfigRequest } from "../lib/types.ts";
+import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type PortalEvent, type SessionListEvent, type SessionMetaEvent, type SetConfigRequest } from "../lib/types.ts";
 
 const META_POLL_MS = 1000;
 const DEFAULT_PAGE = 300;
@@ -139,6 +139,33 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (!session) return reply.code(404).send({ error: "Unknown session." });
     // A fresh look at the agent's processes, so the liveness served is current.
     await ctx.sessions.probeSession(session.id).catch(() => {});
+    return summarizeSession(toMeta(session), projectOf(session.projectId));
+  });
+
+  /**
+   * Rename the session as the user: `{ title }`, trimmed, 1 to `SESSION_TITLE_MAX` characters. A
+   * user's title outranks every other source, so nothing renames it afterwards but the user.
+   * Viewers get it as `meta` and the list as an `updated` patch; answers the session as GET does.
+   */
+  app.patch<IdParams>("/api/sessions/:id", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    const body = req.body;
+    const raw = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).title : undefined;
+    if (typeof raw !== "string") return reply.code(400).send({ error: "Expected {title: string}." });
+    const title = raw.trim();
+    if (!title) return reply.code(400).send({ error: "A session title cannot be empty." });
+    if (title.length > SESSION_TITLE_MAX) {
+      return reply.code(400).send({ error: `A session title can be at most ${SESSION_TITLE_MAX} characters.` });
+    }
+    await ready();
+    if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
+    try {
+      await ctx.sessions.setTitle(req.params.id, title, "user");
+    } catch (err) {
+      return reply.code(500).send({ error: errorMessage(err) });
+    }
+    const session = ctx.sessions.getSession(req.params.id);
+    if (!session) return reply.code(404).send({ error: "Unknown session." });
     return summarizeSession(toMeta(session), projectOf(session.projectId));
   });
 

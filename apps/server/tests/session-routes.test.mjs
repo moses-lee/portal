@@ -383,6 +383,89 @@ test("GET /api/sessions/:id/stream replays after the cursor, sends meta, tails, 
   assert.equal(await tail.next(), null, "the stream ends after deletion");
 });
 
+test("PATCH /api/sessions/:id renames as the user: validated, persisted, pushed to the list and to viewers", async (t) => {
+  const { app, makeApp } = await setup(t);
+  const session = await createSession(app);
+  const patch = (id, payload, headers) => app.inject({ method: "PATCH", url: `/api/sessions/${id}`, payload, headers });
+
+  for (const [payload, error] of [
+    [{}, "Expected {title: string}."],
+    [{ title: 7 }, "Expected {title: string}."],
+    [{ title: "   " }, "A session title cannot be empty."],
+    [{ title: "x".repeat(121) }, "A session title can be at most 120 characters."],
+  ]) {
+    const response = await patch(session.id, payload);
+    assert.equal(response.statusCode, 400, JSON.stringify(payload));
+    assert.deepEqual(response.json(), { error });
+  }
+  const crossOrigin = await patch(session.id, { title: "Evil" }, EVIL);
+  assert.equal(crossOrigin.statusCode, 403);
+  assert.deepEqual(crossOrigin.json(), { error: "Cross-origin requests are not allowed." });
+  const unknown = await patch("nope", { title: "Anything" });
+  assert.equal(unknown.statusCode, 404);
+  assert.deepEqual(unknown.json(), { error: "Unknown session." });
+  assert.equal((await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })).json().title, null, "nothing renamed so far");
+
+  const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const list = sseReader(await fetch(`${base}/api/sessions/stream`, { signal: controller.signal }));
+  assert.equal((await list.next()).data.type, "snapshot");
+  const viewer = sseReader(await fetch(`${base}/api/sessions/${session.id}/stream`, { signal: controller.signal }));
+  assert.equal((await viewer.next()).event, "meta");
+
+  // Exactly 120 characters after trimming is allowed.
+  const longest = "y".repeat(120);
+  assert.equal((await patch(session.id, { title: `  ${longest}  ` })).statusCode, 200);
+  const renamed = await patch(session.id, { title: "  Login bug hunt  " });
+  assert.equal(renamed.statusCode, 200, renamed.body);
+  const body = renamed.json();
+  assert.equal(body.id, session.id);
+  assert.equal(body.title, "Login bug hunt");
+  assert.equal(body.titleSource, "user");
+  assert.deepEqual(body.project, { id: "proj-1", name: "Repo" });
+  assert.equal(body.agentId, "claude");
+
+  let frame;
+  do frame = await list.next(); while (!(frame.data.type === "updated" && frame.data.patch.title === "Login bug hunt"));
+  assert.equal(frame.data.id, session.id);
+  assert.equal(frame.data.patch.titleSource, "user");
+  do frame = await viewer.next(); while (!(frame.event === "meta" && frame.data.title === "Login bug hunt"));
+  assert.equal(frame.data.titleSource, "user");
+  await list.cancel();
+  await viewer.cancel();
+
+  // The user's title outranks Portal's, and the first prompt does not replace it.
+  const { sessions } = appContext(app);
+  assert.equal(await sessions.setTitle(session.id, "Portal's idea", "portal"), false);
+  await app.inject({ method: "POST", url: `/api/sessions/${session.id}/prompt`, payload: { text: "find the bug" } });
+  assert.equal(sessions.getSession(session.id).title, "Login bug hunt");
+
+  // Persisted: another app over the same database reads it back.
+  const restarted = await makeApp();
+  const reread = await restarted.inject({ method: "GET", url: `/api/sessions/${session.id}` });
+  assert.deepEqual([reread.json().title, reread.json().titleSource], ["Login bug hunt", "user"]);
+});
+
+test("a session created with a title is Portal's, and its first prompt keeps the title", async (t) => {
+  const { app, scratch } = await setup(t);
+  const { sessions } = appContext(app);
+  const named = await sessions.createSession(scratch, "claude", "proj-1", { title: "  Fix the flaky login test  " });
+  assert.deepEqual([named.title, named.titleSource], ["Fix the flaky login test", "portal"]);
+  const prompted = await app.inject({ method: "POST", url: `/api/sessions/${named.id}/prompt`, payload: { text: "The login test fails one run in ten" } });
+  assert.equal(prompted.statusCode, 202, prompted.body);
+  const after = (await app.inject({ method: "GET", url: `/api/sessions/${named.id}` })).json();
+  assert.deepEqual([after.title, after.titleSource], ["Fix the flaky login test", "portal"]);
+  // The user still outranks it.
+  assert.equal((await app.inject({ method: "PATCH", url: `/api/sessions/${named.id}`, payload: { title: "Mine" } })).json().titleSource, "user");
+
+  // Without a title the first prompt names it, as before.
+  const plain = await sessions.createSession(scratch, "claude", "proj-1");
+  assert.deepEqual([plain.title, plain.titleSource], [null, "prompt"]);
+  await app.inject({ method: "POST", url: `/api/sessions/${plain.id}/prompt`, payload: { text: "hello there" } });
+  assert.equal(sessions.getSession(plain.id).title, "hello there");
+});
+
 test("opening a persisted session's stream reattaches its agent and reports it through meta", async (t) => {
   const ctx = await setup(t);
   const session = await createSession(ctx.app);

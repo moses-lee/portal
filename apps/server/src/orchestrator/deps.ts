@@ -21,7 +21,7 @@ import { summarizeProject } from "../projects/store.ts";
 import { loadServerKey } from "../settings/crypto.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
-  SessionLiveness, SessionMeta, SessionState, WorktreeMeta,
+  SessionLiveness, SessionMeta, SessionState, TitleSource, WorktreeMeta,
 } from "../lib/types.ts";
 import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../lib/worktrees.ts";
 import { type PullStatus, cloneRepo, getGithubLogin, readOriginUrl, readPullStatus, searchAttentionPulls } from "./github-attention.ts";
@@ -55,7 +55,10 @@ export type OrchestratorDeps = {
   sessions: {
     list(): Promise<SessionMeta[]>;
     get(id: string): Promise<SessionMeta | null>;
-    create(cwd: string, agentId: string, projectId: string): Promise<SessionMeta>;
+    /** `title` names the session as Portal's from the start (the first prompt then leaves it). */
+    create(cwd: string, agentId: string, projectId: string, options?: { title?: string }): Promise<SessionMeta>;
+    /** Rename a session as `source`; false when a title from a higher source (the user's) was kept. Throws for an unknown session. */
+    setTitle(id: string, title: string, source: TitleSource): Promise<boolean>;
     prompt(id: string, text: string): Promise<void>;
     cancel(id: string): Promise<void>;
     respondPermission(id: string, requestId: string, optionId: string | null): Promise<void>;
@@ -189,7 +192,8 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
         const session = (await acp()).getSession(id);
         return session ? toMeta(session) : null;
       },
-      create: async (cwd, agentId, projectId) => toMeta(await (await acp()).createSession(cwd, agentId, projectId)),
+      create: async (cwd, agentId, projectId, options) => toMeta(await (await acp()).createSession(cwd, agentId, projectId, options)),
+      setTitle: async (id, title, source) => (await acp()).setTitle(id, title, source),
       prompt: async (id, text) => (await acp()).sendPrompt(id, text),
       cancel: async (id) => (await acp()).cancel(id),
       respondPermission: async (id, requestId, optionId) => {

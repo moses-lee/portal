@@ -57,11 +57,21 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
     sessions: {
       list: async () => state.sessions,
       get: async (id) => state.sessions.find((session) => session.id === id) ?? null,
-      create: async (cwd, agentId, projectId) => {
-        const meta = sessionMeta({ id: `s${state.sessions.length + 1}`, cwd, agentId, projectId, title: null });
+      create: async (cwd, agentId, projectId, options = {}) => {
+        const title = options.title?.trim() || null;
+        const meta = sessionMeta({ id: `s${state.sessions.length + 1}`, cwd, agentId, projectId, title, titleSource: title ? "portal" : "prompt" });
         state.sessions.push(meta);
         state.created.push(meta);
         return meta;
+      },
+      // The runtime's ranking: user > portal > agent > prompt.
+      setTitle: async (id, title, source) => {
+        const index = state.sessions.findIndex((session) => session.id === id);
+        if (index === -1) throw new Error(`Unknown session: ${id}`);
+        const rank = (value) => ["prompt", "agent", "portal", "user"].indexOf(value ?? "prompt");
+        if (rank(source) < rank(state.sessions[index].titleSource)) return false;
+        state.sessions[index] = { ...state.sessions[index], title: title.trim(), titleSource: source };
+        return true;
       },
       prompt: async (id, text) => {
         if (state.promptFailure) throw new Error(state.promptFailure);

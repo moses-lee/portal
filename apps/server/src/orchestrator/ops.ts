@@ -53,13 +53,13 @@ export type SessionTracker = { tracked: Pick<TrackedService, "track">; context?:
  * never thrown, since the session exists either way.
  */
 export async function startSession(
-  deps: OrchestratorDeps, { projectId, agentId, prompt }: { projectId: string; agentId?: string; prompt?: string }, tracker?: SessionTracker,
+  deps: OrchestratorDeps, { projectId, agentId, prompt, title }: { projectId: string; agentId?: string; prompt?: string; title?: string }, tracker?: SessionTracker,
 ): Promise<{ sessionId: string; promptError?: string }> {
   const project = await requireProject(deps, projectId);
   const agent = agentId ?? await deps.agents.defaultId();
   if (!(await deps.agents.list()).some((known) => known.id === agent)) throw httpError(`Unknown agent "${agent}".`, 400);
   const cwd = await projectCwd(deps, project);
-  const session = await deps.sessions.create(cwd, agent, project.id);
+  const session = await deps.sessions.create(cwd, agent, project.id, title?.trim() ? { title: title.trim() } : {});
   if (tracker) {
     await tracker.tracked.track(session.id, "portal", tracker.context).catch((err: unknown) => {
       console.error(`Could not track session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);

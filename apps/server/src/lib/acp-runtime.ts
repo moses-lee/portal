@@ -825,9 +825,16 @@ export function createAcpRuntime(
     return sessions.get(id);
   }
 
-  /** `projectId` is Portal metadata: it is stored on the session and never sent to the agent. */
-  async function createSession(cwd: string, agentId = agentDefinitions[0]?.id ?? "", projectId = ""): Promise<Session> {
+  /**
+   * `projectId` is Portal metadata: it is stored on the session and never sent to the agent. A
+   * `title` (the orchestrator's) names the session as Portal's from the start, so the first
+   * prompt does not rename it.
+   */
+  async function createSession(
+    cwd: string, agentId = agentDefinitions[0]?.id ?? "", projectId = "", options: { title?: string } = {},
+  ): Promise<Session> {
     await ready;
+    const title = options.title?.trim() || null;
     const instance = await connect(agentId);
     let response: acp.NewSessionResponse;
     try {
@@ -845,8 +852,8 @@ export function createAcpRuntime(
       projectId,
       createdAt: now,
       lastActiveAt: now,
-      title: null,
-      titleSource: "prompt",
+      title,
+      titleSource: title ? "portal" : "prompt",
       // Nothing is running yet: a session that is never prompted is idle from its creation.
       idleSince: now,
       turnEndedAt: null,
@@ -1020,7 +1027,10 @@ export function createAcpRuntime(
     const session = requireSession(id);
     const trimmed = title.trim();
     if (!trimmed) throw new Error("A session title cannot be empty.");
-    return applyTitle(session, trimmed, source);
+    const applied = applyTitle(session, trimmed, source);
+    // Answer once the title is saved, so a caller that reports the rename reports a stored one.
+    await session.writes;
+    return applied;
   }
 
   async function cancel(id: string): Promise<void> {

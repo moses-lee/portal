@@ -240,6 +240,9 @@ export function titleMayReplace(current: TitleSource, next: TitleSource): boolea
   return titleSourceRank(next) >= titleSourceRank(current);
 }
 
+/** The longest title a rename may set (`PATCH /api/sessions/:id`, `rename_session`), after trimming. */
+export const SESSION_TITLE_MAX = 120;
+
 export function isTitleSource(value: unknown): value is TitleSource {
   return typeof value === "string" && (titleSources as readonly string[]).includes(value);
 }

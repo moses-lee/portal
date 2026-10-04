@@ -9,6 +9,9 @@ import { execCommand, readFileCapped } from "../src/orchestrator/deps.ts";
 import { STALE_PULL_MS } from "../src/orchestrator/digest.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { REDACTED } from "../src/orchestrator/tools/context.ts";
+import { GATED_TOOLS } from "../src/orchestrator/approvals/policy.ts";
+import { systemPrompt } from "../src/orchestrator/prompt.ts";
+import { TOOL_GROUPS } from "../src/orchestrator/tools/groups.ts";
 import { BACKGROUND_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
 import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
 import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
@@ -762,6 +765,68 @@ test("delete_session untracks first, so the activity log shows the untrack befor
   // An untracked session is deleted without an untrack entry.
   await run(tools.delete_session, { sessionId: FIRST });
   assert.equal(activity.filter((entry) => entry.kind === "session.untracked").length, 1);
+});
+
+test("rename_session takes an id prefix, renames as Portal, logs session.renamed, and answers the row", async () => {
+  const { tools, state, activity } = prefixed();
+  const renamed = await run(tools.rename_session, { sessionId: "17329ac6", title: "  Auth review: token refresh  " });
+  assert.equal(renamed.id, REVIEW);
+  assert.equal(renamed.title, "Auth review: token refresh");
+  assert.equal(renamed.titleSource, "portal");
+  assert.equal(renamed.projectId, PORTAL);
+  const stored = state.sessions.find((meta) => meta.id === REVIEW);
+  assert.deepEqual([stored.title, stored.titleSource], ["Auth review: token refresh", "portal"]);
+  const entry = activity.at(-1);
+  assert.equal(entry.kind, "session.renamed");
+  assert.equal(entry.actor, "agent");
+  assert.equal(entry.summary, 'Renamed "Review auth" to "Auth review: token refresh"');
+  assert.deepEqual(entry.refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" });
+  assert.deepEqual(entry.detail, { from: "Review auth", to: "Auth review: token refresh", titleSource: "portal" });
+
+  // The same title again changes nothing and logs nothing.
+  const same = await run(tools.rename_session, { sessionId: REVIEW, title: "Auth review: token refresh" });
+  assert.match(same.note, /already had that title/);
+  assert.equal(activity.filter((row) => row.kind === "session.renamed").length, 1);
+
+  assert.equal((await run(tools.rename_session, { sessionId: REVIEW, title: "   " })).invalidInput, true);
+  assert.equal((await run(tools.rename_session, { sessionId: REVIEW, title: "x".repeat(121) })).invalidInput, true);
+  assert.match((await run(tools.rename_session, { sessionId: "deadbeef", title: "Nope" })).error, /^No session has id "deadbeef"/);
+});
+
+test("rename_session refuses a session the user named and says so", async () => {
+  const { tools, state, activity } = prefixed();
+  state.sessions[0] = { ...state.sessions[0], title: "My auth thing", titleSource: "user" };
+  const refused = await run(tools.rename_session, { sessionId: REVIEW, title: "Auth review" });
+  assert.match(refused.error, /The user named this session "My auth thing"/);
+  assert.equal(state.sessions[0].title, "My auth thing");
+  assert.deepEqual(activity.filter((row) => row.kind === "session.renamed"), []);
+});
+
+test("rename_session is a chat-turn tool in the sessions group, never in a background turn, and ungated", async () => {
+  assert.ok(TOOL_GROUPS.sessions.tools.includes("rename_session"));
+  assert.ok(!GATED_TOOLS.includes("rename_session"));
+  assert.ok(!BACKGROUND_TOOLS.includes("rename_session"));
+  assert.ok(setup().tools.rename_session, "a chat turn has it");
+  // A job's run that names its own tools is offered everything else interactively, but not renaming.
+  const { deps } = fakeDeps({});
+  const jobCtx = { store: createMemoryOrchestratorStore(), deps, touched: new Set(), settings: fakeSettings(), interactive: true, now: () => T0,
+    hub: { deps, activity: { log: async () => {} }, tracked: {} }, turn: { runId: "run1", threadId: null, kind: "job", origin: "job" } };
+  assert.equal(createTools(jobCtx).rename_session, undefined);
+  assert.ok(createTools(jobCtx).create_session, "the rest of the session tools are there");
+});
+
+test("create_session with a title names the session as Portal's", async () => {
+  const { tools, state } = setup({ projects: [project()] });
+  assert.deepEqual(await run(tools.create_session, { projectId: "p1", title: "  Fix flaky login test  ", prompt: "The login test fails one run in ten" }), { sessionId: "s1" });
+  assert.deepEqual([state.created[0].title, state.created[0].titleSource], ["Fix flaky login test", "portal"]);
+  await run(tools.create_session, { projectId: "p1" });
+  assert.deepEqual([state.created[1].title, state.created[1].titleSource], [null, "prompt"]);
+  assert.equal((await run(tools.create_session, { projectId: "p1", title: "x".repeat(121) })).invalidInput, true);
+});
+
+test("the system prompt asks to name sessions on create and never rename one the user named", () => {
+  const prompt = systemPrompt({ login: "moses-lee", now: T0, memory: "" });
+  assert.match(prompt, /Name sessions you start for what they are for \(title on create_session\); rename a session when its title no longer says what it does \(rename_session\)\. Never rename a session the user named\./);
 });
 
 test("create_item and update_item refuse the retired session kinds and point at track_session", async () => {
