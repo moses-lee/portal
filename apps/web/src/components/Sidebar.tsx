@@ -2,16 +2,21 @@
 
 import { Activity, memo, useCallback, useMemo, useState } from "react";
 import {
+  ArrowUpRight,
   ChevronRight,
+  DoorOpen,
   FolderKanban,
+  House,
   PanelLeftClose,
   Settings,
+  ShieldAlert,
   TerminalSquare,
   X,
 } from "lucide-react";
 import IconButton from "./IconButton";
 import PortalMark from "./PortalMark";
-import PortalViewBadge, { usePortalViewCounts, viewMeta } from "./portal/views";
+import RoomModeControl from "./RoomModeControl";
+import PortalViewBadge, { usePortalViewCounts, viewMeta, type PortalViewCounts } from "./portal/views";
 import ProjectsColumn from "./ProjectsColumn";
 import RemovedProjects from "./RemovedProjects";
 import { useMediaQuery } from "./useMediaQuery";
@@ -27,7 +32,7 @@ import {
 import { portalViews, type PortalView } from "@/lib/session-routes";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
-import type { ProjectSummary, RemovedProjectSummary } from "@/lib/types";
+import type { ProjectSummary, RemovedProjectSummary, SessionSummary } from "@/lib/types";
 
 export type SidebarProps = {
   projects: ProjectSummary[];
@@ -71,19 +76,15 @@ export type SidebarProps = {
   onCollapse: () => void;
 };
 
-/**
- * Portal's view entries. The only reader of the live context in the sidebar: it turns the stream into
- * a handful of counts once and hands each badge plain numbers, so a stream event re-renders this list
- * rather than one subscriber per entry, or the whole sidebar.
- */
 const PortalViewEntries = memo(function PortalViewEntries({
   portalView,
   onPortalView,
+  counts,
 }: {
   portalView: PortalView | null;
   onPortalView: (view: PortalView) => void;
+  counts: PortalViewCounts;
 }) {
-  const counts = usePortalViewCounts();
   return portalViews.map((entry) => {
     const Icon = viewMeta[entry].icon;
     const selected = entry === portalView;
@@ -93,7 +94,7 @@ const PortalViewEntries = memo(function PortalViewEntries({
         variant="ghost"
         onClick={() => onPortalView(entry)}
         aria-current={selected ? "page" : undefined}
-        className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${selected ? "text-foreground" : "text-foreground/80"}`}
+        className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${selected ? "bg-muted/70 text-foreground" : "text-foreground/75"}`}
       >
         <Icon className="size-4" />
         {viewMeta[entry].label}
@@ -105,6 +106,164 @@ const PortalViewEntries = memo(function PortalViewEntries({
       </Button>
     );
   });
+});
+
+/** Find the newest few sessions without sorting the full list on every stream update. */
+function recentRooms(sessions: SessionSummary[]): SessionSummary[] {
+  const recent: SessionSummary[] = [];
+  for (const session of sessions) {
+    const index = recent.findIndex((row) => session.lastActiveAt > row.lastActiveAt);
+    if (index === -1) {
+      if (recent.length < 3) recent.push(session);
+    } else {
+      recent.splice(index, 0, session);
+      if (recent.length > 3) recent.pop();
+    }
+  }
+  return recent;
+}
+
+function foyerSummary(sessions: SessionSummary[], counts: PortalViewCounts) {
+  let waitingCount = 0;
+  let firstWaitingId: string | null = null;
+  let working = 0;
+  for (const session of sessions) {
+    if (session.awaitingPermission) {
+      waitingCount++;
+      firstWaitingId ??= session.id;
+    }
+    if (session.busy) working++;
+  }
+  const portalWaiting = counts.approvals > 0 || counts.chat > 0;
+  const needsAttention = portalWaiting || waitingCount > 0;
+  const headline = counts.approvals > 0
+    ? `${counts.approvals} Portal ${counts.approvals === 1 ? "approval" : "approvals"} waiting`
+    : counts.chat > 0
+      ? `${counts.chat} ${counts.chat === 1 ? "item needs" : "items need"} you`
+      : waitingCount > 0
+        ? `${waitingCount} ${waitingCount === 1 ? "room needs" : "rooms need"} you`
+        : working > 0
+          ? `${working} ${working === 1 ? "room is" : "rooms are"} in motion`
+          : "Everything is in place";
+  const detail = portalWaiting && waitingCount > 0
+    ? `${waitingCount} ${waitingCount === 1 ? "session is" : "sessions are"} also waiting for you`
+    : needsAttention
+      ? "Step in and keep things moving"
+      : working > 0
+        ? "Your agents are at work"
+        : "Your rooms are ready when you are";
+  return { needsAttention, working, headline, detail, firstWaitingId, portalWaiting };
+}
+
+/** A useful front door: the next request, recent conversations, then the full navigation. */
+const HomeColumn = memo(function HomeColumn({
+  sessions,
+  portalView,
+  projectsActive,
+  terminalActive,
+  onPortalView,
+  onTerminal,
+  onSelect,
+  onPrefetch,
+  onShowProjects,
+}: {
+  sessions: SessionSummary[];
+  portalView: PortalView | null;
+  projectsActive: boolean;
+  terminalActive: boolean;
+  onPortalView: (view: PortalView) => void;
+  onTerminal: () => void;
+  onSelect: (id: string) => void;
+  onPrefetch: (id: string) => void;
+  onShowProjects: () => void;
+}) {
+  const counts = usePortalViewCounts();
+  const recent = useMemo(() => recentRooms(sessions), [sessions]);
+  const { needsAttention, working, headline, detail, firstWaitingId, portalWaiting } = foyerSummary(sessions, counts);
+  const openStatus = () => {
+    if (portalWaiting || firstWaitingId === null) onPortalView("chat");
+    else onSelect(firstWaitingId);
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-0.5 pb-1">
+      <div className="px-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Your foyer</div>
+      <button
+        type="button"
+        onClick={openStatus}
+        className="group mt-2 w-full rounded-2xl border border-border/80 bg-card/70 p-3.5 text-left shadow-sm transition-colors hover:border-amber-200/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="flex items-start justify-between gap-2">
+          <span className={`flex size-8 shrink-0 items-center justify-center rounded-xl border ${needsAttention ? "border-amber-300/20 bg-amber-300/10 text-amber-200" : "border-border bg-muted/60 text-foreground/70"}`}>
+            {needsAttention ? <ShieldAlert className="size-4" aria-hidden="true" /> : <House className="size-4" aria-hidden="true" />}
+          </span>
+          <ArrowUpRight className="size-3.5 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" aria-hidden="true" />
+        </span>
+        <span className="mt-3 block text-[13px] font-semibold leading-5 text-foreground">{headline}</span>
+        <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{detail}</span>
+        <span className="mt-3 flex items-center gap-1.5 border-t border-border/70 pt-2.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          <span className={`size-1.5 rounded-full ${needsAttention ? "bg-amber-300" : working > 0 ? "bg-emerald-400" : "bg-muted-foreground/50"}`} aria-hidden="true" />
+          {needsAttention ? "Needs your attention" : working > 0 ? "Work in progress" : "All caught up"}
+        </span>
+      </button>
+
+      <section aria-labelledby="recent-rooms-title" className="mt-6">
+        <div className="flex items-center justify-between gap-2 px-1.5">
+          <h2 id="recent-rooms-title" className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Recent rooms</h2>
+          <button type="button" onClick={onShowProjects} className="rounded-md px-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">View all</button>
+        </div>
+        {recent.length > 0 ? (
+          <div className="mt-2 space-y-1">
+            {recent.map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => onSelect(session.id)}
+                onMouseEnter={() => onPrefetch(session.id)}
+                onFocus={() => onPrefetch(session.id)}
+                className="group flex w-full min-w-0 items-center gap-2.5 rounded-xl border border-transparent px-2 py-2 text-left transition-colors hover:border-border/70 hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/45 text-foreground/60 group-hover:text-foreground" aria-hidden="true"><DoorOpen className="size-4" /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-foreground/90">{session.title || "New conversation"}</span>
+                  <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{session.project?.name ?? session.agentName}</span>
+                </span>
+                <span className={`size-1.5 shrink-0 rounded-full ${session.awaitingPermission ? "bg-amber-300" : session.busy ? "bg-emerald-400" : "bg-muted-foreground/35"}`} aria-hidden="true" />
+                <span className="sr-only">{session.awaitingPermission ? "Needs your approval" : session.busy ? "Working" : "Ready"}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="px-2 py-3 text-[11px] leading-4 text-muted-foreground">Your recent sessions will appear here.</p>
+        )}
+      </section>
+
+      <nav aria-label="Portal" className="mt-6 flex flex-col">
+        <span className="px-1.5 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Portal</span>
+        <PortalViewEntries portalView={portalView} onPortalView={onPortalView} counts={counts} />
+        <span className="mt-4 px-1.5 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Workspace</span>
+        <Button
+          variant="ghost"
+          onClick={onShowProjects}
+          aria-current={projectsActive ? "page" : undefined}
+          className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${projectsActive ? "bg-muted/70 text-foreground" : "text-foreground/75"}`}
+        >
+          <FolderKanban className="size-4" />
+          Projects
+          <ChevronRight className="ml-auto size-3.5 text-muted-foreground" aria-hidden="true" />
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={onTerminal}
+          aria-current={terminalActive ? "page" : undefined}
+          className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${terminalActive ? "bg-muted/70 text-foreground" : "text-foreground/75"}`}
+        >
+          <TerminalSquare className="size-4" />
+          Terminal
+        </Button>
+      </nav>
+    </div>
+  );
 });
 
 function SidebarContent(props: SidebarProps) {
@@ -158,6 +317,7 @@ function SidebarContent(props: SidebarProps) {
   }
   // Stable, so the memoised Projects column is not re-rendered by a new arrow on every sidebar render.
   const showHome = useCallback(() => setColumn("home"), []);
+  const showProjects = useCallback(() => setColumn("projects"), []);
   const showRemoved = useCallback(() => setColumn("removed"), []);
   return (
     <div className="sidebar-content">
@@ -196,41 +356,17 @@ function SidebarContent(props: SidebarProps) {
         column's root, so the one on show takes the full height.
       */}
       <Activity mode={column === "home" ? "visible" : "hidden"}>
-        <nav aria-label="Portal" className="flex min-h-0 flex-1 flex-col">
-          <PortalViewEntries
-            portalView={portalView}
-            onPortalView={onPortalView}
-          />
-          <Button
-            variant="ghost"
-            onClick={onTerminal}
-            aria-current={terminalActive ? "page" : undefined}
-            className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${terminalActive ? "text-foreground" : "text-foreground/80"}`}
-          >
-            <TerminalSquare className="size-4" />
-            Terminal
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => setColumn("projects")}
-            aria-current={projectsActive ? "page" : undefined}
-            className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${projectsActive ? "text-foreground" : "text-foreground/80"}`}
-          >
-            <FolderKanban className="size-4" />
-            Projects
-            <ChevronRight className="ml-auto size-3.5 text-muted-foreground" aria-hidden="true" />
-          </Button>
-          <div className="mt-auto flex flex-col gap-0.5 pt-3">
-            <Button
-              variant="ghost"
-              onClick={props.onOpenSettings}
-              className="h-10 justify-start gap-2 rounded-xl px-3 text-xs text-muted-foreground"
-            >
-              <Settings className="size-3.5" />
-              Settings
-            </Button>
-          </div>
-        </nav>
+        <HomeColumn
+          sessions={sessions}
+          portalView={portalView}
+          projectsActive={projectsActive}
+          terminalActive={terminalActive}
+          onPortalView={onPortalView}
+          onTerminal={onTerminal}
+          onSelect={onSelect}
+          onPrefetch={onPrefetch}
+          onShowProjects={showProjects}
+        />
       </Activity>
       <Activity mode={column === "projects" ? "visible" : "hidden"}>
         <ProjectsColumn
@@ -268,6 +404,13 @@ function SidebarContent(props: SidebarProps) {
           onDiscard={onDiscardRemoved}
         />
       )}
+      <div className="mt-auto shrink-0 pb-1 pt-2">
+        <RoomModeControl />
+        <Button variant="ghost" onClick={props.onOpenSettings} className="mt-1 h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
+          <Settings className="size-3.5" />
+          Settings
+        </Button>
+      </div>
     </div>
   );
 }

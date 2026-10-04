@@ -17,7 +17,7 @@ import { TrackedRowMenu, TrackedStateBadge, trackedTitle, type TrackedRowActions
  * The panel's session mode: one session beside the Portal view, named by `?session=`. The same
  * stream, transcript, and composer as the session page (`useSessionStream`, `Conversation` with its
  * permission cards, the link banner, `ChatComposer`), without the terminal, the GitHub panel, the
- * agent settings, or the aurora. The panel keys it by session, so a switch starts fresh.
+ * agent settings, or the room backdrop. The panel keys it by session, so a switch starts fresh.
  */
 export default function TrackedSessionView({
   sessionId,
