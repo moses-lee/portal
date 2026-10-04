@@ -80,6 +80,8 @@ export const projects = pgTable("projects", {
   pinnedAt: epochMs("pinned_at"),
   /** Why the last sweep kept an otherwise due worktree; cleared when the guard clears. */
   keptReason: text("kept_reason"),
+  /** When the project was last restored from a removed record; restarts the idle clock. */
+  revivedAt: epochMs("revived_at"),
 });
 
 /** Projects taken out of the list while sessions still referenced them; restoring relinks by id. */

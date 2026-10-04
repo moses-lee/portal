@@ -6,6 +6,8 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { appContext, buildApp } from "../src/app.ts";
+import { createMemoryProjectsStore } from "../src/projects/store.ts";
+import { deleteRemovedSessions } from "../src/sessions/delete.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/fake-acp-agent.mjs", import.meta.url));
@@ -624,4 +626,30 @@ test("stopping a background task forwards the agent's stop request; unknown sess
   const nothing = await stop(session.id, (await detail()).backgroundTasks[0].id);
   assert.equal(nothing.statusCode, 409, nothing.body);
   assert.deepEqual(nothing.json(), { error: "The agent had nothing to stop." });
+});
+
+test("emptying Removed keeps a record removed mid-purge whose sessions are still there", async () => {
+  const projects = createMemoryProjectsStore({
+    projects: [{ id: "busy", name: "busy", path: "/busy", createdAt: 1 }],
+    removed: [{ id: "gone", name: "gone", path: "/gone", createdAt: 1, removedAt: 2 }],
+  });
+  // "s-busy" is passed over first, while its project is still listed.
+  let sessions = [{ id: "s-busy", projectId: "busy" }, { id: "s-gone", projectId: "gone" }];
+  const ctx = {
+    projects,
+    terminals: { closeSession() {} },
+    sessions: {
+      ready: Promise.resolve(),
+      listSessions: () => sessions,
+      getSession: (id) => sessions.find((session) => session.id === id),
+      async deleteSession(id) {
+        // While the purge runs, the user removes "busy"; its session stays with it.
+        await projects.remove("busy", { keep: true });
+        sessions = sessions.filter((session) => session.id !== id);
+        return true;
+      },
+    },
+  };
+  assert.equal(await deleteRemovedSessions(ctx), 1);
+  assert.deepEqual(projects.listRemoved().map((record) => record.id), ["busy"]);
 });

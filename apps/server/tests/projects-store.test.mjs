@@ -52,7 +52,7 @@ test("memory store: seeded records are listed in creation order", async () => {
   const store = createMemoryProjectsStore({ projects: [a, b], removed: [gone] });
   await store.ready;
   // Seeds without the lifecycle fields come back with them at null, like a stored row.
-  const lifecycle = { pinnedAt: null, keptReason: null };
+  const lifecycle = { pinnedAt: null, keptReason: null, revivedAt: null };
   assert.deepEqual(store.list(), [{ ...b, ...lifecycle }, { ...a, ...lifecycle }]);
   assert.deepEqual(store.get("a"), { ...a, ...lifecycle });
   assert.deepEqual(store.listRemoved(), [gone]);
@@ -184,19 +184,22 @@ for (const [name, make] of backends) {
     assert.equal(store.get(wt.id), undefined);
     const record = store.getRemoved(wt.id);
     assert.ok(record && typeof record.removedAt === "number");
-    // Pins and the sweep's kept reason belong to listed projects; the record leaves them behind.
-    const { pinnedAt: _pinnedAt, keptReason: _keptReason, ...listedOnly } = wt;
+    // Pins, the sweep's kept reason, and the revival time belong to listed projects; the record leaves them behind.
+    const { pinnedAt: _pinnedAt, keptReason: _keptReason, revivedAt: _revivedAt, ...listedOnly } = wt;
     assert.deepEqual({ ...record, removedAt: undefined }, { ...listedOnly, parentPath: parent.path, removedAt: undefined });
 
     const target = reopen ? await opened(reopen) : store;
     assert.deepEqual(target.listRemoved(), [record]);
+    const before = Date.now();
     const restored = await target.restore(wt.id);
-    assert.deepEqual(restored, wt, "the restored project carries no removal fields");
-    assert.deepEqual(target.list(), [parent, wt, later], "a restored project returns to its original slot");
+    // The restore restarts the idle clock, so the sweep does not take the worktree again at once.
+    assert.ok(restored.revivedAt >= before && restored.revivedAt <= Date.now());
+    assert.deepEqual(restored, { ...wt, revivedAt: restored.revivedAt }, "the restored project carries no removal fields");
+    assert.deepEqual(target.list(), [parent, restored, later], "a restored project returns to its original slot");
     assert.deepEqual(target.listRemoved(), []);
     if (reopen) {
       const third = await opened(reopen);
-      assert.deepEqual(third.list(), [parent, wt, later]);
+      assert.deepEqual(third.list(), [parent, restored, later]);
       assert.deepEqual(third.listRemoved(), []);
     }
   });
@@ -244,7 +247,9 @@ for (const [name, make] of backends) {
     const wt = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat" } });
     await store.remove(wt.id, { keep: true });
     const again = await store.add({ path: path.join(home, "two"), name: "feat", worktree: { parentId: parent.id, branch: "feat" } });
-    assert.deepEqual(again, wt);
+    // Reviving through add restarts the idle clock like a restore.
+    assert.equal(typeof again.revivedAt, "number");
+    assert.deepEqual(again, { ...wt, revivedAt: again.revivedAt });
     assert.deepEqual(store.list().map((p) => p.id), [parent.id, wt.id]);
   });
 

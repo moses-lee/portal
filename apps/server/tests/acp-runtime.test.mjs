@@ -1657,3 +1657,18 @@ test("the agent's title replaces the prompt's but never one the user or Portal s
   assert.equal(named.titleSource, "user");
   assert.equal(runtime.listSessions().find(({ id }) => id === named.id).title, "Mine");
 });
+
+test("setTitle rejects when the title could not be saved", async (t) => {
+  const store = createMemorySessionStore();
+  let failing = false;
+  const putSession = store.putSession.bind(store);
+  store.putSession = (record) => failing ? Promise.reject(new Error("database is down")) : putSession(record);
+  const { runtime, cwd } = setup(t, { store });
+  const session = await runtime.createSession(cwd, "claude");
+  failing = true;
+  await assert.rejects(runtime.setTitle(session.id, "Unsaved", "user"), /database is down/);
+  // Later writes are not stuck behind the failed one.
+  failing = false;
+  assert.equal(await runtime.setTitle(session.id, "Saved", "user"), true);
+  assert.equal((await store.getSession(session.id)).title, "Saved");
+});

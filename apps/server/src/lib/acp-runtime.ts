@@ -1127,9 +1127,18 @@ export function createAcpRuntime(
     const session = requireSession(id);
     const trimmed = title.trim();
     if (!trimmed) throw new Error("A session title cannot be empty.");
+    const changed = session.title !== trimmed || session.titleSource !== source;
     const applied = applyTitle(session, trimmed, source);
+    if (!applied || !changed || !current(session)) {
+      await session.writes;
+      return applied;
+    }
     // Answer once the title is saved, so a caller that reports the rename reports a stored one.
-    await session.writes;
+    // `persistMeta` only logs a failed write; this one rejects, so the caller can report it.
+    const record = toRecord(session);
+    const saved = session.writes.then(() => store.putSession(record));
+    session.writes = saved.catch(() => {});
+    await saved;
     return applied;
   }
 
