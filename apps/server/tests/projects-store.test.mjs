@@ -51,8 +51,10 @@ test("memory store: seeded records are listed in creation order", async () => {
   const gone = { id: "g", name: "g", path: "/g", createdAt: 0, removedAt: 3 };
   const store = createMemoryProjectsStore({ projects: [a, b], removed: [gone] });
   await store.ready;
-  assert.deepEqual(store.list(), [b, a]);
-  assert.equal(store.get("a"), a);
+  // Seeds without the lifecycle fields come back with them at null, like a stored row.
+  const lifecycle = { pinnedAt: null, keptReason: null };
+  assert.deepEqual(store.list(), [{ ...b, ...lifecycle }, { ...a, ...lifecycle }]);
+  assert.deepEqual(store.get("a"), { ...a, ...lifecycle });
   assert.deepEqual(store.listRemoved(), [gone]);
 });
 
