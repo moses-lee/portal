@@ -17,6 +17,21 @@ export type Settings = {
   orchestrator: OrchestratorSettings;
   /** User scripts run before certain actions; see scripts.ts. */
   scripts: ScriptsSettings;
+  /** Session lifecycle: when the sweep untracks idle sessions and removes idle worktrees (docs/SESSION-LIFECYCLE.md). */
+  sessions: SessionsSettings;
+};
+
+/** The lifecycle sweep's two clocks, in hours since the session (or worktree project) went idle. */
+export type SessionsSettings = {
+  /** Rule 1: a tracked session is untracked this long after it goes idle. */
+  tracked: { untrackAfterHours: number };
+  /** Rule 2: a clean, unpinned worktree project is removed this long after it goes idle. */
+  worktrees: { removeAfterHours: number };
+};
+
+export type SessionsSettingsPatch = {
+  tracked?: { untrackAfterHours?: number };
+  worktrees?: { removeAfterHours?: number };
 };
 
 /**
@@ -27,6 +42,7 @@ export type SettingsPatch = {
   gitActions?: { prompts?: Partial<Record<GitActionKind, string>> };
   orchestrator?: OrchestratorSettingsPatch;
   scripts?: ScriptsPatch;
+  sessions?: SessionsSettingsPatch;
 };
 
 export const gitActionKinds: readonly GitActionKind[] = ["checks", "conflicts", "review"];
@@ -46,6 +62,22 @@ export const orchestratorLimits = {
   /** A turn may be quiet for up to a day before it counts as hung. */
   hungAfterMinutes: 1440,
 } as const;
+
+/** Range limits for the sessions section; both clocks are whole hours from 1 to 30 days. */
+export const sessionsLimits = {
+  minHours: 1,
+  maxHours: 720,
+} as const;
+
+/** A lifecycle clock (`untrackAfterHours`, `removeAfterHours`): a whole number of hours within `sessionsLimits`. */
+export function isLifecycleHours(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= sessionsLimits.minHours && (value as number) <= sessionsLimits.maxHours;
+}
+
+export const defaultSessionsSettings: SessionsSettings = {
+  tracked: { untrackAfterHours: 48 },
+  worktrees: { removeAfterHours: 72 },
+};
 
 export function isHungAfterMinutes(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= orchestratorLimits.hungAfterMinutes;
@@ -69,6 +101,7 @@ export const defaultSettings: Settings = {
   },
   orchestrator: defaultOrchestratorSettings,
   scripts: defaultScripts,
+  sessions: defaultSessionsSettings,
 };
 
 export function isOrchestratorProvider(value: unknown): value is OrchestratorProvider {
@@ -136,6 +169,19 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
   return next;
 }
 
+/** `base` sessions settings with the well-formed clocks of `given` laid on top; anything else leaves the base value. */
+function mergeSessions(base: SessionsSettings, given: SessionsSettingsPatch | undefined): SessionsSettings {
+  const next: SessionsSettings = { tracked: { ...base.tracked }, worktrees: { ...base.worktrees } };
+  if (!given || typeof given !== "object") return next;
+  if (given.tracked && typeof given.tracked === "object" && isLifecycleHours(given.tracked.untrackAfterHours)) {
+    next.tracked = { untrackAfterHours: given.tracked.untrackAfterHours };
+  }
+  if (given.worktrees && typeof given.worktrees === "object" && isLifecycleHours(given.worktrees.removeAfterHours)) {
+    next.worktrees = { removeAfterHours: given.worktrees.removeAfterHours };
+  }
+  return next;
+}
+
 /** Defaults with `overrides` applied; empty or whitespace-only prompt strings mean "use the default". */
 export function mergeSettings(overrides: SettingsPatch | null | undefined): Settings {
   return {
@@ -143,6 +189,7 @@ export function mergeSettings(overrides: SettingsPatch | null | undefined): Sett
     gitActions: { prompts: mergePrompts(defaultSettings.gitActions.prompts, overrides?.gitActions?.prompts) },
     orchestrator: mergeOrchestrator(defaultSettings.orchestrator, overrides?.orchestrator),
     scripts: mergeScripts(defaultSettings.scripts, overrides?.scripts),
+    sessions: mergeSessions(defaultSettings.sessions, overrides?.sessions),
   };
 }
 
@@ -185,12 +232,21 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   const scripts = scriptsOverrides(settings.scripts);
   if (scripts) result.scripts = scripts;
 
+  const sessions: SessionsSettingsPatch = {};
+  if (settings.sessions.tracked.untrackAfterHours !== defaultSettings.sessions.tracked.untrackAfterHours) {
+    sessions.tracked = { untrackAfterHours: settings.sessions.tracked.untrackAfterHours };
+  }
+  if (settings.sessions.worktrees.removeAfterHours !== defaultSettings.sessions.worktrees.removeAfterHours) {
+    sessions.worktrees = { removeAfterHours: settings.sessions.worktrees.removeAfterHours };
+  }
+  if (Object.keys(sessions).length > 0) result.sessions = sessions;
+
   return result;
 }
 
 /**
  * `settings` with `patch` laid on top. A blank prompt in the patch resets that prompt to its
- * default; orchestrator and script fields take the patch's value when present and keep the
+ * default; orchestrator, script and sessions fields take the patch's value when present and keep the
  * current one otherwise. Sections the patch does not mention are preserved as they are.
  */
 export function applySettingsPatch(settings: Settings, patch: SettingsPatch): Settings {
@@ -201,5 +257,6 @@ export function applySettingsPatch(settings: Settings, patch: SettingsPatch): Se
     },
     orchestrator: mergeOrchestrator(settings.orchestrator, patch.orchestrator),
     scripts: mergeScripts(settings.scripts, patch.scripts),
+    sessions: mergeSessions(settings.sessions, patch.sessions),
   };
 }
