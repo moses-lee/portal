@@ -4,6 +4,18 @@ import { approval, globalEntity, helperJob, intent, intentJob, mainThread, memor
 
 test.use({ viewport: { width: 390, height: 844 } });
 
+test("room mode remains usable above Settings in the phone sidebar", async ({ page }) => {
+  await setupPortal(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  const sidebar = page.getByRole("dialog", { name: "Your workspace" });
+  const mode = sidebar.getByRole("group", { name: "Room mode" });
+  await expect(mode).toBeInViewport();
+  await expect(sidebar.getByRole("button", { name: "Settings", exact: true })).toBeInViewport();
+  await mode.getByRole("button", { name: "Dark" }).click();
+  await expect(page.locator(".room-scene")).toHaveAttribute("data-scene", "study");
+});
+
 test("on a phone the views, the memory browser, and the approvals dialog fit the screen", async ({ page }, info) => {
   await setupPortal(page, {
     portal: {

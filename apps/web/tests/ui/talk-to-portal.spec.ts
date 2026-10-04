@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { emitPortal, portalItem, portalStatus, setupPortal } from "./fixtures";
+import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal } from "./fixtures";
 import { approval } from "./orchestrator-fixtures";
 import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
@@ -19,8 +19,12 @@ test("Portal is the home: the sidebar's Chat entry opens / and is marked current
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
   await sidebar.getByRole("button", { name: "Back to Portal" }).click();
   const nav = sidebar.getByRole("navigation", { name: "Portal", exact: true });
+  await expect(sidebar.getByText("Your foyer")).toBeVisible();
+  const recent = sidebar.getByRole("region", { name: "Recent rooms" });
+  await expect(recent.getByRole("button", { name: new RegExp(firstTitle) })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: /1 item needs you/ })).toBeVisible();
   // Chat carries the needs-you count (one in the fixture) as a badge.
-  await expect(nav.getByRole("button")).toHaveText([/^Chat/, "Goals", "Activity", "Memory", "System", "Terminal", "Projects", "Settings"]);
+  await expect(nav.getByRole("button")).toHaveText([/^Chat/, "Goals", "Activity", "Memory", "System", "Projects", "Terminal"]);
   await expect(nav.getByRole("button", { name: "Chat", exact: true })).toContainText("1");
   const button = nav.getByRole("button", { name: "Chat", exact: true });
   await expect(button).not.toHaveAttribute("aria-current", "page");
@@ -49,6 +53,9 @@ test("Portal is the home: the sidebar's Chat entry opens / and is marked current
   await sidebar.getByRole("button", { name: "New conversation in portal", exact: true }).click();
   await expect(page).toHaveURL(/\/new$/);
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Back to Portal" }).click();
+  await recent.getByRole("button", { name: new RegExp(firstTitle) }).click();
+  await expect(page).toHaveURL(/\/sessions\/s1$/);
 });
 
 test("without an API key the page asks for one and Add API key opens settings", async ({
@@ -281,31 +288,34 @@ test("Open session opens the session in the tracked panel", async ({
   ).toBeVisible();
 });
 
-test("the aurora sits behind every Portal view and follows the user's turn and pending approvals", async ({
+test("the daytime room sits behind every Portal view and follows the user's turn and pending approvals", async ({
   page,
 }) => {
+  await page.clock.install({ time: new Date(2026, 9, 4, 10, 0, 0) });
   await setupPortal(page);
   await page.goto("/");
-  const aurora = page.locator(".aurora");
-  await expect(aurora).toHaveAttribute("data-activity", "idle");
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-scene", "garden");
+  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("light-room.webp");
+  await expect(room).toHaveAttribute("data-activity", "idle");
   // A background job never colours it; a turn answering the user (in any thread) does.
   await emitPortal(page, {
     type: "status",
     status: { ...portalStatus, busy: true, runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", threadId: null, startedAt: Date.now(), summary: "Checking" }] },
   });
-  await expect(aurora).toHaveAttribute("data-activity", "idle");
+  await expect(room).toHaveAttribute("data-activity", "idle");
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["t-review"] } });
-  await expect(aurora).toHaveAttribute("data-activity", "working");
+  await expect(room).toHaveAttribute("data-activity", "working");
   // An approval waiting turns it amber, whichever view is open.
   await emitPortal(page, { type: "approvals", approvals: [approval] });
-  await expect(aurora).toHaveAttribute("data-activity", "waiting");
+  await expect(room).toHaveAttribute("data-activity", "waiting");
   await page.getByRole("button", { name: "Decide later" }).click();
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Goals", exact: true }).click();
   await expect(page).toHaveURL(/\/goals$/);
-  await expect(aurora).toHaveAttribute("data-activity", "waiting");
+  await expect(room).toHaveAttribute("data-activity", "waiting");
   await emitPortal(page, { type: "approvals", approvals: [] });
   await emitPortal(page, { type: "status", status: portalStatus });
-  await expect(aurora).toHaveAttribute("data-activity", "idle");
+  await expect(room).toHaveAttribute("data-activity", "idle");
 });
 
 test("a long line in a reply's code block scrolls inside the block, not the whole thread", async ({ page }) => {

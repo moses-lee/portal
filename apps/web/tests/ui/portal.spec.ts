@@ -218,7 +218,7 @@ test("activity colors and controls follow streaming, permission, and cancellatio
     page.getByRole("button", { name: "Agent settings", exact: true }),
   ).toBeVisible();
   await emit(page, { busy: true });
-  await expect(page.locator(".aurora")).toHaveAttribute(
+  await expect(page.locator(".room-scene")).toHaveAttribute(
     "data-activity",
     "working",
   );
@@ -242,7 +242,7 @@ test("activity colors and controls follow streaming, permission, and cancellatio
     "message",
     100,
   );
-  await expect(page.locator(".aurora")).toHaveAttribute(
+  await expect(page.locator(".room-scene")).toHaveAttribute(
     "data-activity",
     "waiting",
   );
@@ -317,7 +317,7 @@ test("activity colors and controls follow streaming, permission, and cancellatio
   await expect(
     page.getByRole("button", { name: "Send message", exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".aurora")).toHaveAttribute(
+  await expect(page.locator(".room-scene")).toHaveAttribute(
     "data-activity",
     "idle",
   );
@@ -553,7 +553,7 @@ test("streaming respects reading position and jump to latest restores following"
     .toBeLessThan(10);
 });
 
-test("reduced motion freezes the aurora and sidebar search finds session titles", async ({
+test("the room photo stays still with reduced motion and sidebar search finds session titles", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -562,13 +562,10 @@ test("reduced motion freezes the aurora and sidebar search finds session titles"
   await expect(
     page.getByRole("button", { name: firstTitle, exact: true }),
   ).toBeVisible();
-  expect(
-    await page
-      .locator(".aurora-ribbons")
-      .evaluateAll((nodes) =>
-        nodes.map((node) => getComputedStyle(node).animationName),
-      ),
-  ).toEqual(["none", "none"]);
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-scene", /garden|study/);
+  expect(await room.evaluate((node) => getComputedStyle(node).animationName)).toBe("none");
+  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("-room.webp");
   await page
     .getByRole("textbox", { name: "Search sessions" })
     .fill("overlapping");
@@ -578,6 +575,53 @@ test("reduced motion freezes the aurora and sidebar search finds session titles"
   await expect(
     page.getByRole("button", { name: firstTitle, exact: true }),
   ).toHaveCount(0);
+});
+
+test("the local 7pm switch changes the room but keeps each session's decor", async ({ page }, info) => {
+  await page.clock.install({ time: new Date(2026, 9, 4, 18, 59, 59) });
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-scene", "garden");
+  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("light-room.webp");
+  const firstDecor = await room.getAttribute("data-decor");
+  await page.screenshot({ animations: "disabled", path: info.outputPath("garden-room.png") });
+
+  await page.clock.runFor(2100);
+  await expect(room).toHaveAttribute("data-scene", "study");
+  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("dark-room.webp");
+  await expect(room).toHaveAttribute("data-decor", firstDecor!);
+  await page.screenshot({ animations: "disabled", path: info.outputPath("evening-study.png") });
+
+  await page.getByRole("button", { name: secondTitle, exact: true }).click();
+  await expect(room).toHaveAttribute("data-scene", "study");
+  await expect(room).not.toHaveAttribute("data-decor", firstDecor!);
+});
+
+test("room mode overrides the clock and stays selected across routes and reloads", async ({ page }) => {
+  await page.clock.install({ time: new Date(2026, 9, 4, 18, 59, 59) });
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const room = page.locator(".room-scene");
+  const mode = page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("group", { name: "Room mode" });
+  await expect(mode.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+  await mode.getByRole("button", { name: "Dark" }).click();
+  await expect(room).toHaveAttribute("data-scene", "study");
+  await mode.getByRole("button", { name: "Light" }).click();
+  await expect(room).toHaveAttribute("data-scene", "garden");
+
+  await page.clock.runFor(2100);
+  await expect(room).toHaveAttribute("data-scene", "garden");
+  await page.reload();
+  await expect(mode.getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "true");
+  await expect(room).toHaveAttribute("data-scene", "garden");
+
+  await mode.getByRole("button", { name: "System" }).click();
+  await expect(room).toHaveAttribute("data-scene", "study");
+  await page.goto("/");
+  await expect(room).toHaveAttribute("data-scene", "study");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
 });
 
 test("loading earlier messages preserves the visible conversation", async ({

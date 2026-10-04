@@ -10,6 +10,7 @@ const serverOrigin = process.env.PORTAL_SERVER_ORIGIN ?? `http://127.0.0.1:${pro
 const nextConfig: NextConfig = {
   transpilePackages: ["@portal/contracts", "@portal/shared"],
   allowedDevOrigins: ["100.115.116.107", "mini", "*.ts.net", "localhost"],
+  devIndicators: false,
   experimental: {
     // Milliseconds a proxied response may go without sending a byte before Next kills it (default
     // 30 s, `router-utils/proxy-request.js`). Some API calls stay silent far longer while the server
