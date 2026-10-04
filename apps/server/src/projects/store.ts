@@ -251,8 +251,10 @@ export function createMemoryProjectsStore(
   { projects = [], removed = [], home }: { projects?: Project[]; removed?: RemovedProject[]; home?: string } = {},
 ): ProjectsStore {
   const noop = async () => {};
+  // Seeds written before the lifecycle columns existed read as pinned-less, like a real row.
+  const seeded = projects.map((p) => ({ ...p, pinnedAt: p.pinnedAt ?? null, keptReason: p.keptReason ?? null }));
   return createProjectsStoreOn({
-    load: async () => ({ projects, removed }),
+    load: async () => ({ projects: seeded, removed }),
     insert: noop,
     rename: noop,
     patch: noop,
