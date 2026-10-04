@@ -1,5 +1,6 @@
 ALTER TABLE "projects" ADD COLUMN "pinned_at" bigint;--> statement-breakpoint
 ALTER TABLE "projects" ADD COLUMN "kept_reason" text;--> statement-breakpoint
+ALTER TABLE "projects" ADD COLUMN "revived_at" bigint;--> statement-breakpoint
 ALTER TABLE "sessions" ADD COLUMN "idle_since" bigint;--> statement-breakpoint
 ALTER TABLE "sessions" ADD COLUMN "turn_ended_at" bigint;--> statement-breakpoint
 ALTER TABLE "sessions" ADD COLUMN "title_source" text DEFAULT 'prompt' NOT NULL;--> statement-breakpoint

@@ -80,8 +80,8 @@ test("migration 0013 adds the lifecycle columns and starts every existing sessio
     { id: "s1", idle_since: "1000", turn_ended_at: "1000", title_source: "prompt", title: null },
     { id: "s2", idle_since: "2500", turn_ended_at: "2500", title_source: "prompt", title: "Named" },
   ]);
-  const [project] = await sql`select pinned_at, kept_reason from projects`;
-  assert.deepEqual({ ...project }, { pinned_at: null, kept_reason: null });
+  const [project] = await sql`select pinned_at, kept_reason, revived_at from projects`;
+  assert.deepEqual({ ...project }, { pinned_at: null, kept_reason: null, revived_at: null });
 
   // The stores read the backfilled rows as numbers.
   const store = createPgSessionStore({ db });
@@ -89,7 +89,7 @@ test("migration 0013 adds the lifecycle columns and starts every existing sessio
   assert.deepEqual({ idleSince: s2.idleSince, turnEndedAt: s2.turnEndedAt, titleSource: s2.titleSource }, { idleSince: 2500, turnEndedAt: 2500, titleSource: "prompt" });
   const projects = createPgProjectsStore({ db });
   await projects.ready;
-  assert.deepEqual(projects.get("p1"), { id: "p1", name: "one", path: "/repos/x", createdAt: 5, pinnedAt: null, keptReason: null });
+  assert.deepEqual(projects.get("p1"), { id: "p1", name: "one", path: "/repos/x", createdAt: 5, pinnedAt: null, keptReason: null, revivedAt: null });
 });
 
 const sessionBackends = [
@@ -178,13 +178,14 @@ for (const [name, make] of projectBackends) {
     // A removed record leaves the pin behind, and a restored project comes back unpinned.
     await store.remove(wt.id, { keep: true });
     const removed = store.getRemoved(wt.id);
-    assert.ok(!("pinnedAt" in removed) && !("keptReason" in removed));
+    assert.ok(!("pinnedAt" in removed) && !("keptReason" in removed) && !("revivedAt" in removed));
     const restored = await store.restore(wt.id);
     assert.deepEqual({ pinnedAt: restored.pinnedAt, keptReason: restored.keptReason }, { pinnedAt: null, keptReason: null });
     if (reopen) {
       const third = reopen();
       await third.ready;
       assert.equal(third.get(wt.id).pinnedAt, null);
+      assert.equal(third.get(wt.id).revivedAt, restored.revivedAt, "the restore time is stored");
     }
   });
 }

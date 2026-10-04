@@ -79,9 +79,9 @@ export interface ProjectsBackend {
 /** The lifecycle fields of a project that change after it is added. */
 export type ProjectLifecyclePatch = Partial<Pick<Project, "pinnedAt" | "keptReason">>;
 
-/** The removed record of a listed project: pins and the kept reason do not outlive the listing. */
+/** The removed record of a listed project: pins, the kept reason, and the revival time do not outlive the listing. */
 export function removedRecordOf(project: Project, removedAt: number, parentPath?: string): RemovedProject {
-  const { pinnedAt: _pinnedAt, keptReason: _keptReason, ...rest } = project;
+  const { pinnedAt: _pinnedAt, keptReason: _keptReason, revivedAt: _revivedAt, ...rest } = project;
   return { ...rest, removedAt, ...(parentPath ? { parentPath } : {}) };
 }
 
@@ -139,7 +139,10 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
     return project;
   }
 
-  /** Move a removed record back into the list, under its original id. Callers hold the mutation lock. */
+  /**
+   * Move a removed record back into the list, under its original id. Callers hold the mutation lock.
+   * `revivedAt` restarts the idle clock, so the sweep does not remove a restored worktree right away.
+   */
   async function revive(record: RemovedProject, patch: { name?: string; worktree?: WorktreeMeta } = {}): Promise<Project> {
     const project: Project = {
       id: record.id,
@@ -149,6 +152,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
       ...cleanWorktree(patch.worktree ?? record.worktree),
       pinnedAt: null,
       keptReason: null,
+      revivedAt: Date.now(),
     };
     await backend.revive(project);
     removed.delete(project.id);
@@ -186,6 +190,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
           ...cleanWorktree(worktree),
           pinnedAt: null,
           keptReason: null,
+          revivedAt: null,
         };
         await backend.insert(project);
         projects.set(project.id, project);
@@ -252,7 +257,7 @@ export function createMemoryProjectsStore(
 ): ProjectsStore {
   const noop = async () => {};
   // Seeds written before the lifecycle columns existed read as pinned-less, like a real row.
-  const seeded = projects.map((p) => ({ ...p, pinnedAt: p.pinnedAt ?? null, keptReason: p.keptReason ?? null }));
+  const seeded = projects.map((p) => ({ ...p, pinnedAt: p.pinnedAt ?? null, keptReason: p.keptReason ?? null, revivedAt: p.revivedAt ?? null }));
   return createProjectsStoreOn({
     load: async () => ({ projects: seeded, removed }),
     insert: noop,

@@ -9,7 +9,7 @@
  * delete through `deps.sessions.onDeleted` and pushes the list again so open tabs drop it. That is
  * not logged: whoever deleted the session logs the delete (and the agent untracks first).
  */
-import type { ActivityRefs } from "@portal/contracts/activity";
+import type { ActivityActor, ActivityRefs } from "@portal/contracts/activity";
 import type { TrackedSession } from "@portal/contracts/orchestrator";
 import type { OrchestratorHub } from "../hub.ts";
 import type { TrackedBy, TrackedStore } from "./store.ts";
@@ -20,6 +20,8 @@ export type TrackContext = {
   reason?: string;
   runId?: string;
   threadId?: string;
+  /** Who the activity entry names; by default the user for `trackedBy: "user"`, else the agent (the sweep says `system`). */
+  actor?: ActivityActor;
 };
 
 export interface TrackedService {
@@ -75,7 +77,7 @@ export function createTrackedService(hub: OrchestratorHub, store: TrackedStore):
       ...(context.threadId ? { threadId: context.threadId } : {}),
     };
     await hub.activity.log({
-      actor: by === "user" ? "user" : "agent", kind, summary: `${verb} "${name}"${reason ? `: ${reason}` : ""}`,
+      actor: context.actor ?? (by === "user" ? "user" : "agent"), kind, summary: `${verb} "${name}"${reason ? `: ${reason}` : ""}`,
       refs, detail: { trackedBy: by, ...(reason ? { reason } : {}) },
     });
   }

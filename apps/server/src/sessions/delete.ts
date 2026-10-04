@@ -28,7 +28,7 @@ async function forgetIfEmpty(ctx: SessionDeletion, projectId: string): Promise<v
 
 /**
  * Delete every session whose project is no longer listed (removed projects, and conversations whose
- * project left no record), then every removed record. Answers how many sessions went.
+ * project left no record), then every removed record left with no sessions. Answers how many sessions went.
  */
 export async function deleteRemovedSessions(ctx: SessionDeletion): Promise<number> {
   await Promise.all([ctx.projects.ready, ctx.sessions.ready]);
@@ -37,6 +37,10 @@ export async function deleteRemovedSessions(ctx: SessionDeletion): Promise<numbe
     if (ctx.projects.get(session.projectId)) continue;
     if (await deleteSessionFully(ctx, session.id)) deleted++;
   }
-  for (const record of ctx.projects.listRemoved()) await ctx.projects.forgetRemoved(record.id);
+  // Only records left empty: one removed meanwhile, whose sessions were not in the list above, stays.
+  for (const record of ctx.projects.listRemoved()) {
+    if (ctx.sessions.listSessions().some((session) => session.projectId === record.id)) continue;
+    await ctx.projects.forgetRemoved(record.id);
+  }
   return deleted;
 }

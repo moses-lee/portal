@@ -27,14 +27,16 @@ export type Project = {
   pinnedAt: number | null;
   /** Why the lifecycle sweep last kept this worktree although it was due ("uncommitted changes"); null once nothing holds it. */
   keptReason: string | null;
+  /** Epoch ms the project was last brought back from a removed record; null when it never was. Restarts the idle clock. The server always sets it. */
+  revivedAt?: number | null;
 };
 
 /**
  * A project the user removed while conversations still referenced it. Kept, with its original
- * `id`, so restoring it relinks those conversations without touching their records. Pins and the
- * sweep's kept reason belong to listed projects only.
+ * `id`, so restoring it relinks those conversations without touching their records. Pins, the
+ * sweep's kept reason, and the revival time belong to listed projects only.
  */
-export type RemovedProject = Omit<Project, "pinnedAt" | "keptReason"> & {
+export type RemovedProject = Omit<Project, "pinnedAt" | "keptReason" | "revivedAt"> & {
   removedAt: number;
   /** For a worktree: the parent project's folder at removal time, so a re-added parent (new id) is still found. */
   parentPath?: string;

@@ -31,7 +31,21 @@ export type ProjectRemovalIo = {
   hasSessions(projectId: string): boolean | Promise<boolean>;
   /** Take the project out of the list, keeping a removed record when `keep`. */
   removeProject(id: string, opts: { keep: boolean }): Promise<void>;
+  /**
+   * Asked after the pre-deletion script and just before git runs: false cancels the removal with a
+   * `RemovalSkipped`. The lifecycle sweep uses it to judge the project on live data once more; the
+   * route and the orchestrator leave it out.
+   */
+  recheck?(): Promise<boolean>;
 };
+
+/** Thrown when `recheck` cancelled a removal: something changed, nothing was removed. */
+export class RemovalSkipped extends Error {
+  constructor() {
+    super("The removal was cancelled because the project changed.");
+    this.name = "RemovalSkipped";
+  }
+}
 
 const exists = (dir: string) => stat(dir).then(() => true, () => false);
 
@@ -54,8 +68,9 @@ export function liveProjectRemovalIo(ctx: Pick<AppContext, "projects" | "session
 /**
  * Remove the worktree folder behind a worktree project. The git commands run in the main checkout,
  * found through the parent project or, when that is gone, through the worktree's own `.git` file.
- * A folder that has already disappeared only needs its registration pruned. Git's refusal (a dirty
- * tree without `force`) is a 409 `WorktreeError` with `dirty: true`.
+ * `io.recheck`, when given, runs between the pre-deletion script and git. A folder that has already
+ * disappeared only needs its registration pruned. Git's refusal (a dirty tree without `force`) is a
+ * 409 `WorktreeError` with `dirty: true`.
  */
 export async function deleteWorktreeFolder(
   io: ProjectRemovalIo,
@@ -69,11 +84,12 @@ export async function deleteWorktreeFolder(
   let repoRoot: string | null = null;
   if (parent && await exists(parent.path)) repoRoot = await io.gitRoot(parent.path);
   if (!repoRoot && worktreeRoot) repoRoot = await io.mainWorktreeOf(worktreeRoot);
-  // Without a folder and without a repository there is nothing left for git to clean up.
-  if (!repoRoot) return { branchDeleted: false };
   const worktreePath = worktreeRoot ?? project.path;
   // The user's pre-deletion script runs first, while the folder is still there; a forced retry runs it again.
-  if (present) await io.runScript("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
+  if (repoRoot && present) await io.runScript("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
+  if (io.recheck && !(await io.recheck())) throw new RemovalSkipped();
+  // Without a folder and without a repository there is nothing left for git to clean up.
+  if (!repoRoot) return { branchDeleted: false };
   return io.removeWorktree({ repoRoot, path: worktreePath, branch: project.worktree.branch, force, ...(deleteBranch ? { deleteBranch } : {}) });
 }
 

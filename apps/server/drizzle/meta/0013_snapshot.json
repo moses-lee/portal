@@ -1455,6 +1455,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "revived_at": {
+          "name": "revived_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
