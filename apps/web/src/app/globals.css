@@ -339,6 +339,45 @@
   background: #8eb6ed;
   animation: status-breathe 1.8s ease-in-out infinite;
 }
+/* The sidebar's dot goes by `sessionState` (data-state), the same states the tracked badge shows. */
+[data-state="working"] > .status-dot {
+  background: #2fe36b;
+  box-shadow: 0 0 9px #2fe36b99;
+}
+[data-state="working"] > .status-dot::after,
+[data-state="background"] > .status-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid #4cf584;
+  opacity: 0;
+  animation: ind-orb-ping 1.6s ease-out infinite;
+}
+/* Background: the turn ended but tasks still run; violet, with a slower ping. */
+[data-state="background"] > .status-dot {
+  background: #a78bfa;
+  box-shadow: 0 0 9px #a78bfa99;
+}
+[data-state="background"] > .status-dot::after {
+  border-color: #c4b5fd;
+  animation-duration: 2.4s;
+}
+[data-state="approval"] > .status-dot {
+  background: #edbb6a;
+}
+/* Hung: a turn open with no CPU or output; orange, blinking slowly, apart from offline's red. */
+[data-state="hung"] > .status-dot {
+  background: #f0965a;
+  animation: status-breathe 2.6s ease-in-out infinite;
+}
+[data-state="offline"] > .status-dot {
+  background: #ed8b95;
+}
+[data-state="connecting"] > .status-dot {
+  background: #8eb6ed;
+  animation: status-breathe 1.8s ease-in-out infinite;
+}
 @keyframes status-breathe {
   50% {
     opacity: 0.45;

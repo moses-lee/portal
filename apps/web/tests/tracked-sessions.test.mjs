@@ -53,10 +53,17 @@ test("a dead agent or an offline link with an error is offline; a detached idle 
 });
 
 test("badge labels and groups", () => {
-  assert.deepEqual(Object.values(trackedStateLabels), ["Needs approval", "Finished", "Working", "Connecting", "Offline", "Hung"]);
+  assert.deepEqual(Object.values(trackedStateLabels), ["Needs approval", "Hung", "Offline", "Connecting", "Working", "Background", "Finished"]);
   assert.equal(trackedGroupOf("offline"), "stalled");
   assert.equal(trackedGroupOf("hung"), "stalled");
   assert.equal(trackedGroupOf("working"), "working");
+  assert.equal(trackedGroupOf("background"), "working");
+});
+
+test("background work after the turn is its own state, listed with working for now", () => {
+  assert.equal(trackedState(session("a", { liveness: "background" })), "background");
+  const groups = groupTracked([track("a")], [session("a", { liveness: "background" })]);
+  assert.deepEqual(groups.map((group) => [group.id, group.rows.map((row) => row.state)]), [["working", ["background"]]]);
 });
 
 test("tracked sessions group in order, newest prompt first, skipping unknown ids", () => {

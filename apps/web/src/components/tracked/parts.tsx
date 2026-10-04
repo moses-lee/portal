@@ -45,6 +45,7 @@ const badgeTone: Record<TrackedState, string> = {
   approval: "bg-amber-300/15 text-amber-200",
   finished: "bg-sky-300/15 text-sky-200",
   working: "bg-emerald-400/15 text-emerald-200",
+  background: "bg-violet-400/15 text-violet-200",
   connecting: "bg-blue-300/10 text-blue-200/80",
   offline: "bg-destructive/15 text-red-200",
   hung: "bg-destructive/15 text-red-200",

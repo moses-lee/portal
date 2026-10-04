@@ -3,6 +3,7 @@
  * panel lists them under. Pure, so the node test runner can load it.
  */
 import type { TrackedSession } from "@portal/contracts/orchestrator";
+import { sessionState, sessionStateLabels, type SessionState } from "./session-state.ts";
 import type { SessionSummary } from "./types.ts";
 
 /** `"true"`/`"false"`: whether the desktop panel is expanded (the list) or collapsed to its slim toggle. */
@@ -10,19 +11,12 @@ export const TRACKED_OPEN_KEY = "portal.tracked.open";
 /** The expanded (session mode) width in px; read by session mode. */
 export const TRACKED_WIDTH_KEY = "portal.tracked.width";
 
-/** A tracked session's state, as its badge shows it. */
-export type TrackedState = "approval" | "finished" | "working" | "connecting" | "offline" | "hung";
-/** The panel's groups, in list order; offline and hung share the last one. */
+/** A tracked session's state, as its badge shows it: the shared `sessionState`, the same one the sidebar dot shows. */
+export type TrackedState = SessionState;
+/** The panel's groups, in list order; offline and hung share the last one, background sits with working. */
 export type TrackedGroupId = "approval" | "finished" | "working" | "connecting" | "stalled";
 
-export const trackedStateLabels: Record<TrackedState, string> = {
-  approval: "Needs approval",
-  finished: "Finished",
-  working: "Working",
-  connecting: "Connecting",
-  offline: "Offline",
-  hung: "Hung",
-};
+export const trackedStateLabels: Record<TrackedState, string> = sessionStateLabels;
 
 export const trackedGroupOrder: readonly TrackedGroupId[] = ["approval", "finished", "working", "connecting", "stalled"];
 
@@ -37,28 +31,16 @@ export const trackedGroupLabels: Record<TrackedGroupId, string> = {
 /** The list fields the state reads. */
 export type TrackedStateInput = Pick<SessionSummary, "busy" | "awaitingPermission" | "link" | "liveness">;
 
-/**
- * The state of one session, first match wins:
- * - approval: a permission prompt is open (`awaitingPermission`, or liveness `blocked`);
- * - hung: liveness `hung` (a turn with no CPU or output for too long);
- * - offline: liveness `dead` (the agent went away mid-work), or the link is offline with an error;
- * - connecting: the link is connecting (attaching the agent);
- * - working: a turn is running (`busy`, or liveness `busy`);
- * - finished: everything else, idle: the agent is done and waiting on us. That includes an offline
- *   link without an error, which is a session whose agent is simply not attached (after a restart);
- *   opening it attaches the agent again.
- */
+/** The state of one session: `sessionState` (see there for the precedence). */
 export function trackedState(session: TrackedStateInput): TrackedState {
-  if (session.awaitingPermission || session.liveness === "blocked") return "approval";
-  if (session.liveness === "hung") return "hung";
-  if (session.liveness === "dead" || (session.link.status === "offline" && session.link.error)) return "offline";
-  if (session.link.status === "connecting") return "connecting";
-  if (session.busy || session.liveness === "busy") return "working";
-  return "finished";
+  return sessionState(session);
 }
 
 export function trackedGroupOf(state: TrackedState): TrackedGroupId {
-  return state === "offline" || state === "hung" ? "stalled" : state;
+  if (state === "offline" || state === "hung") return "stalled";
+  // Background work gets its own group with the new group order; until then it lists with working.
+  if (state === "background") return "working";
+  return state;
 }
 
 export type TrackedRow<S extends TrackedStateInput & Pick<SessionSummary, "id" | "lastActiveAt"> = SessionSummary> = {

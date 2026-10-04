@@ -80,12 +80,14 @@ function originUrl(deps: OrchestratorDeps, dir: string): Promise<string | null> 
 }
 
 /**
- * A session's activity for the snapshot. A session that is merely offline after a restart (no
- * error recorded) is idle for the digest's purposes; only a lost agent is an error.
+ * A session's activity for the snapshot: the shared `sessionState` folded onto `AgentActivity`. A
+ * session that is merely offline after a restart (no error recorded) is idle; only a lost agent is
+ * an error. Liveness is left out on purpose: the snapshot carries it in its own field and stalls go
+ * by it (`sessionDead`, `session_hung`), while a hung turn must stay `working` here so the turn's
+ * end still reads as finished and `list_active_sessions` still lists it.
  */
 export function snapshotActivity(meta: Pick<SessionMeta, "busy" | "awaitingPermission" | "link">) {
-  const quiet = meta.link.status === "offline" && meta.link.error === null;
-  return agentActivity({ busy: meta.busy, awaitingPermission: meta.awaitingPermission, link: quiet ? null : meta.link });
+  return agentActivity({ busy: meta.busy, awaitingPermission: meta.awaitingPermission, link: meta.link });
 }
 
 type SnapshotSession = TickSnapshot["sessions"][string];

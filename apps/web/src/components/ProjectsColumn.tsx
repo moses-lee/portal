@@ -51,7 +51,7 @@ import {
   pruneCollapsed,
   serializeCollapsed,
 } from "@/lib/collapsed-projects";
-import { agentActivity, activityLabels } from "@/lib/agent-activity";
+import { sessionState, sessionStateLabels } from "@/lib/session-state";
 import { relativeAge } from "@/lib/relative-age";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
@@ -126,7 +126,7 @@ const SessionRow = memo(function SessionRow({
     [],
   );
   const title = session.title || "New conversation";
-  const activity = agentActivity(session);
+  const state = sessionState(session);
   const age = relativeAge(now - session.lastActiveAt);
   const cancelHover = () => {
     if (hover.current) clearTimeout(hover.current);
@@ -164,9 +164,9 @@ const SessionRow = memo(function SessionRow({
             className="flex min-w-0 gap-2.5 rounded-xl px-2.5 py-1.5 text-left"
           >
             <span
-              data-activity={activity}
+              data-state={state}
               className="mt-[6px] inline-flex shrink-0"
-              aria-label={activityLabels[activity]}
+              aria-label={sessionStateLabels[state]}
             >
               <span className="status-dot" />
             </span>
@@ -178,12 +178,12 @@ const SessionRow = memo(function SessionRow({
                   className="!size-[11px] opacity-70"
                 />
                 {pinned && <Pin className="size-2.5" aria-label="Pinned" />}
-                {session.busy || session.link.status === "connecting" ? (
-                  <span>{activityLabels[activity]}</span>
+                {state !== "finished" && state !== "offline" ? (
+                  <span>{sessionStateLabels[state]}</span>
                 ) : session.cwdMissing ? (
                   "Folder missing"
-                ) : session.link.status === "offline" && session.link.error ? (
-                  "Offline"
+                ) : state === "offline" ? (
+                  sessionStateLabels.offline
                 ) : (
                   <span>{age === "now" ? "Just now" : `${age} ago`}</span>
                 )}
