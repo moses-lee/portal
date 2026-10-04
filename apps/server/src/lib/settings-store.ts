@@ -3,8 +3,8 @@ import path from "node:path";
 import { orchestratorProviders } from "../orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "../orchestrator/types.ts";
 import type { ConsolidationSettings } from "@portal/contracts/orchestrator";
-import { gitActionKinds, isClockTime, isHungAfterMinutes, isOrchestratorProvider, orchestratorLimits } from "@portal/shared/settings";
-import type { GitActionKind, Settings, SettingsPatch } from "@portal/shared/settings";
+import { gitActionKinds, isClockTime, isHungAfterMinutes, isLifecycleHours, isOrchestratorProvider, orchestratorLimits, sessionsLimits } from "@portal/shared/settings";
+import type { GitActionKind, SessionsSettingsPatch, Settings, SettingsPatch } from "@portal/shared/settings";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";
 import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "@portal/shared/scripts";
 
@@ -63,6 +63,7 @@ export type SettingsFile = {
     apiKeys?: Partial<Record<OrchestratorProvider, string>>;
   };
   scripts?: ScriptsPatch;
+  sessions?: SessionsSettingsPatch;
 };
 
 /** The overrides read from a file, without the version marker. */
@@ -149,6 +150,17 @@ function checkScriptField(kind: ScriptKind, field: keyof ScriptSettingsPatch, va
   }
 }
 
+/** The sessions section's two clocks: `sessions.<group>.<field>`, each in whole hours. */
+const sessionsFields = [
+  ["tracked", "untrackAfterHours"],
+  ["worktrees", "removeAfterHours"],
+] as const;
+
+function checkLifecycleHours(name: string, value: unknown): Checked<number> {
+  if (isLifecycleHours(value)) return { value };
+  return { error: `${name} must be a whole number of hours between ${sessionsLimits.minHours} and ${sessionsLimits.maxHours}.` };
+}
+
 /** Control characters other than newline, carriage return, and tab. */
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
@@ -166,6 +178,19 @@ function parseScriptsPatch(given: unknown): ScriptsPatch {
     scripts[kind] = patch;
   }
   return scripts;
+}
+
+function parseSessionsPatch(given: unknown): SessionsSettingsPatch {
+  if (!isPlainObject(given)) throw new SettingsError("sessions must be an object.", 400);
+  const patch: SessionsSettingsPatch = {};
+  for (const [group, field] of sessionsFields) {
+    const section = given[group];
+    if (section === undefined) continue;
+    if (!isPlainObject(section)) throw new SettingsError(`sessions.${group} must be an object.`, 400);
+    if (section[field] === undefined) continue;
+    (patch as Record<string, unknown>)[group] = { [field]: required(checkLifecycleHours(`sessions.${group}.${field}`, section[field])) };
+  }
+  return patch;
 }
 
 function parsePromptsPatch(given: unknown): Partial<Record<GitActionKind, string>> {
@@ -255,6 +280,7 @@ export function parseSettingsPatch(input: unknown): SettingsPatch {
   }
   if (input.orchestrator !== undefined) patch.orchestrator = parseOrchestratorPatch(input.orchestrator);
   if (input.scripts !== undefined) patch.scripts = parseScriptsPatch(input.scripts);
+  if (input.sessions !== undefined) patch.sessions = parseSessionsPatch(input.sessions);
   return patch;
 }
 
@@ -273,6 +299,18 @@ function parseScriptsFile(given: unknown): SettingsFile["scripts"] {
     if (Object.keys(patch).length > 0) scripts[kind] = patch;
   }
   return Object.keys(scripts).length > 0 ? scripts : undefined;
+}
+
+/** The sessions section of a settings file; a clock that is not a whole number of hours in range falls back to its default. */
+function parseSessionsFile(given: unknown): SettingsFile["sessions"] {
+  if (!isPlainObject(given)) return undefined;
+  const sessions: SessionsSettingsPatch = {};
+  for (const [group, field] of sessionsFields) {
+    const section = given[group];
+    if (!isPlainObject(section) || !isLifecycleHours(section[field])) continue;
+    (sessions as Record<string, unknown>)[group] = { [field]: section[field] };
+  }
+  return Object.keys(sessions).length > 0 ? sessions : undefined;
 }
 
 /**
@@ -305,6 +343,12 @@ function parseOrchestratorFile(given: unknown): SettingsFile["orchestrator"] {
     }
     if (Object.keys(consolidation).length > 0) section.consolidation = consolidation;
   }
+  if (isPlainObject(given.reviews) && typeof given.reviews.answerReadOnly === "boolean") {
+    section.reviews = { answerReadOnly: given.reviews.answerReadOnly };
+  }
+  if (isPlainObject(given.stalls) && isHungAfterMinutes(given.stalls.hungAfterMinutes)) {
+    section.stalls = { hungAfterMinutes: given.stalls.hungAfterMinutes };
+  }
   if (isPlainObject(given.apiKeys)) {
     const apiKeys: Partial<Record<OrchestratorProvider, string>> = {};
     for (const provider of orchestratorProviders) {
@@ -334,6 +378,8 @@ function parseOverridesObject(parsed: Record<string, unknown>): FileOverrides {
   if (orchestrator) overrides.orchestrator = orchestrator;
   const scripts = parseScriptsFile(parsed.scripts);
   if (scripts) overrides.scripts = scripts;
+  const sessions = parseSessionsFile(parsed.sessions);
+  if (sessions) overrides.sessions = sessions;
   return overrides;
 }
 
