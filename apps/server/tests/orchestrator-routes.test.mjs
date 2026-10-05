@@ -285,7 +285,7 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
     ready: Promise.resolve(),
     listSessions: () => sessions,
     getSession: (id) => sessions.find((s) => s.id === id),
-    sendPrompt: async (id, text) => { calls.push(["prompt", id, text]); },
+    sendOrQueue: async (id, text) => { calls.push(["prompt", id, text]); return { queued: null, position: 0 }; },
     deleteSession: async (id) => {
       const before = sessions.length;
       sessions = sessions.filter((s) => s.id !== id);

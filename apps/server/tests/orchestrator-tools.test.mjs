@@ -414,7 +414,7 @@ test("stop_session cancels a busy session's turn, waits until it is idle, and an
     }
     return meta;
   };
-  deps.sessions.cancel = async (id) => { cancels.push(id); };
+  deps.sessions.cancel = async (id) => { cancels.push(id); return []; };
   const result = await run(tools.stop_session, { sessionId: "s1" });
   assert.deepEqual(result, { sessionId: "s1", stopped: true, activity: "idle", stopReason: "cancelled" });
   assert.deepEqual(cancels, ["s1"]);

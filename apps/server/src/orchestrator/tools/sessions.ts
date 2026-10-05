@@ -35,6 +35,7 @@ export function sessionRow(meta: SessionMeta) {
     id: meta.id, title: meta.title, projectId: meta.projectId || null, agent: meta.agentId,
     activity: snapshotActivity(meta),
     ...(meta.liveness ? { liveness: meta.liveness.state, status: meta.liveness.summary } : {}),
+    ...(meta.queue?.length ? { queuedPrompts: meta.queue.length } : {}),
     lastActiveAt: meta.lastActiveAt,
   };
 }
@@ -233,12 +234,12 @@ export function sessionTools(ctx: ToolContext) {
       ),
     } : {}),
     send_prompt: define(
-      "Send a prompt to a session; the agent works on it asynchronously. Fails while the session is busy.",
+      "Send a prompt to a session; the agent works on it asynchronously. While the session is busy the prompt is queued (up to 10 per session) and goes out, in order, once the turn ends; the answer says which happened.",
       z.object({ sessionId, text: z.string().min(1) }),
       async (input) => {
         const sessionId = await full(input.sessionId);
-        await deps.sessions.prompt(sessionId, input.text);
-        return { sessionId, sent: true };
+        const { queued, position } = await deps.sessions.prompt(sessionId, input.text);
+        return queued ? { sessionId, sent: false, queued: true, position } : { sessionId, sent: true };
       },
     ),
     set_session_config: define(
@@ -252,22 +253,23 @@ export function sessionTools(ctx: ToolContext) {
       },
     ),
     cancel_turn: define(
-      "Send a stop to the turn a session is working on, without waiting for it (stop_session waits and confirms).",
+      "Send a stop to the turn a session is working on, without waiting for it (stop_session waits and confirms). A stop also drops the session's queued prompts; the answer lists them.",
       z.object({ sessionId }),
       async (input) => {
         const sessionId = await full(input.sessionId);
-        await deps.sessions.cancel(sessionId);
-        return { sessionId, cancelled: true };
+        const dropped = await deps.sessions.cancel(sessionId);
+        return { sessionId, cancelled: true, ...(dropped.length ? { droppedQueued: dropped.map((item) => item.text) } : {}) };
       },
     ),
     stop_session: define(
-      "Stop the turn a session is working on and wait until the session is idle (up to timeoutSeconds, default 30). Answers the state Portal confirmed afterwards: stopped, its activity, and how the turn ended.",
+      "Stop the turn a session is working on and wait until the session is idle (up to timeoutSeconds, default 30). Answers the state Portal confirmed afterwards: stopped, its activity, how the turn ended, and any queued prompts the stop dropped.",
       z.object({ sessionId, timeoutSeconds: z.number().int().min(1).max(120).optional() }),
       async ({ timeoutSeconds = STOP_WAIT_SECONDS, ...input }, options) => {
         const before = await requireSession(deps, input.sessionId);
         const sessionId = before.id;
         if (!before.busy) return { sessionId, stopped: false, activity: snapshotActivity(before), note: "The session had no turn to stop." };
-        await deps.sessions.cancel(sessionId);
+        const dropped = await deps.sessions.cancel(sessionId);
+        const droppedQueued = dropped.length ? { droppedQueued: dropped.map((item) => item.text) } : {};
         // Counted rather than timed: the tool context's clock may be a test's, which never moves by itself.
         let meta = await requireSession(deps, sessionId);
         for (let left = Math.ceil((timeoutSeconds * 1000) / STOP_POLL_MS); meta.busy && left > 0; left--) {
@@ -275,9 +277,9 @@ export function sessionTools(ctx: ToolContext) {
           meta = await requireSession(deps, sessionId);
         }
         const activity = snapshotActivity(meta);
-        if (meta.busy) return { sessionId, stopped: false, activity, note: `The session was still busy ${timeoutSeconds}s after the stop was sent.` };
+        if (meta.busy) return { sessionId, stopped: false, activity, note: `The session was still busy ${timeoutSeconds}s after the stop was sent.`, ...droppedQueued };
         const { events } = await deps.sessions.readEvents(sessionId, { limit: TURN_END_WINDOW });
-        return { sessionId, stopped: true, activity, stopReason: lastTurnEnd(events) };
+        return { sessionId, stopped: true, activity, stopReason: lastTurnEnd(events), ...droppedQueued };
       },
     ),
     answer_permission: define(

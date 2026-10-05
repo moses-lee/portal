@@ -240,7 +240,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     const sendMeta = () => {
       const meta: SessionMetaEvent = {
         busy: session.busy, link: session.link, title: session.title, titleSource: session.titleSource, cwd: session.cwd,
-        agentId: session.agentId, agentName: session.agentName, git, state: session.state, project, cwdMissing,
+        agentId: session.agentId, agentName: session.agentName, git, state: session.state, project, cwdMissing, queue: [...session.queue],
       };
       stream.send(meta, { event: "meta" });
     };
@@ -272,11 +272,12 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
       for (const { seq, ...ev } of missed) send(seq, ev, ev.ts);
     }
     sendMeta();
-    // Tail. Mode, model, command, connection, and title changes reach viewers through `meta`, not the event log.
+    // Tail. Mode, model, command, connection, title, and queue changes reach viewers through `meta`, not the event log.
     stream.onClose(ctx.sessions.subscribe(id, {
       onEvent: send,
       onState: sendMeta,
       onLink: sendMeta,
+      onQueue: sendMeta,
       onClose: () => {
         stream.write(`event: deleted\ndata: {}\n\n`);
         stream.close();
@@ -323,23 +324,61 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
       .send(createReadStream(blobs.pathOf(name)));
   });
 
+  /**
+   * Send a prompt. With `queue: true` a busy session queues it instead of refusing (202 with the
+   * queued item and its position; it goes out once the turn ends, after earlier queued prompts);
+   * a free session sends it at once either way. 409 when the session is busy without `queue`,
+   * the queue is full, or the agent could not be reached.
+   */
   app.post<IdParams>("/api/sessions/:id/prompt", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
-    const { text } = (req.body ?? {}) as { text?: unknown };
+    const { text, queue } = (req.body ?? {}) as { text?: unknown; queue?: unknown };
     if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "empty prompt" });
     try {
+      if (queue === true) {
+        const { queued, position } = await ctx.sessions.sendOrQueue(req.params.id, text);
+        return reply.code(202).send(queued ? { ok: true, queued, position } : { ok: true, queued: null });
+      }
       await ctx.sessions.sendPrompt(req.params.id, text);
-      return reply.code(202).send({ ok: true });
+      return reply.code(202).send({ ok: true, queued: null });
     } catch (err) {
       return reply.code(409).send({ error: errorMessage(err) });
     }
   });
 
+  /** Edit a queued prompt's text. 404 once it has gone out or was removed. */
+  app.patch<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    const { text } = (req.body ?? {}) as { text?: unknown };
+    if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "empty prompt" });
+    await ready();
+    if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
+    try {
+      return { item: await ctx.sessions.updateQueued(req.params.id, req.params.itemId, text) };
+    } catch (err) {
+      return reply.code(404).send({ error: errorMessage(err) });
+    }
+  });
+
+  /**
+   * Take a prompt out of the queue. Answers `{ removed }`: false when it was no longer there (it
+   * went out as the turn ended, or another viewer removed it), so a viewer editing it knows not
+   * to put the text back in its composer.
+   */
+  app.delete<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    await ready();
+    if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
+    const removed = await ctx.sessions.removeQueued(req.params.id, req.params.itemId);
+    return { removed: removed !== null };
+  });
+
+  /** Stop the open turn. The queued prompts are dropped and answered, so the viewer can put them back in its composer. */
   app.post<IdParams>("/api/sessions/:id/cancel", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     try {
-      await ctx.sessions.cancel(req.params.id);
-      return { ok: true };
+      const queued = await ctx.sessions.cancel(req.params.id);
+      return { ok: true, queued };
     } catch (err) {
       return reply.code(409).send({ error: errorMessage(err) });
     }

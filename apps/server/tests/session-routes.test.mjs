@@ -293,7 +293,7 @@ test("prompt, permission, config, cancel, attach, events, and delete behave like
   // Cancel and attach.
   const cancelled = await post("cancel");
   assert.equal(cancelled.statusCode, 200);
-  assert.deepEqual(cancelled.json(), { ok: true });
+  assert.deepEqual(cancelled.json(), { ok: true, queued: [] });
   await until(() => messages("session/cancel").length === 1, "session/cancel");
   assert.equal((await post("cancel", undefined, EVIL)).statusCode, 403);
   assert.equal((await app.inject({ method: "POST", url: "/api/sessions/nope/cancel" })).statusCode, 409);
@@ -700,4 +700,70 @@ test("emptying Removed keeps a record removed mid-purge whose sessions are still
   };
   assert.equal(await deleteRemovedSessions(ctx), 1);
   assert.deepEqual(projects.listRemoved().map((record) => record.id), ["busy"]);
+});
+
+test("a prompt sent with queue while the session is busy waits in the queue; the queue is edited, removed, streamed in meta, and dropped by a stop", async (t) => {
+  const { app } = await setup(t);
+  const session = await createSession(app);
+  const post = (suffix, payload, headers) => app.inject({ method: "POST", url: `/api/sessions/${session.id}/${suffix}`, payload, headers });
+  const sentNow = await post("prompt", { text: "tool", queue: true });
+  assert.equal(sentNow.statusCode, 202, sentNow.body);
+  assert.deepEqual(sentNow.json(), { ok: true, queued: null });
+  // Without `queue` a busy session still refuses.
+  const refused = await post("prompt", { text: "next" });
+  assert.equal(refused.statusCode, 409);
+  assert.match(refused.json().error, /busy/i);
+  const queued = await post("prompt", { text: "  next  ", queue: true });
+  assert.equal(queued.statusCode, 202, queued.body);
+  const { queued: item, position } = queued.json();
+  assert.equal(position, 1);
+  assert.equal(item.text, "next");
+  assert.equal(typeof item.id, "string");
+  assert.equal((await post("prompt", { text: "x", queue: true }, EVIL)).statusCode, 403);
+  const detail = await app.inject({ method: "GET", url: `/api/sessions/${session.id}` });
+  assert.deepEqual(detail.json().queue, [item]);
+
+  // Edit and remove.
+  const edit = (itemId, payload, headers) => app.inject({ method: "PATCH", url: `/api/sessions/${session.id}/queue/${itemId}`, payload, headers });
+  assert.equal((await edit(item.id, { text: "changed" }, EVIL)).statusCode, 403);
+  assert.equal((await edit(item.id, { text: "  " })).statusCode, 400);
+  const edited = await edit(item.id, { text: "changed" });
+  assert.equal(edited.statusCode, 200, edited.body);
+  assert.deepEqual(edited.json(), { item: { ...item, text: "changed" } });
+  assert.equal((await edit("nope", { text: "x" })).statusCode, 404);
+  assert.equal((await app.inject({ method: "PATCH", url: "/api/sessions/nope/queue/x", payload: { text: "x" } })).statusCode, 404);
+  const other = (await post("prompt", { text: "other", queue: true })).json();
+  assert.equal(other.position, 2);
+  const remove = (itemId, headers) => app.inject({ method: "DELETE", url: `/api/sessions/${session.id}/queue/${itemId}`, headers });
+  assert.equal((await remove(other.queued.id, EVIL)).statusCode, 403);
+  assert.deepEqual((await remove(other.queued.id)).json(), { removed: true });
+  assert.deepEqual((await remove(other.queued.id)).json(), { removed: false });
+  assert.equal((await app.inject({ method: "DELETE", url: "/api/sessions/nope/queue/x" })).statusCode, 404);
+
+  // The stream's meta carries the queue and follows its changes.
+  const address = await app.listen({ port: 0, host: "127.0.0.1" });
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const stream = sseReader(await fetch(`${address}/api/sessions/${session.id}/stream`, { signal: controller.signal }));
+  const next = async (match) => {
+    for (;;) {
+      const frame = await stream.next();
+      assert.ok(frame, "stream ended");
+      if (match(frame)) return frame;
+    }
+  };
+  const meta = await next((frame) => frame.event === "meta");
+  assert.deepEqual(meta.data.queue, [{ ...item, text: "changed" }]);
+  const third = (await post("prompt", { text: "third", queue: true })).json();
+  const grown = await next((frame) => frame.event === "meta" && frame.data.queue.length === 2);
+  assert.deepEqual(grown.data.queue.map(({ text }) => text), ["changed", "third"]);
+
+  // Stop drops the queue and hands it back.
+  const cancelled = await post("cancel");
+  assert.equal(cancelled.statusCode, 200, cancelled.body);
+  assert.deepEqual(cancelled.json(), { ok: true, queued: [{ ...item, text: "changed" }, third.queued] });
+  const emptied = await next((frame) => frame.event === "meta" && frame.data.queue.length === 0);
+  assert.equal(emptied.data.queue.length, 0);
+  await until(async () => (await events(app, session.id)).events.at(-1)?.type === "turn_end", "turn end");
+  assert.equal((await events(app, session.id)).events.filter(({ type }) => type === "user").length, 1);
 });

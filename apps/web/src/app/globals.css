@@ -549,6 +549,44 @@
 .composer-send:disabled {
   opacity: 0.2;
 }
+.prompt-queue {
+  margin: 0 8px 8px;
+  padding: 8px 10px 6px;
+  border-radius: 14px;
+  background: #ffffff08;
+  border: 1px solid #ffffff0f;
+  font-size: 12px;
+}
+.prompt-queue-heading {
+  margin: 0 0 4px 4px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.prompt-queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.prompt-queue-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 4px;
+}
+.prompt-queue-index {
+  flex: none;
+  width: 14px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.prompt-queue-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .composer-context {
   display: flex;
   min-width: 0;

@@ -7,6 +7,7 @@ import SessionControls from "./SessionControls";
 import ContextBar from "./ContextBar";
 import StartPage, { type StartPageProps } from "./StartPage";
 import ChatComposer from "./ChatComposer";
+import PromptQueue from "./PromptQueue";
 import Conversation from "./Conversation";
 import SessionHeader from "./SessionHeader";
 import SessionLinkBanner from "./SessionLinkBanner";
@@ -103,6 +104,9 @@ export default function SessionPane({
     send,
     stop,
     stopping,
+    queue,
+    editQueued,
+    removeQueued,
     answerPermission,
     setConfig,
     configInFlight,
@@ -201,6 +205,12 @@ export default function SessionPane({
               />
             )}
             <div className="composer-wrap">
+              <PromptQueue
+                queue={queue}
+                busy={busy}
+                onEdit={(item) => void editQueued(item)}
+                onRemove={(item) => void removeQueued(item)}
+              />
               <SessionLinkBanner
                 link={link}
                 agentName={agentName}
@@ -212,6 +222,7 @@ export default function SessionPane({
                 onSend={() => void send()}
                 onStop={() => void stop()}
                 busy={busy}
+                queues
                 sending={sending || initialPending}
                 stopping={stopping}
                 disabled={notFound}

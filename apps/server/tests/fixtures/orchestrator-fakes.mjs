@@ -77,8 +77,9 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
       prompt: async (id, text) => {
         if (state.promptFailure) throw new Error(state.promptFailure);
         state.prompts.push({ id, text });
+        return { queued: null, position: 0 };
       },
-      cancel: async () => {},
+      cancel: async () => [],
       respondPermission: async (id, requestId, optionId) => {
         state.answered.push({ id, requestId, optionId });
       },

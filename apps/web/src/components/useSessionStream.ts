@@ -5,12 +5,15 @@ import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useSend } from "./useSend";
 import { useSessions } from "./SessionsProvider";
 import { sessionHistoryKey } from "@/lib/prompt-history";
+import { restoreToDraft } from "@/lib/prompt-queue";
+import { readDraft, writeDraft } from "@/lib/drafts";
 import { applyConfigChange } from "@/lib/session-config";
 import { agentActivity } from "@/lib/agent-activity";
 import { sessionState as deriveSessionState } from "@/lib/session-state";
 import { sessionStatusLabel } from "@/lib/session-status";
 import type {
   EventPage,
+  QueuedPrompt,
   SessionLink,
   SessionMetaEvent,
   SessionState,
@@ -62,6 +65,8 @@ function seed(
     loading: !!sessionId && !cached,
     link: session?.link ?? null,
     busy: session?.busy ?? false,
+    // The list stream does not patch the queue; the stream's first `meta` corrects it on connect.
+    queue: session?.queue ?? [],
     // The list entry carries modes and config options but not the slash commands; those arrive with the first `meta`.
     state: session?.state ? { ...session.state, commands: [] } : null,
   };
@@ -108,6 +113,8 @@ export function useSessionStream(
   const [notFound, setNotFound] = useState(false);
   const [link, setLink] = useState<SessionLink | null>(initial.seed.link);
   const [busy, setBusy] = useState(initial.seed.busy);
+  /** The prompts waiting for the agent, as the stream's `meta` keeps them (see `QueuedPrompt`). */
+  const [queue, setQueue] = useState<QueuedPrompt[]>(initial.seed.queue);
   const [sessionState, setSessionState] = useState<SessionState | null>(
     initial.seed.state,
   );
@@ -135,6 +142,7 @@ export function useSessionStream(
     setNotFound(false);
     setLink(next.link);
     setBusy(next.busy);
+    setQueue(next.queue);
     setSessionState(next.state);
     setConfigInFlight(false);
     setConfigError(null);
@@ -175,8 +183,10 @@ export function useSessionStream(
       if (meta.link) setLink(meta.link);
       // Agent state (modes, config options, commands) changes from any viewer; the stream is the source of truth.
       if (meta.state) setSessionState(meta.state);
+      if (meta.queue) setQueue(meta.queue);
       const patch: Partial<SessionSummary> = {};
       if (meta.busy !== undefined) patch.busy = meta.busy;
+      if (meta.queue) patch.queue = meta.queue;
       if (meta.link) patch.link = meta.link;
       if (meta.title !== undefined) patch.title = meta.title;
       if (meta.titleSource !== undefined) patch.titleSource = meta.titleSource;
@@ -303,7 +313,10 @@ export function useSessionStream(
     setHistory((previous) => appendEvent(previous, event));
   };
 
-  /** `POST /prompt`; resolves once the agent has the prompt (its `turn_start` follows on the stream). */
+  /**
+   * `POST /prompt` with `queue`: resolves once the server has the prompt, sent (its `turn_start`
+   * follows on the stream) or, while the agent works, queued (it shows up in `queue`).
+   */
   const submitPrompt = useCallback(
     async (text: string) => {
       if (!sessionId) throw new Error("No active session.");
@@ -311,7 +324,7 @@ export function useSessionStream(
       const response = await fetch(sessionUrl(sessionId, "/prompt"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, queue: true }),
       });
       if (!response.ok) {
         const result = (await response.json().catch(() => ({}))) as {
@@ -325,6 +338,7 @@ export function useSessionStream(
     },
     [sessionId, submitted],
   );
+  const draftKey = sessionId ?? "new";
   const {
     draft,
     setDraft,
@@ -332,13 +346,38 @@ export function useSessionStream(
     error: sendError,
     send,
   } = useSend({
-    draftKey: sessionId ?? "new",
+    draftKey,
     historyKey: sessionId ? sessionHistoryKey(sessionId) : undefined,
     submit: submitPrompt,
-    canSend: () => !!sessionId && !busy && !sendBlocked,
+    canSend: () => !!sessionId && !sendBlocked,
     onSent: () => setScrollRequest((request) => request + 1),
   });
 
+  /**
+   * Prompts taken out of the queue (edited, or dropped by Stop) that wait for a send in flight:
+   * `useSend` clears the draft only when it still equals what it sent, so changing the draft
+   * meanwhile would leave the sent text in the box to be sent again.
+   */
+  const heldBack = useRef<string[]>([]);
+  /** Put prompts taken out of the queue into this viewer's composer, ahead of its draft. */
+  const takeBack = (texts: string[]) => {
+    if (texts.length === 0) return;
+    if (sending) {
+      heldBack.current.push(...texts);
+      return;
+    }
+    writeDraft(draftKey, restoreToDraft(texts, readDraft(draftKey)));
+  };
+  useEffect(() => {
+    if (sending || heldBack.current.length === 0) return;
+    const texts = heldBack.current.splice(0);
+    writeDraft(draftKey, restoreToDraft(texts, readDraft(draftKey)));
+  }, [sending, draftKey]);
+
+  /**
+   * Stop the turn. The server drops the queue with it and hands the prompts back; they go into
+   * this composer, so nothing typed is lost and nothing starts a turn by itself after a stop.
+   */
   const stop = async () => {
     if (!sessionId || stopping) return;
     setStopping(true);
@@ -352,6 +391,10 @@ export function useSessionStream(
         };
         throw new Error(result.error ?? "Could not stop the agent. Try again.");
       }
+      // The server has already dropped the queue; an unreadable answer must not pass as an empty one.
+      const result = (await response.json()) as { queued?: QueuedPrompt[] };
+      if (currentIdRef.current !== sessionId) return;
+      takeBack((result.queued ?? []).map((item) => item.text));
     } catch (error) {
       if (currentIdRef.current !== sessionId) return;
       setStopping(false);
@@ -361,6 +404,33 @@ export function useSessionStream(
           : "Could not stop the agent. Try again.",
       );
     }
+  };
+
+  /**
+   * `DELETE /queue/:itemId`; the queue's new shape arrives as `meta.queue` on the stream. Answers
+   * whether the prompt was still queued: false once it has gone out (the turn ended as the button
+   * was clicked) or was removed by another viewer.
+   */
+  const removeQueued = async (item: QueuedPrompt) => {
+    if (!sessionId) return false;
+    try {
+      const response = await fetch(sessionUrl(sessionId, `/queue/${encodeURIComponent(item.id)}`), { method: "DELETE" });
+      if (!response.ok) throw new Error("Could not remove the queued prompt. Try again.");
+      const { removed } = (await response.json()) as { removed: boolean };
+      return removed;
+    } catch (error) {
+      if (currentIdRef.current === sessionId) showRequestError(error instanceof Error ? error.message : "Could not remove the queued prompt. Try again.");
+      return false;
+    }
+  };
+
+  /**
+   * Take a queued prompt back into the composer to change it (as Codex's TUI edits its queue):
+   * it leaves the queue and goes ahead of the draft, and Enter sends or queues it again. A prompt
+   * that already went out is not restored, so nothing runs twice.
+   */
+  const editQueued = async (item: QueuedPrompt) => {
+    if (await removeQueued(item)) takeBack([item.text]);
   };
 
   /** Ask the server to reconnect the agent; the outcome arrives as `meta.link` on the stream. */
@@ -492,6 +562,10 @@ export function useSessionStream(
     send,
     stop,
     stopping,
+    /** The prompts waiting for the agent, first to go out first. */
+    queue,
+    editQueued,
+    removeQueued,
     answerPermission,
     setConfig,
     configInFlight,

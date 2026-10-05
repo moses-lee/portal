@@ -3,6 +3,7 @@ import { applySettingsPatch, defaultSettings } from "../../src/lib/settings";
 import type {
   GithubSummary,
   ProjectSummary,
+  QueuedPrompt,
   RemovedProjectSummary,
   SessionState,
   SessionSummary,
@@ -150,6 +151,7 @@ export function makeSession(
     idleSince: now - 3600000,
     turnEndedAt: now - 3600000,
     backgroundTasks: [],
+    queue: [],
     cwd: p.path,
     displayCwd: p.displayPath,
     cwdMissing: false,
@@ -447,6 +449,10 @@ export async function setupPortal(
     removed?: RemovedProjectSummary[];
     /** Replaces the default three conversations, for tests of sidebar grouping, ordering, and capping. */
     sessions?: SessionSummary[];
+    /** What `POST /api/sessions/:id/cancel` hands back as the dropped queue (the real server answers the session's queue). */
+    cancelQueued?: QueuedPrompt[];
+    /** What `DELETE /api/sessions/:id/queue/:itemId` answers as `removed` (false: the prompt had already gone out). */
+    queueRemoved?: boolean;
     /** Replaces the default two projects. */
     projects?: ProjectSummary[];
     /**
@@ -840,8 +846,10 @@ export async function setupPortal(
       );
       return json({ state: session.state });
     }
-    if (path.endsWith("/permission") || path.endsWith("/cancel"))
-      return json({ ok: true });
+    if (path.endsWith("/permission")) return json({ ok: true });
+    if (path.endsWith("/cancel")) return json({ ok: true, queued: options.cancelQueued ?? [] });
+    if (/\/queue\/[^/]+$/.test(path))
+      return method === "DELETE" ? json({ removed: options.queueRemoved ?? true }) : json({ item: { id: "q", text: body.text, queuedAt: 0 } });
     if (path.endsWith("/branches"))
       return json({
         defaultBranch: "main",

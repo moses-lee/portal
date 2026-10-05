@@ -12,8 +12,8 @@ import { coalesceTextChunks, isTextChunk, readTurnPage } from "./session-pages.t
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
 import { AIR_CLIENT_META, AIR_UPDATE_METHOD, ASYNC_TASK_STOP_METHOD, type AirNotification, parseAirNotification, routeAirUpdates } from "./air-tasks.ts";
 import {
-  type BackgroundTask, type BackgroundTaskUpdate, type EventPage, type LivenessState, type OpenToolCall, type PermissionAnswerer, type PortalEvent, type SessionLink, type SessionListPatch,
-  type SessionLiveness, type SessionLoss, type SessionMeta, type SessionState, type StoredEvent, type TitleSource, titleMayReplace,
+  type BackgroundTask, type BackgroundTaskUpdate, type EventPage, type LivenessState, MAX_QUEUED_PROMPTS, type OpenToolCall, type PermissionAnswerer, type PortalEvent, type QueuedPrompt,
+  type SessionLink, type SessionListPatch, type SessionLiveness, type SessionLoss, type SessionMeta, type SessionState, type StoredEvent, type TitleSource, titleMayReplace,
 } from "./types.ts";
 
 /** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
@@ -39,6 +39,10 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness" | "bac
   linkListeners: Set<(link: SessionLink) => void>;
   /** Notified once when the session is deleted. */
   closeListeners: Set<() => void>;
+  /** Notified with the replacement queue after every change to it (an item added, edited, removed, or sent). */
+  queueListeners: Set<(queue: QueuedPrompt[]) => void>;
+  /** True while the queue's first prompt is starting a turn (attaching the agent); see `fireQueue`. */
+  queueFiring: boolean;
   /** Request IDs of permission prompts the agent is still waiting on. Server-only. */
   pendingPermissions: Set<string>;
   /**
@@ -212,7 +216,7 @@ export function toMeta(session: Session): SessionMeta {
   const { id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, idleSince, turnEndedAt, busy, link, state } = session;
   return {
     id, agentId, agentName, cwd, projectId, createdAt, lastActiveAt, title, titleSource, idleSince, turnEndedAt, busy,
-    awaitingPermission: session.pendingPermissions.size > 0, link, state, backgroundTasks: backgroundTaskList(session), liveness: livenessOf(session),
+    awaitingPermission: session.pendingPermissions.size > 0, link, state, backgroundTasks: backgroundTaskList(session), queue: [...session.queue], liveness: livenessOf(session),
   };
 }
 
@@ -248,6 +252,8 @@ export type SessionSubscriber = {
   onState?: (state: SessionState) => void;
   /** The replacement link on every connection change, and after a title change. */
   onLink?: (link: SessionLink) => void;
+  /** The replacement prompt queue after every change to it. */
+  onQueue?: (queue: QueuedPrompt[]) => void;
   /** Once, when the session is deleted. */
   onClose?: () => void;
 };
@@ -830,8 +836,11 @@ export function createAcpRuntime(
       stateListeners: new Set(),
       linkListeners: new Set(),
       closeListeners: new Set(),
+      queueListeners: new Set(),
       pendingPermissions: new Set(),
       backgroundTasks: new Map(),
+      queue: [],
+      queueFiring: false,
       writes: Promise.resolve(),
       pending: [],
       run: null,
@@ -1074,11 +1083,132 @@ export function createAcpRuntime(
     await ready;
     const target = requireSession(id);
     if (target.busy) throw new Error("Session busy");
+    await openTurn(id, text);
+  }
+
+  /**
+   * Send `text` now when the session is free, else queue it (see `queuePrompt`). Answers the
+   * queued item, or null when the prompt went out at once. The browser's composer and Portal's
+   * `send_prompt` both use this, so a turn ending between the viewer's last look and the request
+   * never refuses the message.
+   */
+  async function sendOrQueue(id: string, text: string): Promise<{ queued: QueuedPrompt | null; position: number }> {
+    await ready;
+    const session = requireSession(id);
+    if (session.busy || session.queueFiring || session.queue.length > 0) return queuePrompt(id, text);
+    try {
+      await openTurn(id, text);
+    } catch (error) {
+      // Another prompt took the turn while the agent was attaching: queue behind it rather than refuse.
+      if (errorMessage(error) !== "Session busy") throw error;
+      return queuePrompt(id, text);
+    }
+    return { queued: null, position: 0 };
+  }
+
+  /**
+   * Put `text` at the end of the session's queue; it starts a turn once the agent is free (at once
+   * when it is free now). Answers the item and its 1-based position. Throws when the queue holds
+   * `MAX_QUEUED_PROMPTS` already or the text is blank. The queue lives in memory only.
+   */
+  async function queuePrompt(id: string, text: string): Promise<{ queued: QueuedPrompt; position: number }> {
+    await ready;
+    const session = requireSession(id);
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("A queued prompt cannot be empty.");
+    if (session.queue.length >= MAX_QUEUED_PROMPTS) throw new Error(`The queue is full (${MAX_QUEUED_PROMPTS} prompts). Edit or remove one first.`);
+    const queued: QueuedPrompt = { id: randomUUID(), text: trimmed, queuedAt: Date.now() };
+    session.queue.push(queued);
+    // Taken before the queue may send it at once, so a free session answers "position 1", not 0.
+    const position = session.queue.length;
+    notifyQueue(session);
+    fireQueue(session);
+    return { queued, position };
+  }
+
+  /** Replace a queued prompt's text in place. Throws for an unknown item or blank text. */
+  async function updateQueued(id: string, itemId: string, text: string): Promise<QueuedPrompt> {
+    await ready;
+    const session = requireSession(id);
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("A queued prompt cannot be empty.");
+    const index = session.queue.findIndex((item) => item.id === itemId);
+    if (index === -1) throw new Error("That queued prompt is no longer in the queue.");
+    const updated = { ...session.queue[index], text: trimmed };
+    session.queue[index] = updated;
+    notifyQueue(session);
+    fireQueue(session);
+    return updated;
+  }
+
+  /** Take a prompt out of the queue; null when it was not there (already sent or removed). */
+  async function removeQueued(id: string, itemId: string): Promise<QueuedPrompt | null> {
+    await ready;
+    const session = requireSession(id);
+    const index = session.queue.findIndex((item) => item.id === itemId);
+    if (index === -1) return null;
+    const [removed] = session.queue.splice(index, 1);
+    notifyQueue(session);
+    fireQueue(session);
+    return removed;
+  }
+
+  function notifyQueue(session: Session) {
+    const snapshot = [...session.queue];
+    for (const listener of session.queueListeners) listener(snapshot);
+  }
+
+  /**
+   * Start the queue's first prompt when the session is free. Runs after every completed turn and
+   * every change to the queue; nothing happens while a turn is open or one is already starting.
+   * A prompt that fails to start (the agent could not be reattached) stays at the head with an
+   * error in the log, and the queue waits for the next change to it or the next completed turn.
+   * The queue also waits after a turn that failed or an agent that was lost: those branches do
+   * not call this, so a crash does not run through every queued prompt.
+   *
+   * The head may change while the agent attaches: removed or edited, the attach ends without a
+   * turn and the queue is looked at again; a direct prompt that took the turn meanwhile is no
+   * error, the queue simply goes after it.
+   */
+  function fireQueue(session: Session) {
+    if (!current(session) || session.busy || session.queueFiring || session.queue.length === 0) return;
+    const head = session.queue[0];
+    session.queueFiring = true;
+    openTurn(session.id, head)
+      .then((started) => {
+        session.queueFiring = false;
+        if (!started) fireQueue(session);
+      }, (error: unknown) => {
+        session.queueFiring = false;
+        if (!current(session) || errorMessage(error) === "Session busy") return;
+        emit(session, { type: "error", message: `Could not send the queued prompt. ${errorMessage(error)}` });
+      });
+  }
+
+  /**
+   * Open a turn with a prompt: the text itself, or a queued item, which leaves the queue as the
+   * turn starts. Attaches the agent first when it is not connected. Resolves to whether a turn
+   * started: false when the queued item was removed meanwhile. Throws "Session busy" when a turn
+   * is already open.
+   */
+  async function openTurn(id: string, prompt: string | QueuedPrompt): Promise<boolean> {
+    const target = requireSession(id);
     if (target.link.status !== "live") await attach(id);
     const { session, process: instance, upstreamId } = sessionOwner(id);
     if (session.busy) throw new Error("Session busy");
+    // A queued item may have been edited or removed while the agent was attaching.
+    const index = typeof prompt === "string" ? -1 : session.queue.findIndex((item) => item.id === prompt.id);
+    if (typeof prompt !== "string" && index === -1) return false;
     // Claim the turn before yielding so concurrent requests cannot both start it.
     session.busy = true;
+    let text: string;
+    if (typeof prompt === "string") text = prompt;
+    else {
+      // Leaves the queue with the turn already claimed, so viewers hear a shorter queue and a busy session together.
+      text = session.queue[index].text;
+      session.queue.splice(index, 1);
+      notifyQueue(session);
+    }
     session.lastActiveAt = Date.now();
     // The first prompt names the session until something with more say does.
     if (session.title === null && session.titleSource === "prompt") session.title = titleFrom(text) || null;
@@ -1104,6 +1234,7 @@ export function createAcpRuntime(
       settleIdle(session, { quiet: true });
       persistMeta(session);
       announce(session);
+      fireQueue(session);
     }).catch((error: unknown) => {
       if (instance.failure) return; // fail() already ended this session's turn.
       session.busy = false;
@@ -1115,6 +1246,7 @@ export function createAcpRuntime(
       persistMeta(session);
       announce(session);
     });
+    return true;
   }
 
   /**
@@ -1142,13 +1274,21 @@ export function createAcpRuntime(
     return applied;
   }
 
-  async function cancel(id: string): Promise<void> {
+  /**
+   * Ask the agent to stop the open turn. The queue is emptied first and its prompts answered, so
+   * a stop stops everything: the caller gets them back (the browser puts them in the composer),
+   * and nothing starts a new turn when this one ends.
+   */
+  async function cancel(id: string): Promise<QueuedPrompt[]> {
     const { session, process: instance, upstreamId } = sessionOwner(id);
+    const dropped = session.queue.splice(0);
+    if (dropped.length) notifyQueue(session);
     // Release the agent from any open prompt before asking it to stop the turn. The SDK writes
     // those responses on later microtasks, so yield once to keep them ahead of the notification.
     if (cancelPermissions(session)) await new Promise((resolve) => setImmediate(resolve));
     if (instance.failure) throw instance.failure;
     await instance.conn.agent.notify(acp.methods.agent.session.cancel, { sessionId: upstreamId });
+    return dropped;
   }
 
   /**
@@ -1288,16 +1428,18 @@ export function createAcpRuntime(
    * Follow one session's live events and metadata changes. Throws for an unknown session; the
    * returned function detaches every callback and is safe to call more than once.
    */
-  function subscribe(id: string, { onEvent, onState, onLink, onClose }: SessionSubscriber): () => void {
+  function subscribe(id: string, { onEvent, onState, onLink, onQueue, onClose }: SessionSubscriber): () => void {
     const session = requireSession(id);
     if (onEvent) session.listeners.add(onEvent);
     if (onState) session.stateListeners.add(onState);
     if (onLink) session.linkListeners.add(onLink);
+    if (onQueue) session.queueListeners.add(onQueue);
     if (onClose) session.closeListeners.add(onClose);
     return () => {
       if (onEvent) session.listeners.delete(onEvent);
       if (onState) session.stateListeners.delete(onState);
       if (onLink) session.linkListeners.delete(onLink);
+      if (onQueue) session.queueListeners.delete(onQueue);
       if (onClose) session.closeListeners.delete(onClose);
     };
   }
@@ -1427,7 +1569,7 @@ export function createAcpRuntime(
   }
 
   return {
-    ready, listSessions, getSession, createSession, attach, sendPrompt, setTitle, cancel, stopBackgroundTask,
+    ready, listSessions, getSession, createSession, attach, sendPrompt, sendOrQueue, queuePrompt, updateQueued, removeQueued, setTitle, cancel, stopBackgroundTask,
     respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
     probe, probeSession, setLivenessOptions,
   };

@@ -1672,3 +1672,117 @@ test("setTitle rejects when the title could not be saved", async (t) => {
   assert.equal(await runtime.setTitle(session.id, "Saved", "user"), true);
   assert.equal((await store.getSession(session.id)).title, "Saved");
 });
+
+test("queued prompts go out one turn at a time, in order, once the open turn ends; viewers hear every queue change", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  const queues = [];
+  runtime.subscribe(session.id, { onQueue: (queue) => queues.push(queue.map(({ text }) => text)) });
+  // "finish-tool" answers at once, but over the wire: the session is still busy right after the send.
+  await runtime.sendPrompt(session.id, "finish-tool");
+  assert.equal(session.busy, true);
+  const first = await runtime.queuePrompt(session.id, "  name:Second  ");
+  assert.equal(first.position, 1);
+  assert.equal(first.queued.text, "name:Second");
+  const second = await runtime.sendOrQueue(session.id, "finish-tool");
+  assert.equal(second.position, 2);
+  assert.ok(second.queued);
+  assert.deepEqual(toMeta(session).queue.map(({ text }) => text), ["name:Second", "finish-tool"]);
+  await until(() => session.queue.length === 0 && !session.busy, "the queue to drain");
+  const markers = session.events.filter(({ type }) => type === "user" || type === "turn_start" || type === "turn_end");
+  assert.deepEqual(markers.map((event) => event.type === "user" ? event.text : event.type), [
+    "finish-tool", "turn_start", "turn_end", "name:Second", "turn_start", "turn_end", "finish-tool", "turn_start", "turn_end",
+  ]);
+  assert.equal(session.title, "Second");
+  assert.deepEqual(queues, [["name:Second"], ["name:Second", "finish-tool"], ["finish-tool"], []]);
+  // Free session: the prompt goes out at once rather than through the queue.
+  const direct = await runtime.sendOrQueue(session.id, "finish-tool");
+  assert.deepEqual(direct, { queued: null, position: 0 });
+  assert.equal(session.busy, true);
+  await until(() => !session.busy, "the direct turn to end");
+});
+
+test("the queue holds up to ten prompts, which can be edited and removed; a stop drops them and answers them", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "tool");
+  for (let i = 1; i <= 10; i++) await runtime.queuePrompt(session.id, `p${i}`);
+  await assert.rejects(runtime.queuePrompt(session.id, "p11"), /queue is full/);
+  await assert.rejects(runtime.sendOrQueue(session.id, "p11"), /queue is full/);
+  await assert.rejects(runtime.queuePrompt(session.id, "   "), /empty/);
+  const [head] = session.queue;
+  const edited = await runtime.updateQueued(session.id, head.id, " p1 edited ");
+  assert.deepEqual(edited, { ...head, text: "p1 edited" });
+  assert.equal(session.queue[0].text, "p1 edited");
+  await assert.rejects(runtime.updateQueued(session.id, "nope", "x"), /no longer in the queue/);
+  await assert.rejects(runtime.updateQueued(session.id, head.id, ""), /empty/);
+  const second = session.queue[1];
+  assert.deepEqual(await runtime.removeQueued(session.id, second.id), second);
+  assert.equal(session.queue.length, 9);
+  assert.equal(session.queue.some(({ id }) => id === second.id), false);
+  assert.equal(await runtime.removeQueued(session.id, "nope"), null);
+  await runtime.queuePrompt(session.id, "p11");
+  assert.equal(session.queue.length, 10);
+  const dropped = await runtime.cancel(session.id);
+  assert.deepEqual(dropped.map(({ text }) => text), ["p1 edited", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11"]);
+  assert.equal(session.queue.length, 0);
+  await until(() => !session.busy, "the stopped turn to end");
+  await delay(50);
+  assert.equal(session.events.filter(({ type }) => type === "user").length, 1, "nothing queued starts a turn after a stop");
+});
+
+test("the queue waits after a lost agent; the next change to it tries again and reports a failure without losing the prompt", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "finish-tool");
+  await runtime.queuePrompt(session.id, "exit");
+  await runtime.queuePrompt(session.id, "after");
+  await until(() => session.events.some(({ type }) => type === "error") && !session.busy, "the agent to exit on the queued prompt");
+  await delay(100);
+  assert.deepEqual(session.queue.map(({ text }) => text), ["after"], "the queue holds after the agent was lost");
+  assert.equal(session.events.filter(({ type }) => type === "user").length, 2);
+  // Touching the queue tries the head again; the agent cannot come back, so the prompt stays with an error logged.
+  const retried = await runtime.sendOrQueue(session.id, "later");
+  assert.equal(retried.position, 2);
+  await until(() => session.events.filter(({ type }) => type === "error").length >= 2, "the failed retry to be logged");
+  assert.match(session.events.at(-1).message, /Could not send the queued prompt/);
+  assert.deepEqual(session.queue.map(({ text }) => text), ["after", "later"]);
+  assert.equal(session.events.filter(({ type }) => type === "user").length, 2);
+});
+
+test("while an offline agent reattaches for the queue: a removed head is skipped, a direct send queues behind, and nothing is lost", async (t) => {
+  const first = await persistentSetup(t);
+  const { runtime, cwd } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "finish-tool");
+  await until(() => !session.busy, "first turn");
+  await runtime.dispose();
+
+  // Offline after a restart: the first queued prompt has to reattach the agent before it can start.
+  const next = restart(t, first, { claude: "resume" });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  assert.equal(restored.link.status, "offline");
+  const a = await next.queuePrompt(session.id, "name:A");
+  assert.equal(a.position, 1);
+  assert.equal(restored.queueFiring, true);
+  const b = await next.queuePrompt(session.id, "finish-tool");
+  assert.equal(b.position, 2);
+  // The head goes while the agent attaches: the queue moves on to B rather than stalling.
+  assert.ok(await next.removeQueued(session.id, a.queued.id));
+  await until(() => restored.queue.length === 0 && !restored.busy && restored.events.some((e) => e.type === "user" && e.text === "finish-tool"), "B to run after the attach");
+  assert.equal(restored.events.some(({ type }) => type === "error"), false, "no error for a removed head");
+  assert.equal(restored.title, "finish-tool");
+
+  // A direct send and a queued send racing the same attach: both get through, in order, with no 409.
+  await next.dispose();
+  const third = restart(t, first, { claude: "resume" });
+  await third.ready;
+  const again = third.getSession(session.id);
+  const [direct, queued] = await Promise.all([third.sendOrQueue(session.id, "name:Direct"), third.sendOrQueue(session.id, "finish-tool")]);
+  assert.equal(direct.queued, null);
+  assert.ok(queued.queued);
+  await until(() => again.queue.length === 0 && !again.busy && again.events.filter(({ type }) => type === "turn_end").length === 2, "both turns");
+  assert.deepEqual(again.events.filter(({ type }) => type === "user").map(({ text }) => text), ["name:Direct", "finish-tool"]);
+  assert.equal(again.events.some(({ type }) => type === "error"), false);
+});

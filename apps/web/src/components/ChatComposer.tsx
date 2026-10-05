@@ -32,6 +32,7 @@ export default function ChatComposer({
   onSend,
   onStop,
   busy = false,
+  queues = false,
   sending = false,
   stopping = false,
   disabled = false,
@@ -50,6 +51,11 @@ export default function ChatComposer({
   onSend: () => void;
   onStop?: () => void;
   busy?: boolean;
+  /**
+   * The conversation queues prompts sent while `busy` (agent sessions): the send button stays,
+   * beside Stop, and Enter sends as usual. Without it, Stop replaces the send button while busy.
+   */
+  queues?: boolean;
   sending?: boolean;
   stopping?: boolean;
   disabled?: boolean;
@@ -144,8 +150,9 @@ export default function ChatComposer({
     textarea.current?.focus();
     textarea.current?.setSelectionRange(position, position);
   }, [value]);
+  // With a queue, a send while the agent works queues the text; without one (a Portal thread) it waits.
   const send = () => {
-    if (!disabled && !busy && !sending && value.trim()) onSend();
+    if (!disabled && !sending && (queues || !busy) && value.trim()) onSend();
   };
   return (
     <div>
@@ -242,14 +249,14 @@ export default function ChatComposer({
                 {settings ??
                   (!touch && (
                     <span className="pl-2 text-[11px] font-normal text-muted-foreground">
-                      Enter to send{" "}
+                      {busy && queues ? "Enter to queue" : "Enter to send"}{" "}
                       <span className="hidden sm:inline">
                         · Shift + Enter for a new line
                       </span>
                     </span>
                   ))}
               </div>
-              {busy && onStop ? (
+              {busy && onStop && (
                 <Button
                   type="button"
                   aria-label={stopping ? "Stopping agent" : "Stop agent"}
@@ -264,11 +271,12 @@ export default function ChatComposer({
                     <Square className="size-3.5 fill-current" />
                   )}
                 </Button>
-              ) : (
+              )}
+              {(!busy || !onStop || queues) && (
                 <Button
                   type="submit"
-                  aria-label={sending ? "Sending message" : "Send message"}
-                  title="Send message"
+                  aria-label={sending ? "Sending message" : busy && queues ? "Queue message" : "Send message"}
+                  title={busy && queues ? "Queue message" : "Send message"}
                   disabled={disabled || sending || !value.trim()}
                   className="composer-send !p-0"
                 >

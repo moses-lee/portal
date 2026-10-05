@@ -21,7 +21,7 @@ import { summarizeProject } from "../projects/store.ts";
 import { deleteSessionFully } from "../sessions/delete.ts";
 import { loadServerKey } from "../settings/crypto.ts";
 import type {
-  AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
+  AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, QueuedPrompt, RemovedProject,
   SessionListState, SessionLiveness, SessionMeta, SessionState, TitleSource, WorktreeMeta,
 } from "../lib/types.ts";
 import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../lib/worktrees.ts";
@@ -60,8 +60,10 @@ export type OrchestratorDeps = {
     create(cwd: string, agentId: string, projectId: string, options?: { title?: string }): Promise<SessionMeta>;
     /** Rename a session as `source`; false when a title from a higher source (the user's) was kept. Throws for an unknown session. */
     setTitle(id: string, title: string, source: TitleSource): Promise<boolean>;
-    prompt(id: string, text: string): Promise<void>;
-    cancel(id: string): Promise<void>;
+    /** Send `text` now, or queue it when the session is busy (see the runtime's `sendOrQueue`); the queued item, or null when sent at once. */
+    prompt(id: string, text: string): Promise<{ queued: QueuedPrompt | null; position: number }>;
+    /** Stop the open turn; answers the queued prompts the stop dropped. */
+    cancel(id: string): Promise<QueuedPrompt[]>;
     respondPermission(id: string, requestId: string, optionId: string | null): Promise<void>;
     /** Install (or remove) the advisor asked about every new permission request; see `PermissionAdvisor`. */
     setPermissionAdvisor(advisor: PermissionAdvisor | null): void;
@@ -198,7 +200,7 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       },
       create: async (cwd, agentId, projectId, options) => toMeta(await (await acp()).createSession(cwd, agentId, projectId, options)),
       setTitle: async (id, title, source) => (await acp()).setTitle(id, title, source),
-      prompt: async (id, text) => (await acp()).sendPrompt(id, text),
+      prompt: async (id, text) => (await acp()).sendOrQueue(id, text),
       cancel: async (id) => (await acp()).cancel(id),
       respondPermission: async (id, requestId, optionId) => {
         (await acp()).respondPermission(id, requestId, optionId);

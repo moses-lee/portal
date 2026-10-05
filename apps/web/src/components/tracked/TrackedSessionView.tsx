@@ -3,6 +3,7 @@
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import AgentLogo from "../AgentLogo";
 import ChatComposer from "../ChatComposer";
+import PromptQueue from "../PromptQueue";
 import Conversation from "../Conversation";
 import IconButton from "../IconButton";
 import SessionLinkBanner from "../SessionLinkBanner";
@@ -51,6 +52,9 @@ export default function TrackedSessionView({
     send,
     stop,
     stopping,
+    queue,
+    editQueued,
+    removeQueued,
     answerPermission,
     retryAttach,
     scrollRequest,
@@ -103,6 +107,7 @@ export default function TrackedSessionView({
             scrollRequest={scrollRequest}
           />
           <div className="composer-wrap !px-3">
+            <PromptQueue queue={queue} busy={busy} onEdit={(item) => void editQueued(item)} onRemove={(item) => void removeQueued(item)} />
             <SessionLinkBanner link={link} agentName={agentName} onRetry={() => void retryAttach()} />
             <ChatComposer
               value={draft}
@@ -110,6 +115,7 @@ export default function TrackedSessionView({
               onSend={() => void send()}
               onStop={() => void stop()}
               busy={busy}
+              queues
               sending={sending}
               stopping={stopping}
               commands={sessionState?.commands}

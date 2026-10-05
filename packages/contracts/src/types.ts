@@ -312,9 +312,25 @@ export type SessionMeta = {
   state: SessionState;
   /** Work the agent keeps running past its turn, oldest first; empty when none. Kept in memory only. */
   backgroundTasks: BackgroundTask[];
+  /**
+   * Prompts waiting for the agent, in the order they go out: once a turn completes the first one
+   * starts the next turn (see `POST /api/sessions/:id/prompt` with `queue`). Kept in memory only.
+   */
+  queue: QueuedPrompt[];
   /** Derived when read, from the open turn, its tool calls, the background tasks, and the process probe. */
   liveness: SessionLiveness;
 };
+
+/** A prompt waiting in a session's queue for the agent to be free. */
+export type QueuedPrompt = {
+  id: string;
+  text: string;
+  /** Epoch ms it was queued. */
+  queuedAt: number;
+};
+
+/** The most prompts one session queues; a further one is refused. */
+export const MAX_QUEUED_PROMPTS = 10;
 
 /**
  * The fields of a session's list entry that change while it runs; pushed by `/api/sessions/stream`.
@@ -363,6 +379,8 @@ export type SessionMetaEvent = {
   state: SessionState;
   project: { id: string; name: string } | null;
   cwdMissing: boolean;
+  /** The prompts waiting for the agent (see `SessionMeta.queue`). */
+  queue: QueuedPrompt[];
 };
 
 /**
