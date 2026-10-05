@@ -65,9 +65,8 @@ test("Portal locations and paths round-trip, with the main thread at /", () => {
   assert.equal(portalPath({ view: "chat", threadId: "t 1" }), "/threads/t%201");
   assert.deepEqual(portalLocation("/threads/t%201"), { view: "chat", threadId: "t 1" });
   assert.deepEqual(portalLocation("/threads/t1/extra"), { view: "chat", threadId: "main" });
-  // Watches were Goals until 2026-10-04: the old path still opens them, but is never produced.
-  assert.deepEqual(portalLocation("/goals"), { view: "watches" });
-  assert.deepEqual(portalLocation("/goals/extra"), { view: "chat", threadId: "main" });
+  // Watches were Goals until 2026-10-04; the old path is gone and lands on the main thread like any unknown one.
+  assert.deepEqual(portalLocation("/goals"), { view: "chat", threadId: "main" });
   assert.equal(portalPath("watches"), "/watches");
   for (const view of ["attention", "watches", "activity", "system"]) {
     assert.equal(portalPath(view), `/${view}`);

@@ -326,7 +326,7 @@ clone of the live database with real Anthropic calls.
 
 ### 1.11 Watches and the attention page (2026-10-04)
 
-The Goals tab is now **Watches** (`/watches`; `/goals` still lands there), and the Needs-you strip
+The Goals tab is now **Watches** (`/watches`; `/goals` is gone), and the Needs-you strip
 has left the chat for its own **Needs your attention** page (`/attention`). Intents keep their name
 in code, tables, activity kinds, and REST paths; the model's tools became `create_watch`,
 `update_watch`, `cancel_watch`, `list_watches`, `fire_watch`, and `close_watch` (the `intent`

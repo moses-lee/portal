@@ -143,11 +143,3 @@ test("an items event adds to the page and the badge live", async ({ page }) => {
   await expect(view.getByRole("region", { name: /^Watch update/ }).getByRole("article", { name: watch.title })).toBeVisible();
   await expect(badge).toHaveText(/^Needs you\s*2$/);
 });
-
-test("the old /goals link still opens Watches", async ({ page }) => {
-  await setupPortal(page);
-  await page.goto("/goals");
-  await expect(page.getByRole("region", { name: "Watches", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Watches", level: 1 })).toBeVisible();
-  await expect(navOf(page).getByRole("button", { name: "Watches", exact: true })).toHaveAttribute("aria-current", "page");
-});

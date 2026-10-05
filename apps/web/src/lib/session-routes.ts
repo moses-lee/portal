@@ -102,8 +102,6 @@ function routeOf(pathname: string): PortalLocation {
   }
   if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
   if ((head === "attention" || head === "watches" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
-  // Watches were "Goals" until 2026-10-04; old links and bookmarks still land there.
-  if (head === "goals" && segments.length === 1) return { view: "watches" };
   return { view: "chat", threadId: "main" };
 }
 
