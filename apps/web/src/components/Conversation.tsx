@@ -472,6 +472,16 @@ const TurnView = memo(function TurnView({
           );
         return null;
       })}
+      {/* A turn the agent never wrote text in (tool calls only, or stopped first) has no reply header
+          to carry its finish time, so the time closes the turn on its own line. */}
+      {finishedAt > 0 && !hasAgentLabel && (
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <AgentLogo agentId={agentId} className="!size-4" />
+          {agentName}
+          <span aria-hidden className="text-muted-foreground/50">·</span>
+          <MessageTime at={finishedAt} day={day || finishedAt} />
+        </div>
+      )}
     </div>
   );
 });
