@@ -82,3 +82,23 @@ test("lineage walks both ways and survives a cycle", () => {
   assert.equal(canPin({ authority: "user_stated" }), true);
   assert.equal(canPin({ authority: "observed" }), false);
 });
+
+test("the Needs-you page groups items by kind, approvals first, then by the newest item", async () => {
+  const { groupByKind } = await import("../src/lib/orchestrator/items.ts");
+  const item = (id, kind, updatedAt) => ({ id, kind, updatedAt, status: "open", title: id, body: "", links: {}, actions: [], fingerprint: id, createdAt: 0, snoozedUntil: null });
+  const groups = groupByKind([
+    item("a", "pr_merged", 10),
+    item("b", "intent_update", 50),
+    item("c", "approval_needed", 1),
+    item("d", "pr_merged", 90),
+  ]);
+  assert.deepEqual(
+    groups.map((group) => [group.kind, group.items.map((row) => row.id)]),
+    [
+      ["approval_needed", ["c"]],
+      ["pr_merged", ["d", "a"]],
+      ["intent_update", ["b"]],
+    ],
+  );
+  assert.deepEqual(groupByKind([]), []);
+});

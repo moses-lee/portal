@@ -37,8 +37,8 @@ export function scopeChoices(approval: Approval): { scope: ApprovalScope; label:
   if (approval.jobId || approval.intentId)
     choices.push({
       scope: "job",
-      label: approval.intentId ? "For this goal" : "For this job",
-      hint: `Also ${approval.tool} again for the rest of this ${approval.intentId ? "goal" : "job"}.`,
+      label: approval.intentId ? "For this watch" : "For this job",
+      hint: `Also ${approval.tool} again for the rest of this ${approval.intentId ? "watch" : "job"}.`,
     });
   if (approval.repo)
     choices.push({ scope: "repo", label: `In ${approval.repo}`, hint: `Any ${approval.tool} call on this repository.` });
@@ -51,7 +51,7 @@ function approveLabel(approval: Approval, scope: ApprovalScope): string {
     case "once":
       return "Approve once";
     case "job":
-      return approval.intentId ? "Approve for this goal" : "Approve for this job";
+      return approval.intentId ? "Approve for this watch" : "Approve for this job";
     case "repo":
       return "Approve for this repo";
     case "always":
@@ -264,10 +264,10 @@ export default function ApprovalsDialog({ onNavigate }: { onNavigate: (path: str
             )}
             {(current.jobId || current.intentId) && (
               <>
-                <dt className="text-muted-foreground">{current.intentId ? "Goal" : "Job"}</dt>
+                <dt className="text-muted-foreground">{current.intentId ? "Watch" : "Job"}</dt>
                 <dd>
-                  <button type="button" className="hover:underline" onClick={() => go(portalPath("goals"))}>
-                    View in Goals
+                  <button type="button" className="hover:underline" onClick={() => go(portalPath("watches"))}>
+                    View in Watches
                   </button>
                 </dd>
               </>

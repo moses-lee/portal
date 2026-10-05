@@ -69,7 +69,7 @@ export function compositeTools(ctx: ToolContext) {
 
   return {
     setup_pr_reviews: define(
-      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send a review prompt. Creates one goal that reports each PR's findings as a Needs-you item when the sessions finish. Use this instead of doing the steps by hand. Write prompt yourself from what memory says about reviewing (the author's review style, the code-review task type, the repo's conventions), interpreted for these PRs rather than pasted, and pass the ids of those records as memoryIds; when memory has such guidance and no prompt is given, the call is refused with the guidance to write from. Without guidance, the user's own PRs get their stored triage prompt and everyone else's get a reviewer's brief. Portal answers the sessions' permission requests for read-only steps itself (marked as Portal's in the transcript) unless Settings turns that off or answerPermissions is false; anything else waits for the user. cancel_intent on the goal stops the answering; the worktrees are removed once the user settles the findings.",
+      "Review several pull requests of one repository at once: for each PR, check out its branch in a worktree, start a session there, and send a review prompt. Creates one watch that reports each PR's findings as a Needs-you item when the sessions finish. Use this instead of doing the steps by hand. Write prompt yourself from what memory says about reviewing (the author's review style, the code-review task type, the repo's conventions), interpreted for these PRs rather than pasted, and pass the ids of those records as memoryIds; when memory has such guidance and no prompt is given, the call is refused with the guidance to write from. Without guidance, the user's own PRs get their stored triage prompt and everyone else's get a reviewer's brief. Portal answers the sessions' permission requests for read-only steps itself (marked as Portal's in the transcript) unless Settings turns that off or answerPermissions is false; anything else waits for the user. cancel_watch on that watch stops the answering; the worktrees are removed once the user settles the findings.",
       z.object({
         repo: z.string().regex(REPO_PATTERN, "Expected owner/name.").optional(),
         projectId: z.string().optional(),
@@ -123,7 +123,7 @@ export function compositeTools(ctx: ToolContext) {
             errors.push(`PR #${number}: ${errorMessage(err)}`);
           }
         }
-        if (sessions.length === 0 || !domain) return { sessions, intentId: null, errors };
+        if (sessions.length === 0 || !domain) return { sessions, watchId: null, errors };
         const sessionIds = sessions.map((entry) => entry.sessionId);
         const known = memoryIds.filter((id) => /^m[\w-]+$/.test(id));
         const { intent } = await domain.hub.jobs.createIntent({
@@ -147,7 +147,7 @@ export function compositeTools(ctx: ToolContext) {
             },
           },
         }, { actor: "agent", runId: domain.turn.runId, threadId: domain.turn.threadId });
-        return { sessions, intentId: intent.id, errors };
+        return { sessions, watchId: intent.id, errors };
       },
     ),
     get_settings: define(

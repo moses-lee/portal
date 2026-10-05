@@ -152,7 +152,7 @@ on the suites and checked live on a scratch clone.
   (`&lt;n&gt;` was seen live).
 - `POST /api/portal/runs/:id/cancel` cancels chat runs instead of answering 409.
 - Without a key the tick job is skipped rather than recording a run that checked nothing.
-- Goals' runs list links to the curation run page.
+- Watches' runs list links to the curation run page.
 - Upcoming fetches active and paused jobs in one request.
 - World rebuilds write an activity entry; `get_tick_digest` reuses the world service instead of
   calling `collectSnapshot` itself.
@@ -162,7 +162,7 @@ on the suites and checked live on a scratch clone.
 commit rather than asked).
 
 - Consolidator scheduling: Settings is the default the job follows only until the user
-  reschedules it from Goals; a later settings change no longer overwrites that.
+  reschedules it from Watches; a later settings change no longer overwrites that.
 - Monitors: after five failed checks (GitHub down) the intent pauses with a Needs-you item instead
   of staying active without a check. `resolve_pull` adds a fetched PR to the world, so a bare
   number outside the attention list resolves without asking each repo.
@@ -323,6 +323,17 @@ clone of the live database with real Anthropic calls.
     the findings item removed the worktree, its project entry, and the local branch (its tip was on
     origin), with "Removed the review worktree for liquid-labs-inc/monorepo#2579 and its local
     branch …, now that its findings are read." in the thread and a `review.worktree_removed` entry.
+
+### 1.11 Watches and the attention page (2026-10-04)
+
+The Goals tab is now **Watches** (`/watches`; `/goals` still lands there), and the Needs-you strip
+has left the chat for its own **Needs your attention** page (`/attention`). Intents keep their name
+in code, tables, activity kinds, and REST paths; the model's tools became `create_watch`,
+`update_watch`, `cancel_watch`, `list_watches`, `fire_watch`, and `close_watch` (the `intent`
+names in the sections above are the old ones; a helper job stored with one still gets its tool).
+`counts.needsYou` follows the page's rule (`needsAttention` in `@portal/shared/items`: open, or
+snoozed past its time, and never a retired session kind), and `POST /api/portal/items/bulk`
+resolves or dismisses up to 500 items with one activity entry.
 
 ---
 
@@ -527,6 +538,9 @@ data with its diff visible in the UI; the activity log explains every action the
 - Bearer-token auth for external clients (CLI, Hermes): later. Single user for now.
 - Talk to Portal matches the session pages: same composer and send behaviour, same aurora, and a
   thread in prose, with actionable detail only in the Needs-you strip.
+- Watches and the attention page (2026-10-04): the UI and the model say "watches" for intents
+  (Goals until then), and items are read and acted on on their own Needs-your-attention page
+  rather than in a strip above the thread (§1.11).
 - Unattended reviews (2026-09-24): Portal answers permission requests of the review sessions it
   started, and only those, when the step is read-only, once per command; anything that writes
   waits for the user. Every permission answer says who gave it (you or Portal) in the transcript.

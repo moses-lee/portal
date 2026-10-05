@@ -107,7 +107,7 @@ export interface JobsService {
   /** A job's approval was decided or expired: run it again, put it back on its schedule, or end it. */
   resumeAfterApproval(jobId: string, outcome: "approved" | "denied" | "expired"): Promise<void>;
   listIntents(filter?: { status?: Intent["status"][] }): Promise<Intent[]>;
-  /** The job tools (schedule_job, cancel_job, create_intent, cancel_intent, run_helper, ...). */
+  /** The job tools (schedule_job, cancel_job, create_watch, cancel_watch, run_helper, ...). */
   tools(ctx: DomainToolContext): ToolSet;
 
   /**

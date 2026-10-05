@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { setupPortal } from "./fixtures";
+import { portalItem, setupPortal } from "./fixtures";
 import { approval, globalEntity, helperJob, intent, intentJob, mainThread, memoryRecords, repoEntity, reviewThread } from "./orchestrator-fixtures";
 
 test.use({ viewport: { width: 390, height: 844 } });
@@ -41,10 +41,15 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-chat.png") });
 
-  await go("Goals");
+  await go("Needs you");
+  await expect(page.getByRole("region", { name: "Needs your attention" }).getByRole("article", { name: portalItem.title })).toBeVisible();
+  expect(await noHorizontalScroll()).toBe(true);
+  await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-attention.png") });
+
+  await go("Watches");
   await expect(page.getByRole("listitem", { name: intentJob.title })).toBeVisible();
   expect(await noHorizontalScroll()).toBe(true);
-  await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-goals.png") });
+  await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-watches.png") });
 
   // Memory: the list first, then one entity with a way back.
   await go("Memory");

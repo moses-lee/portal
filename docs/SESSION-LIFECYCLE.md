@@ -41,6 +41,8 @@ Both durations are settings. The sweep runs every 5 minutes inside the server re
 | 11 | Small fixes | The orchestrator's `delete_session` closes the session's terminals (the HTTP route does, the tool does not). Removed-project records that reach zero sessions are dropped, as `Chat.tsx:343` already claims. |
 | 12 | Settings home | A new *Sessions* settings section holds `tracked.untrackAfterHours` and `worktrees.removeAfterHours`; a new *Data* section holds *Delete removed sessions*. General settings (`packages/shared/src/settings.ts`), not orchestrator settings. |
 
+Decision 10 is superseded (2026-10-04): the Needs-you strip left the Chat view for its own *Needs your attention* page (`/attention`).
+
 ## Server
 
 ### Data

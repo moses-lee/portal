@@ -1,7 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { LoaderCircle } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { LoaderCircle, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatDateTime, relativeTime } from "@/lib/orchestrator/format";
 
 export type Tone = "neutral" | "amber" | "sky" | "emerald" | "rose" | "violet";
@@ -118,5 +119,65 @@ export function ViewBody({ children, label, wide = false }: { children: ReactNod
         {children}
       </div>
     </div>
+  );
+}
+
+/** Runs one row action at a time, keeping its error on the row. */
+export function useRowAction() {
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (name: string, action: () => Promise<unknown>) => {
+    setPending(name);
+    setError(null);
+    try {
+      await action();
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That did not work. Try again.");
+      return false;
+    } finally {
+      setPending(null);
+    }
+  };
+  return { pending, error, run };
+}
+
+/** A second click confirms: the first turns the button into "Confirm …"; it disarms after 4 s. */
+export function ConfirmButton({
+  label,
+  confirmLabel,
+  disabled,
+  onConfirm,
+  icon = <X />,
+}: {
+  label: string;
+  confirmLabel: string;
+  disabled?: boolean;
+  onConfirm: () => void;
+  icon?: ReactNode;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  return (
+    <Button
+      type="button"
+      size="xs"
+      variant={armed ? "destructive" : "ghost"}
+      disabled={disabled}
+      onClick={() => {
+        if (armed) {
+          setArmed(false);
+          onConfirm();
+        } else setArmed(true);
+      }}
+      className={armed ? "" : "text-muted-foreground"}
+    >
+      {icon}
+      {armed ? confirmLabel : label}
+    </Button>
   );
 }

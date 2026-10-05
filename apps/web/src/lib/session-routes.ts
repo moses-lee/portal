@@ -1,6 +1,6 @@
 /**
  * Browser routes. Portal, the orchestrator, is the home: `/` is its main thread, `/threads/<id>` one
- * of the side threads it opened, and `/goals`, `/activity`, `/memory[/<entityId>]`, `/system` its
+ * of the side threads it opened, and `/attention`, `/watches`, `/activity`, `/memory[/<entityId>]`, `/system` its
  * views; `/memory/curation[/<runId>]` is memory curation: its runs, or one run's digest and diff.
  * `/new` is the start page (a new conversation in a project), `/sessions/<id>` opens one session,
  * and `/terminal` is the standalone terminal page (shells that belong to no session).
@@ -49,15 +49,15 @@ export function isPortalPath(pathname: string): boolean {
   return sessionIdFromPath(pathname) === null && !isTerminalPath(pathname) && !isStartPath(pathname);
 }
 
-export type PortalView = "chat" | "goals" | "activity" | "memory" | "system";
-export const portalViews: readonly PortalView[] = ["chat", "goals", "activity", "memory", "system"];
+export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system";
+export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system"];
 
 /** Where a Portal path points; unknown paths land on the main thread. */
 export type PortalLocation = (
   | { view: "chat"; threadId: string }
   /** `runId` present: the curation pane (null lists the runs, an id shows one). */
   | { view: "memory"; entityId: string | null; runId?: string | null }
-  | { view: "goals" | "activity" | "system" }
+  | { view: "attention" | "watches" | "activity" | "system" }
 ) & {
   /** The session the tracked panel shows (`?session=`); absent or null when it shows its list. */
   session?: string | null;
@@ -101,7 +101,9 @@ function routeOf(pathname: string): PortalLocation {
     return { view: "memory", entityId: null, runId: segments[2] ? decodeSegment(segments[2]) : null };
   }
   if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
-  if ((head === "goals" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
+  if ((head === "attention" || head === "watches" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
+  // Watches were "Goals" until 2026-10-04; old links and bookmarks still land there.
+  if (head === "goals" && segments.length === 1) return { view: "watches" };
   return { view: "chat", threadId: "main" };
 }
 

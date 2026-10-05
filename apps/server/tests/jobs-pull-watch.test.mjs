@@ -97,7 +97,7 @@ test("monitor_pull watches a PR: the first check is the baseline, then only chos
   assert.match(closed[0].summary, /acme\/app#42 was merged/);
 });
 
-test("asking again updates the monitor, comments can be asked for, and cancel_intent stops it by PR number", async (t) => {
+test("asking again updates the monitor, comments can be asked for, and cancel_watch stops it by PR number", async (t) => {
   let current = status();
   const h = await started(jobsHarness(t, { github: { pullStatus: async () => current } }));
   const tools = h.jobs.tools(toolContext(h));
@@ -118,8 +118,8 @@ test("asking again updates the monitor, comments can be asked for, and cancel_in
   await flush();
   assert.equal((await h.store.listItems())[0].title, "acme/app#42 1 comment new");
 
-  assert.match((await call(tools, "cancel_intent", { pull: 7 })).error, /No active monitor watches PR #7/);
-  const cancelled = await call(tools, "cancel_intent", { pull: 42, reason: "user asked" });
+  assert.match((await call(tools, "cancel_watch", { pull: 7 })).error, /No active monitor watches PR #7/);
+  const cancelled = await call(tools, "cancel_watch", { pull: 42, reason: "user asked" });
   assert.equal(cancelled.status, "cancelled");
   assert.equal((await h.jobs.getJob(job.id)).status, "cancelled");
 });

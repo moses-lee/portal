@@ -71,7 +71,7 @@ export function createRuns(hub: OrchestratorHub, store: JobsStore) {
     if (run.kind !== "chat" && run.kind !== "tick") {
       void hub.activity.log({
         actor: "system", kind: "run.finished",
-        summary: `${run.kind === "intent_check" ? "Intent check" : run.kind === "helper" ? "Helper" : "Job"} ${run.status.replace("_", " ")}${run.summary ? `: ${run.summary}` : ""}`,
+        summary: `${run.kind === "intent_check" ? "Watch check" : run.kind === "helper" ? "Helper" : "Job"} ${run.status.replace("_", " ")}${run.summary ? `: ${run.summary}` : ""}`,
         refs: { runId: run.id, ...(run.jobId ? { jobId: run.jobId } : {}), ...(run.threadId ? { threadId: run.threadId } : {}) },
         detail: { status: run.status, trigger: run.trigger, ...(run.error ? { error: run.error } : {}), ...(run.usage ? { usage: run.usage } : {}) },
       });

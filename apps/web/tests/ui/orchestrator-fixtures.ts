@@ -1,5 +1,5 @@
 /**
- * Sample orchestrator data for the phase 2 views (threads, goals, activity, memory, system,
+ * Sample orchestrator data for the phase 2 views (threads, watches, activity, memory, system,
  * approvals), shaped exactly as the contracts in `@portal/contracts` say the server answers.
  * `setupPortal` serves them from route mocks; specs pass their own through its `portal` option.
  */

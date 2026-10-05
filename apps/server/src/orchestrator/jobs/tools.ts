@@ -1,7 +1,9 @@
 /**
  * The job tools. A chat turn (or a helper that names them) gets the scheduling set: jobs, runs,
- * intents, helpers, and the schedule. An intent check gets only what acts on its own intent
- * (fire_intent, close_intent, update_intent). Other background turns get none: their tool schemas
+ * watches, helpers, and the schedule. An intent check gets only what acts on its own intent
+ * (fire_watch, close_watch, update_watch). Intents are called watches wherever the model (or the
+ * user) reads about them: tool names, descriptions, and result keys say "watch"; the code, the
+ * tables, and the REST paths keep "intent". Other background turns get none: their tool schemas
  * would be paid for on every step. The world refresh job (`TICK_JOB_ID`) is Portal's plumbing and
  * never shows here: no tool lists it or its runs, and update_job and cancel_job answer that it is
  * unknown (the jobs core refuses it).
@@ -73,7 +75,7 @@ function parseTime(value: string | null | undefined, what: string): number | nul
 function jobRow(job: Job) {
   return {
     id: job.id, kind: job.kind, title: job.title, schedule: describeSchedule(job.schedule), status: job.status, nextRunAt: iso(job.nextRunAt),
-    lastRunAt: iso(job.lastRunAt), ...(job.failures ? { failures: job.failures } : {}), ...(job.intentId ? { intentId: job.intentId } : {}),
+    lastRunAt: iso(job.lastRunAt), ...(job.failures ? { failures: job.failures } : {}), ...(job.intentId ? { watchId: job.intentId } : {}),
     ...(job.threadId ? { threadId: job.threadId } : {}),
   };
 }
@@ -105,18 +107,18 @@ export function jobTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
 function intentCheckTools(intents: IntentsPart, ctx: DomainToolContext, intentId: string): ToolSet {
   const how = { actor: "agent" as const, runId: ctx.turn.runId };
   return {
-    fire_intent: define(
-      "Something new happened that the intent's trigger names: record the firing and put a Needs-you item in front of the user. The server refuses a repeat of the last firing's title, during the cooldown, past the budget, or after expiry; then stop.",
+    fire_watch: define(
+      "Something new happened that the watch's trigger names: record the firing and put a Needs-you item in front of the user. The server refuses a repeat of the last firing's title, during the cooldown, past the budget, or after expiry; then stop.",
       z.object({ title: z.string().min(1).max(200).describe("One line for the user: what happened."), body: z.string().max(2000).describe("One to three sentences: what you saw, what to do.") }),
       async ({ title, body }) => intents.fire(intentId, { title, body }, { ...how, touched: ctx.touched }),
     ),
-    close_intent: define(
-      "End this intent: done when it is fulfilled, cancelled when it can never fire or no longer applies.",
+    close_watch: define(
+      "End this watch: done when it is fulfilled, cancelled when it can never fire or no longer applies.",
       z.object({ status: z.enum(["done", "cancelled"]), reason: z.string().max(500) }),
       async ({ status, reason }) => ({ closed: (await intents.close(intentId, status, { ...how, reason })).status }),
     ),
-    update_intent: define(
-      "Rewrite this intent's notes: what you saw and what is left. Keep them short.",
+    update_watch: define(
+      "Rewrite this watch's notes: what you saw and what is left. Keep them short.",
       z.object({ notes: z.string().max(4000) }),
       async ({ notes }) => intentRow(await intents.update(intentId, { notes }, how), true),
     ),
@@ -172,7 +174,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
 
   return {
     monitor_pull: define(
-      "Watch one pull request and tell the user only when its state changes: merged, closed, checks failing or passing again, changes requested, approved, merge conflicts (new reviews and comments only with comments: true). It ends by itself when the PR merges or closes; cancel_intent with pull stops it. Asking again for a PR already watched updates that monitor. repo may be owner/name (any repo on GitHub) or a loose name.",
+      "Watch one pull request and tell the user only when its state changes: merged, closed, checks failing or passing again, changes requested, approved, merge conflicts (new reviews and comments only with comments: true). It ends by itself when the PR merges or closes; cancel_watch with pull stops it. Asking again for a PR already watched updates that monitor. repo may be owner/name (any repo on GitHub) or a loose name.",
       z.object({
         number: z.number().int().positive(),
         repo: z.string().optional(),
@@ -214,15 +216,15 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         return { ...intentRow(intent), checkJob: jobRow(job), pull: target, events: chosen };
       },
     ),
-    create_intent: define(
-      "Track a standing request of the user (\"tell me when #42 merges\"): text in the user's words, a precise trigger, the action when it fires, and how often to check. A check job evaluates the trigger; firing puts a Needs-you item in front of the user.",
+    create_watch: define(
+      "Create a watch: a standing request of the user (\"tell me when #42 merges\"): text in the user's words, a precise trigger, the action when it fires, and how often to check. A check job evaluates the trigger; firing puts a Needs-you item in front of the user.",
       z.object({
         text: z.string().min(1).max(2000).describe("What the user asked, in their words."),
         trigger: z.string().min(1).max(1000).describe("The exact condition, e.g. \"PR acme/app#42 is merged or closed\"."),
         action: z.string().min(1).max(1000).describe("What to do when it fires, e.g. \"tell me, and offer to remove the worktree\"."),
         scope: scopeSchema.optional(),
         notes: z.string().max(4000).optional().describe("Your plan and what you know so far."),
-        expiresAt: z.string().optional().describe("ISO 8601 time after which the intent lapses."),
+        expiresAt: z.string().optional().describe("ISO 8601 time after which the watch lapses."),
         fireBudget: z.number().int().min(1).nullable().optional().describe("How many times it may fire (default 1; null for unlimited)."),
         cooldownMinutes: z.number().min(0).optional().describe("Least time between two firings (default 0)."),
         ...cadence,
@@ -241,8 +243,8 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         return { ...intentRow(intent), checkJob: jobRow(job) };
       },
     ),
-    update_intent: define(
-      "Change an active intent: its notes (your current understanding), trigger, action, scope, expiry, budget, cooldown, or check cadence.",
+    update_watch: define(
+      "Change an active watch: its notes (your current understanding), trigger, action, scope, expiry, budget, cooldown, or check cadence.",
       z.object({
         id: z.string().min(1),
         text: z.string().min(1).max(2000).optional(),
@@ -267,28 +269,28 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         return intentRow(await intents.update(id, changes, { ...how, check: checkSchedule(rest) }));
       },
     ),
-    cancel_intent: define(
-      "Cancel an intent the user no longer wants (or that can never fire); its check job stops too, including a check in progress (runStopped says whether one was). Give its id, or pull (and repo) to stop the monitor of that PR.",
+    cancel_watch: define(
+      "Cancel a watch the user no longer wants (or that can never fire); its check job stops too, including a check in progress (runStopped says whether one was). Give its id, or pull (and repo) to stop the monitor of that PR.",
       z.object({ id: z.string().min(1).optional(), pull: z.number().int().positive().optional(), repo: z.string().optional(), reason: z.string().max(500).optional() }),
       async ({ id, pull, repo, reason }) => {
         const target = id ?? (pull ? (await monitorOf(repo && REPO_PATTERN.test(repo) ? repo : null, pull))?.intent.id : undefined);
-        if (!target) throw httpError(pull ? `No active monitor watches PR #${pull}.` : "Give the intent's id or a PR number.", pull ? 404 : 400);
+        if (!target) throw httpError(pull ? `No active monitor watches PR #${pull}.` : "Give the watch's id or a PR number.", pull ? 404 : 400);
         const stopped: string[] = [];
         const intent = await intents.close(target, "cancelled", { ...how, reason, stopped });
         const jobIds = (await store.listJobs({ intentId: intent.id })).map((job) => job.id);
         return { ...intentRow(intent, true), ...(await runsReport(jobIds, stopped)) };
       },
     ),
-    list_intents: define(
-      "Intents by status (default active), newest first.",
+    list_watches: define(
+      "Watches by status (default active), newest first.",
       z.object({ status: z.enum(["active", "done", "cancelled", "expired"]).optional() }),
       async ({ status = "active" }) => {
         const { rows, truncated } = capped(await store.listIntents({ status: [status] }));
-        return { intents: rows.map((intent) => intentRow(intent, true)), truncated };
+        return { watches: rows.map((intent) => intentRow(intent, true)), truncated };
       },
     ),
     schedule_job: define(
-      "Schedule a helper job: a bounded turn with your prompt that runs on a schedule (every N minutes, cron, or once) and posts its answer to this thread. For conditions to watch, use create_intent instead.",
+      "Schedule a helper job: a bounded turn with your prompt that runs on a schedule (every N minutes, cron, or once) and posts its answer to this thread. For conditions to watch, use create_watch instead.",
       z.object({
         title: z.string().min(1).max(200),
         prompt: z.string().min(1).max(8000).describe("The instruction the helper turn gets each time."),
@@ -316,7 +318,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     cancel_job: define(
-      "Cancel a job that is no longer needed; a run of it in progress is stopped too (runStopped says whether one was). Cancelling an intent's check job cancels the intent.",
+      "Cancel a job that is no longer needed; a run of it in progress is stopped too (runStopped says whether one was). Cancelling a watch's check job cancels the watch.",
       z.object({ id: z.string().min(1) }),
       async ({ id }) => {
         const stopped: string[] = [];

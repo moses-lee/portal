@@ -16,12 +16,12 @@ const intentArgs = (overrides = {}) => ({
 
 async function withIntent(h, overrides) {
   const tools = h.jobs.tools(toolContext(h));
-  const created = await call(tools, "create_intent", intentArgs(overrides));
+  const created = await call(tools, "create_watch", intentArgs(overrides));
   assert.equal(created.error, undefined, created.error);
   return { tools, created };
 }
 
-test("create_intent stores the intent and its check job at the agent's cadence, logs it, and announces the active intents", async (t) => {
+test("create_watch stores the intent and its check job at the agent's cadence, logs it, and announces the active intents", async (t) => {
   const h = await started(jobsHarness(t));
   const { created } = await withIntent(h, { cooldownMinutes: 5, fireBudget: 2, expiresAt: new Date(T0 + 86_400_000).toISOString(), idleCheckEveryMinutes: 15 });
   const intent = await h.jobs.getIntent(created.id);
@@ -45,17 +45,17 @@ test("create_intent stores the intent and its check job at the agent's cadence, 
   assert.equal((await h.runtime.status()).counts.intents, 1);
 
   const tools = h.jobs.tools(toolContext(h));
-  assert.equal((await call(tools, "list_intents", {})).intents[0].id, intent.id);
-  assert.match((await call(tools, "create_intent", intentArgs({ expiresAt: new Date(T0 - 1).toISOString() }))).error, /in the past/);
-  assert.match((await call(tools, "create_intent", intentArgs({ checkEveryMinutes: undefined, checkCron: "not a cron" }))).error, /Invalid cron/);
-  assert.equal((await call(tools, "create_intent", intentArgs({ fireBudget: 0 }))).invalidInput, true);
+  assert.equal((await call(tools, "list_watches", {})).watches[0].id, intent.id);
+  assert.match((await call(tools, "create_watch", intentArgs({ expiresAt: new Date(T0 - 1).toISOString() }))).error, /in the past/);
+  assert.match((await call(tools, "create_watch", intentArgs({ checkEveryMinutes: undefined, checkCron: "not a cron" }))).error, /Invalid cron/);
+  assert.equal((await call(tools, "create_watch", intentArgs({ fireBudget: 0 }))).invalidInput, true);
 });
 
 test("an intent check fires the intent: a Needs-you item with its links, a note in the thread, and a spent budget finishes the intent and its job", async (t) => {
   const h = await started(jobsHarness(t, {
     doGenerate: [
       toolStep("get_pull", { repo: "acme/app", number: 42 }, "c1"),
-      toolStep("fire_intent", { title: "acme/app#42 merged", body: "It merged a minute ago. The worktree can go." }, "c2"),
+      toolStep("fire_watch", { title: "acme/app#42 merged", body: "It merged a minute ago. The worktree can go." }, "c2"),
       textStep("acme/app#42 merged; its worktree can be removed."),
     ],
   }));
@@ -66,8 +66,8 @@ test("an intent check fires the intent: a Needs-you item with its links, a note 
   const calls = h.model.doGenerateCalls;
   assert.ok(calls.length >= 3);
   const offered = calls[0].tools.map((tool) => tool.name);
-  assert.ok(offered.includes("fire_intent") && offered.includes("close_intent") && offered.includes("update_intent"));
-  assert.ok(!offered.includes("create_intent") && !offered.includes("run_command") && !offered.includes("schedule_job"), offered.join(","));
+  assert.ok(offered.includes("fire_watch") && offered.includes("close_watch") && offered.includes("update_watch"));
+  assert.ok(!offered.includes("create_watch") && !offered.includes("run_command") && !offered.includes("schedule_job"), offered.join(","));
   assert.match(JSON.stringify(calls[0].prompt), /PR acme\/app#42 is merged or closed/);
 
   const intent = await h.jobs.getIntent(created.id);
@@ -103,9 +103,9 @@ test("a check that fires beside rewriting its notes and closing the intent, in o
     store: createPgJobsStore({ db }),
     doGenerate: [
       toolsStep(
-        ["update_intent", { notes: "The session finished its re-review. Fired." }],
-        ["fire_intent", { title, body: "Seven issues found." }],
-        ["close_intent", { status: "done", reason: "Reported." }],
+        ["update_watch", { notes: "The session finished its re-review. Fired." }],
+        ["fire_watch", { title, body: "Seven issues found." }],
+        ["close_watch", { status: "done", reason: "Reported." }],
       ),
       textStep("The re-review finished with seven issues."),
     ],
@@ -128,12 +128,12 @@ test("a check that fires beside rewriting its notes and closing the intent, in o
   const [note] = (await h.runtime.history()).messages;
   assert.equal(note?.parts[0].text, "The re-review finished with seven issues.", "the user hears of the firing in the thread");
   const closed = await h.hub.activity.list({ kind: "intent.closed" });
-  assert.equal(closed.length, 1, "one close ends it, whichever of the firing and close_intent got there first");
+  assert.equal(closed.length, 1, "one close ends it, whichever of the firing and close_watch got there first");
 });
 
 test("a check whose trigger does not hold rewrites the notes, posts nothing, and stays scheduled", async (t) => {
   const h = await started(jobsHarness(t, {
-    doGenerate: [toolStep("update_intent", { notes: "Still open; CI running." }), textStep("NO_UPDATE")],
+    doGenerate: [toolStep("update_watch", { notes: "Still open; CI running." }), textStep("NO_UPDATE")],
   }));
   const { created } = await withIntent(h, { checkNow: true });
   await flush();
@@ -152,17 +152,17 @@ test("the server enforces cooldown and fire budget, whatever the model asks", as
   const h = await started(jobsHarness(t));
   const { created } = await withIntent(h, { fireBudget: 2, cooldownMinutes: 30 });
   const check = h.jobs.tools(toolContext(h, { kind: "intent_check", intentId: created.id, runId: "run-check" }));
-  assert.deepEqual(Object.keys(check).sort(), ["close_intent", "fire_intent", "update_intent"]);
+  assert.deepEqual(Object.keys(check).sort(), ["close_watch", "fire_watch", "update_watch"]);
 
-  const first = await call(check, "fire_intent", { title: "Checks failed", body: "CI is red." });
+  const first = await call(check, "fire_watch", { title: "Checks failed", body: "CI is red." });
   assert.deepEqual(first, { fired: true, itemId: first.itemId, firesLeft: 1, done: false });
-  const cooling = await call(check, "fire_intent", { title: "Checks failed again", body: "Still red." });
+  const cooling = await call(check, "fire_watch", { title: "Checks failed again", body: "Still red." });
   assert.equal(cooling.fired, false);
   assert.match(cooling.reason, /cooling down until/);
   assert.equal((await h.jobs.getIntent(created.id)).fires, 1);
 
   h.timers.tick(30 * MIN);
-  const second = await call(check, "fire_intent", { title: "Checks failed again", body: "Still red." });
+  const second = await call(check, "fire_watch", { title: "Checks failed again", body: "Still red." });
   assert.equal(second.fired, true);
   assert.equal(second.done, true);
   assert.equal(second.itemId, first.itemId, "one item per intent, updated on each firing");
@@ -174,14 +174,14 @@ test("the server enforces cooldown and fire budget, whatever the model asks", as
   assert.equal(job.status, "done");
 
   h.timers.tick(60 * MIN);
-  const spent = await call(check, "fire_intent", { title: "Again", body: "x" });
+  const spent = await call(check, "fire_watch", { title: "Again", body: "x" });
   assert.equal(spent.fired, false);
-  assert.match(spent.reason, /intent is done/);
+  assert.match(spent.reason, /watch is done/);
 
   // Unlimited: no budget, just the cooldown.
   const { created: open } = await withIntent(h, { fireBudget: null, cooldownMinutes: 0 });
   const openCheck = h.jobs.tools(toolContext(h, { kind: "intent_check", intentId: open.id }));
-  for (let i = 0; i < 3; i++) assert.equal((await call(openCheck, "fire_intent", { title: `Firing ${i}`, body: "x" })).fired, true);
+  for (let i = 0; i < 3; i++) assert.equal((await call(openCheck, "fire_watch", { title: `Firing ${i}`, body: "x" })).fired, true);
   assert.equal((await h.jobs.getIntent(open.id)).status, "active");
 });
 
@@ -189,16 +189,16 @@ test("a firing that repeats the last one's title is refused whatever the cooldow
   const h = await started(jobsHarness(t));
   const { created } = await withIntent(h, { fireBudget: 3, cooldownMinutes: 5 });
   const check = h.jobs.tools(toolContext(h, { kind: "intent_check", intentId: created.id }));
-  assert.equal((await call(check, "fire_intent", { title: "Session 17329ac6 has been deleted", body: "It is gone." })).fired, true);
+  assert.equal((await call(check, "fire_watch", { title: "Session 17329ac6 has been deleted", body: "It is gone." })).fired, true);
   assert.equal((await h.jobs.getIntent(created.id)).lastFiredTitle, "Session 17329ac6 has been deleted");
 
   h.timers.tick(7 * MIN);
-  const again = await call(check, "fire_intent", { title: "session 17329ac6 has been deleted.", body: "Still gone at 18:52; it no longer exists." });
+  const again = await call(check, "fire_watch", { title: "session 17329ac6 has been deleted.", body: "Still gone at 18:52; it no longer exists." });
   assert.equal(again.fired, false);
   assert.match(again.reason, new RegExp(`repeats the last firing at ${new Date(T0).toISOString()}.*fire only when something changed`));
   assert.equal((await h.jobs.getIntent(created.id)).fires, 1, "a refused repeat spends nothing");
 
-  const changed = await call(check, "fire_intent", { title: "Session 17329ac6 is back and working", body: "It reappeared." });
+  const changed = await call(check, "fire_watch", { title: "Session 17329ac6 is back and working", body: "It reappeared." });
   assert.equal(changed.fired, true);
   const intent = await h.jobs.getIntent(created.id);
   assert.equal(intent.fires, 2);
@@ -225,7 +225,7 @@ test("a check is handed each scoped session's live state, prefix ids included, a
   assert.match(prompt, /- deadbeef: not among Portal's 2 sessions right now/);
   assert.match(prompt, /Fire on change, not on state/);
   assert.match(prompt, /A failed lookup is not proof something is gone/);
-  assert.match(system.content, /When the user corrects what an intent reported/, "the jobs guidance reaches every turn");
+  assert.match(system.content, /When the user corrects what a watch reported/, "the jobs guidance reaches every turn");
   assert.match(system.content, /In focus for this turn:\n- "Refactor the parser" \[17329ac6\]/, "the prefix is focused as its full session");
   assert.equal((await h.jobs.getIntent(created.id)).fires, 0);
 });
@@ -251,7 +251,7 @@ test("an intent past its expiry is expired by the worker, its job ends, and a la
   const { created } = await withIntent(h, { expiresAt: new Date(T0 + 10 * MIN).toISOString(), checkEveryMinutes: 60 });
   const check = h.jobs.tools(toolContext(h, { kind: "intent_check", intentId: created.id }));
   h.timers.tick(10 * MIN);
-  const late = await call(check, "fire_intent", { title: "Too late", body: "x" });
+  const late = await call(check, "fire_watch", { title: "Too late", body: "x" });
   assert.equal(late.fired, false);
   assert.match(late.reason, /expired/);
   assert.equal((await h.jobs.getIntent(created.id)).status, "expired");
@@ -268,10 +268,10 @@ test("an intent past its expiry is expired by the worker, its job ends, and a la
   assert.deepEqual(h.events.findLast((event) => event.type === "intents").intents, []);
 });
 
-test("update_intent rewrites the intent and reschedules its check; cancel_intent and cancelling the check job both end it", async (t) => {
+test("update_watch rewrites the intent and reschedules its check; cancel_watch and cancelling the check job both end it", async (t) => {
   const h = await started(jobsHarness(t, { presence: 1 }));
   const { tools, created } = await withIntent(h);
-  const updated = await call(tools, "update_intent", { id: created.id, trigger: "PR acme/app#42 is merged", checkEveryMinutes: 30, scope: { repos: ["acme/app"] }, expiresAt: null });
+  const updated = await call(tools, "update_watch", { id: created.id, trigger: "PR acme/app#42 is merged", checkEveryMinutes: 30, scope: { repos: ["acme/app"] }, expiresAt: null });
   assert.equal(updated.trigger, "PR acme/app#42 is merged");
   const intent = await h.jobs.getIntent(created.id);
   assert.deepEqual(intent.scope.pulls, [pull], "a partial scope merges with the stored one");
@@ -281,10 +281,10 @@ test("update_intent rewrites the intent and reschedules its check; cancel_intent
   assert.equal(job.nextRunAt, T0 + 2 * MIN, "a sooner plan for a job that never ran stays");
   assert.match((await h.hub.activity.list({ kind: "intent.updated" }))[0].summary, /trigger, scope, expiresAt, cadence/);
 
-  const cancelled = await call(tools, "cancel_intent", { id: created.id, reason: "The user merged it by hand." });
+  const cancelled = await call(tools, "cancel_watch", { id: created.id, reason: "The user merged it by hand." });
   assert.equal(cancelled.status, "cancelled");
   assert.equal((await h.jobs.getJob(job.id)).status, "cancelled");
-  assert.match((await call(tools, "update_intent", { id: created.id, notes: "x" })).error, /cancelled; create a new one/);
+  assert.match((await call(tools, "update_watch", { id: created.id, notes: "x" })).error, /cancelled; create a new one/);
 
   const { created: second } = await withIntent(h);
   const [secondJob] = await h.jobs.listJobs({ intentId: second.id });
@@ -311,7 +311,7 @@ test("a check job whose intent is gone or closed ends itself without calling the
   await flush();
   assert.equal(h.model.doGenerateCalls.length, 0);
   assert.equal((await h.jobs.getJob(job.id)).status, "done");
-  assert.equal((await h.jobs.getRun((await h.jobs.getJob(job.id)).lastRunId)).summary, "The intent is done.");
+  assert.equal((await h.jobs.getRun((await h.jobs.getJob(job.id)).lastRunId)).summary, "The watch is done.");
 });
 
 // The World section shows 8-char prefixes; a real intent was once stored with one and every check read the session as deleted.
@@ -325,25 +325,25 @@ const prefixWorld = {
   ],
 };
 
-test("create_intent and update_intent store full session and project ids, and refuse ids that name nothing or several", async (t) => {
+test("create_watch and update_watch store full session and project ids, and refuse ids that name nothing or several", async (t) => {
   const h = await started(jobsHarness(t, prefixWorld));
   const { tools, created } = await withIntent(h, { scope: { sessionIds: ["17329ac6"], projectIds: ["9b1d4e7a"] } });
   const intent = await h.jobs.getIntent(created.id);
   assert.deepEqual(intent.scope.sessionIds, [REVIEW]);
   assert.deepEqual(intent.scope.projectIds, [PORTAL]);
 
-  const unknown = await call(tools, "create_intent", intentArgs({ scope: { sessionIds: ["deadbeef"] } }));
+  const unknown = await call(tools, "create_watch", intentArgs({ scope: { sessionIds: ["deadbeef"] } }));
   assert.match(unknown.error, /^scope\.sessionIds: No session has id "deadbeef"\. Ids in the World section are prefixes/);
-  assert.match((await call(tools, "create_intent", intentArgs({ scope: { sessionIds: ["5e0f"] } }))).error, /^scope\.sessionIds: Id "5e0f" is ambiguous: 2 sessions/);
-  assert.match((await call(tools, "create_intent", intentArgs({ scope: { projectIds: ["nope-project"] } }))).error, /^scope\.projectIds: No project has id "nope-project"/);
+  assert.match((await call(tools, "create_watch", intentArgs({ scope: { sessionIds: ["5e0f"] } }))).error, /^scope\.sessionIds: Id "5e0f" is ambiguous: 2 sessions/);
+  assert.match((await call(tools, "create_watch", intentArgs({ scope: { projectIds: ["nope-project"] } }))).error, /^scope\.projectIds: No project has id "nope-project"/);
   assert.equal((await h.jobs.listIntents({})).length, 1, "the refused ones stored nothing");
 
   // An id stored earlier that no longer resolves does not block an unrelated change; a new one must resolve.
   await h.jobsStore.updateIntent(created.id, { scope: { ...intent.scope, sessionIds: [REVIEW, "gone0000"] } });
-  const updated = await call(tools, "update_intent", { id: created.id, scope: { projectIds: ["9b1d4e7a"] } });
+  const updated = await call(tools, "update_watch", { id: created.id, scope: { projectIds: ["9b1d4e7a"] } });
   assert.equal(updated.error, undefined, updated.error);
   assert.deepEqual((await h.jobs.getIntent(created.id)).scope.sessionIds, [REVIEW, "gone0000"]);
-  assert.match((await call(tools, "update_intent", { id: created.id, scope: { sessionIds: ["deadbeef"] } })).error, /^scope\.sessionIds: No session has id "deadbeef"/);
+  assert.match((await call(tools, "update_watch", { id: created.id, scope: { sessionIds: ["deadbeef"] } })).error, /^scope\.sessionIds: No session has id "deadbeef"/);
 });
 
 test("a check repairs a scope stored with prefixes, and its item's links, once", async (t) => {
@@ -382,7 +382,7 @@ test("a firing links the full id even from a scope stored with a prefix", async 
   const { created } = await withIntent(h, { scope: { sessionIds: [REVIEW], projectIds: [PORTAL] } });
   await h.jobsStore.updateIntent(created.id, { scope: { ...(await h.jobs.getIntent(created.id)).scope, sessionIds: ["17329ac6"], projectIds: ["9b1d4e7a"] } });
   const check = h.jobs.tools(toolContext(h, { kind: "intent_check", intentId: created.id }));
-  const fired = await call(check, "fire_intent", { title: "Review finished", body: "Done." });
+  const fired = await call(check, "fire_watch", { title: "Review finished", body: "Done." });
   const item = await h.store.getItem(fired.itemId);
   assert.deepEqual(item.links, { intentId: created.id, threadId: "main", sessionId: REVIEW, projectId: PORTAL });
   assert.deepEqual(item.actions, [{ type: "open_session", sessionId: REVIEW, label: "Open session" }]);

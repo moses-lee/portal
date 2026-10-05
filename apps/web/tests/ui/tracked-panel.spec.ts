@@ -110,12 +110,12 @@ test("a row click opens the session in the panel through ?session=, which surviv
   await expect(panelOf(page).getByRole("heading", { name: finishedTitle })).toBeVisible();
 
   // Switching Portal views keeps the panel's session.
-  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Goals", exact: true }).click();
-  await expect(page).toHaveURL(/\/goals\?session=s1$/);
+  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Watches", exact: true }).click();
+  await expect(page).toHaveURL(/\/watches\?session=s1$/);
   await expect(panelOf(page).getByRole("heading", { name: finishedTitle })).toBeVisible();
 
   await panelOf(page).getByRole("button", { name: "Back to tracked sessions" }).click();
-  await expect(page).toHaveURL(/\/goals$/);
+  await expect(page).toHaveURL(/\/watches$/);
   await expect(panelOf(page).getByRole("heading", { name: "Tracked (4)" })).toBeVisible();
 });
 
@@ -148,7 +148,7 @@ test("a project row's menu tracks a session, and the panel then lists it", async
   await expect(panel.getByRole("button", { name: untrackedTitle, exact: true })).toBeVisible();
 });
 
-test("retired session items stay out of the Needs-you strip", async ({ page }) => {
+test("retired session items stay off the Needs-you page and out of its count", async ({ page }) => {
   await setupPortal(page, {
     sessions: trackedSessions(),
     portal: {
@@ -166,11 +166,14 @@ test("retired session items stay out of the Needs-you strip", async ({ page }) =
       ],
     },
   });
-  await page.goto("/");
-  const strip = page.getByRole("region", { name: "Needs you (1)" });
-  await expect(strip).toBeVisible();
-  await expect(strip.getByRole("button", { name: /Checks are failing/ })).toBeVisible();
+  await page.goto("/attention");
+  const view = page.getByRole("region", { name: "Needs your attention" });
+  await expect(view.getByRole("article", { name: /Checks are failing/ })).toBeVisible();
+  await expect(view.getByRole("article")).toHaveCount(1);
   await expect(page.getByText("Session s1 finished")).toHaveCount(0);
+  await expect(
+    page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Needs you", exact: true }),
+  ).toHaveText(/^Needs you\s*1$/);
 });
 
 test.describe("on a phone", () => {
@@ -267,7 +270,7 @@ test("session mode is resizable, keeps the thread at 480 px, and remembers its w
 
 test("Ask Portal about this prefills the thread's composer and focuses it", async ({ page }) => {
   await setup(page);
-  await page.goto("/goals");
+  await page.goto("/watches");
   const panel = panelOf(page);
   await panel.getByRole("button", { name: `Actions for ${finishedTitle}` }).click();
   await page.getByRole("menuitem", { name: "Ask Portal about this" }).click();
@@ -280,10 +283,9 @@ test("Ask Portal about this prefills the thread's composer and focuses it", asyn
 
 test("an item's open-session action opens the session in the panel instead of navigating", async ({ page }) => {
   await setup(page);
-  await page.goto("/");
-  await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: portalItem.title }).click();
+  await page.goto("/attention");
   await page.getByRole("article", { name: portalItem.title }).getByRole("button", { name: "Open session" }).click();
-  await expect(page).toHaveURL(/\/\?session=s1$/);
+  await expect(page).toHaveURL(/\/attention\?session=s1$/);
   const panel = panelOf(page);
   await expect(panel.getByRole("heading", { name: finishedTitle })).toBeVisible();
 

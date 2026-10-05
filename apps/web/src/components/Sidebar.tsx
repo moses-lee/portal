@@ -100,7 +100,7 @@ const PortalViewEntries = memo(function PortalViewEntries({
         {viewMeta[entry].label}
         <PortalViewBadge
           view={entry}
-          approvals={entry === "chat" ? counts.approvals : 0}
+          approvals={entry === "attention" ? counts.approvals : 0}
           count={counts[entry]}
         />
       </Button>
@@ -134,12 +134,12 @@ function foyerSummary(sessions: SessionSummary[], counts: PortalViewCounts) {
     }
     if (session.busy) working++;
   }
-  const portalWaiting = counts.approvals > 0 || counts.chat > 0;
+  const portalWaiting = counts.approvals > 0 || counts.attention > 0;
   const needsAttention = portalWaiting || waitingCount > 0;
   const headline = counts.approvals > 0
     ? `${counts.approvals} Portal ${counts.approvals === 1 ? "approval" : "approvals"} waiting`
-    : counts.chat > 0
-      ? `${counts.chat} ${counts.chat === 1 ? "item needs" : "items need"} you`
+    : counts.attention > 0
+      ? `${counts.attention} ${counts.attention === 1 ? "item needs" : "items need"} you`
       : waitingCount > 0
         ? `${waitingCount} ${waitingCount === 1 ? "room needs" : "rooms need"} you`
         : working > 0
@@ -181,7 +181,8 @@ const HomeColumn = memo(function HomeColumn({
   const recent = useMemo(() => recentRooms(sessions), [sessions]);
   const { needsAttention, working, headline, detail, firstWaitingId, portalWaiting } = foyerSummary(sessions, counts);
   const openStatus = () => {
-    if (portalWaiting || firstWaitingId === null) onPortalView("chat");
+    if (portalWaiting) onPortalView("attention");
+    else if (firstWaitingId === null) onPortalView("chat");
     else onSelect(firstWaitingId);
   };
 

@@ -13,7 +13,7 @@ import type { DomainToolContext, OrchestratorHub, ResolvedModel, RunOutcome, Too
 import { systemPrompt } from "./prompt.ts";
 import { expandScope } from "./ids.ts";
 import { normalizeScope } from "./store.ts";
-import { READ_ONLY_TOOLS, createTools } from "./tools/index.ts";
+import { READ_ONLY_TOOLS, createTools, currentToolName } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
 import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
 import { threadTools } from "./tools/threads.ts";
@@ -176,7 +176,8 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
   const classic = createTools(offered) as unknown as ToolSet;
   let tools: ToolSet = { ...classic, ...withRedaction(ctx, domain) };
   if (toolNames) {
-    const allowed = new Set(toolNames);
+    // A stored list may predate a rename (a helper job scheduled before it).
+    const allowed = new Set(toolNames.map(currentToolName));
     tools = Object.fromEntries(Object.entries(tools).filter(([name]) => allowed.has(name)));
   }
   return withActivity(hub, ctx.turn, withJobGuard(hub, ctx.turn, { ...hub.approvals.gate(tools, ctx), ...extra }));

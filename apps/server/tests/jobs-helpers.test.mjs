@@ -26,7 +26,7 @@ test("run_helper with wait runs a sub-turn inside the chat turn, records it as a
   // The helper saw the read-only set, nothing that changes things, and no job tools.
   const offered = h.model.doGenerateCalls[0].tools.map((tool) => tool.name);
   assert.ok(offered.includes("get_pull") && offered.includes("read_transcript"));
-  for (const name of ["run_command", "send_prompt", "delete_session", "create_intent", "run_helper"]) assert.ok(!offered.includes(name), name);
+  for (const name of ["run_command", "send_prompt", "delete_session", "create_watch", "run_helper"]) assert.ok(!offered.includes(name), name);
   assert.match(JSON.stringify(h.model.doGenerateCalls[0].prompt), /running as a helper/);
   assert.deepEqual((await h.runtime.history()).messages, [], "an inline helper posts nothing; the chat turn answers");
 });
@@ -55,6 +55,17 @@ test("run_helper without wait schedules a helper job now; it runs in the backgro
   const scheduledEntry = (await h.hub.activity.list({ kind: "job.scheduled" })).find((entry) => entry.refs.jobId === job.id);
   assert.equal(scheduledEntry.actor, "agent");
   assert.equal(scheduledEntry.refs.runId, parent.id);
+});
+
+test("a helper job stored with a tool's old name still gets that tool under its new one", async (t) => {
+  const h = await started(jobsHarness(t, { doGenerate: [textStep("Two watches are active.")] }));
+  const parent = await chatRun(h);
+  const tools = h.jobs.tools(toolContext(h, { runId: parent.id }));
+  // As a helper scheduled before the intent tools became watch tools has it in its payload.
+  const scheduled = await call(tools, "run_helper", { prompt: "What is being watched?", tools: ["list_intents", "get_pull"] });
+  await flush();
+  assert.equal((await h.jobs.getJob(scheduled.jobId)).status, "done");
+  assert.deepEqual(h.model.doGenerateCalls[0].tools.map((tool) => tool.name).sort(), ["get_pull", "list_watches"]);
 });
 
 test("helpers nest at most two levels; a background turn cannot wait and schedules instead", async (t) => {
@@ -133,8 +144,8 @@ test("only the turns that should see them get the job tools", async (t) => {
   const h = await started(jobsHarness(t));
   const chat = Object.keys(h.jobs.tools(toolContext(h))).sort();
   assert.deepEqual(chat, [
-    "cancel_intent", "cancel_job", "create_intent", "get_schedule", "list_intents", "list_jobs", "list_runs", "monitor_pull", "run_helper", "schedule_job", "update_intent",
-    "update_job",
+    "cancel_job", "cancel_watch", "create_watch", "get_schedule", "list_jobs", "list_runs", "list_watches", "monitor_pull", "run_helper", "schedule_job", "update_job",
+    "update_watch",
   ]);
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "consolidate", origin: "job", interactive: false })), {}, "a background turn pays for no job schemas");
   assert.deepEqual(h.jobs.tools(toolContext(h, { kind: "intent_check", origin: "job", interactive: false })), {}, "a check without an intent gets nothing");

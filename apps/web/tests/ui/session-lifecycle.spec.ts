@@ -178,30 +178,26 @@ test("worktree rows say when they will be removed, or why the sweep kept them", 
   await expect(sidebar.getByRole("region", { name: project.name, exact: true }).getByTestId("worktree-retention")).toHaveCount(0);
 });
 
-test("the Needs-you strip starts collapsed above five items and is absent with none", async ({ page }) => {
+test("six open items: the Needs-you badge says 6, the page lists six cards by kind, and the chat shows none", async ({ page }) => {
   const items = Array.from({ length: 6 }, (_, i) => ({
     ...portalItem,
     id: `i${i + 1}`,
-    title: `Checks are failing on example/portal#${40 + i}`,
-    fingerprint: `pr_checks_failing:example/portal#${40 + i}`,
+    kind: i < 4 ? ("pr_checks_failing" as const) : ("pr_conflicts" as const),
+    title: `${i < 4 ? "Checks are failing" : "Merge conflicts"} on example/portal#${40 + i}`,
+    fingerprint: `pr:example/portal#${40 + i}`,
     updatedAt: Date.now() - i * 1000,
   }));
   await setupPortal(page, { portal: { items } });
   await page.goto("/");
-  const strip = page.getByRole("region", { name: "Needs you (6)" });
-  await expect(strip).toBeVisible();
-  const header = strip.getByRole("button", { name: "Needs you (6)" });
-  await expect(header).toHaveAttribute("aria-expanded", "false");
-  await expect(strip.getByRole("button", { name: items[0].title })).toHaveCount(0);
-  await header.click();
-  await expect(header).toHaveAttribute("aria-expanded", "true");
-  for (const item of items) await expect(strip.getByRole("button", { name: item.title })).toBeVisible();
-});
-
-test("with nothing open the Needs-you strip takes no room", async ({ page }) => {
-  await setupPortal(page, { portal: { items: [] } });
-  await page.goto("/");
   await expect(page.getByText("Nothing yet. I will keep an eye on your pull requests.")).toBeVisible();
-  await expect(page.getByRole("region", { name: /^Needs you/ })).toHaveCount(0);
-  await expect(page.locator(".needs-you-slot")).toHaveCount(0);
+  await expect(page.getByRole("article")).toHaveCount(0);
+  const entry = page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Needs you", exact: true });
+  await expect(entry).toHaveText(/^Needs you\s*6$/);
+
+  await entry.click();
+  const view = page.getByRole("region", { name: "Needs your attention" });
+  await expect(view.getByRole("article")).toHaveCount(6);
+  await expect(view.getByRole("region", { name: /^Checks failing/ }).getByRole("article")).toHaveCount(4);
+  await expect(view.getByRole("region", { name: /^Merge conflicts/ }).getByRole("article")).toHaveCount(2);
+  for (const item of items) await expect(view.getByRole("article", { name: item.title })).toBeVisible();
 });

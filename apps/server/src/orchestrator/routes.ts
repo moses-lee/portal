@@ -17,7 +17,7 @@ import { registerMemoryRoutes } from "./memory/routes.ts";
 import { parseItemPatch } from "./store.ts";
 import { registerTrackedRoutes } from "./tracked/routes.ts";
 import type { Item, OrchestratorEvent, OrchestratorMessage } from "./types.ts";
-import { MAIN_THREAD_ID } from "./types.ts";
+import { MAIN_THREAD_ID, MAX_BULK_ITEMS } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
 
 type IdParams = { Params: { id: string } };
@@ -213,6 +213,24 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     const body = readObject(req.body);
     if (!body) return notAnObject(reply);
     return { item: await runtime.updateItem(req.params.id, parseItemPatch(body)) };
+  });
+
+  /**
+   * `POST /api/portal/items/bulk` — body `{ ids, status }`: 1..500 item ids and "resolved" or
+   * "dismissed" -> `{ items, missing }`, the updated items and the ids no item has (skipped, not an
+   * error). One activity entry for the batch; 400 for any other body.
+   */
+  app.post("/api/portal/items/bulk", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    const body = readObject(req.body);
+    if (!body) return notAnObject(reply);
+    const { ids, status } = body;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_BULK_ITEMS || !ids.every((id) => typeof id === "string" && id)) {
+      return reply.code(400).send({ error: `Expected ids: an array of 1 to ${MAX_BULK_ITEMS} item ids.` });
+    }
+    if (status !== "resolved" && status !== "dismissed") return reply.code(400).send({ error: "Expected status: \"resolved\" or \"dismissed\"." });
+    return runtime.updateItems(ids as string[], status);
   });
 
   /**

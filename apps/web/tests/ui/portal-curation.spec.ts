@@ -84,9 +84,8 @@ test("the re-confirm item opens the Memory view", async ({ page }) => {
       }],
     },
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: /Re-confirm a memory claim of yours/ }).click();
-  await page.getByRole("button", { name: "Open memory" }).click();
+  await page.goto("/attention");
+  await page.getByRole("article", { name: "Re-confirm a memory claim of yours" }).getByRole("button", { name: "Open memory" }).click();
   await expect(page).toHaveURL(/\/memory$/);
 });
 

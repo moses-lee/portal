@@ -11,7 +11,7 @@ export function generateStaticParams(): { view: string[] }[] {
   return [{ view: [] }, ...portalViews.filter((view) => view !== "chat").map((view) => ({ view: [view] }))];
 }
 
-/** Portal's home and views (`/`, `/threads/<id>`, `/goals`, ...); the layout renders the app and reads the route from the URL. */
+/** Portal's home and views (`/`, `/threads/<id>`, `/watches`, ...); the layout renders the app and reads the route from the URL. */
 export default function PortalRoute() {
   return null;
 }

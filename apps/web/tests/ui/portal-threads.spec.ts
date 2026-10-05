@@ -28,8 +28,8 @@ test("side threads have their own history, composer, and URL; the switcher offer
   await expect(page.getByText("I started a review session for")).toBeVisible();
   await expect(page.getByRole("heading", { name: reviewThread.title })).toBeVisible();
   await expect(page.getByRole("link", { name: "example/portal#42" })).toHaveAttribute("href", "https://github.com/example/portal/pull/42");
-  // The main thread's Needs-you strip belongs to the main thread only.
-  await expect(page.getByRole("region", { name: /Needs you/ })).toHaveCount(0);
+  // Items live on the Needs-you page, never in a thread.
+  await expect(page.getByRole("article")).toHaveCount(0);
   await page.screenshot({ animations: "disabled", path: info.outputPath("side-thread.png") });
 
   const input = page.getByRole("textbox", { name: `Message Portal in ${reviewThread.title}` });

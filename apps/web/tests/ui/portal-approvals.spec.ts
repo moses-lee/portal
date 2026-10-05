@@ -22,7 +22,7 @@ test("a pending approval opens the dialog wherever the user is, with everything 
   await expect(dialog.getByRole("button", { name: reviewThread.title })).toBeVisible();
   await expect(dialog.getByText(/in (59|60) min/)).toBeVisible();
   await expect(dialog.getByText('"deleteBranch": true')).toBeVisible();
-  // It asked from a goal's job in a repo: every scope applies.
+  // It asked from a watch's job in a repo: every scope applies.
   const scopes = dialog.getByRole("radio");
   await expect(scopes).toHaveCount(4);
   await expect(dialog.getByRole("radio", { name: /Just this once/ })).toBeChecked();
@@ -49,7 +49,7 @@ test("scopes follow the request, several queue up, and Decide later leaves a way
   const second = page.getByRole("dialog", { name: chatApproval.title });
   await expect(second.getByText("2 of 2")).toBeVisible();
   await expect(second.getByText("Leaves this machine")).toBeVisible();
-  // No job, goal, or repo: only once and always.
+  // No job, watch, or repo: only once and always.
   await expect(second.getByRole("radio")).toHaveCount(2);
   await expect(second.getByRole("radio", { name: /Always/ })).toBeVisible();
   await expect(second.getByTestId("approval-summary").locator("pre")).toContainText("git push origin HEAD");
@@ -83,7 +83,7 @@ test("an item that links an approval, or an action the server gates, opens the d
           ...portalItem,
           id: "i2",
           kind: "approval_needed",
-          title: "A goal is paused on your approval",
+          title: "A watch is paused on your approval",
           body: "Removing the worktree needs your go-ahead.",
           links: { approvalId: "a4", intentId: "in1" },
           actions: [{ type: "send_prompt", sessionId: "s1", prompt: "Review it" }],
@@ -95,9 +95,10 @@ test("an item that links an approval, or an action the server gates, opens the d
       status: { counts: { needsYou: 2, inbox: 0, approvals: 0, intents: 0 } },
     },
   });
-  await page.goto("/");
-  await page.getByRole("region", { name: "Needs you (2)" }).getByRole("button", { name: /A goal is paused/ }).click();
-  const card = page.getByRole("article", { name: "A goal is paused on your approval" });
+  await page.goto("/attention");
+  // The approvals group leads the page.
+  await expect(page.getByRole("region", { name: "Needs your attention" }).getByRole("heading", { level: 2 }).nth(1)).toHaveText(/^Needs approval/);
+  const card = page.getByRole("article", { name: "A watch is paused on your approval" });
   await expect(card.getByText("Needs approval")).toBeVisible();
 
   // The request is not in the stream yet: the dialog asks the server for the pending list.
@@ -115,9 +116,9 @@ test("an item that links an approval, or an action the server gates, opens the d
   const dialog = page.getByRole("dialog", { name: gated.title });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Asked by an item action")).toBeVisible();
-  // The modal hides the Needs-you strip from the accessibility tree while it is open; the card still shows the notice.
+  // The modal hides the Needs-you page from the accessibility tree while it is open; the card still shows the notice.
   await expect(
-    page.getByRole("article", { name: "A goal is paused on your approval", includeHidden: true }).getByText("Waiting for your approval"),
+    page.getByRole("article", { name: "A watch is paused on your approval", includeHidden: true }).getByText("Waiting for your approval"),
   ).toBeVisible();
 });
 
@@ -146,8 +147,7 @@ test("a request that is no longer pending says so instead of showing anything", 
       items: [{ ...portalItem, id: "i3", kind: "approval_needed", title: "Old request", links: { approvalId: "gone" }, actions: [] }],
     },
   });
-  await page.goto("/");
-  await page.getByRole("region", { name: "Needs you (1)" }).getByRole("button", { name: /Old request/ }).click();
+  await page.goto("/attention");
   await page.getByRole("article", { name: "Old request" }).getByRole("button", { name: "Review request" }).click();
   await expect(page.getByRole("dialog", { name: "Nothing to approve" })).toBeVisible();
 });

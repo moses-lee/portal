@@ -273,7 +273,7 @@ export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_T
   const others = world.pulls.filter((p) => !shownPulls.has(pullKey(p)));
   out.section("Other PRs of yours or for your review:", others.map((p) => pullLine(p, lookup)), { cap: caps.otherPulls });
 
-  out.section("Active intents:", world.intents.map((intent) =>
+  out.section("Active watches:", world.intents.map((intent) =>
     `- [${intent.id}] ${quoted(intent.text, 80)}${intent.lastCheckedAt ? ` · checked ${ago(intent.lastCheckedAt, now)}` : " · not checked yet"}`), { cap: caps.intents });
   out.section("Next jobs:", world.jobs.map((job) =>
     `- [${job.id}] ${clip(job.title, 60)} (${job.kind})${job.nextRunAt ? ` · ${until(job.nextRunAt, now)}` : ""}`), { cap: caps.jobs });

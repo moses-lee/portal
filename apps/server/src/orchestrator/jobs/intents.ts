@@ -24,7 +24,7 @@ import type { IntentChanges } from "./store.ts";
 
 /** The tools an intent check may call (names another domain does not offer are simply absent). */
 export const INTENT_CHECK_TOOLS = [
-  "fire_intent", "close_intent", "update_intent",
+  "fire_watch", "close_watch", "update_watch",
   "list_sessions", "get_session", "read_transcript", "get_pull", "get_github_status", "list_items", "update_item", "send_prompt",
   "resolve_pull", "resolve_session", "search_memory",
 ] as const;
@@ -62,11 +62,11 @@ type Refusal = { reason: string; close?: "expired" | "done" };
  * not read back from its item, which the user may have dismissed.
  */
 function refusal(intent: Intent, now: number, title: string, actor: ActivityActor): Refusal | null {
-  if (intent.status !== "active") return { reason: `the intent is ${intent.status}` };
-  if (intent.expiresAt !== null && intent.expiresAt <= now) return { reason: "the intent has expired", close: "expired" };
-  if (intent.fireBudget !== null && intent.fires >= intent.fireBudget) return { reason: "the intent's fire budget is spent", close: "done" };
+  if (intent.status !== "active") return { reason: `the watch is ${intent.status}` };
+  if (intent.expiresAt !== null && intent.expiresAt <= now) return { reason: "the watch has expired", close: "expired" };
+  if (intent.fireBudget !== null && intent.fires >= intent.fireBudget) return { reason: "the watch's fire budget is spent", close: "done" };
   if (intent.lastFiredAt !== null && now - intent.lastFiredAt < intent.cooldownMs) {
-    return { reason: `the intent is cooling down until ${new Date(intent.lastFiredAt + intent.cooldownMs).toISOString()}` };
+    return { reason: `the watch is cooling down until ${new Date(intent.lastFiredAt + intent.cooldownMs).toISOString()}` };
   }
   if (actor !== "system" && intent.lastFiredTitle !== null && intent.lastFiredAt !== null && repeatKey(intent.lastFiredTitle) === repeatKey(title)) {
     return { reason: `this repeats the last firing at ${new Date(intent.lastFiredAt).toISOString()} ("${short(intent.lastFiredTitle, 120)}"); fire only when something changed since then` };
@@ -83,7 +83,7 @@ export function createIntents(core: JobsCore) {
 
   async function requireIntent(id: string): Promise<Intent> {
     const intent = await store.getIntent(id);
-    if (!intent) throw httpError(`Unknown intent "${id}".`, 404);
+    if (!intent) throw httpError(`Unknown watch "${id}".`, 404);
     return intent;
   }
 
@@ -113,7 +113,7 @@ export function createIntents(core: JobsCore) {
     // Checked on the stored intent, so a firing that closes it at the same moment is seen.
     const intent = await store.updateIntent(id, (current) => {
       if (current.status !== "active" && (changes.status === undefined || changes.status === current.status)) {
-        throw httpError(`This intent is ${current.status}; create a new one instead.`, 409);
+        throw httpError(`This watch is ${current.status}; create a new one instead.`, 409);
       }
       return changes;
     });
@@ -262,12 +262,12 @@ export function createIntents(core: JobsCore) {
   async function check({ job, run, trigger, signal }: KindContext): Promise<KindResult> {
     const intentId = typeof job.payload.intentId === "string" ? job.payload.intentId : job.intentId;
     const intent = await repaired(intentId ? await store.getIntent(intentId) : null);
-    if (!intent) return { summary: "Its intent no longer exists.", jobStatus: "cancelled" };
-    if (intent.status !== "active") return { summary: `The intent is ${intent.status}.`, jobStatus: intent.status === "cancelled" ? "cancelled" : "done" };
+    if (!intent) return { summary: "Its watch no longer exists.", jobStatus: "cancelled" };
+    if (intent.status !== "active") return { summary: `The watch is ${intent.status}.`, jobStatus: intent.status === "cancelled" ? "cancelled" : "done" };
     const now = hub.timers.now();
     if (intent.expiresAt !== null && intent.expiresAt <= now) {
       await close(intent.id, "expired", { actor: "system", runId: run.id });
-      return { summary: "The intent expired.", jobStatus: "done" };
+      return { summary: "The watch expired.", jobStatus: "done" };
     }
     // A watch the server can evaluate itself needs no model turn.
     const review = reviewWatchOf(job.payload);
@@ -283,8 +283,8 @@ export function createIntents(core: JobsCore) {
       interactive: false, toolNames: INTENT_CHECK_TOOLS, scope: intent.scope, query: `${intent.text}\n${intent.trigger}`, touched,
       summary: job.title,
     });
-    if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the intent was not checked." };
-    // Whether it fired is what fire_intent did in this run, not the stored count: another write may have changed that.
+    if (!prepared) return { status: "failed", skipped: true, error: "not ready", summary: "No API key is stored; the watch was not checked." };
+    // Whether it fired is what fire_watch did in this run, not the stored count: another write may have changed that.
     firings.set(prepared.run.id, 0);
     let result: Awaited<ReturnType<typeof generateTurn>>;
     let fired: boolean;

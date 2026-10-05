@@ -154,7 +154,7 @@ function GrantScope({ grant }: { grant: ApprovalGrant }) {
     case "repo":
       return <>In {grant.repo ?? "one repository"}</>;
     case "job":
-      return <>For {grant.intentId ? "one goal" : "one job"}</>;
+      return <>For {grant.intentId ? "one watch" : "one job"}</>;
   }
 }
 

@@ -14,21 +14,20 @@ import {
   Play,
   ShieldQuestion,
   Target,
-  X,
   Zap,
 } from "lucide-react";
 import PortalMarkdown from "../PortalMarkdown";
 import type { PortalLinks } from "../PortalPage";
-import { Badge, Empty, ErrorLine, JsonBlock, Loading, SectionTitle, ViewBody, When, type Tone } from "./bits";
+import { Badge, ConfirmButton, Empty, ErrorLine, JsonBlock, Loading, SectionTitle, useRowAction, ViewBody, When, type Tone } from "./bits";
 import { usePortalEvents, usePortalLive, useNow } from "./PortalLive";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { portalJson, portalSend, query } from "@/lib/orchestrator/api";
 import { describeSchedule, describeUsage, formatDuration, runDuration } from "@/lib/orchestrator/format";
-import type { Intent, Job, JobKind, JobRun, RunStatus } from "@/lib/orchestrator/types";
+import type { Intent, IntentStatus, Job, JobKind, JobRun, RunStatus } from "@/lib/orchestrator/types";
 
 const jobKindLabels: Partial<Record<JobKind | "chat", string>> = {
-  intent_check: "Goal check",
+  intent_check: "Watch check",
   helper: "Helper",
   consolidate: "Curation",
   chat: "Chat turn",
@@ -57,75 +56,30 @@ function RunStatusIcon({ status }: { status: RunStatus }) {
   }
 }
 
-/** Runs one row action at a time, keeping its error on the row. */
-function useRowAction() {
-  const [pending, setPending] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const run = async (name: string, action: () => Promise<unknown>) => {
-    setPending(name);
-    setError(null);
-    try {
-      await action();
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "That did not work. Try again.");
-      return false;
-    } finally {
-      setPending(null);
-    }
-  };
-  return { pending, error, run };
-}
+const intentStatusMeta: Record<IntentStatus, { label: string; tone: Tone }> = {
+  active: { label: "Active", tone: "sky" },
+  done: { label: "Done", tone: "emerald" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+  expired: { label: "Expired", tone: "amber" },
+};
 
-/** A second click confirms: the first turns the button into "Confirm …". */
-function ConfirmButton({
-  label,
-  confirmLabel,
-  disabled,
-  onConfirm,
-}: {
-  label: string;
-  confirmLabel: string;
-  disabled?: boolean;
-  onConfirm: () => void;
-}) {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (!armed) return;
-    const timer = setTimeout(() => setArmed(false), 4000);
-    return () => clearTimeout(timer);
-  }, [armed]);
-  return (
-    <Button
-      type="button"
-      size="xs"
-      variant={armed ? "destructive" : "ghost"}
-      disabled={disabled}
-      onClick={() => {
-        if (armed) {
-          setArmed(false);
-          onConfirm();
-        } else setArmed(true);
-      }}
-      className={armed ? "" : "text-muted-foreground"}
-    >
-      <X />
-      {armed ? confirmLabel : label}
-    </Button>
-  );
-}
-
-function IntentCard({ intent, now, links }: { intent: Intent; now: number; links: PortalLinks }) {
+/**
+ * One watch. Active: what triggers it, what it does, how it has gone, and Cancel. Closed: the same
+ * with its end state, and Re-activate (`onReactivated` takes the card off the closed list).
+ */
+function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now: number; links: PortalLinks; onReactivated?: (intent: Intent) => void }) {
   const { putIntent } = usePortalLive();
   const { pending, error, run } = useRowAction();
-  const cancel = () =>
-    run("cancel", async () => {
+  const closed = intent.status !== "active";
+  const setStatus = (status: "cancelled" | "active") =>
+    run(status, async () => {
       const { intent: updated } = await portalSend<{ intent: Intent }>(
         `/api/portal/intents/${encodeURIComponent(intent.id)}`,
         "PATCH",
-        { status: "cancelled" },
+        { status },
       );
       putIntent(updated);
+      if (status === "active") onReactivated?.(updated);
     });
   const fires = intent.fireBudget === null ? `${intent.fires} fired` : `${intent.fires} of ${intent.fireBudget} fired`;
   return (
@@ -134,6 +88,7 @@ function IntentCard({ intent, now, links }: { intent: Intent; now: number; links
         <Target className="mt-0.5 size-4 shrink-0 text-sky-300" />
         <div className="min-w-0 flex-1">
           <h3 className="text-[14px] font-medium leading-snug tracking-[-.01em]">{intent.text}</h3>
+          {closed && <Badge tone={intentStatusMeta[intent.status].tone} className="mt-1">{intentStatusMeta[intent.status].label}</Badge>}
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted-foreground">When</dt>
             <dd className="text-foreground/85">{intent.trigger}</dd>
@@ -185,7 +140,14 @@ function IntentCard({ intent, now, links }: { intent: Intent; now: number; links
                 Open thread
               </Button>
             )}
-            <ConfirmButton label="Cancel goal" confirmLabel="Confirm cancel" disabled={pending !== null} onConfirm={() => void cancel()} />
+            {closed ? (
+              <Button type="button" size="xs" variant="ghost" disabled={pending !== null} onClick={() => void setStatus("active")} className="text-muted-foreground">
+                <Play />
+                Re-activate
+              </Button>
+            ) : (
+              <ConfirmButton label="Cancel watch" confirmLabel="Confirm cancel" disabled={pending !== null} onConfirm={() => void setStatus("cancelled")} />
+            )}
             {pending && <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />}
           </div>
           <ErrorLine>{error}</ErrorLine>
@@ -255,7 +217,7 @@ function JobRow({
           {intent && (
             <>
               <span>·</span>
-              <button type="button" onClick={links.openGoals} className="truncate hover:text-foreground">
+              <button type="button" onClick={links.openWatches} className="truncate hover:text-foreground">
                 for “{intent.text}”
               </button>
             </>
@@ -388,11 +350,11 @@ function RunRow({ run, title, now, links }: { run: JobRun; title: string; now: n
 const RUN_PAGE = 20;
 
 /**
- * Goals and upcoming work: the active intents (what the user asked Portal to keep doing), the jobs
+ * Watches and upcoming work: the active intents (watches) (what the user asked Portal to keep doing), the jobs
  * it scheduled ordered by next run with pause/resume/cancel/run now, and the recent runs with
  * their model, tokens, and duration. Jobs refetch on `jobs` events; runs update from `run` events.
  */
-export default function GoalsView({ links }: { links: PortalLinks }) {
+export default function WatchesView({ links }: { links: PortalLinks }) {
   const { intents } = usePortalLive();
   const now = useNow(15_000);
   const [jobs, setJobs] = useState<Job[] | null>(null);
@@ -403,6 +365,25 @@ export default function GoalsView({ links }: { links: PortalLinks }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [jobsRequest, setJobsRequest] = useState(0);
   const [runsRequest, setRunsRequest] = useState(0);
+  /** Which watches the first section lists: the live active ones, or the closed ones fetched on demand. */
+  const [shown, setShown] = useState<"active" | "closed">("active");
+  const [closed, setClosed] = useState<Intent[] | null>(null);
+  const [closedError, setClosedError] = useState<string | null>(null);
+  const [closedRequest, setClosedRequest] = useState(0);
+
+  useEffect(() => {
+    if (shown !== "closed") return;
+    const controller = new AbortController();
+    portalJson<{ intents: Intent[] }>(`/api/portal/intents${query({ status: "done,cancelled,expired" })}`, { signal: controller.signal })
+      .then(({ intents: rows }) => {
+        setClosed(rows);
+        setClosedError(null);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setClosedError(e instanceof Error ? e.message : "Could not load the closed watches.");
+      });
+    return () => controller.abort();
+  }, [shown, closedRequest]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -439,9 +420,11 @@ export default function GoalsView({ links }: { links: PortalLinks }) {
 
   usePortalEvents((event) => {
     if (event.type === "jobs") setJobsRequest((n) => n + 1);
+    else if (event.type === "intents") setClosedRequest((n) => n + 1);
     else if (event.type === "reconnected") {
       setJobsRequest((n) => n + 1);
       setRunsRequest((n) => n + 1);
+      setClosedRequest((n) => n + 1);
     } else if (event.type === "run") {
       const incoming = event.run;
       setRuns((prev) => {
@@ -484,27 +467,68 @@ export default function GoalsView({ links }: { links: PortalLinks }) {
   const runTitle = (run: JobRun) => (run.jobId && jobTitles.get(run.jobId)) || jobKindLabels[run.kind] || run.kind;
 
   return (
-    <ViewBody label="Goals">
-      <section aria-labelledby="goals-intents">
-        <SectionTitle id="goals-intents" count={intents.length}>
-          Goals
+    <ViewBody label="Watches">
+      <section aria-labelledby="watches-list">
+        <SectionTitle
+          id="watches-list"
+          count={shown === "active" ? intents.length : closed?.length}
+          actions={
+            <div role="group" aria-label="Which watches" className="flex items-center gap-0.5 rounded-lg bg-white/5 p-0.5">
+              {(["active", "closed"] as const).map((choice) => (
+                <Button
+                  key={choice}
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  aria-pressed={shown === choice}
+                  onClick={() => setShown(choice)}
+                  className={shown === choice ? "bg-white/10 text-foreground" : "text-muted-foreground"}
+                >
+                  {choice === "active" ? "Active" : "Closed"}
+                </Button>
+              ))}
+            </div>
+          }
+        >
+          Watches
         </SectionTitle>
-        {intents.length === 0 ? (
-          <Empty>
-            No standing goals. Ask Portal to keep an eye on something (“tell me when #42 merges”) and it
-            shows up here with what triggers it.
-          </Empty>
+        {shown === "active" ? (
+          intents.length === 0 ? (
+            <Empty>
+              No standing watches. Ask Portal to keep an eye on something (“tell me when #42 merges”) and it
+              shows up here with what triggers it. Closed shows the ones that fired their last time, lapsed, or were cancelled.
+            </Empty>
+          ) : (
+            <div className="space-y-2.5">
+              {intents.map((intent) => (
+                <IntentCard key={intent.id} intent={intent} now={now} links={links} />
+              ))}
+            </div>
+          )
         ) : (
-          <div className="space-y-2.5">
-            {intents.map((intent) => (
-              <IntentCard key={intent.id} intent={intent} now={now} links={links} />
-            ))}
-          </div>
+          <>
+            <ErrorLine>{closedError}</ErrorLine>
+            {!closed && !closedError && <Loading>Loading the closed watches…</Loading>}
+            {closed && closed.length === 0 && <Empty>No watch has closed yet.</Empty>}
+            {closed && closed.length > 0 && (
+              <div className="space-y-2.5">
+                {closed.map((intent) => (
+                  <IntentCard
+                    key={intent.id}
+                    intent={intent}
+                    now={now}
+                    links={links}
+                    onReactivated={(updated) => setClosed((prev) => (prev ?? []).filter((row) => row.id !== updated.id))}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </section>
 
-      <section aria-labelledby="goals-upcoming">
-        <SectionTitle id="goals-upcoming" count={jobs ? upcoming.length : undefined}>
+      <section aria-labelledby="watches-upcoming">
+        <SectionTitle id="watches-upcoming" count={jobs ? upcoming.length : undefined}>
           Upcoming
         </SectionTitle>
         <ErrorLine>{jobsError}</ErrorLine>
@@ -526,8 +550,8 @@ export default function GoalsView({ links }: { links: PortalLinks }) {
         )}
       </section>
 
-      <section aria-labelledby="goals-runs">
-        <SectionTitle id="goals-runs">Recent runs</SectionTitle>
+      <section aria-labelledby="watches-runs">
+        <SectionTitle id="watches-runs">Recent runs</SectionTitle>
         <ErrorLine>{runsError}</ErrorLine>
         {!runs && !runsError && <Loading>Loading recent runs…</Loading>}
         {runs && runs.length === 0 && <Empty>Portal has not run anything yet.</Empty>}

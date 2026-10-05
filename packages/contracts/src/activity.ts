@@ -32,6 +32,9 @@ export type ActivityActor = "user" | "agent" | "system";
  * `worktree.kept` and `worktree.removed_idle` come from the lifecycle sweep (an idle worktree project
  * kept, with `detail.reason`, logged only when the reason changes; or removed, with `detail.branch`
  * and `detail.branchDeleted`) and carry `refs.projectId`.
+ *
+ * `item.resolved` and `item.dismissed` from the bulk route (`POST /api/portal/items/bulk`) are one
+ * entry per batch: `detail.itemIds` lists the items, and `refs.itemId` is set only when there was one.
  */
 export type ActivityKind = string;
 

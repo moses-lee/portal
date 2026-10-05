@@ -10,9 +10,14 @@
  * A **run** is one execution of anything that calls a model or does background work: a chat turn,
  * a job firing, a helper sub-turn. Every run records its model and token usage.
  *
- * An **intent** is a standing "when X, do Y" the user gave (it replaces the old watches). It is
- * checked by a job of kind `intent_check` whose cadence the agent picks, fires at most `fireBudget`
- * times with `cooldownMs` between firings, expires at `expiresAt`, and is cancelled explicitly.
+ * An **intent** is a standing "when X, do Y" the user gave (it replaced the pre-2026-09 watch
+ * records). It is checked by a job of kind `intent_check` whose cadence the agent picks, fires at
+ * most `fireBudget` times with `cooldownMs` between firings, expires at `expiresAt`, and is
+ * cancelled explicitly.
+ *
+ * Watches (UI and model tools) are intents in code; they were called Goals in the UI until
+ * 2026-10-04. Code identifiers, tables, activity kinds (`intent.*`), the `intent_check` job kind,
+ * and the REST paths below keep "intent".
  *
  * HTTP surface:
  *   GET    /api/portal/jobs?status=<s>          { jobs }      (Upcoming: active jobs by nextRunAt; never the world refresh)

@@ -163,7 +163,7 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
     const memory = await memoryFor(req, reply);
     if (!memory) return reply;
     const run = await ctx.orchestrator.hub.jobs.runNow(CONSOLIDATE_JOB_ID, "manual");
-    if (!run) return reply.code(409).send({ error: "Memory curation is paused; resume \"Curate memory\" under Goals first." });
+    if (!run) return reply.code(409).send({ error: "Memory curation is paused; resume \"Curate memory\" under Watches first." });
     return { run };
   });
 

@@ -43,7 +43,8 @@ function ViewLoading() {
  * The views other than Chat load on demand so they stay off the home's (`/`) bundle: Chat is where
  * the app lands, and these unmount when left anyway. Their `PortalLinks` import is type-only.
  */
-const GoalsView = dynamic(() => import("./portal/GoalsView"), { loading: ViewLoading });
+const AttentionView = dynamic(() => import("./portal/AttentionView"), { loading: ViewLoading });
+const WatchesView = dynamic(() => import("./portal/WatchesView"), { loading: ViewLoading });
 const ActivityView = dynamic(() => import("./portal/ActivityView"), { loading: ViewLoading });
 const MemoryView = dynamic(() => import("./portal/MemoryView"), { loading: ViewLoading });
 const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewLoading });
@@ -51,7 +52,7 @@ const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewL
 /**
  * Portal's pages: the orchestrator is the app's home. Chat (`/`) holds the main thread and the side
  * threads Portal opened (each its own conversation), and carries the live status line;
- * Goals the intents, upcoming jobs, and recent runs, Activity the audit log, Memory the curated
+ * Needs you the items waiting on the user, Watches the intents (watches), upcoming jobs, and recent runs, Activity the audit log, Memory the curated
  * records, and System what the model is shown (CORE.md, the world) plus approval grants. The
  * sidebar switches between them and the URL says which, so reloads and links land in place. The
  * room scene sits behind every view and follows the viewer's local time.
@@ -111,34 +112,41 @@ export default function PortalPage({
     }),
     [openInPanel, putItem, requestApproval, go],
   );
-  /** An item opened from a link (Activity, Goals): its card in a dialog. */
+  /** Outside a conversation (the Needs-you page, an item dialog), "Ask Portal" drafts into the main thread and goes there. */
+  const askInMain = useCallback(
+    (text: string) => {
+      const key = threadDraftKey(MAIN_THREAD_ID);
+      const current = readDraft(key);
+      if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
+      go({ view: "chat", threadId: MAIN_THREAD_ID });
+    },
+    [go],
+  );
+  const pageHandlers: ItemCardHandlers = useMemo(() => ({ ...handlers, onAsk: askInMain }), [handlers, askInMain]);
+  /** An item opened from a link (Activity, Watches): its card in a dialog. */
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const openItem = items.find((item) => item.id === openItemId) ?? null;
   const dialogHandlers: ItemCardHandlers = useMemo(
     () => ({
-      ...handlers,
+      ...pageHandlers,
       // The panel opens beside the view; the dialog would cover it.
       onOpenSession: (sessionId: string) => {
         setOpenItemId(null);
         openInPanel(sessionId);
       },
-      // Outside a conversation, "Ask Portal" drafts into the main thread and goes there.
       onAsk: (text: string) => {
-        const key = "portal:orchestrator";
-        const current = readDraft(key);
-        if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
         setOpenItemId(null);
-        go({ view: "chat", threadId: MAIN_THREAD_ID });
+        askInMain(text);
       },
     }),
-    [handlers, go, openInPanel],
+    [pageHandlers, askInMain, openInPanel],
   );
   const links = useMemo(
     () => ({
       openThread: (threadId: string) => go({ view: "chat", threadId }),
       openItem: (itemId: string) => setOpenItemId(itemId),
       openSession: openInPanel,
-      openGoals: () => go("goals"),
+      openWatches: () => go("watches"),
       openEntity: (entityId: string) => go({ view: "memory", entityId }),
       openCurationRun: (runId: string | null) => go({ view: "memory", entityId: null, runId }),
       openApproval: requestApproval,
@@ -225,11 +233,12 @@ export default function PortalPage({
               thread={threads.find((thread) => thread.id === threadId) ?? null}
               visible={view === "chat" && threadId === shownThread}
               handlers={handlers}
-              onOpenGoals={links.openGoals}
+              onOpenWatches={links.openWatches}
             />
           ))}
         </section>
-        {view === "goals" && <GoalsView links={links} />}
+        {view === "attention" && <AttentionView links={links} handlers={pageHandlers} />}
+        {view === "watches" && <WatchesView links={links} />}
         {view === "activity" && <ActivityView links={links} />}
         {view === "memory" && (
           <MemoryView
@@ -258,12 +267,12 @@ export default function PortalPage({
   );
 }
 
-/** What views hand to links in their rows: threads, items, sessions, goals, memory, and approvals. */
+/** What views hand to links in their rows: threads, items, sessions, watches, memory, and approvals. */
 export type PortalLinks = {
   openThread: (threadId: string) => void;
   openItem: (itemId: string) => void;
   openSession: (sessionId: string) => void;
-  openGoals: () => void;
+  openWatches: () => void;
   openEntity: (entityId: string) => void;
   /** Memory curation: null lists the runs, an id opens one run's digest and diff. */
   openCurationRun: (runId: string | null) => void;

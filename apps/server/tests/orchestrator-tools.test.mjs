@@ -475,7 +475,7 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
   // The user's own PR gets their stored triage prompt; someone else's gets the reviewer's brief.
   assert.equal(state.prompts[0].text, "Review this PR.\n\nPR #1: https://github.com/acme/app/pull/1");
   assert.equal(state.prompts[1].text, `${REVIEWER_PROMPT}\n\nPR #2: https://github.com/acme/app/pull/2`);
-  assert.equal(result.intentId, "i1");
+  assert.equal(result.watchId, "i1");
   const [{ input, how }] = intents;
   assert.match(input.text, /^Review PRs 1, 2 on acme\/app; tell me the findings when the review sessions finish/);
   assert.match(input.trigger, /s1, s2/);

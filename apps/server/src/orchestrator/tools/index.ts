@@ -46,10 +46,23 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "list_sessions", "list_active_sessions", "list_tracked_sessions", "get_session", "search_sessions", "read_transcript", "get_pending_permission", "list_agents",
   "list_attention_pulls", "list_pulls", "get_pull", "get_github_status", "github_identity",
   "list_items", "list_threads", "get_settings", "get_schedule",
-  "list_jobs", "list_runs", "list_intents",
+  "list_jobs", "list_runs", "list_watches",
   "get_world", "get_changes", "resolve_pull", "resolve_repo", "resolve_session",
   "search_memory", "explain_memory",
 ]);
+
+/**
+ * Tools renamed since a stored row may have named them: a helper job's `payload.tools` keeps the
+ * names the model gave when it scheduled the job. The intent tools became watch tools on
+ * 2026-10-04 (the UI's name for them); an old name still selects its tool.
+ */
+export const RENAMED_TOOLS: Readonly<Record<string, string>> = {
+  create_intent: "create_watch", update_intent: "update_watch", cancel_intent: "cancel_watch",
+  list_intents: "list_watches", fire_intent: "fire_watch", close_intent: "close_watch",
+};
+
+/** `name` under its current name. */
+export const currentToolName = (name: string): string => RENAMED_TOOLS[name] ?? name;
 
 export function createTools(ctx: ToolContext): OrchestratorTools {
   const tools = withRedaction(ctx, allTools(ctx));

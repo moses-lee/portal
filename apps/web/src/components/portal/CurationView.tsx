@@ -32,7 +32,7 @@ function StatusIcon({ status }: { status: RunStatus }) {
 /** "Next run in 5 h", "Nightly run off", or "Paused", from the curation job. */
 function describeJob(job: Job | null, now: number): string | null {
   if (!job) return null;
-  if (job.status === "paused") return "Curation is paused (resume it under Goals).";
+  if (job.status === "paused") return "Curation is paused (resume it under Watches).";
   const schedule = job.nextRunAt === null && job.schedule.type === "cron" ? "The nightly run is off" : describeSchedule(job.schedule, now);
   return job.nextRunAt === null ? `${schedule}; it runs when the inbox fills up or on Run now.` : schedule;
 }

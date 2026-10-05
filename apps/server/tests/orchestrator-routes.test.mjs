@@ -45,10 +45,10 @@ async function setup(t, { key = "sk-test", sessions = [], doStream } = {}) {
 const inject = (app, method, url, payload, headers = {}) => app.inject({ method, url, payload, headers });
 
 const itemInput = {
-  kind: "session_waiting", title: "Session needs your approval", body: "The agent asked to run a command.",
+  kind: "custom", title: "Session needs your approval", body: "The agent asked to run a command.",
   links: { sessionId: "s1", projectId: "p1" },
   actions: [{ type: "open_session", sessionId: "s1", label: "Open" }, { type: "send_prompt", sessionId: "s1", prompt: "Continue" }],
-  fingerprint: "session_waiting:s1",
+  fingerprint: "custom:s1",
 };
 
 test("status, messages, ticks, and items answer their JSON shapes; watches and the legacy memory text are gone", async (t) => {
@@ -120,6 +120,64 @@ test("items: PATCH validates, 404s unknown ids, and persists; actions run server
 
 });
 
+test("needsYou counts what the attention page lists: open and lapsed-snoozed items, never future snoozes, retired kinds, or settled ones", async (t) => {
+  const { app, database } = await setup(t);
+  const { createPgOrchestratorStore } = await import("../src/orchestrator/pg-store.ts");
+  const store = createPgOrchestratorStore({ db: database.db });
+  const make = (fingerprint, extra = {}) => store.createItem({ ...itemInput, links: {}, actions: [], fingerprint, ...extra });
+  await make("open");
+  await make("lapsed", { status: "snoozed", snoozedUntil: T0 - 1 });
+  await make("future", { status: "snoozed", snoozedUntil: T0 + 60_000 });
+  await make("retired", { kind: "session_waiting" });
+  await make("retired-lapsed", { kind: "session_hung", status: "snoozed", snoozedUntil: T0 - 1 });
+  await make("resolved", { status: "resolved" });
+  assert.equal((await inject(app, "GET", "/api/portal")).json().status.counts.needsYou, 2);
+});
+
+test("POST /api/portal/items/bulk settles many items, skips unknown ids, logs one entry, and validates its body", async (t) => {
+  const { app, database } = await setup(t);
+  const { createPgOrchestratorStore } = await import("../src/orchestrator/pg-store.ts");
+  const store = createPgOrchestratorStore({ db: database.db });
+  const make = (fingerprint, title) => store.createItem({ ...itemInput, links: {}, actions: [], fingerprint, title });
+  const a = await make("a", "First");
+  const b = await make("b", "Second");
+  const c = await make("c", "Third");
+  assert.equal((await inject(app, "GET", "/api/portal")).json().status.counts.needsYou, 3);
+
+  const resolved = await inject(app, "POST", "/api/portal/items/bulk", { ids: [a.id, b.id, "nope0000", a.id], status: "resolved" });
+  assert.equal(resolved.statusCode, 200);
+  assert.deepEqual(resolved.json().missing, ["nope0000"]);
+  assert.deepEqual(resolved.json().items.map((item) => [item.id, item.status]), [[a.id, "resolved"], [b.id, "resolved"]]);
+  assert.equal((await store.getItem(a.id)).status, "resolved");
+  assert.equal((await store.getItem(c.id)).status, "open");
+  assert.equal((await inject(app, "GET", "/api/portal")).json().status.counts.needsYou, 1, "the count is fresh right after the write");
+  await flush();
+  const [entry, ...others] = (await inject(app, "GET", "/api/portal/activity?kind=item.resolved")).json().entries;
+  assert.equal(others.length, 0, "one entry for the batch");
+  assert.equal(entry.actor, "user");
+  assert.equal(entry.summary, "Marked 2 items resolved");
+  assert.equal(entry.refs.itemId, undefined);
+  assert.deepEqual(entry.detail.itemIds, [a.id, b.id]);
+
+  const dismissed = await inject(app, "POST", "/api/portal/items/bulk", { ids: [c.id], status: "dismissed" });
+  assert.deepEqual(dismissed.json().items.map((item) => item.status), ["dismissed"]);
+  await flush();
+  const [single] = (await inject(app, "GET", "/api/portal/activity?kind=item.dismissed")).json().entries;
+  assert.equal(single.summary, 'Marked "Third" dismissed');
+  assert.equal(single.refs.itemId, c.id);
+  assert.deepEqual((await inject(app, "POST", "/api/portal/items/bulk", { ids: ["gone0000"], status: "dismissed" })).json(), { items: [], missing: ["gone0000"] });
+
+  for (const body of [
+    { ids: [], status: "resolved" }, { ids: Array.from({ length: 501 }, (_, i) => `id${i}`), status: "resolved" }, { ids: "a", status: "resolved" },
+    { ids: [1], status: "resolved" }, { ids: [""], status: "resolved" }, { ids: [a.id], status: "open" }, { ids: [a.id] }, ["x"],
+  ]) {
+    const response = await inject(app, "POST", "/api/portal/items/bulk", body);
+    assert.equal(response.statusCode, 400, JSON.stringify(body).slice(0, 80));
+    assert.equal(typeof response.json().error, "string");
+  }
+  assert.equal((await inject(app, "POST", "/api/portal/items/bulk", { ids: Array.from({ length: 500 }, (_, i) => `id${i}`), status: "dismissed" })).json().missing.length, 500);
+});
+
 test("body validation: messages need a user text part, and bad JSON is a 400", async (t) => {
   const { app } = await setup(t);
   const bad = await inject(app, "POST", "/api/portal/messages", "{ nope", { "content-type": "application/json" });
@@ -136,7 +194,7 @@ test("cross-origin requests are refused with 403 on every route", async (t) => {
   const { app } = await setup(t);
   const headers = { origin: "https://evil.example", host: "portal.local" };
   for (const [method, url] of [
-    ["GET", "/api/portal"], ["GET", "/api/portal/items"], ["PATCH", "/api/portal/items/x"], ["POST", "/api/portal/items/x/actions/0"],
+    ["GET", "/api/portal"], ["GET", "/api/portal/items"], ["PATCH", "/api/portal/items/x"], ["POST", "/api/portal/items/bulk"], ["POST", "/api/portal/items/x/actions/0"],
     ["GET", "/api/portal/jobs"], ["PATCH", "/api/portal/jobs/x"], ["POST", "/api/portal/jobs/x/run"], ["GET", "/api/portal/runs"], ["GET", "/api/portal/runs/x"],
     ["POST", "/api/portal/runs/x/cancel"], ["GET", "/api/portal/intents"], ["PATCH", "/api/portal/intents/x"], ["POST", "/api/portal/messages"],
     ["POST", "/api/portal/cancel"], ["GET", "/api/portal/stream"],

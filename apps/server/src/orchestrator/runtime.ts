@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
 import type { Sql } from "postgres";
+import { needsAttention } from "@portal/shared/items";
 import type { Db } from "../db/client.ts";
 import { type ActivityStore, createMemoryActivityStore } from "./activity/store.ts";
 import { createActivityService } from "./activity/service.ts";
@@ -28,7 +29,7 @@ import { createTrackedService } from "./tracked/service.ts";
 import { type TrackedStore, createMemoryTrackedStore } from "./tracked/store.ts";
 import { prepareTurn, runUsage } from "./turn.ts";
 import type {
-  Item, ItemFilter, ItemPatch, MessagePage, MessagePageQuery, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings,
+  BulkItemStatus, Item, ItemFilter, ItemPatch, MessagePage, MessagePageQuery, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings,
   OrchestratorStatus, OrchestratorStore,
 } from "./types.ts";
 import { MAIN_THREAD_ID, TOOL_IO_OMITTED } from "./types.ts";
@@ -54,7 +55,7 @@ export const MAX_PAGE_LIMIT = 200;
 const STATUS_MEMO_MS = 1_000;
 /** Events that change the status are pushed as one status this long after the first. */
 const STATUS_DEBOUNCE_MS = 250;
-/** Items the browser sees: the open ones and the snoozed ones (the strip hides the latter until due). */
+/** Items the browser sees: the open ones and the snoozed ones (the attention page hides the latter until due). */
 const LIVE_ITEMS: ItemFilter = { status: ["open", "snoozed"] };
 export type { PresenceSource } from "./hub.ts";
 
@@ -373,10 +374,12 @@ export function createOrchestratorRuntime({
   async function computeStatus(): Promise<OrchestratorStatus> {
     await ready;
     const { settings, apiKey } = await settingsAndKey();
-    const [open, nextDue, inbox, approvals, intents] = await Promise.all([
-      store.listItems({ status: ["open"] }), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(), hub.jobs.listIntents({ status: ["active"] }),
+    const [live, nextDue, inbox, approvals, intents] = await Promise.all([
+      store.listItems(LIVE_ITEMS), hub.jobs.nextDue(), hub.memory.inboxCount(), hub.approvals.pending(), hub.jobs.listIntents({ status: ["active"] }),
     ]);
-    const needsYou = open.length;
+    // The same rule the Needs-your-attention page lists by: lapsed snoozes count, retired kinds never do.
+    const now = timers.now();
+    const needsYou = live.filter((item) => needsAttention(item, now)).length;
     const running = hub.jobs.running();
     const runs = running.map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
     const nextJob = nextDue?.nextRunAt != null ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt } : null;
@@ -497,11 +500,50 @@ export function createOrchestratorRuntime({
       actor: "user", kind: (patch.status && itemChangeKind[patch.status]) ?? "item.updated",
       summary: patch.status ? `Marked "${item.title}" ${patch.status}` : `Edited "${item.title}"`, refs: { itemId: id },
     });
+    // The counts changed: the next status read recomputes, subscribers or not.
+    statusMemo = null;
     void emitItems();
     void emitStatus();
     // Findings read: the review's worktree can go (see jobs/review-cleanup.ts).
     if (patch.status === "resolved" || patch.status === "dismissed") void settleReviewWorktree(hub, item);
     return item;
+  }
+
+  /**
+   * Settles many items at once (the attention page's bulk resolve or dismiss): each existing id is
+   * updated through the store, ids the store does not know are skipped and reported in `missing`.
+   * One activity entry stands for the batch, and items and status are pushed once.
+   */
+  async function updateItems(ids: string[], status: BulkItemStatus): Promise<{ items: Item[]; missing: string[] }> {
+    await ready;
+    const items: Item[] = [];
+    const missing: string[] = [];
+    for (const id of [...new Set(ids)]) {
+      if (!(await store.getItem(id))) {
+        missing.push(id);
+        continue;
+      }
+      try {
+        items.push(await store.updateItem(id, { status, snoozedUntil: null }));
+      } catch (err) {
+        // Gone between the read and the write.
+        if ((err as { status?: number }).status === 404) missing.push(id);
+        else throw err;
+      }
+    }
+    if (items.length > 0) {
+      const what = items.length === 1 ? `"${items[0].title}"` : `${items.length} items`;
+      void hub.activity.log({
+        actor: "user", kind: itemChangeKind[status], summary: `Marked ${what} ${status}`,
+        refs: items.length === 1 ? { itemId: items[0].id } : {}, detail: { itemIds: items.map((item) => item.id) },
+      });
+      statusMemo = null;
+      void emitItems();
+      void emitStatus();
+      // Findings read: each review's worktree can go (see jobs/review-cleanup.ts).
+      for (const item of items) void settleReviewWorktree(hub, item);
+    }
+    return { items, missing };
   }
 
   return {
@@ -520,6 +562,7 @@ export function createOrchestratorRuntime({
     },
     listItems: (filter) => store.listItems(filter),
     updateItem,
+    updateItems,
     performAction,
     subscribe(listener) {
       listeners.add(listener);

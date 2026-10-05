@@ -71,14 +71,14 @@ test("a run whose job was cancelled elsewhere checks before its next change, is 
   assert.equal((await h.jobs.getJob(job.id)).status, "cancelled");
 });
 
-test("cancel_intent stops a check of the intent in progress and says so", async (t) => {
+test("cancel_watch stops a check of the intent in progress and says so", async (t) => {
   const h = await started(jobsHarness(t, { doGenerate: hang }));
   const tools = h.jobs.tools(toolContext(h));
-  const created = await call(tools, "create_intent", {
+  const created = await call(tools, "create_watch", {
     text: "Tell me when s1 is done", trigger: "Session s1 is idle", action: "Tell the user", checkEveryMinutes: 10, checkNow: true,
   });
   const run = await runOf(h, created.checkJob.id);
-  const cancelled = await call(tools, "cancel_intent", { id: created.id });
+  const cancelled = await call(tools, "cancel_watch", { id: created.id });
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.runStopped, true);
   assert.deepEqual(cancelled.stoppedRunIds, [run.id]);
@@ -88,10 +88,10 @@ test("cancel_intent stops a check of the intent in progress and says so", async 
 
 test("a check that closes its own intent is not stopped by that", async (t) => {
   const h = await started(jobsHarness(t, {
-    doGenerate: async ({ prompt }) => (JSON.stringify(prompt).includes("tool-result") ? textStep("NO_UPDATE") : toolStep("close_intent", { status: "cancelled", reason: "It can never fire." })),
+    doGenerate: async ({ prompt }) => (JSON.stringify(prompt).includes("tool-result") ? textStep("NO_UPDATE") : toolStep("close_watch", { status: "cancelled", reason: "It can never fire." })),
   }));
   const tools = h.jobs.tools(toolContext(h));
-  const created = await call(tools, "create_intent", { text: "Watch it", trigger: "Never", action: "Tell the user", checkNow: true });
+  const created = await call(tools, "create_watch", { text: "Watch it", trigger: "Never", action: "Tell the user", checkNow: true });
   await flush(50);
   const [run] = await h.jobs.listRuns({ jobId: created.checkJob.id });
   assert.equal(run.status, "succeeded");

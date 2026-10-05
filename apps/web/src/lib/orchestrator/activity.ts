@@ -13,7 +13,7 @@ export const activityFilters: readonly ActivityFilter[] = [
   { id: "tool", label: "Tools", prefix: "tool." },
   { id: "run", label: "Runs", prefix: "run." },
   { id: "job", label: "Jobs", prefix: "job." },
-  { id: "intent", label: "Goals", prefix: "intent." },
+  { id: "intent", label: "Watches", prefix: "intent." },
   { id: "item", label: "Items", prefix: "item." },
   { id: "thread", label: "Threads", prefix: "thread." },
   { id: "session", label: "Sessions", prefix: "session." },

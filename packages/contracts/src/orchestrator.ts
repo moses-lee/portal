@@ -257,6 +257,15 @@ export type Item = {
 
 export type ItemPatch = Partial<Pick<Item, "kind" | "title" | "body" | "links" | "actions" | "status" | "snoozedUntil">>;
 
+/** The statuses `POST /api/portal/items/bulk` settles items to. */
+export type BulkItemStatus = "resolved" | "dismissed";
+/** Most ids one `POST /api/portal/items/bulk` takes. */
+export const MAX_BULK_ITEMS = 500;
+/** Body of `POST /api/portal/items/bulk`: 1..`MAX_BULK_ITEMS` item ids and the status they all move to. */
+export type BulkItemsRequest = { ids: string[]; status: BulkItemStatus };
+/** Answer of `POST /api/portal/items/bulk`: the updated items, and the ids no item has (skipped, not an error). */
+export type BulkItemsResponse = { items: Item[]; missing: string[] };
+
 // ---------------------------------------------------------------------------------------------
 // Conversation
 // ---------------------------------------------------------------------------------------------

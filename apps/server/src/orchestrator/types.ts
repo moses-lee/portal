@@ -5,7 +5,7 @@
  * server's modules keep importing everything from one place.
  */
 import type {
-  Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
+  BulkItemStatus, BulkItemsResponse, Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
 } from "@portal/contracts/orchestrator";
 
 import type { OrchestratorHub } from "./hub.ts";
@@ -106,6 +106,12 @@ export interface OrchestratorRuntime {
 
   listItems(filter?: ItemFilter): Promise<Item[]>;
   updateItem(id: string, patch: ItemPatch): Promise<Item>;
+  /**
+   * Moves every item in `ids` to `status` (the attention page's bulk resolve or dismiss). Unknown ids
+   * are skipped and listed in `missing`; one activity entry stands for the batch, and items and
+   * status are pushed once.
+   */
+  updateItems(ids: string[], status: BulkItemStatus): Promise<BulkItemsResponse>;
   /**
    * Executes one of an item's actions server-side (open_* actions are browser-only and rejected
    * here). Only open or snoozed items act (409 otherwise). An action the approval gate holds back

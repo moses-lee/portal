@@ -13,6 +13,7 @@ import {
   ShieldQuestion,
   Timer,
 } from "lucide-react";
+import { needsAttention } from "@portal/shared/items";
 import PortalMarkdown from "./PortalMarkdown";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,35 +46,22 @@ export const kindLabels: Record<ItemKind, string> = {
   worktree_dirty: "Worktree dirty",
   folder_missing: "Folder missing",
   watch_update: "Follow-up",
-  intent_update: "Goal update",
+  intent_update: "Watch update",
   review_findings: "Review findings",
   approval_needed: "Needs approval",
   memory_reconfirm: "Re-confirm memory",
   custom: "Note",
 };
 
-/**
- * The session kinds the tracked-sessions panel replaced: the server no longer raises them and
- * resolved the open ones once, so the strip leaves out any that still come through.
- */
-export const retiredItemKinds: ReadonlySet<ItemKind> = new Set<ItemKind>([
-  "session_finished",
-  "session_stopped",
-  "session_waiting",
-  "session_hung",
-  "session_offline",
-]);
+export { retiredItemKinds } from "@portal/shared/items";
 
 /**
- * What still asks for attention: open items, and snoozed ones whose snooze has run out. The
- * "Needs you" strip and the counts use this. Cards under a message are not filtered by it: the
- * thread stays an honest record, so resolved and dismissed items render there dimmed instead.
- * Retired session kinds never count.
+ * What still asks for attention: open items, and snoozed ones whose snooze has run out, retired
+ * session kinds never. The Needs-your-attention page and the sidebar badge use this; it is the
+ * server's `needsYou` rule (`@portal/shared/items`), so the count and the list agree.
  */
 export function isVisibleItem(item: Item, now = Date.now()): boolean {
-  if (retiredItemKinds.has(item.kind)) return false;
-  if (item.status === "open") return true;
-  return item.status === "snoozed" && (item.snoozedUntil === null || item.snoozedUntil <= now);
+  return needsAttention(item, now);
 }
 
 export function actionLabel(action: ItemAction): string {

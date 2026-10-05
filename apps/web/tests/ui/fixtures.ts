@@ -462,6 +462,11 @@ export async function setupPortal(
       /** Side threads' messages by thread id. */
       threadMessages?: Record<string, OrchestratorMessage[]>;
       intents?: Intent[];
+      /**
+       * Watches that ended (done, cancelled, expired): `GET /api/portal/intents?status=…` lists them
+       * with the active ones; the stream's `intents` event never carries them.
+       */
+      closedIntents?: Intent[];
       approvals?: Approval[];
       jobs?: Job[];
       runs?: JobRun[];
@@ -504,6 +509,7 @@ export async function setupPortal(
     core: structuredClone(options.portal?.core ?? coreDocument),
     world: structuredClone(options.portal?.world ?? worldResponse),
     grants: structuredClone(options.portal?.grants ?? []),
+    closedIntents: structuredClone(options.portal?.closedIntents ?? []),
   };
   const portalThread = structuredClone(options.portal?.messages ?? portalMessages);
   const history = options.history ?? events;
@@ -664,6 +670,15 @@ export async function setupPortal(
       return orchestratorReply.status === 204
         ? route.fulfill({ status: 204 })
         : json(orchestratorReply.body, orchestratorReply.status);
+    // Resolve or dismiss many at once: answers the rows it changed, and the ids it did not know.
+    if (path === "/api/portal/items/bulk" && method === "POST") {
+      const input = (body ?? {}) as { ids?: string[]; status?: Item["status"] };
+      const ids = new Set(input.ids ?? []);
+      const updated = live.items.filter((row) => ids.has(row.id));
+      for (const row of updated) Object.assign(row, { status: input.status, snoozedUntil: null, updatedAt: Date.now() });
+      const known = new Set(updated.map((row) => row.id));
+      return json({ items: updated, missing: [...ids].filter((id) => !known.has(id)) });
+    }
     const itemMatch = path.match(/^\/api\/portal\/items\/([^/]+)(?:\/actions\/(\d+))?$/);
     if (itemMatch) {
       const item = live.items.find((row) => row.id === itemMatch[1]);
@@ -947,6 +962,7 @@ type OrchestratorData = {
   core: CoreDocument;
   world: WorldResponse;
   grants: ApprovalGrant[];
+  closedIntents: Intent[];
 };
 
 /**
@@ -1020,12 +1036,23 @@ function handleOrchestrator(
   }
   const runCancel = path.match(/^\/api\/portal\/runs\/([^/]+)\/cancel$/);
   if (runCancel && method === "POST") return { body: null, status: 204 };
-  if (path === "/api/portal/intents" && method === "GET") return ok({ intents: live.intents });
+  if (path === "/api/portal/intents" && method === "GET") {
+    // `status` is a comma-separated list; without it the server answers the active watches.
+    const wanted = new Set((params.get("status") ?? "active").split(","));
+    return ok({ intents: [...live.intents, ...data.closedIntents].filter((row) => wanted.has(row.status)) });
+  }
   const intentPatch = path.match(/^\/api\/portal\/intents\/([^/]+)$/);
   if (intentPatch && method === "PATCH") {
-    const row = live.intents.find((entry) => entry.id === intentPatch[1]);
+    const id = decodeURIComponent(intentPatch[1]);
+    const row = [...live.intents, ...data.closedIntents].find((entry) => entry.id === id);
     if (!row) return missing("intent");
-    return ok({ intent: { ...row, ...body, updatedAt: Date.now() } });
+    const updated: Intent = { ...row, ...body, updatedAt: Date.now() };
+    // Like the server: an active watch is in the live list, any other status among the closed ones.
+    live.intents = live.intents.filter((entry) => entry.id !== id);
+    data.closedIntents = data.closedIntents.filter((entry) => entry.id !== id);
+    if (updated.status === "active") live.intents.push(updated);
+    else data.closedIntents.push(updated);
+    return ok({ intent: updated });
   }
   if (path === "/api/portal/world" && method === "GET") return ok(data.world);
   if (path === "/api/portal/world/refresh" && method === "POST") {

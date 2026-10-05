@@ -68,9 +68,9 @@ function LinkChip({ link, links, threadTitle }: { link: ActivityLink; links: Por
     case "approval":
       return chip(ShieldQuestion, "Approval", () => links.openApproval(link.id));
     case "intent":
-      return chip(Target, "Goal", links.openGoals);
+      return chip(Target, "Watch", links.openWatches);
     case "job":
-      return chip(Target, "Job", links.openGoals);
+      return chip(Target, "Job", links.openWatches);
     case "record":
       return link.entityId ? chip(Brain, "Memory record", () => links.openEntity(link.entityId!)) : null;
     case "entity":
@@ -149,7 +149,7 @@ function EntryRow({
 /**
  * The activity log: everything Portal and the user did to it, newest first, filterable by kind
  * (the server filters by dotted prefix), paged with `before=<id>`, with live `activity` events
- * prepended when they match the filter. Refs become links to threads, items, sessions, PRs, goals,
+ * prepended when they match the filter. Refs become links to threads, items, sessions, PRs, watches,
  * approvals, and memory.
  */
 export default function ActivityView({ links }: { links: PortalLinks }) {

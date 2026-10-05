@@ -106,7 +106,7 @@ test("sessions waiting on the user come before PRs, the repo map, and recent ses
   assert.ok(at("Sessions needing you") < at("PRs needing attention"));
   assert.ok(at("PRs needing attention") < at("Repos and their Portal projects"));
   assert.ok(at("Repos and their Portal projects") < at("Recent sessions"));
-  assert.ok(at("Recent sessions") < at("Active intents"));
+  assert.ok(at("Recent sessions") < at("Active watches"));
   assert.ok(at("Next jobs") < at("Open items"));
   assert.match(text, /acme\/monorepo#2367 "Big change" by moses-lee — review requested · checkout mono \[p1\]/);
   assert.match(text, /"Needs approval" \[waiting-\] in mono \[p1\] · Claude Code · waiting on a permission · last prompt 1m ago/);

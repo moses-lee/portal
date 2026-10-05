@@ -6,8 +6,7 @@ import { DefaultChatTransport } from "ai";
 import { Archive, GitPullRequest, KeyRound, LoaderCircle, Sparkles, Target } from "lucide-react";
 import ChatComposer from "../ChatComposer";
 import PortalMessage from "../PortalMessage";
-import PortalNeedsYou from "../PortalNeedsYou";
-import { isVisibleItem, type ItemCardHandlers } from "../PortalItemCard";
+import type { ItemCardHandlers } from "../PortalItemCard";
 import { useSend } from "../useSend";
 import { openSettings } from "../useSettings";
 import { usePortalEvents, usePortalLive } from "./PortalLive";
@@ -19,7 +18,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { readDraft, writeDraft } from "@/lib/drafts";
 import { formatDateTime } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
@@ -92,7 +90,7 @@ export const threadDraftKey = (threadId: string) =>
   threadId === MAIN_THREAD_ID ? "portal:orchestrator" : `portal:orchestrator:${threadId}`;
 
 /** What a side thread is about, above its messages: title, when Portal opened it, and its scope. */
-function ThreadIntro({ thread, onOpenGoals }: { thread: Thread; onOpenGoals: () => void }) {
+function ThreadIntro({ thread, onOpenWatches }: { thread: Thread; onOpenWatches: () => void }) {
   const { scope } = thread;
   const chips = [
     ...scope.pulls.map((pull) => ({ key: `pr:${pull.url}`, label: `${pull.repo}#${pull.number}`, href: pull.url })),
@@ -135,11 +133,11 @@ function ThreadIntro({ thread, onOpenGoals }: { thread: Thread; onOpenGoals: () 
           {thread.intentId && (
             <button
               type="button"
-              onClick={onOpenGoals}
+              onClick={onOpenWatches}
               className="inline-flex items-center gap-1 rounded-full bg-sky-300/10 px-2 text-[11px] leading-5 text-sky-200 hover:bg-sky-300/15"
             >
               <Target className="size-3" />
-              View goal
+              View watch
             </button>
           )}
         </div>
@@ -162,17 +160,17 @@ export default function PortalThread({
   thread,
   visible,
   handlers,
-  onOpenGoals,
+  onOpenWatches,
 }: {
   threadId: string;
   /** Null until the thread list arrives, or for a thread the server does not know. */
   thread: Thread | null;
   visible: boolean;
   handlers: Omit<ItemCardHandlers, "onAsk">;
-  onOpenGoals: () => void;
+  onOpenWatches: () => void;
 }) {
   const live = usePortalLive();
-  const { status, items } = live;
+  const { status } = live;
   const routes = useMemo(() => threadRoutes(threadId), [threadId]);
   const key = threadDraftKey(threadId);
   const [ack] = useState(() => new Acknowledgement());
@@ -327,15 +325,6 @@ export default function PortalThread({
   const archived = thread?.status === "archived";
   /** A turn in this thread that this view did not start (another tab, or one still running from before a reload). */
   const otherTurn = !responding && !!status?.busyThreads.includes(threadId);
-  const needsYou = useMemo(
-    () =>
-      isMain
-        ? items
-            .filter((item) => isVisibleItem(item))
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-        : [],
-    [items, isMain],
-  );
 
   /** Start the turn; settles when the reply stream opens (taken) or the send is refused. */
   const submit = useCallback(
@@ -358,19 +347,6 @@ export default function PortalThread({
     reportError.current = setChatError;
   }, [setChatError]);
   const composerWrap = useRef<HTMLDivElement>(null);
-  /**
-   * A card's "Ask Portal". When the turn cannot start right now (a reply is running, or there is
-   * no key yet) the text goes into the composer instead, ready to send, so nothing is dropped.
-   */
-  const ask = useCallback(
-    (text: string) => {
-      if (send(text)) return;
-      const current = readDraft(key);
-      if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
-      composerWrap.current?.querySelector("textarea")?.focus();
-    },
-    [send, key],
-  );
   const stopTurn = () => {
     stop();
     fetch(routes.cancel, { method: "POST" }).catch(() => {});
@@ -385,7 +361,6 @@ export default function PortalThread({
   }, [handlers]);
   const openCurationRun = useCallback((runId: string) => latestHandlers.current.onOpenCurationRun?.(runId), []);
   const canOpenCurationRun = !!handlers.onOpenCurationRun;
-  const cardHandlers: ItemCardHandlers = useMemo(() => ({ ...handlers, onAsk: ask }), [handlers, ask]);
 
   const last = messages.at(-1);
   const waitingForReply =
@@ -403,13 +378,6 @@ export default function PortalThread({
 
   return (
     <div hidden={!visible} className="flex min-h-0 flex-1 flex-col" data-thread={threadId}>
-      {/* Pinned above the scroller, not inside it: in the log it sat above the oldest loaded message and went unseen. */}
-      {/* Nothing at all with no items, so an empty strip does not cost every view its height. */}
-      {isMain && needsYou.length > 0 && (
-        <div className="needs-you-slot shrink-0">
-          <PortalNeedsYou items={needsYou} handlers={cardHandlers} />
-        </div>
-      )}
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={80}>
         <MessageScroller className="flex-1">
           <MessageScrollerViewport
@@ -434,7 +402,7 @@ export default function PortalThread({
               aria-live="off"
               aria-label="Messages"
             >
-              {!isMain && thread && <ThreadIntro thread={thread} onOpenGoals={onOpenGoals} />}
+              {!isMain && thread && <ThreadIntro thread={thread} onOpenWatches={onOpenWatches} />}
               {isMain && status && !ready && (
                 <div className="glass flex flex-col items-start gap-3 rounded-2xl p-5">
                   <div className="flex items-center gap-2 text-sm font-medium">
