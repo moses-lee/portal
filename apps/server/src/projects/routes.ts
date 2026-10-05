@@ -12,6 +12,7 @@ import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
 import { displayPath, readGitInfo } from "../lib/git-info.ts";
 import { pullFastForward, readCommitPage, readGithubSummary, summaryEtag } from "../lib/github-summary.ts";
 import { type ProjectLookup, type RemovedFacts, parentOf, projectIdOfRow, summarizeOrphans, summarizeRemoved } from "../lib/removed-projects.ts";
+import { ScriptError } from "../lib/script-runner.ts";
 import type { BranchListing, Project, RemovedProject, RemovedProjectSummary, WorktreeMeta } from "../lib/types.ts";
 import {
   WorktreeError, ensureWorktree, getPull, hasBranch, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf,
@@ -176,15 +177,18 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
     const { id } = req.params;
     const deleteWorktree = query(req, "worktree") === "delete";
     const force = query(req, "force") === "1";
+    const skipScript = query(req, "script") === "skip";
     const project = ctx.projects.get(id);
     if (!project) return reply.code(404).send({ error: "Unknown project." });
     try {
       if (deleteWorktree && !project.worktree) return reply.code(400).send({ error: "This project is not a worktree." });
-      await removeProject(removalIo, project, { deleteWorktree, force });
+      await removeProject(removalIo, project, { deleteWorktree, force, skipScript });
       return reply.code(204).send();
     } catch (err) {
+      // Marked so the browser can offer the way past: forcing for a dirty tree, skipping a failed script.
       const dirty = err instanceof Error && (err as { dirty?: unknown }).dirty === true;
-      return reply.code(errorStatus(err) ?? 500).send(dirty ? { error: errorMessage(err), dirty: true } : { error: errorMessage(err) });
+      const scriptFailed = err instanceof ScriptError;
+      return reply.code(errorStatus(err) ?? 500).send({ error: errorMessage(err), ...(dirty ? { dirty: true } : {}), ...(scriptFailed ? { scriptFailed: true } : {}) });
     }
   });
 

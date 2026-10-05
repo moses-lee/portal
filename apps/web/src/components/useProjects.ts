@@ -12,17 +12,22 @@ export type RemoveProjectOptions = {
   deleteWorktree?: boolean;
   /** Remove the worktree even when it has uncommitted changes. */
   force?: boolean;
+  /** Leave out the user's pre-deletion script, after it failed on this worktree. */
+  skipScript?: boolean;
 };
 
 /** A failed project request, with the server's status and its `dirty` flag for a worktree that refused removal. */
 export class ProjectRequestError extends Error {
   status: number;
   dirty: boolean;
-  constructor(message: string, status: number, dirty = false) {
+  /** The pre-deletion script failed and stopped the removal. */
+  scriptFailed: boolean;
+  constructor(message: string, status: number, dirty = false, scriptFailed = false) {
     super(message);
     this.name = "ProjectRequestError";
     this.status = status;
     this.dirty = dirty;
+    this.scriptFailed = scriptFailed;
   }
 }
 
@@ -44,8 +49,8 @@ export type UseProjects = {
   /** `PATCH /api/projects/[id]` with `{pinned}`; shown at once, refetched if the server refuses. Rejects with the server's message. */
   setProjectPinned: (id: string, pinned: boolean) => Promise<Project>;
   /**
-   * `DELETE /api/projects/[id]`, with `?worktree=delete[&force=1]` per `opts`. Sessions stay.
-   * Rejects with a `ProjectRequestError` carrying the server's message (and `dirty` for a 409).
+   * `DELETE /api/projects/[id]`, with `?worktree=delete[&force=1][&script=skip]` per `opts`. Sessions stay.
+   * Rejects with a `ProjectRequestError` carrying the server's message (and `dirty` or `scriptFailed` for a 409).
    */
   removeProject: (id: string, opts?: RemoveProjectOptions) => Promise<void>;
   /** Refetch the list. Never rejects; failures land in `error`. */
@@ -60,8 +65,8 @@ function placeholder(project: Project, previous?: ProjectSummary): ProjectSummar
 }
 
 async function readError(r: Response, fallback: string) {
-  const j = (await r.json().catch(() => ({}))) as { error?: string; dirty?: boolean };
-  return new ProjectRequestError(j.error ?? fallback, r.status, j.dirty === true);
+  const j = (await r.json().catch(() => ({}))) as { error?: string; dirty?: boolean; scriptFailed?: boolean };
+  return new ProjectRequestError(j.error ?? fallback, r.status, j.dirty === true, j.scriptFailed === true);
 }
 
 /** `PATCH /api/projects/[id]` with `{pinned}`, answering the updated project. */
@@ -217,6 +222,7 @@ export function useProjects(): UseProjects {
     if (opts.deleteWorktree) {
       params.set("worktree", "delete");
       if (opts.force) params.set("force", "1");
+      if (opts.skipScript) params.set("script", "skip");
     }
     const query = params.size ? `?${params}` : "";
     let r: Response;

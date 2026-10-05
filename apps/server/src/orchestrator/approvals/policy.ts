@@ -152,7 +152,7 @@ async function assessRemoveProject(deps: OrchestratorDeps, input: Input): Promis
         `Remove the worktree project ${projectName(project)} from Portal **and delete its folder** with \`git worktree remove\`.`,
         "",
         `- Branch: ${code(project.worktree.branch)}${parent ? ` (from ${code(parent.name)})` : ""}`,
-        "- Your pre-deletion script, if one is set, runs first.",
+        input.skipScript === true ? "- **skipScript**: your pre-deletion script does not run." : "- Your pre-deletion script, if one is set, runs first.",
         ...(input.force === true ? ["- **force**: uncommitted changes in the worktree are discarded."] : []),
         `- ${kept}`,
       ].join("\n"),

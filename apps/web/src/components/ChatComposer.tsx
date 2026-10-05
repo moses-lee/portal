@@ -22,6 +22,7 @@ import {
   InputGroupTextarea,
 } from "@/components/ui/input-group";
 import { atHistoryEdge, readPromptHistory } from "@/lib/prompt-history";
+import { useMediaQuery } from "./useMediaQuery";
 
 const noCommands: AvailableCommand[] = [];
 
@@ -65,6 +66,8 @@ export default function ChatComposer({
   paletteId?: string;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
+  // A touch keyboard's return key has no Shift to hold, so there it types a new line and only the button sends.
+  const touch = useMediaQuery("(pointer: coarse)");
   const [caret, setCaret] = useState(0);
   const [paletteClosed, setPaletteClosed] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
@@ -172,6 +175,7 @@ export default function ChatComposer({
               aria-describedby={describedBy}
               placeholder={placeholder}
               rows={2}
+              enterKeyHint={touch ? "enter" : "send"}
               role={commands.length ? "combobox" : undefined}
               aria-autocomplete={commands.length ? "list" : undefined}
               aria-expanded={commands.length ? paletteOpen : undefined}
@@ -227,7 +231,7 @@ export default function ChatComposer({
                   event.preventDefault();
                   return;
                 }
-                if (event.key === "Enter" && !event.shiftKey) {
+                if (event.key === "Enter" && !event.shiftKey && !touch) {
                   event.preventDefault();
                   send();
                 }
@@ -235,14 +239,15 @@ export default function ChatComposer({
             />
             <InputGroupAddon align="block-end">
               <div className="min-w-0 flex-1">
-                {settings ?? (
-                  <span className="pl-2 text-[11px] font-normal text-muted-foreground">
-                    Enter to send{" "}
-                    <span className="hidden sm:inline">
-                      · Shift + Enter for a new line
+                {settings ??
+                  (!touch && (
+                    <span className="pl-2 text-[11px] font-normal text-muted-foreground">
+                      Enter to send{" "}
+                      <span className="hidden sm:inline">
+                        · Shift + Enter for a new line
+                      </span>
                     </span>
-                  </span>
-                )}
+                  ))}
               </div>
               {busy && onStop ? (
                 <Button

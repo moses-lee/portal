@@ -98,7 +98,10 @@ export function RemoveConfirm({
   const [error, setError] = useState<{
     message: string;
     dirty: boolean;
+    scriptFailed: boolean;
   } | null>(null);
+  // Once the script has failed and been skipped, a forced retry for a dirty tree skips it too.
+  const [skipScript, setSkipScript] = useState(false);
   const isWorktree = !!project.worktree;
   const checkboxId = `sidebar-delete-worktree-${project.id}`;
   // Deleting the folder runs the user's pre-deletion script first, when one is set; say so and show it running.
@@ -107,13 +110,17 @@ export function RemoveConfirm({
     isWorktree &&
     deleteWorktree &&
     !!settings &&
-    isScriptEnabled(settings.scripts.preWorktreeDelete);
+    isScriptEnabled(settings.scripts.preWorktreeDelete) &&
+    !skipScript;
 
-  const submit = async (force: boolean) => {
+  const submit = async ({ force = false, skip = skipScript } = {}) => {
     setBusy(true);
     setError(null);
+    setSkipScript(skip);
     try {
-      await onRemove(isWorktree ? { deleteWorktree, force } : {});
+      await onRemove(
+        isWorktree ? { deleteWorktree, force, ...(skip ? { skipScript: true } : {}) } : {},
+      );
     } catch (e) {
       setError({
         message:
@@ -121,6 +128,7 @@ export function RemoveConfirm({
             ? e.message
             : "Could not remove the project. Try again.",
         dirty: e instanceof ProjectRequestError && e.dirty,
+        scriptFailed: e instanceof ProjectRequestError && e.scriptFailed,
       });
       setBusy(false);
     }
@@ -179,16 +187,27 @@ export function RemoveConfirm({
         <button
           type="button"
           disabled={busy}
-          onClick={() => void submit(false)}
+          onClick={() => void submit()}
           className="rounded bg-red-700 px-2 py-1 font-medium text-white hover:bg-red-600 disabled:opacity-50"
         >
           {busy ? (runsScript ? "Running script…" : "Removing…") : "Remove"}
         </button>
+        {error?.scriptFailed && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void submit({ skip: true })}
+            title="Delete the worktree without running your pre-deletion script"
+            className="rounded border border-red-700 px-2 py-1 font-medium text-red-200 hover:bg-red-900/40 disabled:opacity-50"
+          >
+            Remove without script
+          </button>
+        )}
         {error?.dirty && (
           <button
             type="button"
             disabled={busy}
-            onClick={() => void submit(true)}
+            onClick={() => void submit({ force: true })}
             title="Discard the worktree's uncommitted changes"
             className="rounded border border-red-700 px-2 py-1 font-medium text-red-200 hover:bg-red-900/40 disabled:opacity-50"
           >

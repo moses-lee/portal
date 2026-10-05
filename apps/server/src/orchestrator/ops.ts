@@ -117,14 +117,16 @@ function removalIo(deps: OrchestratorDeps): ProjectRemovalIo {
  * Take a project out of Portal (DELETE /api/projects/[id]). Sessions created from it keep running;
  * while any exist the project is kept as a removed record so it can be restored.
  */
-export async function removeProject(deps: OrchestratorDeps, { id, deleteWorktree = false, force = false, deleteBranch }: {
+export async function removeProject(deps: OrchestratorDeps, { id, deleteWorktree = false, force = false, skipScript = false, deleteBranch }: {
   id: string; deleteWorktree?: boolean; force?: boolean;
+  /** Leave out the user's pre-deletion script (one that fails on this worktree). */
+  skipScript?: boolean;
   /** With `"pushed"`, a local branch whose tip is exactly on origin goes too (a review's PR branch); default only a merged one. */
   deleteBranch?: "merged" | "pushed";
 }): Promise<{ kept: boolean; branchDeleted: boolean }> {
   const project = await requireProject(deps, id);
   if (deleteWorktree && !project.worktree) throw httpError("This project is not a worktree.", 400);
-  return removeProjectWith(removalIo(deps), project, { deleteWorktree, force, deleteBranch });
+  return removeProjectWith(removalIo(deps), project, { deleteWorktree, force, skipScript, deleteBranch });
 }
 
 /** Bring a removed project back, recreating its worktree first when the folder is gone (POST /api/projects/removed/[id]/restore). */

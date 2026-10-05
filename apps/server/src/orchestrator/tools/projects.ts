@@ -67,8 +67,8 @@ export function projectTools({ deps }: ToolContext) {
       async ({ id, name }) => row(await deps.projects.rename((await requireProject(deps, id)).id, name)),
     ),
     remove_project: define(
-      "Remove a project from Portal. deleteWorktree also removes a worktree project's folder (force discards uncommitted changes). Its sessions keep running; the project is kept restorable while they exist.",
-      z.object({ id, deleteWorktree: z.boolean().optional(), force: z.boolean().optional() }),
+      "Remove a project from Portal. deleteWorktree also removes a worktree project's folder (force discards uncommitted changes; skipScript leaves out the user's pre-deletion script, only when they ask after it failed). Its sessions keep running; the project is kept restorable while they exist.",
+      z.object({ id, deleteWorktree: z.boolean().optional(), force: z.boolean().optional(), skipScript: z.boolean().optional() }),
       async (input) => {
         const { id } = await requireProject(deps, input.id);
         return { id, removed: true, ...(await removeProject(deps, { ...input, id })) };

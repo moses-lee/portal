@@ -1245,3 +1245,40 @@ test("the collapse toggle is disabled when there are no projects", async ({
     sidebar.getByRole("button", { name: "Collapse all projects" }),
   ).toBeDisabled();
 });
+
+test("a failed pre-deletion script offers to remove the worktree without it", async ({
+  page,
+}) => {
+  await setupPortal(page);
+  const deletes: string[] = [];
+  await page.route(`**/api/projects/${worktree.id}?*`, (route) => {
+    const url = new URL(route.request().url());
+    deletes.push(url.search);
+    if (url.searchParams.get("script") !== "skip")
+      return route.fulfill({ status: 409, json: { error: 'The "before deleting a worktree" script exited with code 1.\nbazel: not found', scriptFailed: true } });
+    if (url.searchParams.get("force") !== "1")
+      return route.fulfill({ status: 409, json: { error: "The worktree has uncommitted changes.", dirty: true } });
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto("/new");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await sidebar.getByRole("button", { name: `Actions for project ${worktree.name}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Remove project" }).click();
+  const confirm = sidebar.getByRole("group", { name: `Remove ${worktree.name}?` });
+
+  await confirm.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(confirm.getByRole("alert")).toContainText("bazel: not found");
+  await expect(confirm.getByRole("button", { name: "Remove anyway" })).toHaveCount(0);
+  await confirm.getByRole("button", { name: "Remove without script" }).click();
+
+  // Past the script, git finds uncommitted changes; forcing keeps skipping the script.
+  await expect(confirm.getByRole("alert")).toContainText("uncommitted changes");
+  await expect(confirm.getByRole("button", { name: "Remove without script" })).toHaveCount(0);
+  await confirm.getByRole("button", { name: "Remove anyway" }).click();
+  await expect(confirm).toHaveCount(0);
+  expect(deletes).toEqual([
+    "?worktree=delete",
+    "?worktree=delete&script=skip",
+    "?worktree=delete&force=1&script=skip",
+  ]);
+});

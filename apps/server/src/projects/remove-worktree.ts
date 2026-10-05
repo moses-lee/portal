@@ -3,8 +3,8 @@
  * implementation behind `DELETE /api/projects/:id`, the orchestrator's project removal and review
  * cleanup (`orchestrator/ops.ts`), and the lifecycle sweep's idle worktree removal
  * (`lib/lifecycle-sweep.ts`). Each caller hands in the I/O it has (the live services, or the
- * orchestrator's deps), so the steps are the same everywhere: the user's pre-deletion script,
- * `git worktree remove` (forced only when asked), the branch only when merged (or, with
+ * orchestrator's deps), so the steps are the same everywhere: the user's pre-deletion script (unless
+ * `skipScript`, the way past a script that fails on this worktree), `git worktree remove` (forced only when asked), the branch only when merged (or, with
  * `deleteBranch: "pushed"`, exactly on origin), then the project entry, kept as a removed record
  * while sessions still point at it.
  */
@@ -75,7 +75,7 @@ export function liveProjectRemovalIo(ctx: Pick<AppContext, "projects" | "session
 export async function deleteWorktreeFolder(
   io: ProjectRemovalIo,
   project: Project & { worktree: WorktreeMeta },
-  { force = false, deleteBranch }: { force?: boolean; deleteBranch?: DeleteBranch } = {},
+  { force = false, skipScript = false, deleteBranch }: { force?: boolean; skipScript?: boolean; deleteBranch?: DeleteBranch } = {},
 ): Promise<{ branchDeleted: boolean }> {
   const present = await exists(project.path);
   // The project may sit in a subfolder of the worktree; git needs the worktree's root.
@@ -86,7 +86,7 @@ export async function deleteWorktreeFolder(
   if (!repoRoot && worktreeRoot) repoRoot = await io.mainWorktreeOf(worktreeRoot);
   const worktreePath = worktreeRoot ?? project.path;
   // The user's pre-deletion script runs first, while the folder is still there; a forced retry runs it again.
-  if (repoRoot && present) await io.runScript("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
+  if (repoRoot && present && !skipScript) await io.runScript("preWorktreeDelete", preWorktreeDeleteRun(project, { worktreePath, repoRoot }));
   if (io.recheck && !(await io.recheck())) throw new RemovalSkipped();
   // Without a folder and without a repository there is nothing left for git to clean up.
   if (!repoRoot) return { branchDeleted: false };
@@ -101,12 +101,12 @@ export async function deleteWorktreeFolder(
 export async function removeProject(
   io: ProjectRemovalIo,
   project: Project,
-  { deleteWorktree = false, force = false, deleteBranch }: { deleteWorktree?: boolean; force?: boolean; deleteBranch?: DeleteBranch } = {},
+  { deleteWorktree = false, force = false, skipScript = false, deleteBranch }: { deleteWorktree?: boolean; force?: boolean; skipScript?: boolean; deleteBranch?: DeleteBranch } = {},
 ): Promise<{ kept: boolean; branchDeleted: boolean }> {
   let branchDeleted = false;
   if (deleteWorktree) {
     if (!project.worktree) throw new WorktreeError("This project is not a worktree.", 400);
-    ({ branchDeleted } = await deleteWorktreeFolder(io, { ...project, worktree: project.worktree }, { force, deleteBranch }));
+    ({ branchDeleted } = await deleteWorktreeFolder(io, { ...project, worktree: project.worktree }, { force, skipScript, deleteBranch }));
   }
   const kept = await io.hasSessions(project.id);
   await io.removeProject(project.id, { keep: kept });

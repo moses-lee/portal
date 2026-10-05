@@ -583,6 +583,15 @@ test("remove_project runs the pre-deletion script in the worktree before git rem
   });
   assert.deepEqual(await run(failing.tools.remove_project, { id: "p4", deleteWorktree: true, force: true }), { error: "The script exited with code 2." });
   assert.deepEqual(failing.state.removed, []);
+
+  // skipScript leaves the script out and goes straight to git.
+  const skipping = setup({
+    projects: [project({ id: "p1", path: parentPath }), project({ id: "p5", path: worktreePath, worktree: { parentId: "p1", branch: "feat/s" } })],
+    removeWorktree: async () => ({ branchDeleted: false }),
+    scripts: { run: async () => { throw new Error("should not run"); } },
+  });
+  assert.deepEqual(await run(skipping.tools.remove_project, { id: "p5", deleteWorktree: true, skipScript: true }), { id: "p5", removed: true, kept: false, branchDeleted: false });
+  assert.deepEqual(skipping.state.removed, [{ id: "p5", keep: false }]);
 });
 
 test("list_attention_pulls narrows the search to the stale window unless includeStale asks for everything", async () => {

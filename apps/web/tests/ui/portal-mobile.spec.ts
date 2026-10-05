@@ -64,3 +64,23 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
   await expect(dialog.getByRole("button", { name: "Approve once" })).toBeInViewport();
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-approval.png") });
 });
+
+test.describe("on a touch screen", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test("the return key types a new line and only the button sends", async ({ page }) => {
+    const fixture = await setupPortal(page);
+    await page.goto("/sessions/s1");
+    const input = page.getByRole("combobox", { name: "Message Claude Code" });
+    await expect(input).toHaveAttribute("enterkeyhint", "enter");
+    await expect(page.getByText("Enter to send")).toHaveCount(0);
+    await input.fill("first line");
+    await input.press("Enter");
+    await input.pressSequentially("second line");
+    await expect(input).toHaveValue("first line\nsecond line");
+    const prompts = () => fixture.requests.filter((request) => request.path.endsWith("/prompt"));
+    expect(prompts()).toHaveLength(0);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect.poll(() => prompts().length).toBe(1);
+  });
+});

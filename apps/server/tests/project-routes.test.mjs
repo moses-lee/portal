@@ -297,6 +297,15 @@ test("worktrees: create, reuse, list branches, and delete with the pre-deletion 
   assert.match(refused.json().error, /exited with code 4\.\nrefusing/);
   assert.ok(existsSync(wtPath));
   assert.ok(appContext(app).projects.get(wt.id));
+  assert.equal(refused.json().scriptFailed, true, "marked so the browser can offer to skip it");
+  assert.equal(refused.json().dirty, undefined);
+  // Skipping the script gets past it and on to git, which refuses the dirty tree; a forced retry skipping it goes through.
+  writeFileSync(path.join(wtPath, "skip.txt"), "x");
+  const skipped = await call("DELETE", `/api/projects/${wt.id}?worktree=delete&script=skip`);
+  assert.equal(skipped.statusCode, 409);
+  assert.deepEqual(skipped.json().dirty, true);
+  assert.equal(skipped.json().scriptFailed, undefined);
+  rmSync(path.join(wtPath, "skip.txt"));
 
   // Uncommitted changes: git refuses, the answer is marked dirty, and a forced retry goes through.
   useScript({ command: 'echo "$PORTAL_BRANCH $PORTAL_WORKTREE_PATH $PORTAL_REPO_ROOT $(pwd)" >> "$LOG"' });
