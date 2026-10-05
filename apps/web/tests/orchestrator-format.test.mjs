@@ -6,7 +6,12 @@ import {
   describeSchedule,
   describeStatusLine,
   describeUsage,
+  daySections,
+  formatClock,
+  formatDateTime,
+  formatDay,
   formatDuration,
+  formatMessageTime,
   formatTokens,
   portalActivity,
   relativeTime,
@@ -136,4 +141,34 @@ test("the room's activity marker follows the user's turn and pending approvals, 
   assert.equal(portalActivity(status(["t-review"]), []), "working", "any thread's turn counts");
   assert.equal(portalActivity(status(["main"]), [{ status: "pending" }]), "waiting", "an approval outranks the turn");
   assert.equal(portalActivity(status([]), [{ status: "approved" }]), "idle");
+});
+
+test("chat times: a clock, day dividers, and the day added only off the divider's day", () => {
+  // Local times, so the test holds in any time zone.
+  const today = new Date(2026, 9, 5, 14, 5).getTime();
+  const at = (month, day, hours = 9, minutes = 0, year = 2026) => new Date(year, month, day, hours, minutes).getTime();
+  assert.equal(formatClock(at(9, 5, 9, 3)), "09:03");
+  assert.equal(formatDateTime(at(9, 5, 9, 3), today), "today 09:03");
+  assert.equal(formatDay(at(9, 5, 0, 1), today), "Today");
+  assert.equal(formatDay(at(9, 4, 23, 59), today), "Yesterday");
+  assert.equal(formatDay(at(9, 3), today), "Oct 3");
+  assert.equal(formatDay(at(0, 1, 9, 0, 2026), today), "Jan 1");
+  assert.equal(formatDay(at(11, 31, 9, 0, 2025), today), "Dec 31, 2025");
+  // Yesterday across a month boundary.
+  assert.equal(formatDay(at(8, 30, 20), at(9, 1, 8)), "Yesterday");
+  assert.equal(formatMessageTime(at(9, 5, 14, 5), at(9, 5, 1), today), "14:05");
+  assert.equal(formatMessageTime(at(9, 5, 0, 3), at(9, 4, 23), today), "Today 00:03");
+  // Dividers open each new day; unknown times (0) stay in the day before them.
+  const d3 = at(9, 3, 9);
+  const d4 = at(9, 4, 8);
+  const d5 = at(9, 5, 8);
+  assert.deepEqual(daySections([0, d3, at(9, 3, 10), 0, d4, d5]), [
+    { divider: null, day: 0 },
+    { divider: d3, day: d3 },
+    { divider: null, day: d3 },
+    { divider: null, day: d3 },
+    { divider: d4, day: d4 },
+    { divider: d5, day: d5 },
+  ]);
+  assert.deepEqual(daySections([]), []);
 });

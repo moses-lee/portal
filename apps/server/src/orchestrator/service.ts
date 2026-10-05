@@ -17,7 +17,7 @@ export type OrchestratorService = OrchestratorRuntime;
 export type OrchestratorOptions = Partial<OrchestratorRuntimeOptions>;
 
 export function createOrchestratorService(
-  ctx: Pick<AppContext, "db" | "sql" | "presence" | "sessions" | "projects" | "settings" | "terminals" | "config">,
+  ctx: Pick<AppContext, "db" | "sql" | "presence" | "sessions" | "projects" | "settings" | "terminals" | "config" | "lastUsed">,
   options: OrchestratorOptions = {},
 ): OrchestratorService {
   return createOrchestratorRuntime({

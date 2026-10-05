@@ -291,9 +291,11 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
       sessions = sessions.filter((s) => s.id !== id);
       return sessions.length < before;
     },
-    listAgents: () => [{ id: "fake", name: "Fake agent" }],
+    listAgents: () => [{ id: "fake", name: "Fake agent" }, { id: "other", name: "Other agent" }],
     defaultAgentId: "fake",
   };
+  let lastAgentId = null;
+  ctx.lastUsed = { read: async () => ({ agentId: lastAgentId, settings: {} }) };
   const removed = new Set(["gone"]);
   ctx.projects = {
     ready: Promise.resolve(), list: () => [{ id: "p1" }], get: (id) => (id === "p1" ? { id } : undefined),
@@ -313,7 +315,12 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
   assert.equal(calls.length, 2, "an unknown session closes nothing");
   assert.deepEqual(await deps.projects.list(), [{ id: "p1" }]);
   assert.equal(await deps.projects.get("zz"), undefined);
-  assert.deepEqual(await deps.agents.list(), [{ id: "fake", name: "Fake agent" }], "the sessions service's agents, not the built-in ones");
+  assert.deepEqual(await deps.agents.list(), [{ id: "fake", name: "Fake agent" }, { id: "other", name: "Other agent" }], "the sessions service's agents, not the built-in ones");
+  assert.equal(await deps.agents.defaultId(), "fake");
+  // The user's last pick wins while the server still offers it.
+  lastAgentId = "other";
+  assert.equal(await deps.agents.defaultId(), "other");
+  lastAgentId = "retired";
   assert.equal(await deps.agents.defaultId(), "fake");
   assert.equal(await settings.apiKey("anthropic"), "key-anthropic");
   // Scripts read their settings from the context's settings service; an unset script does not run.

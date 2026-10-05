@@ -12,6 +12,7 @@ import type { Presence } from "./lib/presence.ts";
 import type { OrchestratorService } from "./orchestrator/service.ts";
 import type { ProjectsService } from "./projects/service.ts";
 import type { SessionsService } from "./sessions/service.ts";
+import type { LastUsedStore } from "./settings/last-used.ts";
 import type { SettingsService } from "./settings/service.ts";
 import type { TerminalsService } from "./terminals/service.ts";
 
@@ -25,6 +26,8 @@ export interface AppContext {
   sessions: SessionsService;
   projects: ProjectsService;
   settings: SettingsService;
+  /** The agent and agent settings the user last picked, which new sessions start from. */
+  lastUsed: LastUsedStore;
   terminals: TerminalsService;
   orchestrator: OrchestratorService;
   /** The lifecycle sweep (idle untracking, idle worktree removal); runs with or without the orchestrator. */

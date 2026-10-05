@@ -22,7 +22,7 @@ import { deleteSessionFully } from "../sessions/delete.ts";
 import { loadServerKey } from "../settings/crypto.ts";
 import type {
   AgentInfo, BranchInfo, DirListing, EventPage, GithubSummary, Project, ProjectSummary, PullInfo, RemovedProject,
-  SessionLiveness, SessionMeta, SessionState, TitleSource, WorktreeMeta,
+  SessionListState, SessionLiveness, SessionMeta, SessionState, TitleSource, WorktreeMeta,
 } from "../lib/types.ts";
 import { defaultGh, ensureWorktree, getPull, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf } from "../lib/worktrees.ts";
 import { type PullStatus, cloneRepo, getGithubLogin, readOriginUrl, readPullStatus, searchAttentionPulls } from "./github-attention.ts";
@@ -77,7 +77,10 @@ export type OrchestratorDeps = {
   };
   agents: {
     list(): Promise<AgentInfo[]>;
+    /** The agent sessions start with when none is named: the user's last pick while offered, else the registry's default. */
     defaultId(): Promise<string>;
+    /** The settings the user last left `agentId` with (last-used.ts), which the sessions Portal starts take on; null when none. */
+    lastSettings(agentId: string): Promise<SessionListState | null>;
   };
   projects: {
     list(): Promise<Project[]>;
@@ -174,7 +177,7 @@ async function readPullState(url: string): Promise<PullState | null> {
 // ---------------------------------------------------------------------------------------------
 
 /** The server services the live deps act through. Read at call time, so the order services are built in does not matter. */
-export type OrchestratorServices = Pick<AppContext, "sessions" | "projects" | "settings" | "terminals">;
+export type OrchestratorServices = Pick<AppContext, "sessions" | "projects" | "settings" | "terminals" | "lastUsed">;
 
 export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
   /** The ACP runtime once it has loaded its sessions, as the old module-level `ready` promise gave it. */
@@ -220,7 +223,12 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
     // The sessions service's agents, not the built-in list: the orchestrator must offer only agents it can start.
     agents: {
       list: async () => ctx.sessions.listAgents(),
-      defaultId: async () => ctx.sessions.defaultAgentId,
+      // The agent the user last picked while it is still offered, as the start page has it; else the registry's.
+      defaultId: async () => {
+        const { agentId } = await ctx.lastUsed.read().catch(() => ({ agentId: null }));
+        return agentId && ctx.sessions.listAgents().some((agent) => agent.id === agentId) ? agentId : ctx.sessions.defaultAgentId;
+      },
+      lastSettings: (agentId) => ctx.lastUsed.agentSettings(agentId),
     },
     projects: {
       list: async () => (await projects()).list(),

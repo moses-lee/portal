@@ -6,6 +6,7 @@
  */
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { MAX_CONFIG_STEPS, nextConfigChange } from "@portal/shared/agent-settings";
 import { errorStatus } from "../lib/fs-paths.ts";
 import { displayPath } from "../lib/git-info.ts";
 import { githubRepoUrl } from "../lib/github-summary.ts";
@@ -46,7 +47,32 @@ export async function projectCwd(deps: OrchestratorDeps, project: Project): Prom
 export type SessionTracker = { tracked: Pick<TrackedService, "track">; context?: TrackContext };
 
 /**
+ * Bring a new session to the settings the user last left its agent with (model, mode, effort, …),
+ * the start page's way: one request at a time, re-diffing against each answer, values the agent no
+ * longer offers skipped. A failure stops here and is logged: the session exists either way, and
+ * runs on the agent's defaults for what is left. Not recorded as last-used: these are not the
+ * user's picks.
+ */
+async function applyLastSettings(deps: OrchestratorDeps, session: SessionMeta): Promise<void> {
+  try {
+    const desired = await deps.agents.lastSettings(session.agentId);
+    if (!desired) return;
+    let state = session.state;
+    for (let step = 0; step < MAX_CONFIG_STEPS; step++) {
+      const request = nextConfigChange(desired, state);
+      if (!request) return;
+      state = "modeId" in request
+        ? await deps.sessions.setMode(session.id, request.modeId)
+        : await deps.sessions.setConfigOption(session.id, request.configId, request.value);
+    }
+  } catch (err) {
+    console.error(`Could not apply the last-used settings to session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Create a session in a project and, with `prompt`, start its first turn (POST /api/sessions + prompt).
+ * The new session takes on the settings the user last left its agent with (`applyLastSettings`).
  * The session exists once created: a prompt that fails is reported as `promptError` rather than
  * thrown, so a retry sends the prompt again instead of creating a second session. With `tracker`,
  * the new session is tracked (by Portal) before its prompt goes out; a failure to track is logged,
@@ -60,6 +86,7 @@ export async function startSession(
   if (!(await deps.agents.list()).some((known) => known.id === agent)) throw httpError(`Unknown agent "${agent}".`, 400);
   const cwd = await projectCwd(deps, project);
   const session = await deps.sessions.create(cwd, agent, project.id, title?.trim() ? { title: title.trim() } : {});
+  await applyLastSettings(deps, session);
   if (tracker) {
     await tracker.tracked.track(session.id, "portal", tracker.context).catch((err: unknown) => {
       console.error(`Could not track session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);

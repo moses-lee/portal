@@ -79,3 +79,21 @@ test("a page that starts inside a turn reduces on its own; the turn is keyed by 
   assert.deepEqual(turns[0].blocks.map((b) => b.kind), ["assistant", "turn_end"]);
   assert.equal(firstSeq({ turns, hasMore: true }), 40);
 });
+
+test("a prompt keeps its logged time and a turn records when it ended", () => {
+  let history = { turns: segment([{ ...user(0, "hi"), ts: 1000 }, { ...text(1, "Hel"), ts: 1100 }]), hasMore: false };
+  assert.equal(history.turns[0].blocks[0].at, 1000);
+  assert.equal(history.turns[0].endedAt, null, "a running turn has no end time");
+  history = appendEvent(history, { ...text(2, "lo"), ts: 1200 });
+  // A client-only notice (negative seq) describes a failed request; it does not end the turn.
+  history = appendEvent(history, { seq: -1, ts: 1300, type: "error", message: "request failed" });
+  assert.equal(history.turns[0].endedAt, null);
+  history = appendEvent(history, { seq: 3, ts: 1500, type: "turn_end", stopReason: "end_turn" });
+  assert.equal(history.turns[0].endedAt, 1500);
+  assert.equal(history.turns[0].blocks.at(-1).at, 1500);
+  // A server-side error cuts the turn off.
+  const cut = segment([user(0, "a"), { seq: 1, ts: 1400, type: "error", message: "Portal restarted" }]);
+  assert.equal(cut[0].endedAt, 1400);
+  // A turn that ended at an unknown time is still ended.
+  assert.equal(segment([user(0, "a"), { seq: 1, ts: 0, type: "turn_end", stopReason: "end_turn" }])[0].endedAt, 0);
+});

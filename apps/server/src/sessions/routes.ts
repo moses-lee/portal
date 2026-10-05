@@ -13,7 +13,7 @@ import { sameGitInfo } from "@portal/shared/git-info";
 import { displayPath, readGitInfo, type GitInfo } from "../lib/git-info.ts";
 import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
 import { deleteRemovedSessions, deleteSessionFully } from "./delete.ts";
-import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type PortalEvent, type SessionListEvent, type SessionMetaEvent, type SetConfigRequest } from "../lib/types.ts";
+import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type PortalEvent, type SessionListEvent, type SessionMetaEvent, type SetConfigRequest, type StreamedEvent } from "../lib/types.ts";
 
 const META_POLL_MS = 1000;
 const DEFAULT_PAGE = 300;
@@ -236,7 +236,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     let cwdMissing = false;
     let project = currentProject();
     let checking = false;
-    const send = (seq: number, ev: PortalEvent) => stream.send(ev, { id: seq });
+    const send = (seq: number, ev: PortalEvent, ts: number) => stream.send({ ...ev, ts } satisfies StreamedEvent, { id: seq });
     const sendMeta = () => {
       const meta: SessionMetaEvent = {
         busy: session.busy, link: session.link, title: session.title, titleSource: session.titleSource, cwd: session.cwd,
@@ -269,12 +269,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     const missed = ctx.sessions.eventsSince(id, since);
     if (missed === null) stream.write(`event: reset\ndata: {}\n\n`);
     else {
-      for (const stored of missed) {
-        const ev: Record<string, unknown> = { ...stored };
-        delete ev.seq;
-        delete ev.ts;
-        send(stored.seq, ev as PortalEvent);
-      }
+      for (const { seq, ...ev } of missed) send(seq, ev, ev.ts);
     }
     sendMeta();
     // Tail. Mode, model, command, connection, and title changes reach viewers through `meta`, not the event log.
@@ -370,6 +365,14 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
       const state = "modeId" in body
         ? await ctx.sessions.setMode(req.params.id, body.modeId)
         : await ctx.sessions.setConfigOption(req.params.id, body.configId, body.value);
+      // Only the browser posts here (the orchestrator's set_session_config goes to the runtime), so
+      // this is the user's own pick: it becomes the agent's last-used settings. Never fails the change.
+      const agentId = ctx.sessions.getSession(req.params.id)?.agentId;
+      if (agentId) {
+        await ctx.lastUsed.recordChange(agentId, state, body).catch((err: unknown) => {
+          req.log.warn({ err }, "Could not record the last-used agent settings");
+        });
+      }
       return { state };
     } catch (err) {
       return reply.code(409).send({ error: errorMessage(err) });

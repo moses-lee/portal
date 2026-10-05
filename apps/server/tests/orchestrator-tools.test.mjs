@@ -447,6 +447,75 @@ test("create_session mirrors the sessions route, sends the first prompt, and rep
   assert.equal(state.created.length, 2, "the session was created once");
 });
 
+test("sessions Portal starts take on the settings the user last left the agent with; a failure to apply never fails the start", async () => {
+  const select = (id, category, currentValue, values) => ({ id, category, name: id, type: "select", currentValue, options: values.map((value) => ({ value, name: value })) });
+  const fresh = () => ({
+    modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }] },
+    configOptions: [select("model", "model", "sonnet", ["sonnet", "fable"]), select("effort", "thought_level", "low", ["low"])],
+    commands: [],
+  });
+  const { tools, state, deps } = setup({ projects: [project()] });
+  const live = new Map();
+  const calls = [];
+  const create = deps.sessions.create;
+  deps.sessions.create = async (...args) => {
+    const meta = { ...(await create(...args)), state: fresh() };
+    live.set(meta.id, meta.state);
+    return meta;
+  };
+  deps.sessions.setConfigOption = async (id, configId, value) => {
+    calls.push({ id, configId, value });
+    const current = live.get(id);
+    // A model switch changes the effort choices, as Claude's does.
+    const effort = configId === "model" && value === "fable" ? select("effort", "thought_level", "low", ["low", "max"]) : current.configOptions[1];
+    const next = { ...current, configOptions: current.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option.id === "effort" ? effort : option) };
+    live.set(id, next);
+    return next;
+  };
+  deps.sessions.setMode = async (id, modeId) => {
+    calls.push({ id, modeId });
+    const next = { ...live.get(id), modes: { ...live.get(id).modes, currentModeId: modeId } };
+    live.set(id, next);
+    return next;
+  };
+
+  // Nothing remembered: the agent's defaults, no requests.
+  assert.deepEqual(await run(tools.create_session, { projectId: "p1" }), { sessionId: "s1" });
+  assert.deepEqual(calls, []);
+
+  // Claude's record: Fable, max effort (offered only once Fable is on), plan mode; Codex has its own.
+  state.lastSettings.claude = {
+    modes: { currentModeId: "plan", availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }] },
+    configOptions: [select("model", "model", "fable", ["sonnet", "fable"]), select("effort", "thought_level", "max", ["low", "max"])],
+  };
+  state.lastSettings.codex = { modes: null, configOptions: [select("model", "model", "sonnet", ["sonnet"])] };
+  assert.deepEqual(await run(tools.create_session, { projectId: "p1", prompt: "Go" }), { sessionId: "s2" });
+  assert.deepEqual(calls, [
+    { id: "s2", configId: "model", value: "fable" },
+    { id: "s2", configId: "effort", value: "max" },
+    { id: "s2", modeId: "plan" },
+  ]);
+  assert.deepEqual(state.prompts, [{ id: "s2", text: "Go" }], "the prompt goes out after the settings");
+
+  // An explicit agent uses that agent's record (already matching here: nothing to send).
+  calls.length = 0;
+  await run(tools.create_session, { projectId: "p1", agentId: "codex" });
+  assert.deepEqual(calls, []);
+
+  // The agent refusing a change is logged; the session still starts and gets its prompt.
+  deps.sessions.setConfigOption = async () => { throw new Error("agent says no"); };
+  const errors = [];
+  const original = console.error;
+  console.error = (message) => errors.push(String(message));
+  try {
+    assert.deepEqual(await run(tools.create_session, { projectId: "p1", prompt: "Still" }), { sessionId: "s4" });
+  } finally {
+    console.error = original;
+  }
+  assert.match(errors.join("\n"), /Could not apply the last-used settings to session s4: agent says no/);
+  assert.deepEqual(state.prompts.at(-1), { id: "s4", text: "Still" });
+});
+
 test("setup_pr_reviews checks out each PR, starts a review session, and creates one intent that reports the findings", async () => {
   const pulls = { 1: "feat/one", 2: "feat/two", 3: "fork/three" };
   const { tools, state, intents } = setup({

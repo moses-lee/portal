@@ -32,7 +32,7 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness" | "bac
   nextSeq: number;
   /** The agent's own session ID. Server-only. */
   upstreamId: string;
-  listeners: Set<(seq: number, event: PortalEvent) => void>;
+  listeners: Set<(seq: number, event: PortalEvent, ts: number) => void>;
   /** Notified with the replacement `state` after every agent-side state change. */
   stateListeners: Set<(state: SessionState) => void>;
   /** Notified with the replacement `link` whenever the agent connection changes. */
@@ -242,8 +242,8 @@ function turnOpen(tail: readonly PortalEvent[]): boolean | null {
 
 /** Callbacks for one viewer of a session; see `subscribe`. */
 export type SessionSubscriber = {
-  /** Each new log event with its seq. */
-  onEvent?: (seq: number, event: PortalEvent) => void;
+  /** Each new log event with its seq and epoch ms timestamp. */
+  onEvent?: (seq: number, event: PortalEvent, ts: number) => void;
   /** The replacement agent-side state after every change. */
   onState?: (state: SessionState) => void;
   /** The replacement link on every connection change, and after a title change. */
@@ -409,7 +409,7 @@ export function createAcpRuntime(
     }
     // A deleted session may still receive its agent's final events; viewers hear them, disk does not.
     if (current(session)) queueWrite(session, { ...event, seq, ts });
-    for (const listener of session.listeners) listener(seq, event);
+    for (const listener of session.listeners) listener(seq, event, ts);
   }
 
   /**

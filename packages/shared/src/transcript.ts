@@ -31,13 +31,15 @@ export type ToolBlock = {
   rawOutput?: unknown;
 };
 export type Block =
-  | { kind: "user"; text: string }
+  /** `at`: when the prompt was logged (epoch ms; 0 when unknown). */
+  | { kind: "user"; text: string; at: number }
   | { kind: "assistant"; text: string }
   | { kind: "thought"; text: string }
   | ToolBlock
   | { kind: "plan"; entries: { content: string; status: string }[] }
   | PermissionBlock
-  | { kind: "turn_end"; stopReason: string }
+  /** `at`: when the turn ended (epoch ms; 0 when unknown). */
+  | { kind: "turn_end"; stopReason: string; at: number }
   | { kind: "error"; message: string };
 
 /**
@@ -50,6 +52,11 @@ export type TurnReducer = {
   readonly blocks: Block[];
   /** The highest logged seq applied; -1 before any. */
   readonly lastSeq: number;
+  /**
+   * When the turn ended (the logged time of its `turn_end`, or of a server-side error that cut it
+   * off), in epoch ms; null while it runs. 0 when it ended at an unknown time.
+   */
+  readonly endedAt: number | null;
   /** Apply one event; true when `blocks` changed. */
   apply(event: StoredEvent): boolean;
 };
@@ -57,6 +64,7 @@ export type TurnReducer = {
 export function createTurnReducer(): TurnReducer {
   let blocks: Block[] = [];
   let lastSeq = -1;
+  let endedAt: number | null = null;
   /** Index into `blocks` of each tool call and each open permission prompt, by id. */
   const tools = new Map<string, number>();
   const permissions = new Map<string, number>();
@@ -87,15 +95,19 @@ export function createTurnReducer(): TurnReducer {
   function reduceOne(ev: StoredEvent): boolean {
     switch (ev.type) {
       case "user":
-        push({ kind: "user", text: ev.text });
+        push({ kind: "user", text: ev.text, at: ev.ts || 0 });
         return true;
       case "turn_end":
         closeOpenPermissions();
-        push({ kind: "turn_end", stopReason: ev.stopReason });
+        endedAt = ev.ts || 0;
+        push({ kind: "turn_end", stopReason: ev.stopReason, at: endedAt });
         return true;
       case "error":
         // Client-only notices (negative seq) describe a failed request, not the end of the turn.
-        if (ev.seq >= 0) closeOpenPermissions();
+        if (ev.seq >= 0) {
+          closeOpenPermissions();
+          endedAt = ev.ts || 0;
+        }
         push({ kind: "error", message: ev.message });
         return true;
       case "permission_request": {
@@ -174,6 +186,7 @@ export function createTurnReducer(): TurnReducer {
   return {
     get blocks() { return blocks; },
     get lastSeq() { return lastSeq; },
+    get endedAt() { return endedAt; },
     apply(event) {
       if (event.seq >= 0) {
         if (event.seq <= lastSeq) return false;
@@ -201,6 +214,8 @@ export type Turn = {
   /** The highest logged seq the turn holds. */
   lastSeq: number;
   blocks: Block[];
+  /** See `TurnReducer.endedAt`: when the agent's reply finished; null while the turn runs. */
+  endedAt: number | null;
   reducer: TurnReducer;
 };
 
@@ -212,7 +227,7 @@ export type Turn = {
 export type History = { turns: Turn[]; hasMore: boolean };
 
 function snapshot(key: number, reducer: TurnReducer): Turn {
-  return { key, lastSeq: reducer.lastSeq, blocks: reducer.blocks, reducer };
+  return { key, lastSeq: reducer.lastSeq, blocks: reducer.blocks, endedAt: reducer.endedAt, reducer };
 }
 
 export function segment(events: StoredEvent[]): Turn[] {

@@ -6,6 +6,7 @@ import { DefaultChatTransport } from "ai";
 import { Archive, GitPullRequest, KeyRound, LoaderCircle, Sparkles, Target } from "lucide-react";
 import ChatComposer from "../ChatComposer";
 import PortalMessage from "../PortalMessage";
+import { DayDivider } from "../ChatTime";
 import type { ItemCardHandlers } from "../PortalItemCard";
 import { useSend } from "../useSend";
 import { openSettings } from "../useSettings";
@@ -18,7 +19,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { formatDateTime } from "@/lib/orchestrator/format";
+import { daySections, formatDateTime } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
 
@@ -362,6 +363,9 @@ export default function PortalThread({
   const openCurationRun = useCallback((runId: string) => latestHandlers.current.onOpenCurationRun?.(runId), []);
   const canOpenCurationRun = !!handlers.onOpenCurationRun;
 
+  /** Where the day dividers go, and the day each message sits under (0 before the first known time). */
+  const days = useMemo(() => daySections(messages.map((message) => message.metadata?.at ?? 0)), [messages]);
+
   const last = messages.at(-1);
   const waitingForReply =
     (responding && (!last || last.role === "user" || !last.parts.some((part) => part.type === "text" && part.text))) ||
@@ -441,16 +445,21 @@ export default function PortalThread({
                   </p>
                 </div>
               )}
-              {messages.map((message, index) => (
-                <MessageScrollerItem key={message.id} messageId={message.id}>
-                  <PortalMessage
-                    message={message}
-                    streaming={responding && index === messages.length - 1}
-                    onOpenCurationRun={canOpenCurationRun ? openCurationRun : undefined}
-                    onLoadToolIO={loadToolIO}
-                  />
-                </MessageScrollerItem>
-              ))}
+              {messages.map((message, index) => {
+                const { divider, day } = days[index];
+                return (
+                  <MessageScrollerItem key={message.id} messageId={message.id}>
+                    {divider !== null && <DayDivider at={divider} className="mb-8" />}
+                    <PortalMessage
+                      message={message}
+                      streaming={responding && index === messages.length - 1}
+                      day={day}
+                      onOpenCurationRun={canOpenCurationRun ? openCurationRun : undefined}
+                      onLoadToolIO={loadToolIO}
+                    />
+                  </MessageScrollerItem>
+                );
+              })}
               {waitingForReply && (
                 <p role="status" className="flex items-center gap-2.5 text-xs text-muted-foreground">
                   <LoaderCircle className="size-3.5 animate-spin" />

@@ -35,9 +35,14 @@ import { byRecentActivity, orderProjectsByActivity } from "@/lib/session-groups"
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
   applyConfigChange,
+  hasSettings,
   latestStateForAgent,
+  MAX_CONFIG_STEPS,
   nextConfigChange,
+  overlaySettings,
+  settingsOf,
 } from "@/lib/session-config";
+import { useLastUsed } from "./useLastUsed";
 import {
   isPortalPath,
   isStartPath,
@@ -129,9 +134,17 @@ function ChatShell() {
     refetchSessions,
     historyCache,
   } = useSessions();
-  /** The agent picked on the start page; the registry's default until then. */
-  const [chosenAgentId, setSelectedAgentId] = useState("");
-  const selectedAgentId = chosenAgentId || defaultAgentId;
+  /**
+   * The agent and agent settings the user last picked (on the start page or in a session's Agent
+   * settings), kept by the server for every project; refreshed each time the start page opens.
+   */
+  const { lastUsed, save: saveLastUsed } = useLastUsed(onStartPage);
+  /** The agent new sessions start with: the last one picked while it is still offered, else the registry's default. */
+  const selectedAgentId =
+    lastUsed?.agentId && agents.some((agent) => agent.id === lastUsed.agentId)
+      ? lastUsed.agentId
+      : defaultAgentId;
+  const selectAgent = (agentId: string) => saveLastUsed({ agentId });
   const [creating, setCreating] = useState(false);
   const [createError, setSessionError] = useState<string | null>(null);
   const sessionError = createError ?? loadError;
@@ -182,11 +195,6 @@ function ChatShell() {
   const [worktreePick, setWorktreePick] = useState<{
     projectId: string;
     choice: WorktreeChoice;
-  } | null>(null);
-  /** Agent settings chosen on the start page, tied to the agent they were chosen for. */
-  const [startConfig, setStartConfig] = useState<{
-    agentId: string;
-    state: SessionListState;
   } | null>(null);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -245,20 +253,20 @@ function ChatShell() {
       ? worktreePick.choice
       : ORIGINAL;
 
-  // The start page's agent settings: the user's picks this visit, else the agent's latest session
-  // (its current option list and the values last chosen); null until the agent has had a session.
+  // The start page's agent settings: the ones the user last left this agent with (with the option
+  // lists they were picked from). Before Portal has any for the agent, its latest session's; null
+  // until the agent has had a session.
+  const storedSettings = lastUsed?.settings[selectedAgentId];
   const startSettings = useMemo(
-    () =>
-      startConfig?.agentId === selectedAgentId
-        ? startConfig.state
-        : latestStateForAgent(sessions, selectedAgentId),
-    [startConfig, selectedAgentId, sessions],
+    () => storedSettings ?? latestStateForAgent(sessions, selectedAgentId),
+    [storedSettings, selectedAgentId, sessions],
   );
   const changeStartSetting = (request: SetConfigRequest) => {
     if (!startSettings) return;
-    setStartConfig({
-      agentId: selectedAgentId,
-      state: applyConfigChange(startSettings, request),
+    saveLastUsed({
+      settings: {
+        [selectedAgentId]: applyConfigChange(settingsOf(startSettings), request),
+      },
     });
   };
 
@@ -272,7 +280,7 @@ function ChatShell() {
     actual: SessionState,
   ) => {
     let state = actual;
-    for (let step = 0; step < 16; step++) {
+    for (let step = 0; step < MAX_CONFIG_STEPS; step++) {
       const request = nextConfigChange(desired, state);
       if (!request) break;
       let r: Response;
@@ -383,6 +391,7 @@ function ChatShell() {
   const canCreate =
     !loading &&
     !projectsLoading &&
+    !!lastUsed &&
     !creating &&
     !!selectedAgentId &&
     !!selectedProjectId;
@@ -468,6 +477,7 @@ function ChatShell() {
     creatingRef.current = true;
     setCreating(true);
     setSessionError(null);
+    const agentId = selectedAgentId;
     const desiredSettings = startSettings;
     if (projectId !== selectedProjectId) selectProject(projectId);
     try {
@@ -490,7 +500,7 @@ function ChatShell() {
       const r = await fetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, agentId: selectedAgentId }),
+        body: JSON.stringify({ projectId, agentId }),
       });
       const session = (await r.json()) as SessionDetail & { error?: string };
       if (!r.ok || !session.id) {
@@ -510,24 +520,27 @@ function ChatShell() {
       }
       pushPath(sessionPath(session.id));
       setShowSidebar(false);
-      if (desiredSettings) {
-        // The next start page seeds from this session, which now carries these choices.
-        setStartConfig(null);
-        try {
-          const state = await applyStartSettings(
-            session.id,
-            desiredSettings,
-            session.state,
-          );
-          updateSession(session.id, { state });
-        } catch (error) {
-          setInitialSend({
-            sessionId: session.id,
-            pending: false,
-            error: `${error instanceof Error ? error.message : "Could not apply the agent settings."} Check Agent settings, then send your message.`,
-          });
-          return;
-        }
+      try {
+        const state = desiredSettings
+          ? await applyStartSettings(session.id, desiredSettings, session.state)
+          : session.state;
+        if (desiredSettings) updateSession(session.id, { state });
+        // The record takes this session's option lists (an agent may offer new models since) with
+        // the values chosen, so the next start page shows what the agent offers now.
+        const settings = desiredSettings
+          ? overlaySettings(desiredSettings, state)
+          : settingsOf(state);
+        saveLastUsed({
+          agentId,
+          ...(hasSettings(settings) ? { settings: { [agentId]: settings } } : {}),
+        });
+      } catch (error) {
+        setInitialSend({
+          sessionId: session.id,
+          pending: false,
+          error: `${error instanceof Error ? error.message : "Could not apply the agent settings."} Check Agent settings, then send your message.`,
+        });
+        return;
       }
       if (firstPrompt.trim()) {
         try {
@@ -696,10 +709,10 @@ function ChatShell() {
             setWorktreePick({ projectId: selectedProjectId, choice }),
           agents,
           selectedAgentId,
-          onSelectAgent: setSelectedAgentId,
+          onSelectAgent: selectAgent,
           settings: startSettings,
           onSettingsChange: changeStartSetting,
-          loading: loading || projectsLoading,
+          loading: loading || projectsLoading || !lastUsed,
           canCreate,
           creating,
           error: sessionError,

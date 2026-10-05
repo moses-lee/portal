@@ -403,6 +403,12 @@ export type PermissionAnswerer = "user" | "portal";
 export type StoredEvent = PortalEvent & { seq: number; ts: number };
 
 /**
+ * Payload of a default (`message`) SSE event on `/api/sessions/[id]/stream`: one logged event with
+ * its epoch ms timestamp. Its seq is the SSE `id:`.
+ */
+export type StreamedEvent = PortalEvent & { ts: number };
+
+/**
  * Response of `GET /api/sessions/[id]/events`: one page of the log, oldest first. Ask for the
  * last few turns with `?turns=<n>` (the page starts at a turn boundary unless a single turn
  * exceeds the row cap, in which case it starts inside that turn) or for `?limit=<rows>`.

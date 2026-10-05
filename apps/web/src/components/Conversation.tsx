@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState, type ComponentProps } from "react";
+import { memo, useEffect, useMemo, useState, type ComponentProps } from "react";
 import {
   ArrowDown,
   Check,
@@ -35,6 +35,7 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import AgentLogo from "./AgentLogo";
+import { DayDivider, MessageTime } from "./ChatTime";
 import CodeBlock from "./CodeBlock";
 import CopyButton from "./CopyButton";
 import PermissionCard from "./PermissionCard";
@@ -43,6 +44,7 @@ import dynamic from "next/dynamic";
 // The diff library is only needed once an edit's card is opened.
 const DiffView = dynamic(() => import("./DiffView"));
 import type { Block, History, ToolBlock, Turn } from "@/lib/transcript";
+import { daySections } from "@/lib/orchestrator/format";
 
 const markdownComponents = {
   pre: CodeBlock,
@@ -339,19 +341,33 @@ function ActivityGroup({
   );
 }
 
+/** When a turn happened, for its day divider: its prompt's time, else when it ended; 0 when unknown. */
+function turnTime(turn: Turn): number {
+  const prompt = turn.blocks.find((block) => block.kind === "user");
+  return (prompt?.at || turn.endedAt) ?? 0;
+}
+
+/**
+ * One turn: the prompt with the time it was sent, then the reply. The reply's label carries the
+ * time the turn ended, so it shows nothing while the agent is still working.
+ */
 const TurnView = memo(function TurnView({
   turn,
   agentId,
   agentName,
   working,
+  day,
   onAnswer,
 }: {
   turn: Turn;
   agentId: string;
   agentName: string;
   working: boolean;
+  /** Any time on the day of the day divider this turn sits under; 0 before the first. */
+  day: number;
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
 }) {
+  const finishedAt = !working && turn.endedAt ? turn.endedAt : 0;
   const segments: (Block | ActivityBlock[])[] = [];
   for (const block of turn.blocks) {
     const previous = segments.at(-1);
@@ -375,12 +391,17 @@ const TurnView = memo(function TurnView({
         if (segment.kind === "user")
           return (
             <Message key={`user-${i}`} align="end">
-              <MessageContent>
+              <MessageContent className="gap-1.5">
                 <Bubble variant="secondary" className="max-w-[90%]">
                   <BubbleContent className="!rounded-[20px] !border-white/5 !bg-[#252b3e]/70 !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
                     {segment.text}
                   </BubbleContent>
                 </Bubble>
+                {segment.at > 0 && (
+                  <MessageFooter className="!px-2">
+                    <MessageTime at={segment.at} day={day || segment.at} />
+                  </MessageFooter>
+                )}
               </MessageContent>
             </Message>
           );
@@ -399,6 +420,12 @@ const TurnView = memo(function TurnView({
                   <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                     <AgentLogo agentId={agentId} className="!size-4" />
                     {agentName}
+                    {finishedAt > 0 && (
+                      <>
+                        <span aria-hidden className="text-muted-foreground/50">·</span>
+                        <MessageTime at={finishedAt} day={day || finishedAt} />
+                      </>
+                    )}
                   </div>
                 )}
                 {settled && <Markdown text={settled} />}
@@ -480,6 +507,8 @@ export default function Conversation({
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
   scrollRequest: number;
 }) {
+  /** Where the day dividers go, and the day each turn sits under (0 before the first known time). */
+  const days = useMemo(() => daySections(history.turns.map(turnTime)), [history.turns]);
   return (
     <MessageScrollerProvider
       autoScroll
@@ -554,17 +583,22 @@ export default function Conversation({
                 </p>
               </div>
             )}
-            {history.turns.map((turn, i) => (
-              <MessageScrollerItem key={turn.key} messageId={`turn-${turn.key}`}>
-                <TurnView
-                  turn={turn}
-                  agentId={agentId}
-                  agentName={agentName}
-                  working={busy && i === history.turns.length - 1}
-                  onAnswer={onAnswer}
-                />
-              </MessageScrollerItem>
-            ))}
+            {history.turns.map((turn, i) => {
+              const { divider, day } = days[i];
+              return (
+                <MessageScrollerItem key={turn.key} messageId={`turn-${turn.key}`}>
+                  {divider !== null && <DayDivider at={divider} className="mb-10" />}
+                  <TurnView
+                    turn={turn}
+                    agentId={agentId}
+                    agentName={agentName}
+                    working={busy && i === history.turns.length - 1}
+                    day={day}
+                    onAnswer={onAnswer}
+                  />
+                </MessageScrollerItem>
+              );
+            })}
             {busy && (
               <WorkingIndicator
                 turn={history.turns.at(-1)}

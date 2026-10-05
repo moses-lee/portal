@@ -65,12 +65,59 @@ export function describeCron(expr: string): string | null {
   return null;
 }
 
+/** A local time of day, 24-hour: "14:05". */
+export function formatClock(at: number): string {
+  const date = new Date(at);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** True when both times fall on the same local calendar day. */
+export function sameDay(a: number, b: number): boolean {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
+/** A chat's day divider: "Today", "Yesterday", "Oct 3", or "Oct 3, 2025" outside the current year. */
+export function formatDay(at: number, now = Date.now()): string {
+  if (sameDay(at, now)) return "Today";
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (sameDay(at, yesterday.getTime())) return "Yesterday";
+  const date = new Date(at);
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+/**
+ * A chat message's time under its day divider (`day`, any time on that day): "14:05", or with the
+ * day ("Yesterday 23:58") when the message fell on another day than the divider above it.
+ */
+export function formatMessageTime(at: number, day: number, now = Date.now()): string {
+  return sameDay(at, day) ? formatClock(at) : `${formatDay(at, now)} ${formatClock(at)}`;
+}
+
+/**
+ * Where a chat's day dividers go, for each message's time (0 or less when unknown): `divider`, the
+ * time to label a divider before the message with (null for none), and `day`, a time on the day
+ * the message sits under (0 before the first known time). A divider opens the first known day and
+ * each day after it; a message of unknown time stays in the day before it.
+ */
+export function daySections(times: readonly number[]): { divider: number | null; day: number }[] {
+  let day = 0;
+  return times.map((at) => {
+    if (!(at > 0) || (day > 0 && sameDay(at, day))) return { divider: null, day };
+    day = at;
+    return { divider: at, day };
+  });
+}
+
 /** A short local date and time: "Tue 14:05" within a week, else "Sep 30, 14:05". */
 export function formatDateTime(at: number, now = Date.now()): string {
   const date = new Date(at);
-  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  const sameDay = new Date(now).toDateString() === date.toDateString();
-  if (sameDay) return `today ${time}`;
+  const time = formatClock(at);
+  if (sameDay(at, now)) return `today ${time}`;
   if (Math.abs(at - now) < 6 * DAY)
     return `${date.toLocaleDateString("en-US", { weekday: "short" })} ${time}`;
   return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${time}`;

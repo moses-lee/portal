@@ -20,14 +20,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Message, MessageContent } from "@/components/ui/message";
+import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
+import { formatClock } from "@/lib/orchestrator/format";
 import { TOOL_IO_OMITTED, type OrchestratorMessage } from "@/lib/orchestrator/types";
+import { MessageTime } from "./ChatTime";
 
 type Part = UIMessagePart<UIDataTypes, UITools>;
-
-export function formatTime(at: number) {
-  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
 function Json({ label, value }: { label: string; value: unknown }) {
   if (value === undefined) return null;
@@ -158,37 +156,47 @@ function userText(message: OrchestratorMessage) {
  * One message of the thread: the user's bubble, or the orchestrator's reply with its text through
  * Markdown, reasoning folded away, and tool calls as compact rows. The thread is prose: the items
  * a message touched are not drawn under it (the Needs-you strip is where they are read and acted
- * on). Tick messages carry a "Scheduled check · 10:42" label instead of the Portal label.
+ * on). Tick messages carry a "Scheduled check · 10:42" label instead of the Portal label. Each
+ * message shows its time: a prompt when the server took it, a reply when it finished (nothing
+ * while it streams, nor when the time is unknown).
  */
 const PortalMessage = memo(function PortalMessage({
   message,
   streaming,
+  day,
   onOpenCurationRun,
   onLoadToolIO,
 }: {
   message: OrchestratorMessage;
   /** True while this message is still arriving. */
   streaming: boolean;
+  /** Any time on the day of the day divider this message sits under; 0 before the first. */
+  day: number;
   /** Set when the page can show a curation run's digest and diff (a consolidator's note links to it). */
   onOpenCurationRun?: (runId: string) => void;
   /** Asked for the whole message when a tool row of a paged message (tool traffic left out) is opened. */
   onLoadToolIO?: (messageId: string) => void;
 }) {
+  const at = message.metadata?.at ?? 0;
   if (message.role === "user") {
     return (
       <Message align="end">
-        <MessageContent>
+        <MessageContent className="gap-1.5">
           <Bubble variant="secondary" className="max-w-[90%]">
             <BubbleContent className="!rounded-[20px] !border-white/5 !bg-[#252b3e]/70 !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
               {userText(message)}
             </BubbleContent>
           </Bubble>
+          {at > 0 && (
+            <MessageFooter className="!px-2">
+              <MessageTime at={at} day={day || at} />
+            </MessageFooter>
+          )}
         </MessageContent>
       </Message>
     );
   }
   const tick = message.metadata?.tick;
-  const at = message.metadata?.at;
   const run = message.metadata?.run;
   const curationRun = run?.kind === "consolidate" && onOpenCurationRun ? run.id : null;
   return (
@@ -197,8 +205,15 @@ const PortalMessage = memo(function PortalMessage({
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Sparkles className="size-3.5" />
           {tick
-            ? `${tick.reason === "manual" ? "Manual" : "Scheduled"} check${at ? ` · ${formatTime(at)}` : ""}`
+            ? `${tick.reason === "manual" ? "Manual" : "Scheduled"} check${at ? ` · ${formatClock(at)}` : ""}`
             : "Portal"}
+          {/* The start part stamps a time too; a reply shows its finish time once it has one. */}
+          {!tick && !streaming && at > 0 && (
+            <>
+              <span aria-hidden className="text-muted-foreground/50">·</span>
+              <MessageTime at={at} day={day || at} />
+            </>
+          )}
         </div>
         {message.parts.map((part, index) => {
           if (part.type === "text")

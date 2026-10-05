@@ -11,13 +11,13 @@ import { sessionState as deriveSessionState } from "@/lib/session-state";
 import { sessionStatusLabel } from "@/lib/session-status";
 import type {
   EventPage,
-  PortalEvent,
   SessionLink,
   SessionMetaEvent,
   SessionState,
   SessionSummary,
   SetConfigRequest,
   StoredEvent,
+  StreamedEvent,
 } from "@/lib/types";
 import {
   appendEvent,
@@ -207,11 +207,12 @@ export function useSessionStream(
         es = mine;
         mine.onmessage = (m) => {
           if (es !== mine) return;
-          const ev = JSON.parse(m.data) as PortalEvent;
+          const ev = JSON.parse(m.data) as StreamedEvent;
           const seq = Number(m.lastEventId);
           cursorRef.current = Math.max(cursorRef.current, seq);
           // `appendEvent` drops an event the history already holds (a replay after reconnect).
-          pending.push({ ...ev, seq, ts: Date.now() });
+          // The server stamps each event with its logged time; an older server sent none.
+          pending.push({ ...ev, seq, ts: typeof ev.ts === "number" ? ev.ts : Date.now() });
           frame ??= requestAnimationFrame(flushEvents);
         };
         mine.addEventListener("meta", (m) => {

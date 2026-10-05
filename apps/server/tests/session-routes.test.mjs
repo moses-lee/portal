@@ -192,6 +192,50 @@ test("POST /api/sessions validates like the web route and creates a session in t
   assert.deepEqual(unknown.json(), { error: "Unknown session." });
 });
 
+test("the last-used agent and settings: the start page patches them, a session's config route records the user's change only", async (t) => {
+  const { app, makeApp } = await setup(t);
+  const lastUsed = async (target = app) => (await target.inject({ method: "GET", url: "/api/last-used" })).json().lastUsed;
+  const patch = (payload, headers) => app.inject({ method: "PATCH", url: "/api/last-used", payload, headers });
+  const values = (record) => Object.fromEntries(record.configOptions.map((option) => [option.id, option.currentValue]));
+  assert.deepEqual(await lastUsed(), { agentId: null, settings: {} });
+
+  assert.equal((await patch({ agentId: "codex" }, EVIL)).statusCode, 403);
+  assert.deepEqual((await patch({ agentId: "nope" })).json(), { error: 'Unknown agent "nope".' });
+  assert.equal((await patch({ settings: { claude: { configOptions: "x" } } })).statusCode, 400);
+  assert.equal((await patch({ settings: { other: { modes: null, configOptions: [] } } })).statusCode, 400);
+  assert.equal((await patch({ agent: "codex" })).statusCode, 400);
+  assert.equal((await patch([])).statusCode, 400);
+  const picked = await patch({ agentId: "codex" });
+  assert.equal(picked.statusCode, 200, picked.body);
+  assert.deepEqual(picked.json().lastUsed, { agentId: "codex", settings: {} });
+
+  // The start page picked plan mode for Claude; then, in a session, the user switches model only.
+  const session = await createSession(app, { projectId: "proj-1", agentId: "claude" });
+  const record = { modes: session.state.modes, configOptions: session.state.configOptions.map((option) => option.id === "mode" ? { ...option, currentValue: "plan" } : option) };
+  assert.equal((await patch({ settings: { claude: record } })).statusCode, 200);
+  const changed = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/config`, payload: { configId: "model", value: "smart" } });
+  assert.equal(changed.statusCode, 200, changed.body);
+  // The session itself is still in default mode (as if the agent had left plan); the record keeps the user's plan.
+  assert.equal(changed.json().state.configOptions.find(({ id }) => id === "mode").currentValue, "default");
+  let stored = await lastUsed();
+  assert.equal(stored.agentId, "codex", "a config change does not pick an agent");
+  assert.deepEqual(values(stored.settings.claude), { mode: "plan", model: "smart", fast: false });
+  assert.equal(stored.settings.claude.modes.currentModeId, "plan", "the legacy mode follows the mode option");
+  assert.equal("commands" in stored.settings.claude, false);
+
+  // Changing the mode records the mode; a failed change records nothing.
+  await app.inject({ method: "POST", url: `/api/sessions/${session.id}/config`, payload: { configId: "fast", value: true } });
+  await app.inject({ method: "POST", url: `/api/sessions/${session.id}/config`, payload: { modeId: "default" } });
+  stored = await lastUsed();
+  assert.deepEqual(values(stored.settings.claude), { mode: "default", model: "smart", fast: true });
+  assert.equal(stored.settings.claude.modes.currentModeId, "default");
+  assert.equal((await app.inject({ method: "POST", url: "/api/sessions/nope/config", payload: { modeId: "plan" } })).statusCode, 409);
+  assert.deepEqual(await lastUsed(), stored);
+
+  // The record is in Postgres: a restarted server reads it back.
+  assert.deepEqual(await lastUsed(await makeApp()), stored);
+});
+
 test("prompt, permission, config, cancel, attach, events, and delete behave like the web routes", async (t) => {
   const { app, messages } = await setup(t);
   const session = await createSession(app);
@@ -384,8 +428,10 @@ test("GET /api/sessions/:id/stream replays after the cursor, sends meta, tails, 
   const replayed = [await replay.next(), await replay.next(), await replay.next()];
   assert.deepEqual(replayed.map(({ id }) => id), ["3", "4", "5"]);
   assert.deepEqual(replayed.map(({ data }) => data.type), ["permission_request", "permission_response", "turn_end"]);
+  // The seq is the SSE id; each event carries the time it was logged.
   assert.equal(replayed[2].data.seq, undefined);
-  assert.equal(replayed[2].data.ts, undefined);
+  assert.equal(typeof replayed[2].data.ts, "number");
+  assert.ok(replayed[2].data.ts > 0);
   const meta = await replay.next();
   assert.equal(meta.event, "meta");
   assert.deepEqual(meta.data.link, { status: "live" });
@@ -421,7 +467,9 @@ test("GET /api/sessions/:id/stream replays after the cursor, sends meta, tails, 
   await app.inject({ method: "POST", url: `/api/sessions/${session.id}/prompt`, payload: { text: "again" } });
   const user = await next((frame) => frame.event === "message");
   assert.equal(user.id, "6");
-  assert.deepEqual(user.data, { type: "user", text: "again" });
+  const { ts, ...prompt } = user.data;
+  assert.deepEqual(prompt, { type: "user", text: "again" });
+  assert.ok(Math.abs(ts - Date.now()) < 60_000, "a live event carries its logged time");
   await app.inject({ method: "POST", url: `/api/sessions/${session.id}/config`, payload: { modeId: "plan" } });
   const modeMeta = await next((frame) => frame.event === "meta" && frame.data.state.modes?.currentModeId === "plan");
   assert.equal(modeMeta.data.state.modes.currentModeId, "plan");

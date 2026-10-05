@@ -22,6 +22,7 @@ import { createProjectsService } from "./projects/service.ts";
 import { registerProjectRoutes } from "./projects/routes.ts";
 import { type SessionsOptions, createSessionsService } from "./sessions/service.ts";
 import { registerSessionRoutes } from "./sessions/routes.ts";
+import { createPgLastUsedStore } from "./settings/last-used.ts";
 import { createSettingsService } from "./settings/service.ts";
 import { registerSettingsRoutes } from "./settings/routes.ts";
 import { createTerminalsService } from "./terminals/service.ts";
@@ -79,6 +80,7 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     ctx.sessions = createSessionsService(ctx, sessions);
     ctx.projects = createProjectsService(ctx);
     ctx.settings = createSettingsService(ctx);
+    ctx.lastUsed = createPgLastUsedStore(ctx.db);
     // A missing or broken server key fails the boot here rather than the first settings request.
     await ctx.settings.ready;
     // The hung threshold is the user's; later changes reach the running sessions too.

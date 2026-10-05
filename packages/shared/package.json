@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./agent-activity": "./src/agent-activity.ts",
+    "./agent-settings": "./src/agent-settings.ts",
     "./branch-matching": "./src/branch-matching.ts",
     "./git-info": "./src/git-info.ts",
     "./items": "./src/items.ts",
