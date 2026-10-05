@@ -23,9 +23,8 @@ test("Portal is the home: the sidebar's Chat entry opens / and is marked current
   const recent = sidebar.getByRole("region", { name: "Recent rooms" });
   await expect(recent.getByRole("button", { name: new RegExp(firstTitle) })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: /1 item needs you/ })).toBeVisible();
-  // Needs you carries the needs-you count (one in the fixture) as a badge; Chat carries none.
-  await expect(nav.getByRole("button")).toHaveText(["Chat", /^Needs you/, "Watches", "Activity", "Memory", "System", "Projects", "Terminal"]);
-  await expect(nav.getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you\s*1$/);
+  // What needs you is on the foyer card above, not a Portal entry; Chat carries no badge.
+  await expect(nav.getByRole("button")).toHaveText(["Chat", "Watches", "Activity", "Memory", "System", "Projects", "Terminal"]);
   const button = nav.getByRole("button", { name: "Chat", exact: true });
   await expect(button).not.toHaveAttribute("aria-current", "page");
   await expect(nav.getByRole("button", { name: "Projects", exact: true })).toHaveAttribute("aria-current", "page");
@@ -104,7 +103,8 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   await page.screenshot({ animations: "disabled", path: info.outputPath("portal.png") });
 
   const nav = page.getByRole("navigation", { name: "Portal", exact: true });
-  await nav.getByRole("button", { name: "Needs you", exact: true }).click();
+  const foyer = page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ });
+  await foyer.click();
   await expect(page).toHaveURL(/\/attention$/);
   const card = page.getByRole("region", { name: "Needs your attention" }).getByRole("article", { name: portalItem.title });
   await expect(card).toBeVisible();
@@ -136,12 +136,12 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   expect((sent[0].body as { message: { role: string } }).message.role).toBe("user");
 
   // Resolve goes through PATCH and empties the page and the badge; the thread's messages are unchanged.
-  await nav.getByRole("button", { name: "Needs you", exact: true }).click();
+  await foyer.click();
   await card.getByRole("button", { name: `More actions for ${portalItem.title}` }).click();
   await page.getByRole("menuitem", { name: "Resolve" }).click();
   await expect(page.getByRole("article", { name: portalItem.title })).toHaveCount(0);
   await expect(page.getByText(/^Nothing needs you\./)).toBeVisible();
-  await expect(nav.getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you$/);
+  await expect(foyer).toContainText("Everything is in place");
   const patch = fixture.requests.find(
     (request) => request.path === "/api/portal/items/i1" && request.method === "PATCH",
   );
@@ -241,8 +241,7 @@ test("background work never blocks the composer; only this thread's own turn doe
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
   await expect(page.getByText(/Portal is answering in this thread/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
-  const nav = page.getByRole("navigation", { name: "Portal", exact: true });
-  await nav.getByRole("button", { name: "Needs you", exact: true }).click();
+  await page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ }).click();
   await page
     .getByRole("article", { name: portalItem.title })
     .getByRole("button", { name: "Ask Portal" })

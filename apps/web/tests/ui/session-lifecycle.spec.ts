@@ -191,8 +191,8 @@ test("six open items: the Needs-you badge says 6, the page lists six cards by ki
   await page.goto("/");
   await expect(page.getByText("Nothing yet. I will keep an eye on your pull requests.")).toBeVisible();
   await expect(page.getByRole("article")).toHaveCount(0);
-  const entry = page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Needs you", exact: true });
-  await expect(entry).toHaveText(/^Needs you\s*6$/);
+  const entry = page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ });
+  await expect(entry).toContainText("6 items need you");
 
   await entry.click();
   const view = page.getByRole("region", { name: "Needs your attention" });

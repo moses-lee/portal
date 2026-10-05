@@ -41,7 +41,10 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-chat.png") });
 
-  await go("Needs you");
+  // The Needs-you page has no entry: the foyer card in the sheet opens it.
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ }).click();
+  await expect(page.getByRole("dialog", { name: "Your workspace" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Needs your attention" }).getByRole("article", { name: portalItem.title })).toBeVisible();
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-attention.png") });

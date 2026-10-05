@@ -16,7 +16,7 @@ import {
 import IconButton from "./IconButton";
 import PortalMark from "./PortalMark";
 import RoomModeControl from "./RoomModeControl";
-import PortalViewBadge, { usePortalViewCounts, viewMeta, type PortalViewCounts } from "./portal/views";
+import PortalViewBadge, { sidebarViews, usePortalViewCounts, viewMeta, type PortalViewCounts } from "./portal/views";
 import ProjectsColumn from "./ProjectsColumn";
 import RemovedProjects from "./RemovedProjects";
 import { useMediaQuery } from "./useMediaQuery";
@@ -29,7 +29,7 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import { portalViews, type PortalView } from "@/lib/session-routes";
+import type { PortalView } from "@/lib/session-routes";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, RemovedProjectSummary, SessionSummary } from "@/lib/types";
@@ -85,7 +85,7 @@ const PortalViewEntries = memo(function PortalViewEntries({
   onPortalView: (view: PortalView) => void;
   counts: PortalViewCounts;
 }) {
-  return portalViews.map((entry) => {
+  return sidebarViews.map((entry) => {
     const Icon = viewMeta[entry].icon;
     const selected = entry === portalView;
     return (
@@ -98,11 +98,7 @@ const PortalViewEntries = memo(function PortalViewEntries({
       >
         <Icon className="size-4" />
         {viewMeta[entry].label}
-        <PortalViewBadge
-          view={entry}
-          approvals={entry === "attention" ? counts.approvals : 0}
-          count={counts[entry]}
-        />
+        <PortalViewBadge count={counts[entry]} />
       </Button>
     );
   });
@@ -125,13 +121,9 @@ function recentRooms(sessions: SessionSummary[]): SessionSummary[] {
 
 function foyerSummary(sessions: SessionSummary[], counts: PortalViewCounts) {
   let waitingCount = 0;
-  let firstWaitingId: string | null = null;
   let working = 0;
   for (const session of sessions) {
-    if (session.awaitingPermission) {
-      waitingCount++;
-      firstWaitingId ??= session.id;
-    }
+    if (session.awaitingPermission) waitingCount++;
     if (session.busy) working++;
   }
   const portalWaiting = counts.approvals > 0 || counts.attention > 0;
@@ -152,7 +144,7 @@ function foyerSummary(sessions: SessionSummary[], counts: PortalViewCounts) {
       : working > 0
         ? "Your agents are at work"
         : "Your rooms are ready when you are";
-  return { needsAttention, working, headline, detail, firstWaitingId, portalWaiting };
+  return { needsAttention, working, headline, detail };
 }
 
 /** A useful front door: the next request, recent conversations, then the full navigation. */
@@ -179,12 +171,9 @@ const HomeColumn = memo(function HomeColumn({
 }) {
   const counts = usePortalViewCounts();
   const recent = useMemo(() => recentRooms(sessions), [sessions]);
-  const { needsAttention, working, headline, detail, firstWaitingId, portalWaiting } = foyerSummary(sessions, counts);
-  const openStatus = () => {
-    if (portalWaiting) onPortalView("attention");
-    else if (firstWaitingId === null) onPortalView("chat");
-    else onSelect(firstWaitingId);
-  };
+  const { needsAttention, working, headline, detail } = foyerSummary(sessions, counts);
+  // The card is the way to the Needs-your-attention page (it has no sidebar entry), whatever it says.
+  const openStatus = () => onPortalView("attention");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-0.5 pb-1">
@@ -192,6 +181,7 @@ const HomeColumn = memo(function HomeColumn({
       <button
         type="button"
         onClick={openStatus}
+        aria-current={portalView === "attention" ? "page" : undefined}
         className="group mt-2 w-full rounded-2xl border border-border/80 bg-card/70 p-3.5 text-left shadow-sm transition-colors hover:border-amber-200/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex items-start justify-between gap-2">

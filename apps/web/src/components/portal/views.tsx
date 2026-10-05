@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import { Activity, BellRing, Brain, MessagesSquare, Radar, ServerCog, ShieldAlert, type LucideIcon } from "lucide-react";
+import { Activity, BellRing, Brain, MessagesSquare, Radar, ServerCog, type LucideIcon } from "lucide-react";
 import { isVisibleItem } from "../PortalItemCard";
 import { usePortalLive } from "./PortalLive";
-import type { PortalView } from "@/lib/session-routes";
+import { portalViews, type PortalView } from "@/lib/session-routes";
 
 /** The sidebar entry and page title of each Portal view; Chat is the home and keeps the page's old name. */
 export const viewMeta: Record<PortalView, { label: string; title: string; icon: LucideIcon }> = {
@@ -16,7 +16,10 @@ export const viewMeta: Record<PortalView, { label: string; title: string; icon: 
   system: { label: "System", title: "System", icon: ServerCog },
 };
 
-/** The numbers behind the sidebar's badges, per view, plus waiting approvals (which Needs you shows first). */
+/** The views with a sidebar entry: Needs you has none, the foyer card at the top of the sidebar opens it. */
+export const sidebarViews: readonly PortalView[] = portalViews.filter((view) => view !== "attention");
+
+/** The numbers behind the sidebar's badges and the foyer card, per view, plus waiting approvals (the card names them first). */
 export type PortalViewCounts = Record<PortalView, number> & { approvals: number };
 
 /**
@@ -41,35 +44,14 @@ export function usePortalViewCounts(): PortalViewCounts {
 }
 
 /**
- * The count beside a view's sidebar entry: on Needs you, waiting approvals first (they block work),
- * else the items that need the user; on Watches the active watches; on Memory the inbox. Nothing
- * otherwise. Visual only: the entry keeps its plain name, and the approvals dialog and the views
- * announce the same counts.
+ * The count beside a view's sidebar entry: on Watches the active watches, on Memory the inbox,
+ * nothing otherwise. What needs the user is on the foyer card, not an entry. Visual only: the entry
+ * keeps its plain name, and the views announce the same counts.
  */
-export default function PortalViewBadge({
-  view,
-  approvals,
-  count,
-}: {
-  view: PortalView;
-  /** Waiting approvals; only Needs you shows them. */
-  approvals: number;
-  /** The view's own count from `usePortalViewCounts`. */
-  count: number;
-}) {
-  if (view === "attention" && approvals > 0)
-    return (
-      <span aria-hidden="true" className="ml-auto flex items-center gap-0.5 rounded-full bg-amber-300/15 px-1.5 text-[10px] font-medium leading-4 text-amber-200">
-        <ShieldAlert className="size-2.5" />
-        {approvals}
-      </span>
-    );
+export default function PortalViewBadge({ count }: { /** The view's own count from `usePortalViewCounts`. */ count: number }) {
   if (!count) return null;
   return (
-    <span
-      aria-hidden="true"
-      className={`ml-auto rounded-full px-1.5 text-[10px] leading-4 ${view === "attention" ? "bg-amber-300/15 text-amber-200" : "bg-white/10 text-foreground/80"}`}
-    >
+    <span aria-hidden="true" className="ml-auto rounded-full bg-white/10 px-1.5 text-[10px] leading-4 text-foreground/80">
       {count}
     </span>
   );

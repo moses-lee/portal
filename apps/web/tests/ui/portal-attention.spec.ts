@@ -19,23 +19,41 @@ const items = [checks1, checks2, watch, approvalItem];
 
 const navOf = (page: Page) =>
   page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("navigation", { name: "Portal", exact: true });
+/** The foyer card at the top of the sidebar: it names what waits and opens the Needs-your-attention page. */
+const foyerOf = (page: Page) =>
+  page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ });
 const viewOf = (page: Page) => page.getByRole("region", { name: "Needs your attention" });
 const bulkRequests = (requests: { path: string; method: string; body: unknown }[]) =>
   requests.filter((r) => r.path === "/api/portal/items/bulk" && r.method === "POST");
 
-test("the sidebar's Needs you entry carries the count of what waits; Chat carries none", async ({ page }) => {
+test("the foyer card counts what waits and opens the page; no sidebar entry carries it", async ({ page }) => {
   await setupPortal(page, { portal: { items } });
   await page.goto("/");
   const nav = navOf(page);
-  await expect(nav.getByRole("button")).toHaveText(["Chat", /^Needs you/, "Watches", "Activity", "Memory", "System", "Projects", "Terminal"]);
-  await expect(nav.getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you\s*4$/);
+  await expect(nav.getByRole("button")).toHaveText(["Chat", "Watches", "Activity", "Memory", "System", "Projects", "Terminal"]);
   await expect(nav.getByRole("button", { name: "Chat", exact: true })).toHaveText(/^Chat$/);
+  const foyer = foyerOf(page);
+  await expect(foyer).toContainText("4 items need you");
+  await expect(foyer).not.toHaveAttribute("aria-current", "page");
   // The chat shows no item cards at all.
   await expect(page.getByRole("article")).toHaveCount(0);
 
-  await nav.getByRole("button", { name: "Needs you", exact: true }).click();
+  await foyer.click();
   await expect(page).toHaveURL(/\/attention$/);
-  await expect(nav.getByRole("button", { name: "Needs you", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "Needs your attention", level: 1 })).toBeVisible();
+  await expect(foyer).toHaveAttribute("aria-current", "page");
+  // No Portal entry is current: the page has none.
+  await expect(nav.getByRole("button", { name: "Chat", exact: true })).not.toHaveAttribute("aria-current", "page");
+});
+
+test("with nothing waiting the foyer card still opens the page", async ({ page }) => {
+  await setupPortal(page, { portal: { items: [] } });
+  await page.goto("/");
+  const foyer = foyerOf(page);
+  await expect(foyer).toContainText("Everything is in place");
+  await foyer.click();
+  await expect(page).toHaveURL(/\/attention$/);
+  await expect(viewOf(page).getByText(/^Nothing needs you\./)).toBeVisible();
 });
 
 test("Needs you groups the items by kind, approvals first, newest first inside a group", async ({ page }, info) => {
@@ -71,7 +89,7 @@ test("a group's Resolve asks once more, then resolves exactly that group in one 
   await expect(view.getByRole("article", { name: checks1.title })).toHaveCount(0);
   await expect(view.getByRole("article", { name: checks2.title })).toHaveCount(0);
   await expect(view.getByRole("article")).toHaveCount(2);
-  await expect(navOf(page).getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you\s*2$/);
+  await expect(foyerOf(page)).toContainText("2 items need you");
   const sent = bulkRequests(fixture.requests);
   expect(sent).toHaveLength(1);
   expect(sent[0].body).toEqual({ ids: [checks1.id, checks2.id], status: "resolved" });
@@ -89,7 +107,7 @@ test("Dismiss all asks once more, then dismisses every item on the page and leav
 
   await expect(view.getByText(/^Nothing needs you\./)).toBeVisible();
   await expect(view.getByRole("article")).toHaveCount(0);
-  await expect(navOf(page).getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you$/);
+  await expect(foyerOf(page)).toContainText("Everything is in place");
   const sent = bulkRequests(fixture.requests);
   expect(sent).toHaveLength(1);
   const body = sent[0].body as { ids: string[]; status: string };
@@ -109,7 +127,7 @@ test("items snoozed for later wait folded away and do not count; a lapsed snooze
   await setupPortal(page, { portal: { items: [checks1, later, lapsed] } });
   await page.goto("/attention");
   const view = viewOf(page);
-  await expect(navOf(page).getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you\s*2$/);
+  await expect(foyerOf(page)).toContainText("2 items need you");
   await expect(view.getByRole("heading", { level: 2, name: /^Needs you/ })).toHaveText(/^Needs you\s*2$/);
   await expect(view.getByRole("region", { name: /^Review requested/ }).getByRole("article", { name: lapsed.title })).toBeVisible();
 
@@ -130,16 +148,16 @@ test("with nothing waiting the page says so and offers no bulk actions", async (
   await expect(view.getByText(/^Nothing needs you\./)).toBeVisible();
   await expect(view.getByRole("button", { name: /^(Resolve|Dismiss)/ })).toHaveCount(0);
   await expect(view.getByRole("button", { name: /^Snoozed/ })).toHaveCount(0);
-  await expect(navOf(page).getByRole("button", { name: "Needs you", exact: true })).toHaveText(/^Needs you$/);
+  await expect(foyerOf(page)).toContainText("Everything is in place");
 });
 
-test("an items event adds to the page and the badge live", async ({ page }) => {
+test("an items event adds to the page and the foyer card live", async ({ page }) => {
   await setupPortal(page, { portal: { items: [checks1] } });
   await page.goto("/attention");
   const view = viewOf(page);
-  const badge = navOf(page).getByRole("button", { name: "Needs you", exact: true });
-  await expect(badge).toHaveText(/^Needs you\s*1$/);
+  const badge = foyerOf(page);
+  await expect(badge).toContainText("1 item needs you");
   await emitPortal(page, { type: "items", items: [checks1, watch] });
   await expect(view.getByRole("region", { name: /^Watch update/ }).getByRole("article", { name: watch.title })).toBeVisible();
-  await expect(badge).toHaveText(/^Needs you\s*2$/);
+  await expect(badge).toContainText("2 items need you");
 });

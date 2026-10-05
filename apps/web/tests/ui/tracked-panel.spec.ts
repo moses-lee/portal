@@ -171,9 +171,7 @@ test("retired session items stay off the Needs-you page and out of its count", a
   await expect(view.getByRole("article", { name: /Checks are failing/ })).toBeVisible();
   await expect(view.getByRole("article")).toHaveCount(1);
   await expect(page.getByText("Session s1 finished")).toHaveCount(0);
-  await expect(
-    page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Needs you", exact: true }),
-  ).toHaveText(/^Needs you\s*1$/);
+  await expect(page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ })).toContainText("1 item needs you");
 });
 
 test.describe("on a phone", () => {
