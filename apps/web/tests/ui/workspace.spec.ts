@@ -196,9 +196,10 @@ test("a layout preset from the tab menu rearranges the tab; a smaller preset mov
     await layout.hover();
     await layout.click();
   };
+  // The presets are a radio group: the current layout is the checked item.
   await openLayouts();
-  await expect(page.getByRole("menuitem", { name: "Two columns" })).toHaveAttribute("aria-current", "true");
-  await page.getByRole("menuitem", { name: "Two rows" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Two columns" })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Two rows" }).click();
   await expect(page.getByRole("separator", { name: "Resize stacked panes" })).toBeVisible();
   await expect(page.getByRole("separator", { name: "Resize panes side by side" })).toHaveCount(0);
   // Both sessions stay, in order, in the rebuilt tab (split w1, panes w2 and w3); the focus lands on its first pane.
@@ -209,8 +210,8 @@ test("a layout preset from the tab menu rearranges the tab; a smaller preset mov
   expect(ops(fixture)).toEqual([{ op: "arrange", tabId: "t1", preset: "rows-2", sessionIds: ["s1", "s2"] }]);
   // Single holds one: the second session overflows to a tab of its own, right after this one.
   await openLayouts();
-  await expect(page.getByRole("menuitem", { name: "Two rows" })).toHaveAttribute("aria-current", "true");
-  await page.getByRole("menuitem", { name: "Single" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Two rows" })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Single" }).click();
   const tabs = strip(page).getByRole("tab");
   await expect(tabs).toHaveCount(2);
   await expect(tabs.nth(0)).toHaveText(firstTitle);
@@ -274,7 +275,7 @@ test("/sessions/<id> focuses the tab and pane holding the session, or opens a ta
   expect(ops(fixture)).toEqual([{ op: "open", sessionId: "s4" }]);
 });
 
-test("/new opens a start-page tab whose pane becomes the new session's; a later /new focuses an open start page", async ({ page }) => {
+test("/new opens a start-page tab whose pane becomes the new session's; + reuses the focused tab's start page, a later /new focuses the existing one", async ({ page }) => {
   const fixture = await setupPortal(page, { workspace: workspaceOf([tab("t1", pane("p1", "s1"))]) });
   await page.goto("/new");
   await expect(page).toHaveURL(/\/tabs\/w2$/);
@@ -294,13 +295,22 @@ test("/new opens a start-page tab whose pane becomes the new session's; a later 
     { op: "open", sessionId: null },
     { op: "replace_pane", paneId: "w1", sessionId: "created" },
   ]);
-  // The strip's + opens another start page (pane w3, tab w4); /new then focuses it instead of opening a third.
+  // The strip's + opens another start page (pane w3, tab w4). Every "new session" entry reuses a
+  // start-page pane only when it is in the focused tab: + again stays on w4 with no op.
   await strip(page).getByRole("button", { name: "New tab" }).click();
   await expect(page).toHaveURL(/\/tabs\/w4$/);
   await expect(tabs).toHaveCount(3);
+  await strip(page).getByRole("button", { name: "New tab" }).click();
+  await expect(page).toHaveURL(/\/tabs\/w4$/);
+  await expect(tabs).toHaveCount(3);
+  // `/new` from another tab focuses the existing start page (decision 7): no new tab, no op.
+  await tabs.nth(0).click();
+  await expect(page).toHaveURL(/\/tabs\/w2$/);
   await page.evaluate(() => window.history.pushState(null, "", "/new"));
   await expect(page).toHaveURL(/\/tabs\/w4$/);
   await expect(tabs).toHaveCount(3);
+  await expect(tabs.nth(2)).toHaveAttribute("aria-selected", "true");
+  await expect(paneOf(page, "w3").getByRole("textbox", { name: "First message" })).toBeVisible();
   expect(ops(fixture)).toHaveLength(3);
 });
 

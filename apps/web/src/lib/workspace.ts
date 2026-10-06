@@ -151,9 +151,9 @@ export function locationPath(ws: Workspace, location: WorkspaceLocation): string
 /**
  * What the shell does with a resolver path (decision 7 and 9): focus the tab holding the session, else
  * open it in a new tab. For `/new`: stay on the bare start page while the workspace is empty; else the
- * one rule every "new session" entry point follows (`+`, a project's `+`, a drafted prompt, `/new`): a
- * start-page pane is reused only when it is in the focused tab (`focusedTabId`; `/new` itself names
- * none), otherwise a new start-page tab opens.
+ * resolver focuses an existing start-page pane (the focused tab's first, else the first anywhere, decision
+ * 7), otherwise it opens a new start-page tab. The in-app entry points (`+`, a project's `+`, a drafted
+ * prompt) are additive instead: they reuse a start pane only when it is in the focused tab.
  */
 export type RouteResolution = { kind: "focus"; location: WorkspaceLocation } | { kind: "open"; op: WorkspaceOp } | { kind: "stay" };
 
@@ -168,7 +168,7 @@ export function resolveRoute(
   }
   if (ws.tabs.length === 0) return { kind: "stay" };
   const focused = focusedTabId ? findTab(ws, focusedTabId) : null;
-  const start = focused ? startPaneIn(focused) : null;
+  const start = (focused ? startPaneIn(focused) : null) ?? ws.tabs.map(startPaneIn).find((loc) => loc !== null) ?? null;
   return start ? { kind: "focus", location: start } : { kind: "open", op: { op: "open", sessionId: null } };
 }
 

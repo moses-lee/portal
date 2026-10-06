@@ -400,12 +400,17 @@ export const portalMessages: OrchestratorMessage[] = [
 
 declare global {
   interface Window {
+    /**
+     * Pushes one frame on the open stream(s) matching `match`. A frame for a session's own stream
+     * path waits for a stream that carries the session, so it settles once delivered (or rejects
+     * when no view subscribes); other frames are delivered to whatever is open at once.
+     */
     __portalEmit: (
       match: string,
       data: unknown,
       type?: string,
       seq?: number,
-    ) => void;
+    ) => Promise<void>;
     __portalSessions: SessionSummary[];
     __portalLive: {
       status: OrchestratorStatus;
@@ -636,15 +641,37 @@ export async function setupPortal(
         // A session's own stream path (`/api/sessions/<id>/stream`) also names its frames on the
         // multiplexed stream, where they carry the session id (and a message its seq).
         const sessionId = match.match(/^\/api\/sessions\/([^/]+)\/stream$/)?.[1];
-        for (const source of sources) {
-          if (source.url.includes(match)) source.send(data, type, seq);
-          else if (sessionId && source.sessionIds?.includes(sessionId))
-            source.send(
-              { sessionId, ...(data as Record<string, unknown>), ...(type === "message" ? { seq } : {}) },
-              type,
-              seq,
-            );
-        }
+        const deliver = () => {
+          let delivered = false;
+          for (const source of sources) {
+            if (source.url.includes(match)) {
+              source.send(data, type, seq);
+              delivered = true;
+            } else if (sessionId && source.sessionIds?.includes(sessionId)) {
+              source.send(
+                { sessionId, ...(data as Record<string, unknown>), ...(type === "message" ? { seq } : {}) },
+                type,
+                seq,
+              );
+              delivered = true;
+            }
+          }
+          return delivered;
+        };
+        if (deliver() || !sessionId) return Promise.resolve();
+        // A session's views subscribe through the page's one multiplexed stream, which opens a
+        // short debounce after the first page of history (`lib/session-stream-hub`). A frame for a
+        // session no stream carries yet waits for it, as the server could only send it to a
+        // connected view; a test that emits before its view exists fails here, not later.
+        return new Promise<void>((resolve, reject) => {
+          const started = Date.now();
+          const tick = () => {
+            if (deliver()) resolve();
+            else if (Date.now() - started > 5_000) reject(new Error(`No open stream carries session ${sessionId}; the frame was not delivered.`));
+            else setTimeout(tick, 10);
+          };
+          setTimeout(tick, 10);
+        });
       };
     },
     { sessions: currentSessions, live },

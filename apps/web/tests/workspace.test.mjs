@@ -138,12 +138,11 @@ test("resolvers: a session focuses its pane or opens a tab; /new reuses a start 
   const [sessionTab, startTab] = ws.tabs;
   assert.deepEqual(startPaneIn(startTab), { tabId: startTab.id, paneId: startTab.root.id });
   assert.equal(startPaneIn(sessionTab), null);
-  // The one rule of every "new session" entry point: a start pane is reused only when it is in the focused tab.
+  // `/new` focuses an existing start pane: the focused tab's first, else the first anywhere (decision 7).
   assert.deepEqual(resolveRoute(ws, { kind: "start" }, startTab.id), { kind: "focus", location: startPaneIn(startTab) });
-  assert.deepEqual(resolveRoute(ws, { kind: "start" }, sessionTab.id), { kind: "open", op: { op: "open", sessionId: null } });
-  // `/new` itself names no focused tab: a start pane elsewhere is not reused.
-  assert.deepEqual(resolveRoute(ws, { kind: "start" }), { kind: "open", op: { op: "open", sessionId: null } });
-  assert.deepEqual(resolveRoute(ws, { kind: "start" }, "gone"), { kind: "open", op: { op: "open", sessionId: null } });
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }, sessionTab.id), { kind: "focus", location: startPaneIn(startTab) });
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }), { kind: "focus", location: startPaneIn(startTab) });
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }, "gone"), { kind: "focus", location: startPaneIn(startTab) });
   // A split with a start pane in the focused tab: that pane.
   const split = build([{ op: "arrange", sessionIds: ["a", null], preset: "columns-2" }]);
   assert.deepEqual(resolveRoute(split, { kind: "start" }, split.tabs[0].id), {
