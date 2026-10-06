@@ -17,7 +17,7 @@ import type {
 } from "@portal/contracts/workspace";
 import { LAYOUT_PRESETS, WORKSPACE_TAB_TITLE_MAX } from "@portal/contracts/workspace";
 
-export const EMPTY_WORKSPACE: Workspace = { tabs: [], version: 0 };
+export const EMPTY_WORKSPACE: Workspace = Object.freeze({ tabs: Object.freeze([]) as unknown as Tab[], version: 0 });
 
 export const MAX_PANES_PER_TAB = 4;
 export const MAX_SPLIT_DEPTH = 2;
@@ -108,12 +108,14 @@ function roundSizes(sizes: number[]): number[] {
 /**
  * Sizes for `count` children: scaled to sum 100 with each at least 10 (a child squeezed below the
  * minimum is pinned there and the rest share what is left). Unusable input (wrong length, a
- * non-finite or non-positive entry) gives an equal split.
+ * non-finite or negative entry, all zeros) gives an equal split; a zero entry (a panel dragged
+ * shut) is pinned at the minimum.
  */
 export function normalizeSizes(sizes: readonly number[], count: number): number[] {
   if (count < 1) return [];
-  if (sizes.length !== count || !sizes.every((s) => Number.isFinite(s) && s > 0)) return equalSizes(count);
+  if (sizes.length !== count || !sizes.every((s) => Number.isFinite(s) && s >= 0)) return equalSizes(count);
   const total = sizes.reduce((sum, s) => sum + s, 0);
+  if (total <= 0) return equalSizes(count);
   let out = sizes.map((s) => (s / total) * 100);
   for (let pass = 0; pass < count; pass++) {
     const pinned = out.map((s) => s <= MIN_PANE_SIZE);
@@ -437,8 +439,9 @@ function resize(ws: Workspace, op: Extract<WorkspaceOp, { op: "resize" }>): Appl
   const tab = ws.tabs.find((t) => findSplit(t.root, op.splitId) !== null);
   const split = tab ? findSplit(tab.root, op.splitId) : null;
   if (!tab || !split) throw notFound("split", op.splitId);
-  if (op.sizes.length !== split.children.length || !op.sizes.every((s) => Number.isFinite(s) && s > 0)) {
-    throw new WorkspaceError("invalid", `Expected ${split.children.length} positive sizes for split ${op.splitId}.`);
+  // A panel dragged shut reports 0; clamping lifts it to the minimum like any other small size.
+  if (op.sizes.length !== split.children.length || !op.sizes.every((s) => Number.isFinite(s) && s >= 0)) {
+    throw new WorkspaceError("invalid", `Expected ${split.children.length} non-negative sizes for split ${op.splitId}.`);
   }
   const sizes = normalizeSizes(op.sizes, split.children.length);
   if (sameSizes(sizes, split.sizes)) return { workspace: ws, changed: false };
@@ -537,7 +540,8 @@ export function parseWorkspaceOp(input: unknown): WorkspaceOp {
   };
   switch (input.op) {
     case "open": {
-      const sessionId = input.sessionId ?? null;
+      if (!("sessionId" in input)) throw invalid("open needs a sessionId or null.");
+      const sessionId = input.sessionId;
       if (sessionId !== null && !isId(sessionId)) throw invalid("open needs a sessionId or null.");
       const target = input.target ?? null;
       if (target === null) return { op: "open", sessionId };
@@ -557,8 +561,8 @@ export function parseWorkspaceOp(input: unknown): WorkspaceOp {
       const op: WorkspaceOp = { op: "arrange", sessionIds: [...(list as (string | null)[])], preset: input.preset as LayoutPreset };
       const tabId = optionalId("tabId");
       if (tabId !== undefined) op.tabId = tabId;
-      if (input.title !== undefined && input.title !== null) {
-        if (typeof input.title !== "string") throw invalid("arrange title must be a string.");
+      if (input.title !== undefined) {
+        if (input.title !== null && typeof input.title !== "string") throw invalid("arrange title must be a string or null.");
         op.title = input.title;
       }
       if (input.titleSource !== undefined && input.titleSource !== null) op.titleSource = source("titleSource");

@@ -377,6 +377,8 @@ test("resize normalises and clamps; identical sizes are no change", () => {
   assert.deepEqual(result.workspace.tabs[0].root.sizes, [25, 75]);
   assert.equal(result.changed, true);
   assert.deepEqual(apply(start, { op: "resize", splitId: "sp", sizes: [1, 99] }).workspace.tabs[0].root.sizes, [10, 90]);
+  assert.deepEqual(apply(start, { op: "resize", splitId: "sp", sizes: [0, 100] }).workspace.tabs[0].root.sizes, [10, 90]);
+  assert.deepEqual(apply(start, { op: "resize", splitId: "sp", sizes: [0, 0] }).workspace.tabs[0].root.sizes, [50, 50]);
   assert.equal(apply(start, { op: "resize", splitId: "sp", sizes: [50, 50] }).changed, false);
   assert.equal(apply(start, { op: "resize", splitId: "sp", sizes: [7, 7] }).changed, false);
 
@@ -390,7 +392,6 @@ test("resize normalises and clamps; identical sizes are no change", () => {
 test("resize rejects the wrong number of sizes, non-positive sizes, and unknown splits", () => {
   const start = ws(tab("A", split("sp", "row", [pane("p1"), pane("p2")], [50, 50])));
   throwsCode(() => apply(start, { op: "resize", splitId: "sp", sizes: [100] }), "invalid");
-  throwsCode(() => apply(start, { op: "resize", splitId: "sp", sizes: [0, 100] }), "invalid");
   throwsCode(() => apply(start, { op: "resize", splitId: "sp", sizes: [-5, 105] }), "invalid");
   throwsCode(() => apply(start, { op: "resize", splitId: "p1", sizes: [50, 50] }), "not_found");
 });
@@ -468,7 +469,8 @@ test("normalizeSizes scales to 100, pins small entries at 10, and falls back to 
   assert.deepEqual(normalizeSizes([], 3), [33.34, 33.33, 33.33]);
   assert.deepEqual(normalizeSizes([50, 50], 3), [33.34, 33.33, 33.33]);
   assert.deepEqual(normalizeSizes([NaN, 1], 2), [50, 50]);
-  assert.deepEqual(normalizeSizes([0, 1], 2), [50, 50]);
+  assert.deepEqual(normalizeSizes([0, 1], 2), [10, 90]);
+  assert.deepEqual(normalizeSizes([0, 0], 2), [50, 50]);
   assert.deepEqual(normalizeSizes([-1, 1], 2), [50, 50]);
   assert.deepEqual(normalizeSizes([], 0), []);
   for (const input of [[1, 2, 3, 4], [97, 1, 1, 1], [0.001, 50, 50]]) {
@@ -531,13 +533,13 @@ test("parseWorkspaceOp accepts each op and answers a fresh object with only the 
   const cases = [
     [{ op: "open", sessionId: "s1", extra: 1 }, { op: "open", sessionId: "s1" }],
     [{ op: "open", sessionId: null, target: null }, { op: "open", sessionId: null }],
-    [{ op: "open" }, { op: "open", sessionId: null }],
     [
       { op: "open", sessionId: "s1", target: { tabId: "A", paneId: "p", edge: "left", junk: true } },
       { op: "open", sessionId: "s1", target: { tabId: "A", paneId: "p", edge: "left" } },
     ],
     [{ op: "replace_pane", paneId: "p", sessionId: "s" }, { op: "replace_pane", paneId: "p", sessionId: "s" }],
-    [{ op: "arrange", sessionIds: ["a", null], preset: "columns-2", tabId: null, title: null }, { op: "arrange", sessionIds: ["a", null], preset: "columns-2" }],
+    [{ op: "arrange", sessionIds: ["a", null], preset: "columns-2", tabId: null, title: null }, { op: "arrange", sessionIds: ["a", null], preset: "columns-2", title: null }],
+    [{ op: "arrange", sessionIds: ["a"], preset: "single", tabId: "T" }, { op: "arrange", sessionIds: ["a"], preset: "single", tabId: "T" }],
     [
       { op: "arrange", sessionIds: [], preset: "single", tabId: "T", title: "Hi", titleSource: "portal" },
       { op: "arrange", sessionIds: [], preset: "single", tabId: "T", title: "Hi", titleSource: "portal" },
@@ -566,6 +568,7 @@ test("parseWorkspaceOp rejects malformed input with invalid", () => {
     [],
     {},
     { op: "explode" },
+    { op: "open" },
     { op: "open", sessionId: 5 },
     { op: "open", sessionId: "" },
     { op: "open", sessionId: "s", target: "right" },
