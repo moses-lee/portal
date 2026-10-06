@@ -1,6 +1,5 @@
 /** `/api/agents`, `/api/sessions/**`, and `/api/blobs/**`, as the web app's Next.js routes served them. */
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { errorMessage } from "../http/errors.ts";
@@ -9,13 +8,14 @@ import { openEventStream } from "../http/sse.ts";
 import { toMeta, type SessionListChange } from "../lib/acp-runtime.ts";
 import { BLOB_NAME, mimeTypeOf } from "../lib/blobs.ts";
 import { errorStatus, resolveDirectory } from "../lib/fs-paths.ts";
-import { sameGitInfo } from "@portal/shared/git-info";
-import { displayPath, readGitInfo, type GitInfo } from "../lib/git-info.ts";
+import { displayPath } from "../lib/git-info.ts";
 import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
 import { deleteRemovedSessions, deleteSessionFully } from "./delete.ts";
-import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type PortalEvent, type SessionListEvent, type SessionMetaEvent, type SetConfigRequest, type StreamedEvent } from "../lib/types.ts";
+import { attachSessionViewer } from "./viewer.ts";
+import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type SessionListEvent, type SetConfigRequest } from "../lib/types.ts";
 
-const META_POLL_MS = 1000;
+/** The most sessions one `/api/sessions/streams` socket carries. */
+export const STREAM_IDS_MAX = 32;
 const DEFAULT_PAGE = 300;
 const MAX_PAGE = 2000;
 const MAX_TURNS = 50;
@@ -31,6 +31,29 @@ function parseCount(value: string | null): number | null {
 /** The query string as the web routes read it (`URLSearchParams.get` takes the first of repeated keys). */
 function searchParams(req: FastifyRequest): URLSearchParams {
   return new URL(req.url, "http://portal.invalid").searchParams;
+}
+
+/** An event cursor: the last seq a viewer holds, or -1 for none. */
+const CURSOR = /^-1$|^\d{1,15}$/;
+
+/**
+ * `/api/sessions/streams`' query: `ids=a,b` names the sessions, `since=a:5,b:-1` the last seq the
+ * viewer holds for each (-1, the default, for none). Answers the cursor per id in `ids` order, or
+ * the text of the 400.
+ */
+function parseStreamsQuery(ids: string | null, since: string | null): { cursors: Map<string, number> } | { error: string } {
+  const list = (ids ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (list.length === 0) return { error: "no session ids" };
+  const cursors = new Map(list.map((id) => [id, -1]));
+  if (cursors.size > STREAM_IDS_MAX) return { error: `at most ${STREAM_IDS_MAX} session ids` };
+  for (const part of (since ?? "").split(",").filter(Boolean)) {
+    const at = part.lastIndexOf(":");
+    const id = part.slice(0, at).trim();
+    const cursor = part.slice(at + 1).trim();
+    if (at < 1 || !cursors.has(id) || !CURSOR.test(cursor)) return { error: "invalid event cursor" };
+    cursors.set(id, Number(cursor));
+  }
+  return { cursors };
 }
 
 function parseConfigBody(body: unknown): SetConfigRequest | null {
@@ -147,6 +170,51 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     stream.onClose(ctx.sessions.onSessionsChange(onChange));
   });
 
+  /**
+   * Several sessions' event streams on one socket: the page's open panes share it, as a browser
+   * allows six connections per host on plain HTTP. `?ids=<id>,<id>` names the sessions and
+   * `&since=<id>:<seq>,...` the last seq the viewer holds for each (default -1). Each session is
+   * served as `/api/sessions/:id/stream` serves it, tagged with its id: default messages carry
+   * `{ sessionId, seq, ...event }` under the SSE id `<sessionId>:<seq>`; `meta`, `reset` and
+   * `deleted` carry `{ sessionId, ...payload }`. An unknown id gets `deleted` at once and the rest
+   * proceed; the socket ends once every session on it is gone. The cursors travel in the query,
+   * not `Last-Event-ID`, so the viewer reopens the stream itself instead of the browser's retry.
+   */
+  app.get("/api/sessions/streams", async (req, reply) => {
+    const query = searchParams(req);
+    const parsed = parseStreamsQuery(query.get("ids"), query.get("since"));
+    if ("error" in parsed) return reply.code(400).type("text/plain; charset=utf-8").send(parsed.error);
+    await ready();
+    const stream = openEventStream(req, reply);
+    if (stream.closed) return;
+    let attached = 0;
+    for (const [sessionId, since] of parsed.cursors) {
+      const detach = attachSessionViewer(ctx, sessionId, since, (frame) => {
+        switch (frame.kind) {
+          case "event":
+            stream.send({ ...frame.event, sessionId, seq: frame.seq }, { id: `${sessionId}:${frame.seq}` });
+            return;
+          case "meta":
+            stream.send({ ...frame.meta, sessionId }, { event: "meta" });
+            return;
+          case "reset":
+            stream.send({ sessionId }, { event: "reset" });
+            return;
+          case "deleted":
+            stream.send({ sessionId }, { event: "deleted" });
+            if (--attached === 0) stream.close();
+        }
+      });
+      if (!detach) {
+        stream.send({ sessionId }, { event: "deleted" });
+        continue;
+      }
+      attached++;
+      stream.onClose(detach);
+    }
+    if (attached === 0) stream.close();
+  });
+
   // Above the `:id` routes so the literal path is never read as a session id.
   /** Delete every session whose project is gone, and the removed-project records. Answers `{ deleted }`. */
   app.delete("/api/sessions/removed", async (req, reply) => {
@@ -221,73 +289,36 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     // EventSource sends the last `id:` it saw on reconnect; a first connection names it in the query.
     const lastEventId = req.headers["last-event-id"];
     const cursor = (typeof lastEventId === "string" && lastEventId) || searchParams(req).get("since") || "-1";
-    if (!/^-1$|^\d{1,15}$/.test(cursor)) {
+    if (!CURSOR.test(cursor)) {
       return reply.code(400).type("text/plain; charset=utf-8").send("invalid event cursor");
     }
     const since = Number(cursor);
 
     const stream = openEventStream(req, reply);
     if (stream.closed) return;
-    const currentProject = (): SessionMetaEvent["project"] => {
-      const owner = ctx.projects.get(session.projectId);
-      return owner ? { id: owner.id, name: owner.name } : null;
-    };
-    let git: GitInfo = null;
-    let cwdMissing = false;
-    let project = currentProject();
-    let checking = false;
-    const send = (seq: number, ev: PortalEvent, ts: number) => stream.send({ ...ev, ts } satisfies StreamedEvent, { id: seq });
-    const sendMeta = () => {
-      const meta: SessionMetaEvent = {
-        busy: session.busy, link: session.link, title: session.title, titleSource: session.titleSource, cwd: session.cwd,
-        agentId: session.agentId, agentName: session.agentName, git, state: session.state, project, cwdMissing, queue: [...session.queue],
-      };
-      stream.send(meta, { event: "meta" });
-    };
-    // The session directory is fixed, but its checked-out branch moves as the agent or a terminal
-    // run git, the folder itself can disappear, and the owning project can be renamed or removed;
-    // re-announce meta whenever any of those change.
-    const refreshMeta = async (announce: boolean) => {
-      if (checking) return;
-      checking = true;
-      try {
-        const missing = await stat(session.cwd).then(() => false, () => true);
-        // readGitInfo walks up to parent directories, so skip it once the folder itself is gone.
-        const nextGit = missing ? null : await readGitInfo(session.cwd);
-        if (stream.closed) return;
-        const nextProject = currentProject();
-        const changed = !sameGitInfo(nextGit, git) || missing !== cwdMissing
-          || nextProject?.id !== project?.id || nextProject?.name !== project?.name;
-        git = nextGit;
-        cwdMissing = missing;
-        project = nextProject;
-        if (announce || changed) sendMeta();
-      } finally { checking = false; }
-    };
-
-    // Replay what the viewer missed, or tell it to start over from a fresh page.
-    const missed = ctx.sessions.eventsSince(id, since);
-    if (missed === null) stream.write(`event: reset\ndata: {}\n\n`);
-    else {
-      for (const { seq, ...ev } of missed) send(seq, ev, ev.ts);
+    const detach = attachSessionViewer(ctx, id, since, (frame) => {
+      switch (frame.kind) {
+        case "event":
+          stream.send(frame.event, { id: frame.seq });
+          return;
+        case "meta":
+          stream.send(frame.meta, { event: "meta" });
+          return;
+        case "reset":
+          stream.write(`event: reset\ndata: {}\n\n`);
+          return;
+        case "deleted":
+          stream.write(`event: deleted\ndata: {}\n\n`);
+          stream.close();
+      }
+    });
+    // The lookup above and this run without an await between them, so this is only in principle.
+    if (!detach) {
+      stream.write(`event: deleted\ndata: {}\n\n`);
+      stream.close();
+      return;
     }
-    sendMeta();
-    // Tail. Mode, model, command, connection, title, and queue changes reach viewers through `meta`, not the event log.
-    stream.onClose(ctx.sessions.subscribe(id, {
-      onEvent: send,
-      onState: sendMeta,
-      onLink: sendMeta,
-      onQueue: sendMeta,
-      onClose: () => {
-        stream.write(`event: deleted\ndata: {}\n\n`);
-        stream.close();
-      },
-    }));
-    const metaPoll = setInterval(() => { void refreshMeta(false); }, META_POLL_MS);
-    stream.onClose(() => clearInterval(metaPoll));
-    void refreshMeta(true);
-    // Reconnect a persisted session's agent; the outcome arrives as `meta.link`.
-    if (session.link.status !== "live") ctx.sessions.attach(id).catch(() => {});
+    stream.onClose(detach);
   });
 
   /**

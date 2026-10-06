@@ -478,6 +478,122 @@ test("GET /api/sessions/:id/stream replays after the cursor, sends meta, tails, 
   assert.equal(await tail.next(), null, "the stream ends after deletion");
 });
 
+test("GET /api/sessions/streams serves several sessions on one socket: each replays from its own cursor, frames carry the session id, an unknown id is reported deleted", async (t) => {
+  const { app } = await setup(t, { recentEvents: 3 });
+  const a = await createSession(app);
+  const b = await createSession(app);
+  await runTurn(app, a.id);
+  await runTurn(app, b.id);
+  const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const open = (query) => fetch(`${base}/api/sessions/streams${query}`, { signal: controller.signal });
+
+  // Only seqs 3, 4, 5 of each session are in memory. `a` is replayed from 2, `b` is caught up, `nope` does not exist.
+  const response = await open(`?ids=${a.id},${b.id},nope&since=${a.id}:2,${b.id}:5`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /^text\/event-stream/);
+  const stream = sseReader(response);
+  const replayed = [await stream.next(), await stream.next(), await stream.next()];
+  assert.deepEqual(replayed.map(({ event }) => event), ["message", "message", "message"]);
+  assert.deepEqual(replayed.map(({ id }) => id), [`${a.id}:3`, `${a.id}:4`, `${a.id}:5`]);
+  assert.deepEqual(
+    replayed.map(({ data }) => [data.sessionId, data.seq, data.type]),
+    [[a.id, 3, "permission_request"], [a.id, 4, "permission_response"], [a.id, 5, "turn_end"]],
+  );
+  assert.equal(typeof replayed[2].data.ts, "number");
+  const metaA = await stream.next();
+  assert.equal(metaA.event, "meta");
+  assert.equal(metaA.data.sessionId, a.id);
+  assert.equal(metaA.data.title, "hello");
+  assert.equal(metaA.data.cwd, a.cwd);
+  assert.deepEqual(metaA.data.link, { status: "live" });
+  assert.deepEqual(metaA.data.project, { id: "proj-1", name: "Repo" });
+  const metaB = await stream.next();
+  assert.equal(metaB.event, "meta");
+  assert.equal(metaB.data.sessionId, b.id);
+  assert.equal(metaB.data.cwd, b.cwd);
+  const missing = await stream.next();
+  assert.equal(missing.event, "deleted");
+  assert.deepEqual(missing.data, { sessionId: "nope" });
+
+  // A cursor older than memory resets that session alone; a session `since` omits starts from -1.
+  const aged = sseReader(await open(`?ids=${a.id},${b.id}&since=${b.id}:5`));
+  const reset = await aged.next();
+  assert.equal(reset.event, "reset");
+  assert.deepEqual(reset.data, { sessionId: a.id });
+  assert.deepEqual([(await aged.next()).data.sessionId, (await aged.next()).data.sessionId], [a.id, b.id]);
+  await aged.cancel();
+
+  // Live tail: events and meta carry the id of the session they belong to.
+  const next = async (predicate) => {
+    for (;;) {
+      const frame = await stream.next();
+      assert.ok(frame, "stream ended early");
+      if (predicate(frame)) return frame;
+    }
+  };
+  await app.inject({ method: "POST", url: `/api/sessions/${b.id}/prompt`, payload: { text: "again" } });
+  const user = await next((frame) => frame.event === "message");
+  assert.equal(user.id, `${b.id}:6`);
+  const { ts, ...prompt } = user.data;
+  assert.deepEqual(prompt, { sessionId: b.id, seq: 6, type: "user", text: "again" });
+  assert.ok(Math.abs(ts - Date.now()) < 60_000, "a live event carries its logged time");
+  await app.inject({ method: "POST", url: `/api/sessions/${a.id}/config`, payload: { modeId: "plan" } });
+  const mode = await next((frame) => frame.event === "meta" && frame.data.state.modes?.currentModeId === "plan");
+  assert.equal(mode.data.sessionId, a.id);
+
+  // Deleting one session ends its part alone; the socket ends with the last one.
+  await app.inject({ method: "DELETE", url: `/api/sessions/${a.id}` });
+  const deletedA = await next((frame) => frame.event === "deleted");
+  assert.deepEqual(deletedA.data, { sessionId: a.id });
+  await app.inject({ method: "PATCH", url: `/api/sessions/${b.id}`, payload: { title: "Renamed" } });
+  const renamed = await next((frame) => frame.event === "meta" && frame.data.title === "Renamed");
+  assert.equal(renamed.data.sessionId, b.id);
+  await app.inject({ method: "DELETE", url: `/api/sessions/${b.id}` });
+  const deletedB = await next((frame) => frame.event === "deleted");
+  assert.deepEqual(deletedB.data, { sessionId: b.id });
+  assert.equal(await stream.next(), null, "the socket ends with its last session");
+});
+
+test("GET /api/sessions/streams refuses an empty id list, bad cursors, and more than 32 ids; 32 unknown ids are each reported deleted", async (t) => {
+  const { app } = await setup(t);
+  const session = await createSession(app);
+  const tooMany = Array.from({ length: 33 }, (_, i) => `s${i}`).join(",");
+  for (const [query, error] of [
+    ["", "no session ids"],
+    ["?ids=", "no session ids"],
+    ["?ids=,%20,", "no session ids"],
+    [`?ids=${session.id}&since=${session.id}:abc`, "invalid event cursor"],
+    [`?ids=${session.id}&since=${session.id}:-2`, "invalid event cursor"],
+    [`?ids=${session.id}&since=5`, "invalid event cursor"],
+    [`?ids=${session.id}&since=other:1`, "invalid event cursor"],
+    [`?ids=${tooMany}`, "at most 32 session ids"],
+  ]) {
+    const response = await app.inject({ method: "GET", url: `/api/sessions/streams${query}` });
+    assert.equal(response.statusCode, 400, query);
+    assert.equal(response.body, error, query);
+  }
+
+  const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const ids = Array.from({ length: 32 }, (_, i) => `s${i}`);
+  const stream = sseReader(await fetch(`${base}/api/sessions/streams?ids=${ids.join(",")}`));
+  const frames = [];
+  for (let frame = await stream.next(); frame; frame = await stream.next()) frames.push(frame);
+  assert.deepEqual(frames.map(({ event, data }) => [event, data.sessionId]), ids.map((id) => ["deleted", id]));
+
+  // The same id twice is one viewer: one meta, and the session's events once.
+  const twice = sseReader(await fetch(`${base}/api/sessions/streams?ids=${session.id},${session.id}`));
+  assert.equal((await twice.next()).event, "meta");
+  await app.inject({ method: "POST", url: `/api/sessions/${session.id}/prompt`, payload: { text: "once" } });
+  const first = await twice.next();
+  assert.equal(first.event, "message");
+  assert.equal(first.data.type, "user");
+  const after = await twice.next();
+  assert.ok(after.event !== "message" || after.data.seq !== first.data.seq, "a duplicate id does not double the events");
+  await twice.cancel();
+});
+
 test("PATCH /api/sessions/:id renames as the user: validated, persisted, pushed to the list and to viewers", async (t) => {
   const { app, makeApp } = await setup(t);
   const session = await createSession(app);
