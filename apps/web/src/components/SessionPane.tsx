@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import SessionControls from "./SessionControls";
@@ -9,12 +9,12 @@ import StartPage, { type StartPageProps } from "./StartPage";
 import ChatComposer from "./ChatComposer";
 import PromptQueue from "./PromptQueue";
 import Conversation from "./Conversation";
-import SessionHeader from "./SessionHeader";
+import SessionHeader, { type PaneMenu } from "./SessionHeader";
 import SessionLinkBanner from "./SessionLinkBanner";
-import RoomBackground from "./RoomBackground";
 import { Button } from "@/components/ui/button";
 import { useSessions } from "./SessionsProvider";
 import { sessionUrl, useSessionStream } from "./useSessionStream";
+import type { AgentActivity } from "@/lib/agent-activity";
 import { sessionHistoryKey } from "@/lib/prompt-history";
 import { queueEditLabel } from "@/lib/prompt-queue";
 
@@ -25,50 +25,70 @@ const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ),
 });
 
-export type SessionPaneProps = {
-  /** The open session, or null for the start page. The parent keys this component by it. */
-  sessionId: string | null;
-  /** Props for the start page shown when no session is open. */
-  start: StartPageProps;
-  onOpenSidebar: () => void;
-  showGithub: boolean;
-  onToggleGithub: () => void;
-  initialSend: {
-    sessionId: string;
-    pending: boolean;
-    error: string | null;
-  } | null;
-  onInitialSendHandled: (sessionId: string) => void;
-  /** "+ New": back to the start page. */
-  onBack: () => void;
-  /** The session was deleted (by this or another viewer). */
-  onSessionDeleted: (id: string) => void;
-  showShell: boolean;
-  onShowShell: (open: boolean) => void;
-  shellSize: number;
-  onShellSize: (size: number) => void;
+/** The start page's props as a pane hands them on: `onCreate` also says which pane asked, so the new session lands in it. */
+export type StartPaneProps = Omit<StartPageProps, "onCreate"> & {
+  onCreate: (firstPrompt: string | undefined, paneId: string | null) => void;
 };
 
-/** The main column: header, transcript, message box, controls, and terminals for one session. */
+export type InitialSend = {
+  sessionId: string;
+  pending: boolean;
+  error: string | null;
+} | null;
+
+export type SessionPaneProps = {
+  /** The open session, or null for the start page. The parent keys this component by the pane. */
+  sessionId: string | null;
+  /** The workspace pane this is; null for the bare start page of an empty workspace. */
+  paneId: string | null;
+  /** Props for the start page shown when no session is open. */
+  start: StartPaneProps;
+  /** Only the first pane of a tab carries the sidebar toggle. */
+  showSidebarToggle?: boolean;
+  onOpenSidebar: (opener: HTMLElement) => void;
+  showGithub: boolean;
+  onToggleGithub: (opener: HTMLElement) => void;
+  initialSend: InitialSend;
+  onInitialSendHandled: (sessionId: string) => void;
+  /** The header's "New conversation": a start page somewhere in the workspace. */
+  onNew: () => void;
+  /** The session was deleted (by this or another viewer). */
+  onSessionDeleted: (id: string) => void;
+  /** The pane menu (split, move, close); absent on the bare start page. */
+  pane?: PaneMenu;
+  /** The agent's activity, for the room scene behind the focused pane. */
+  onActivity?: (paneId: string | null, activity: AgentActivity) => void;
+};
+
+/**
+ * One pane: header, transcript, message box, controls, and terminals for one session, or the start
+ * page. The terminal's open state and height are this pane's own (decision 26); element ids are per
+ * instance, since several panes render at once.
+ */
 export default function SessionPane({
   sessionId,
+  paneId,
   start,
+  showSidebarToggle = true,
   onOpenSidebar,
-  onBack,
+  onNew,
   onSessionDeleted,
   showGithub,
   onToggleGithub,
   initialSend,
   onInitialSendHandled,
-  showShell,
-  onShowShell,
-  shellSize,
-  onShellSize,
+  pane,
+  onActivity,
 }: SessionPaneProps) {
   const { historyCache, tracked, track, untrack, renameSession } = useSessions();
+  const uid = useId();
+  const terminalPanelId = `${uid}-terminal`;
+  const contextId = `${uid}-context`;
   const isTracked = !!sessionId && tracked.some((entry) => entry.sessionId === sessionId);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [trackPending, setTrackPending] = useState(false);
+  const [showShell, setShowShell] = useState(false);
+  const [shellSize, setShellSize] = useState(33);
   const toggleTracked = () => {
     if (!sessionId || trackPending) return;
     setTrackPending(true);
@@ -124,11 +144,15 @@ export default function SessionPane({
     sendBlocked: initialPending,
   });
   const shellButton = useRef<HTMLButtonElement>(null);
+  const roomActivity: AgentActivity = sessionId ? activity : "idle";
+  useEffect(() => {
+    onActivity?.(paneId, roomActivity);
+  }, [onActivity, paneId, roomActivity]);
 
   const agentName = session?.agentName ?? "the agent";
 
   const hideShell = () => {
-    onShowShell(false);
+    setShowShell(false);
     shellButton.current?.focus();
   };
 
@@ -137,8 +161,11 @@ export default function SessionPane({
     (initialSend?.sessionId === sessionId ? initialSend.error : null);
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
-      <RoomBackground activity={sessionId ? activity : "idle"} sessionId={sessionId} />
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      data-pane={paneId ?? undefined}
+      data-session={sessionId ?? undefined}
+    >
       <SessionHeader
         title={
           session
@@ -152,16 +179,19 @@ export default function SessionPane({
         hasSession={!!sessionId}
         showShell={showShell && !!sessionId}
         showGithub={showGithub}
+        showSidebarToggle={showSidebarToggle}
         onSidebar={onOpenSidebar}
-        onNew={onBack}
-        onTerminal={() => onShowShell(!showShell)}
+        onNew={onNew}
+        onTerminal={() => setShowShell((open) => !open)}
         onGithub={onToggleGithub}
         shellButton={shellButton}
+        terminalPanelId={terminalPanelId}
         tracked={isTracked}
         trackPending={trackPending}
         onToggleTrack={toggleTracked}
         renameFrom={session?.title ?? ""}
         onRename={session ? rename : undefined}
+        pane={pane}
       />
       {trackError && (
         <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
@@ -170,14 +200,14 @@ export default function SessionPane({
       )}
       {!sessionId ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <StartPage {...start} />
+          <StartPage {...start} onCreate={(text) => start.onCreate(text, paneId)} />
         </div>
       ) : (
         <Group
           orientation="vertical"
           className="min-h-0 flex-1"
           onLayoutChanged={(layout) => {
-            if (layout.shell) onShellSize(layout.shell);
+            if (layout.shell) setShellSize(layout.shell);
           }}
         >
           <Panel id="chat" minSize="25%" className="flex min-h-0 flex-col">
@@ -189,7 +219,7 @@ export default function SessionPane({
                 <p className="text-sm text-muted-foreground">
                   It may have been deleted, or opened from a different Portal.
                 </p>
-                <Button onClick={onBack} variant="secondary">
+                <Button onClick={onNew} variant="secondary">
                   Start a conversation
                 </Button>
               </div>
@@ -239,7 +269,8 @@ export default function SessionPane({
                 historyKey={sessionId ? sessionHistoryKey(sessionId) : undefined}
                 label={`Message ${agentName}`}
                 placeholder={`Message ${agentName}…`}
-                describedBy={session ? "session-context" : undefined}
+                describedBy={session ? contextId : undefined}
+                paletteId={`${uid}-palette`}
                 error={composerError}
                 settings={
                   sessionState && (
@@ -256,6 +287,7 @@ export default function SessionPane({
                 context={
                   session && (
                     <ContextBar
+                      id={contextId}
                       cwd={session.cwd}
                       displayCwd={session.displayCwd}
                       git={session.git}
@@ -286,11 +318,12 @@ export default function SessionPane({
               <TerminalPanel
                 endpoint={sessionUrl(sessionId, "/terminals")}
                 onHide={hideShell}
+                panelId={terminalPanelId}
               />
             </Panel>
           )}
         </Group>
       )}
-    </main>
+    </div>
   );
 }

@@ -15,11 +15,13 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  Columns2,
   Eye,
   EyeOff,
   Folder,
   FolderGit2,
   MoreHorizontal,
+  PanelsTopLeft,
   PencilLine,
   Pin,
   PinOff,
@@ -68,7 +70,12 @@ export type ProjectsColumnProps = {
   projectPins: PinMap;
   sessionPins: PinMap;
   active: string | null;
+  /** Sessions open somewhere in the workspace: their rows show a tab glyph. */
+  openSessionIds: ReadonlySet<string>;
   onSelect: (id: string) => void;
+  onOpenInNewTab: (id: string) => void;
+  /** Null when nothing is focused to open beside. */
+  onOpenBeside: ((id: string) => void) | null;
   onPrefetch: (id: string) => void;
   onDeleteSession: (id: string) => void | Promise<void>;
   onTogglePinSession: (id: string) => void;
@@ -101,10 +108,13 @@ const PREFETCH_HOVER_MS = 400;
 const SessionRow = memo(function SessionRow({
   session,
   active,
+  inWorkspace,
   pinned,
   tracked,
   now,
   onSelect,
+  onOpenInNewTab,
+  onOpenBeside,
   onPrefetch,
   onDelete,
   onTogglePin,
@@ -113,10 +123,14 @@ const SessionRow = memo(function SessionRow({
 }: {
   session: SessionSummary;
   active: boolean;
+  /** Open in some tab (not necessarily the focused one). */
+  inWorkspace: boolean;
   pinned: boolean;
   tracked: boolean;
   now: number;
   onSelect: (id: string) => void;
+  onOpenInNewTab: (id: string) => void;
+  onOpenBeside: ((id: string) => void) | null;
   onPrefetch: (id: string) => void;
   onDelete: (id: string) => void | Promise<void>;
   onTogglePin: (id: string) => void;
@@ -203,7 +217,12 @@ const SessionRow = memo(function SessionRow({
               <span className="status-dot" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="sidebar-title text-foreground/90">{title}</span>
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="sidebar-title min-w-0 text-foreground/90">{title}</span>
+                {inWorkspace && (
+                  <PanelsTopLeft className="size-2.5 shrink-0 text-muted-foreground" aria-label="Open in the workspace" />
+                )}
+              </span>
               <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
                 <AgentLogo
                   agentId={session.agentId}
@@ -251,6 +270,15 @@ const SessionRow = memo(function SessionRow({
             }
           }}
         >
+          <DropdownMenuItem onSelect={() => onOpenInNewTab(session.id)}>
+            <PanelsTopLeft />
+            Open in new tab
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={!onOpenBeside} onSelect={() => onOpenBeside?.(session.id)}>
+            <Columns2 />
+            Open beside current
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setRenaming(true)}>
             <PencilLine />
             Rename
@@ -338,7 +366,10 @@ const ProjectsColumn = memo(function ProjectsColumn({
   projectPins,
   sessionPins,
   active,
+  openSessionIds,
   onSelect,
+  onOpenInNewTab,
+  onOpenBeside,
   onPrefetch,
   onDeleteSession,
   onTogglePinSession,
@@ -697,6 +728,9 @@ const ProjectsColumn = memo(function ProjectsColumn({
                     key={session.id}
                     session={session}
                     active={session.id === active}
+                    inWorkspace={openSessionIds.has(session.id)}
+                    onOpenInNewTab={onOpenInNewTab}
+                    onOpenBeside={onOpenBeside}
                     pinned={session.id in sessionPins}
                     tracked={trackedIds.has(session.id)}
                     now={now || session.lastActiveAt}

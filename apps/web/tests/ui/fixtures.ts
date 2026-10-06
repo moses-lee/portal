@@ -32,6 +32,8 @@ import type {
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
 import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
+import type { Workspace } from "@portal/contracts/workspace";
+import { applyWorkspaceOp, EMPTY_WORKSPACE, parseWorkspaceOp, WorkspaceError } from "@portal/shared/workspace";
 
 const now = Date.now();
 export const project: ProjectSummary = {
@@ -411,6 +413,7 @@ declare global {
       intents: Intent[];
       approvals: Approval[];
       tracked: TrackedSession[];
+      workspace: Workspace;
     };
   }
 }
@@ -492,6 +495,12 @@ export async function setupPortal(
       /** What `POST /api/portal/items/:id/actions/:index` answers for server-side actions. */
       actionResult?: { sessionId?: string; approvalId?: string };
     };
+    /**
+     * The workspace (tabs and panes) `GET /api/workspace` and the stream's `workspace` event answer
+     * with; empty by default, so a session path opens its tab. Ops posted to `/api/workspace/ops` run
+     * the shared reducer here and push the result on the stream, as the server does.
+     */
+    workspace?: Workspace;
   } = {},
 ) {
   const currentSessions = structuredClone(options.sessions ?? sessions);
@@ -507,7 +516,9 @@ export async function setupPortal(
     intents: structuredClone(options.portal?.intents ?? []),
     approvals: structuredClone(options.portal?.approvals ?? []),
     tracked: structuredClone(options.portal?.tracked ?? []),
+    workspace: structuredClone(options.workspace ?? EMPTY_WORKSPACE),
   };
+  let workspaceIds = 0;
   const orch = {
     threadMessages: structuredClone(options.portal?.threadMessages ?? {}),
     jobs: structuredClone(options.portal?.jobs ?? []),
@@ -559,6 +570,7 @@ export async function setupPortal(
               this.send({ type: "approvals", approvals: window.__portalLive.approvals }, "message");
               this.send({ type: "intents", intents: window.__portalLive.intents }, "message");
               this.send({ type: "tracked", sessions: window.__portalLive.tracked }, "message");
+              this.send({ type: "workspace", workspace: window.__portalLive.workspace }, "message");
             } else
               this.send(
                 window.__portalSessions.find((session) =>
@@ -658,6 +670,23 @@ export async function setupPortal(
     if (path === "/api/portal/cancel") return route.fulfill({ status: 204 });
     if (path === "/api/portal/items") return json({ items: live.items });
     if (path === "/api/portal/tracked" && method === "GET") return json({ sessions: live.tracked });
+    if (path === "/api/workspace" && method === "GET") return json({ workspace: live.workspace });
+    if (path === "/api/workspace/ops" && method === "POST") {
+      try {
+        const op = parseWorkspaceOp(body);
+        if (op.op === "open" && op.sessionId !== null && !currentSessions.some((session) => session.id === op.sessionId))
+          return json({ error: `Unknown session "${op.sessionId}".` }, 404);
+        const result = applyWorkspaceOp(live.workspace, op, () => `w${++workspaceIds}`);
+        if (result.changed) {
+          live.workspace = { ...result.workspace, version: live.workspace.version + 1 };
+          await page.evaluate((workspace) => window.__portalEmit("/api/portal/stream", { type: "workspace", workspace }, "message"), live.workspace);
+        }
+        return json({ workspace: live.workspace, ...(result.location ? { location: result.location } : {}) });
+      } catch (error) {
+        const status = error instanceof WorkspaceError ? (error.code === "not_found" ? 404 : error.code === "refused" ? 409 : 400) : 400;
+        return json({ error: error instanceof Error ? error.message : "Bad workspace op." }, status);
+      }
+    }
     const trackedMatch = path.match(/^\/api\/portal\/tracked\/([^/]+)$/);
     if (trackedMatch) {
       // Like the server: the answer, then the full set on the stream.

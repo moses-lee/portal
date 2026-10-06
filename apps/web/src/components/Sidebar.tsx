@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, memo, useCallback, useMemo, useState } from "react";
+import { Activity, memo, useCallback, useMemo, useState, type RefObject } from "react";
 import {
   ArrowUpRight,
   ChevronRight,
@@ -41,7 +41,17 @@ export type SidebarProps = {
   onTogglePinProject: (id: string) => void;
   onTogglePinSession: (id: string) => void;
   active: string | null;
+  /** Sessions open somewhere in the workspace (decision 27): their rows show a small tab glyph. */
+  openSessionIds: ReadonlySet<string>;
   onSelect: (id: string) => void;
+  /** "Open in new tab": a tab of its own at the end of the strip, moved there when it is open elsewhere. */
+  onOpenInNewTab: (id: string) => void;
+  /** "Open beside current": split the focused pane to the right. */
+  onOpenBeside: (id: string) => void;
+  /** False off the workspace (a Portal view, the terminal): nothing to open beside. */
+  canOpenBeside: boolean;
+  /** Where focus returns when the mobile sheet closes: the toggle that opened it. */
+  returnFocus?: RefObject<HTMLElement | null>;
   onPrefetch: (id: string) => void;
   onDeleteSession: (id: string) => void | Promise<void>;
   onNewSession: (projectId: string) => void;
@@ -263,7 +273,11 @@ function SidebarContent(props: SidebarProps) {
     projectPins,
     sessionPins,
     active,
+    openSessionIds,
     onSelect,
+    onOpenInNewTab,
+    onOpenBeside,
+    canOpenBeside,
     onPrefetch,
     onDeleteSession,
     onTogglePinSession,
@@ -366,7 +380,10 @@ function SidebarContent(props: SidebarProps) {
           projectPins={projectPins}
           sessionPins={sessionPins}
           active={active}
+          openSessionIds={openSessionIds}
           onSelect={onSelect}
+          onOpenInNewTab={onOpenInNewTab}
+          onOpenBeside={canOpenBeside ? onOpenBeside : null}
           onPrefetch={onPrefetch}
           onDeleteSession={onDeleteSession}
           onTogglePinSession={onTogglePinSession}
@@ -430,7 +447,7 @@ export default function Sidebar(props: SidebarProps) {
           className="!w-[min(320px,88vw)] gap-0 p-0"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            document.getElementById("sidebar-toggle")?.focus();
+            (props.returnFocus?.current ?? document.getElementById("sidebar-toggle"))?.focus();
           }}
         >
           <SheetTitle className="sr-only">Your workspace</SheetTitle>

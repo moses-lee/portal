@@ -15,7 +15,7 @@ const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
 export default function TerminalPage({
   onOpenSidebar,
 }: {
-  onOpenSidebar: () => void;
+  onOpenSidebar: (opener?: HTMLElement | null) => void;
 }) {
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -23,7 +23,7 @@ export default function TerminalPage({
         <IconButton
           id="sidebar-toggle"
           label="Toggle sidebar"
-          onClick={onOpenSidebar}
+          onClick={(event) => onOpenSidebar(event.currentTarget)}
           className="text-muted-foreground"
         >
           <PanelLeft className="size-4" />

@@ -32,17 +32,20 @@ export default function ContextBar({
   displayCwd,
   git,
   note,
+  id,
 }: {
   cwd: string | undefined;
   displayCwd: string | undefined;
   git: GitInfo;
   label?: string;
   note?: string;
+  /** The id of the screen-reader summary, for a composer's `aria-describedby`; several panes need different ones. */
+  id?: string;
 }) {
   if (!cwd) return null;
   return (
     <div className="composer-context">
-      <span id="session-context" className="sr-only">
+      <span id={id} className="sr-only">
         Working directory: {displayCwd ?? cwd}.{" "}
         {git ? `Branch: ${git.branch}.` : ""} {note}
       </span>

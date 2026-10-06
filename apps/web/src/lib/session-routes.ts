@@ -2,16 +2,21 @@
  * Browser routes. Portal, the orchestrator, is the home: `/` is its main thread, `/threads/<id>` one
  * of the side threads it opened, and `/attention`, `/watches`, `/activity`, `/memory[/<entityId>]`, `/system` its
  * views; `/memory/curation[/<runId>]` is memory curation: its runs, or one run's digest and diff.
- * `/new` is the start page (a new conversation in a project), `/sessions/<id>` opens one session,
- * and `/terminal` is the standalone terminal page (shells that belong to no session).
+ * `/tabs/<tabId>` is a workspace tab (docs/WORKSPACE.md), `?pane=<paneId>` the focused pane of a split.
+ * `/new` (the start page) and `/sessions/<id>` are **resolvers**: the shell focuses the tab holding a
+ * start-page pane or that session, opening one when none does, then rewrites the URL to the tab
+ * path; old links keep working. `/terminal` is the standalone terminal page (shells that belong to
+ * no session).
  *
  * Any Portal path may carry `?session=<id>`: the session the tracked-sessions panel shows beside the
- * view. Switching Portal views keeps it; leaving Portal (a session page, the terminal, `/new`) drops it.
+ * view. Switching Portal views keeps it; leaving Portal (a tab, the terminal, `/new`) drops it.
  */
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const TERMINAL_PATH = /^\/terminal\/?$/;
 const START_PATH = /^\/new\/?$/;
+const TAB_PATH = /^\/tabs\/([^/]+)\/?$/;
+const PANE_PARAM = "pane";
 
 export function sessionIdFromPath(pathname: string): string | null {
   const match = SESSION_PATH.exec(pathname);
@@ -44,9 +49,86 @@ export function startPath(): string {
   return "/new";
 }
 
-/** Every path that is not a session, the terminal, or the start page is Portal's: a view, or the main thread. */
+/** The tab's path, with the focused pane when given: `/tabs/<tabId>` or `/tabs/<tabId>?pane=<paneId>`. */
+export function tabPath(tabId: string, paneId?: string | null): string {
+  const path = `/tabs/${encodeURIComponent(tabId)}`;
+  return paneId ? `${path}?${new URLSearchParams({ [PANE_PARAM]: paneId })}` : path;
+}
+
+export function isTabPath(pathname: string): boolean {
+  return TAB_PATH.test(pathname);
+}
+
+/** The tab a path names and, from the query string (with or without the `?`), its focused pane; null off a tab path. */
+export function tabFromPath(pathname: string, search = ""): { tabId: string; paneId: string | null } | null {
+  const match = TAB_PATH.exec(pathname);
+  if (!match) return null;
+  const tabId = decodeSegment(match[1]);
+  if (!tabId) return null;
+  return { tabId, paneId: new URLSearchParams(search).get(PANE_PARAM) || null };
+}
+
+/**
+ * Where a workspace path points: a tab (with its pane when the query names one), or one of the two
+ * resolvers, the start page (`/new`) and a session (`/sessions/<id>`). Null for Portal and the terminal.
+ */
+export type WorkspaceRoute =
+  | { kind: "tab"; tabId: string; paneId: string | null }
+  | { kind: "start" }
+  | { kind: "session"; sessionId: string };
+
+export function workspaceRoute(pathname: string, search = ""): WorkspaceRoute | null {
+  const tab = tabFromPath(pathname, search);
+  if (tab) return { kind: "tab", ...tab };
+  if (isStartPath(pathname)) return { kind: "start" };
+  const sessionId = sessionIdFromPath(pathname);
+  return sessionId === null ? null : { kind: "session", sessionId };
+}
+
+/**
+ * The in-app path a link in a Portal reply points at (`/tabs/<id>` or `/sessions/<id>`, as a path or
+ * a URL on `origin`), so the renderer navigates in place instead of opening a new browser tab; null
+ * for every other link.
+ */
+export function inAppLinkPath(href: string, origin: string): string | null {
+  let pathname: string;
+  let search = "";
+  if (href.startsWith("/")) {
+    const query = href.indexOf("?");
+    pathname = query === -1 ? href : href.slice(0, query);
+    search = query === -1 ? "" : href.slice(query);
+    const hash = search.indexOf("#");
+    if (hash !== -1) search = search.slice(0, hash);
+    const pathHash = pathname.indexOf("#");
+    if (pathHash !== -1) pathname = pathname.slice(0, pathHash);
+  } else {
+    let url: URL;
+    try {
+      url = new URL(href);
+    } catch {
+      return null;
+    }
+    if (url.origin !== origin) return null;
+    pathname = url.pathname;
+    search = url.search;
+  }
+  if (!isTabPath(pathname) && sessionIdFromPath(pathname) === null) return null;
+  return `${pathname}${isTabPath(pathname) ? search : ""}`;
+}
+
+/** `/sessions/<id>` and `/new`: paths the shell rewrites to a tab path once the workspace has loaded. */
+export function isResolverPath(pathname: string): boolean {
+  return isStartPath(pathname) || sessionIdFromPath(pathname) !== null;
+}
+
+/** True for every path the workspace view renders: a tab, or one of the resolvers. */
+export function isWorkspacePath(pathname: string): boolean {
+  return isTabPath(pathname) || isResolverPath(pathname);
+}
+
+/** Every path that is not a workspace path or the terminal is Portal's: a view, or the main thread. */
 export function isPortalPath(pathname: string): boolean {
-  return sessionIdFromPath(pathname) === null && !isTerminalPath(pathname) && !isStartPath(pathname);
+  return !isWorkspacePath(pathname) && !isTerminalPath(pathname);
 }
 
 export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system";

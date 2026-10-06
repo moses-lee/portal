@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useMediaQuery } from "./useMediaQuery";
@@ -13,11 +13,14 @@ import {
   sessionHistoryKey,
 } from "@/lib/prompt-history";
 import Sidebar from "./Sidebar";
-import SessionPane from "./SessionPane";
+import type { InitialSend, StartPaneProps } from "./SessionPane";
 import TerminalPage from "./TerminalPage";
 import PortalPage from "./PortalPage";
+import WorkspaceView from "./workspace/WorkspaceView";
+import { useWorkspaceActions } from "./workspace/useWorkspaceActions";
 import { PortalLiveProvider } from "./portal/PortalLive";
 import { SessionsProvider, useSessions } from "./SessionsProvider";
+import { WorkspaceProvider, useWorkspace } from "./WorkspaceProvider";
 import AddProjectDialog from "./AddProjectDialog";
 import { useSessionPins } from "./usePins";
 import { useProjects } from "./useProjects";
@@ -43,18 +46,19 @@ import {
   settingsOf,
 } from "@/lib/session-config";
 import { useLastUsed } from "./useLastUsed";
+import { navigateTo, pushPath } from "@/lib/navigation";
 import {
   isPortalPath,
-  isStartPath,
   isTerminalPath,
   portalLocation,
   portalPathKeepingPanel,
-  sessionIdFromPath,
   sessionPath,
-  startPath,
   terminalPath,
+  workspaceRoute,
   type PortalView,
 } from "@/lib/session-routes";
+import { allPanes } from "@portal/shared/workspace";
+import { locationPath } from "@/lib/workspace";
 import type {
   GithubSummary,
   ProjectSummary,
@@ -88,37 +92,38 @@ function storeProjectId(id: string) {
 }
 
 /**
- * Change the URL without a server round trip. Next syncs `usePathname` with the native history
- * API, and the session routes render nothing of their own, so a router navigation (which fetches
- * the route's payload first) would only delay the switch.
- */
-const pushPath = (path: string) => window.history.pushState(null, "", path);
-const replacePath = (path: string) =>
-  window.history.replaceState(null, "", path);
-
-/**
- * The app: the live orchestrator state and the session list, which every page reads, around the
- * shell. The layout mounts this once, so both providers live for the whole visit.
+ * The app: the live orchestrator state, the session list, and the workspace (tabs and panes), which
+ * every page reads, around the shell. The layout mounts this once, so the providers live for the
+ * whole visit.
  */
 export default function Chat() {
   return (
     <PortalLiveProvider>
       <SessionsProvider>
-        <ChatShell />
+        <WorkspaceProvider>
+          <ChatShell />
+        </WorkspaceProvider>
       </SessionsProvider>
     </PortalLiveProvider>
   );
 }
 
-/** The app shell: sidebar, project selection, and the pane for the session named by the URL. */
+/** The app shell: sidebar, project selection, and the workspace (or Portal, or the terminal) named by the URL. */
 function ChatShell() {
   const pathname = usePathname();
-  /** The open session comes from the URL, so refresh, back, and shared links all land on it. */
-  const active = useMemo(() => sessionIdFromPath(pathname ?? "/"), [pathname]);
+  /**
+   * The workspace route from the URL: a tab (its pane comes from the query, read by the view), or a
+   * resolver (`/new`, `/sessions/<id>`) the view settles; null on Portal and the terminal.
+   */
+  const route = useMemo(() => workspaceRoute(pathname ?? "/"), [pathname]);
+  const { workspace, focus, apply } = useWorkspace();
+  const actions = useWorkspaceActions();
+  /** The focused pane's session (decision 27): the sidebar's highlight, the GitHub inspector's session, the title. */
+  const active = focus.sessionId;
   /** The standalone terminal page: no session, no start page. */
   const terminalOpen = isTerminalPath(pathname ?? "/");
-  /** The start page (`/new`): a new conversation in a project. */
-  const onStartPage = isStartPath(pathname ?? "/");
+  /** A start page is on screen: the focused pane is one, or `/new` is resolving. */
+  const onStartPage = route?.kind === "start" || (focus.pane !== null && focus.pane.sessionId === null);
   /** Portal, the orchestrator: the home (`/`) and its views, outside every project and session. */
   const portalOpen = isPortalPath(pathname ?? "/");
   const portalView: PortalView | null = portalOpen ? portalLocation(pathname ?? "/").view : null;
@@ -205,9 +210,10 @@ function ChatShell() {
     setSettingsSection(section);
     setShowSettings(true);
   });
-  const [showShell, setShowShell] = useState(false);
-  const [shellSize, setShellSize] = useState(33);
   const [showSidebar, setShowSidebar] = useState(false);
+  /** The button that opened the sidebar sheet or the GitHub inspector sheet; focus returns there when it closes. */
+  const sidebarOpener = useRef<HTMLElement | null>(null);
+  const githubOpener = useRef<HTMLElement | null>(null);
   const desktop = useMediaQuery("(min-width: 768px)", true);
   const [sidebarPreference, setSidebarPreference] = usePreference(
     "portal.sidebar.open",
@@ -220,11 +226,7 @@ function ChatShell() {
   const showGithub = githubPreference === "true";
   /** Portal preferences; the source control panel's actions read their prompts from here. */
   const { settings } = useSettings();
-  const [initialSend, setInitialSend] = useState<{
-    sessionId: string;
-    pending: boolean;
-    error: string | null;
-  } | null>(null);
+  const [initialSend, setInitialSend] = useState<InitialSend>(null);
   const creatingRef = useRef(false);
   // Session pins outlive their sessions in storage; forget the ones for sessions that are gone.
   useEffect(() => {
@@ -306,10 +308,9 @@ function ChatShell() {
     return state;
   };
 
-  /** Navigate to a session (or the start page); the URL drives the rest. */
-  const selectSession = (sessionId: string | null) => {
-    if (sessionId !== active || terminalOpen || portalOpen)
-      pushPath(sessionId ? sessionPath(sessionId) : startPath());
+  /** Open a session (decision 8): focus its pane if it is open anywhere, else a new tab; the URL drives the rest. */
+  const selectSession = (sessionId: string) => {
+    void actions.openSession(sessionId);
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
     if (projectId && projects.some((p) => p.id === projectId))
@@ -323,11 +324,10 @@ function ChatShell() {
     );
   }, []);
 
-  /** Another viewer deleted the open session, or the server dropped it: leave it. */
+  /** Another viewer deleted an open session, or the server dropped it; the server closes its pane and pushes the workspace. */
   const sessionDeleted = useCallback(
     (id: string) => {
       removeSession(id);
-      replacePath("/");
     },
     [removeSession],
   );
@@ -352,7 +352,6 @@ function ChatShell() {
     historyCache.delete(sessionId);
     writeDraft(sessionId, "");
     forgetPromptHistory(sessionHistoryKey(sessionId));
-    if (sessionId === active) replacePath("/");
     // A removed project's last conversation going away drops its Removed row.
     void refreshRemoved();
   };
@@ -378,7 +377,8 @@ function ChatShell() {
     const newest = fetched
       .filter((s) => s.projectId === project.id)
       .sort(byRecentActivity)[0];
-    pushPath(newest ? sessionPath(newest.id) : startPath());
+    if (newest) void actions.openSession(newest.id);
+    else void actions.openStartTab();
     setShowSidebar(false);
   };
 
@@ -428,10 +428,10 @@ function ChatShell() {
     return j.project;
   };
 
-  /** The sidebar's `+`: open the start page with `projectId` selected so the worktree picker is available. */
+  /** The sidebar's `+`: a start-page tab with `projectId` selected so the worktree picker is available. */
   const startIn = (projectId: string) => {
     selectProject(projectId);
-    if (!onStartPage) pushPath(startPath());
+    void actions.openStartTab();
     setShowSidebar(false);
   };
 
@@ -453,18 +453,27 @@ function ChatShell() {
     setShowSidebar(false);
   };
 
-  /** The sidebar toggle shared by the pages without a session header of their own. */
-  const toggleSidebar = () => {
+  /** The sidebar toggle: collapse or expand on desktop, the sheet on mobile (focus returns to `opener` when it closes). */
+  const toggleSidebar = (opener?: HTMLElement | null) => {
+    sidebarOpener.current = opener ?? null;
     if (desktop)
       setSidebarPreference(sidebarPreference === "true" ? "false" : "true");
     else setShowSidebar(true);
   };
+  const toggleGithub = (opener?: HTMLElement | null) => {
+    githubOpener.current = opener ?? null;
+    setGithubPreference(showGithub ? "false" : "true");
+  };
 
-  /** Start a session in `projectId`, first turning a non-Original `choice` into its worktree project. */
+  /**
+   * Start a session in `projectId`, first turning a non-Original `choice` into its worktree project.
+   * It opens in `paneId` (the start-page pane that asked, decision 9), else in a new tab.
+   */
   const newSession = async (
     projectId: string = selectedProjectId,
     choice: WorktreeChoice = ORIGINAL,
     firstPrompt = "",
+    paneId: string | null = null,
   ) => {
     if (
       creatingRef.current ||
@@ -518,7 +527,7 @@ function ChatShell() {
         clearSubmittedDraft("new", firstPrompt);
         setInitialSend({ sessionId: session.id, pending: true, error: null });
       }
-      pushPath(sessionPath(session.id));
+      await placeNewSession(session.id, paneId);
       setShowSidebar(false);
       try {
         const state = desiredSettings
@@ -585,7 +594,22 @@ function ChatShell() {
     }
   };
 
-  // The GitHub panel follows the open session's project, else the project new sessions start in.
+  /**
+   * Where a new session shows: the start-page pane that asked becomes its pane (`replace_pane`),
+   * else it opens in a new tab. If the workspace refuses, the session page path still resolves it.
+   */
+  const placeNewSession = async (sessionId: string, paneId: string | null) => {
+    try {
+      const { workspace: next, location } = paneId
+        ? await apply({ op: "replace_pane", paneId, sessionId })
+        : await apply({ op: "open", sessionId });
+      if (location) navigateTo(locationPath(next, location), { replace: !!paneId });
+    } catch {
+      pushPath(sessionPath(sessionId));
+    }
+  };
+
+  // The GitHub panel follows the focused pane's session's project, else the project new sessions start in.
   // Nothing until the session list has loaded, so it does not fetch the start page's project and then switch.
   const activeSession = sessions.find((s) => s.id === active);
   const githubProjectId = active
@@ -613,12 +637,50 @@ function ChatShell() {
     // The start page begins at Original again; the draft replaces whatever was there.
     setWorktreePick(null);
     writeDraft("new", text);
-    if (!onStartPage) pushPath(startPath());
+    void actions.openStartTab();
     setShowSidebar(false);
+  };
+  /** The sessions open somewhere in the workspace: their sidebar rows get the tab glyph. */
+  const openSessionIds = useMemo(
+    () => new Set(allPanes(workspace).flatMap(({ pane }) => (pane.sessionId === null ? [] : [pane.sessionId]))),
+    [workspace],
+  );
+  // Decision: the document title is the focused session's title, else "Portal".
+  useEffect(() => {
+    document.title = activeSession?.title || (active ? "Conversation" : "Portal");
+  }, [activeSession?.title, active]);
+  /** The start page's props, shared by every start-page pane; `onCreate` names the pane that asked. */
+  const start: StartPaneProps = {
+    projects: orderedProjects,
+    selectedProjectId,
+    onSelectProject: selectProject,
+    onAddProject: () => setShowAddProject(true),
+    worktree: worktreeChoice,
+    onWorktreeChange: (choice) =>
+      setWorktreePick({ projectId: selectedProjectId, choice }),
+    agents,
+    selectedAgentId,
+    onSelectAgent: selectAgent,
+    settings: startSettings,
+    onSettingsChange: changeStartSetting,
+    loading: loading || projectsLoading || !lastUsed,
+    canCreate,
+    creating,
+    error: sessionError,
+    onCreate: (text, paneId) =>
+      void newSession(selectedProjectId, worktreeChoice, text, paneId),
   };
   // Stable identities for the sidebar: its rows are memoised, and this component re-renders on
   // every list-stream event, so an inline arrow here would re-render every row each time.
   const sidebarSelect = useStableCallback((id: string) => selectSession(id));
+  const sidebarOpenInTab = useStableCallback((id: string) => {
+    void actions.moveToNewTab(id);
+    setShowSidebar(false);
+  });
+  const sidebarOpenBeside = useStableCallback((id: string) => {
+    void actions.openBeside(id);
+    setShowSidebar(false);
+  });
   const sidebarPrefetch = useStableCallback((id: string) => historyCache.prefetch(id));
   const sidebarDelete = useStableCallback(deleteSession);
   const sidebarNewSession = useStableCallback(startIn);
@@ -645,7 +707,12 @@ function ChatShell() {
         onTogglePinProject={toggleProjectPin}
         onTogglePinSession={toggleSessionPin}
         active={active}
+        openSessionIds={openSessionIds}
         onSelect={sidebarSelect}
+        onOpenInNewTab={sidebarOpenInTab}
+        onOpenBeside={sidebarOpenBeside}
+        canOpenBeside={focus.pane !== null}
+        returnFocus={sidebarOpener}
         onPrefetch={sidebarPrefetch}
         onDeleteSession={sidebarDelete}
         onNewSession={sidebarNewSession}
@@ -664,7 +731,7 @@ function ChatShell() {
         terminalActive={terminalOpen}
         onPortalView={sidebarPortalView}
         portalView={portalView}
-        projectsActive={!!active || onStartPage}
+        projectsActive={route !== null}
         desktopOpen={sidebarPreference === "true"}
         onCollapse={sidebarCollapse}
       />
@@ -694,52 +761,21 @@ function ChatShell() {
         />
       ) : terminalOpen ? (
         <TerminalPage onOpenSidebar={toggleSidebar} />
-      ) : (
-      /* Keyed by session so switching remounts the pane with fresh history; terminals keep running server-side. */
-      <SessionPane
-        key={active ?? ""}
-        sessionId={active}
-        start={{
-          projects: orderedProjects,
-          selectedProjectId,
-          onSelectProject: selectProject,
-          onAddProject: () => setShowAddProject(true),
-          worktree: worktreeChoice,
-          onWorktreeChange: (choice) =>
-            setWorktreePick({ projectId: selectedProjectId, choice }),
-          agents,
-          selectedAgentId,
-          onSelectAgent: selectAgent,
-          settings: startSettings,
-          onSettingsChange: changeStartSetting,
-          loading: loading || projectsLoading || !lastUsed,
-          canCreate,
-          creating,
-          error: sessionError,
-          onCreate: (text) =>
-            void newSession(selectedProjectId, worktreeChoice, text),
-        }}
-        onOpenSidebar={() => {
-          if (desktop)
-            setSidebarPreference(
-              sidebarPreference === "true" ? "false" : "true",
-            );
-          else setShowSidebar(true);
-        }}
-        showGithub={showGithub}
-        onToggleGithub={() =>
-          setGithubPreference(showGithub ? "false" : "true")
-        }
-        initialSend={initialSend}
-        onInitialSendHandled={initialSendHandled}
-        onBack={() => selectSession(null)}
-        onSessionDeleted={sessionDeleted}
-        showShell={showShell}
-        onShowShell={setShowShell}
-        shellSize={shellSize}
-        onShellSize={setShellSize}
-      />
-      )}
+      ) : route ? (
+        /* The view reads `?pane=` with useSearchParams, which needs a boundary on the prerendered `/new`; the data is client-side anyway. */
+        <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
+          <WorkspaceView
+            route={route}
+            start={start}
+            onOpenSidebar={toggleSidebar}
+            showGithub={showGithub}
+            onToggleGithub={toggleGithub}
+            initialSend={initialSend}
+            onInitialSendHandled={initialSendHandled}
+            onSessionDeleted={sessionDeleted}
+          />
+        </Suspense>
+      ) : null}
       {showGithub && !terminalOpen && !portalOpen && (
         <GithubInspector
           open={showGithub}
@@ -748,6 +784,7 @@ function ChatShell() {
           projectRemoved={githubProjectRemoved}
           session={activeSession}
           onGitAction={startGitAction}
+          returnFocus={githubOpener}
         />
       )}
       <ApprovalsDialog

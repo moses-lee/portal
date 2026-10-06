@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { FolderGit2, Plus } from "lucide-react";
 import WorktreePicker, { type WorktreeChoice } from "./WorktreePicker";
 import ContextBar from "./ContextBar";
@@ -64,6 +65,10 @@ export default function StartPage({
   onCreate,
 }: StartPageProps) {
   const [draft, setDraft] = useDraft("new");
+  /** Per instance: two start pages may be open at once (one per pane), and ids and radio group names must not collide. */
+  const uid = useId();
+  const titleId = `${uid}-title`;
+  const projectSelectId = `${uid}-project`;
   const project = projects.find((item) => item.id === selectedProjectId);
   const target = project ? worktreeTarget(project, worktree) : null;
   const git =
@@ -73,13 +78,13 @@ export default function StartPage({
   const ready = canCreate && project?.exists !== false;
   return (
     <section
-      aria-labelledby="new-session-title"
+      aria-labelledby={titleId}
       className="mx-auto flex w-full max-w-[780px] flex-col px-6 pb-12 pt-[clamp(48px,13vh,160px)] sm:px-10"
     >
       <div className="mb-9 text-center">
         <PortalMark className="mx-auto mb-6 size-14" />
         <h2
-          id="new-session-title"
+          id={titleId}
           className="text-[clamp(26px,3vw,34px)] font-medium tracking-[-.045em]"
         >
           What would you like to work on?
@@ -108,7 +113,7 @@ export default function StartPage({
           <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-white/5 bg-white/[.015] p-4 sm:flex-row sm:items-start sm:gap-4">
             <div className="min-w-0 flex-1 space-y-2">
               <label
-                htmlFor="new-session-project"
+                htmlFor={projectSelectId}
                 className="text-[11px] text-muted-foreground"
               >
                 Project
@@ -120,7 +125,7 @@ export default function StartPage({
                   disabled={loading || creating}
                 >
                   <SelectTrigger
-                    id="new-session-project"
+                    id={projectSelectId}
                     className="h-9 min-w-0 flex-1 border-white/5 !bg-white/[.025] text-xs"
                   >
                     <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
@@ -167,7 +172,7 @@ export default function StartPage({
                 <label key={agent.id} className="relative cursor-pointer">
                   <input
                     type="radio"
-                    name="new-session-agent"
+                    name={`${uid}-agent`}
                     value={agent.id}
                     checked={agent.id === selectedAgentId}
                     onChange={() => onSelectAgent(agent.id)}
@@ -194,6 +199,7 @@ export default function StartPage({
             disabled={!ready && !creating}
             label="First message"
             placeholder="What would you like to build?"
+            paletteId={`${uid}-palette`}
             error={error}
             settings={
               settings && (

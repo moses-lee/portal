@@ -1,14 +1,44 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Eye, GitBranch, PanelLeft, PencilLine, SquarePen, TerminalSquare } from "lucide-react";
+import {
+  Eye,
+  GitBranch,
+  LayoutPanelLeft,
+  PanelLeft,
+  PencilLine,
+  SquarePen,
+  SquareArrowOutUpRight,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 import IconButton from "./IconButton";
 import { RenameField } from "./ProjectActions";
 import { SESSION_TITLE_MAX } from "./SessionsProvider";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { activityLabels, type AgentActivity } from "@/lib/agent-activity";
+
+/** The pane menu's actions (docs/WORKSPACE.md, "Pane header"); absent on the bare start page of an empty workspace. */
+export type PaneMenu = {
+  /** False once the tab is full (4 panes): the split items are disabled. */
+  canSplit: boolean;
+  onSplitRight: () => void;
+  onSplitDown: () => void;
+  /** Offered when the pane shares its tab with others. */
+  onMoveToTab: (() => void) | null;
+  onClose: () => void;
+};
 
 export default function SessionHeader({
   title,
@@ -17,16 +47,19 @@ export default function SessionHeader({
   hasSession,
   showShell,
   showGithub,
+  showSidebarToggle = true,
   onSidebar,
   onNew,
   onTerminal,
   onGithub,
   shellButton,
+  terminalPanelId,
   tracked,
   trackPending,
   onToggleTrack,
   renameFrom,
   onRename,
+  pane,
 }: {
   title: string;
   /** The session's own title ("" while untitled) for the rename field; rename is offered only with `onRename`. */
@@ -39,16 +72,24 @@ export default function SessionHeader({
   hasSession: boolean;
   showShell: boolean;
   showGithub: boolean;
-  onSidebar: () => void;
+  /** Only the first pane of a tab carries the sidebar toggle. */
+  showSidebarToggle?: boolean;
+  /** Open the sidebar; the opener is where focus returns when the sidebar sheet closes. */
+  onSidebar: (opener: HTMLElement) => void;
   onNew: () => void;
   onTerminal: () => void;
-  onGithub: () => void;
+  /** Toggle the GitHub inspector; the opener is where focus returns when its sheet closes. */
+  onGithub: (opener: HTMLElement) => void;
   shellButton: RefObject<HTMLButtonElement | null>;
+  /** The terminal panel's element id, for the toggle's `aria-controls`. */
+  terminalPanelId?: string;
   /** Whether the session is in the tracked set (the Portal views' right panel lists it). */
   tracked: boolean;
   /** A track or untrack request is in flight. */
   trackPending: boolean;
   onToggleTrack: () => void;
+  /** The pane menu: split, move to a tab, close. */
+  pane?: PaneMenu;
 }) {
   const [renaming, setRenaming] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
@@ -66,14 +107,15 @@ export default function SessionHeader({
   };
   return (
     <header className="workspace-header">
-      <IconButton
-        id="sidebar-toggle"
-        label="Toggle sidebar"
-        onClick={onSidebar}
-        className="text-muted-foreground"
-      >
-        <PanelLeft className="size-4" />
-      </IconButton>
+      {showSidebarToggle && (
+        <IconButton
+          label="Toggle sidebar"
+          onClick={(event) => onSidebar(event.currentTarget)}
+          className="text-muted-foreground"
+        >
+          <PanelLeft className="size-4" />
+        </IconButton>
+      )}
       <div className="min-w-0 flex-1">
         {renaming && onRename ? (
           <RenameField
@@ -142,7 +184,6 @@ export default function SessionHeader({
         )}
         {hasSession && (
           <IconButton
-            id="track-toggle"
             label="Track session"
             aria-pressed={tracked}
             disabled={trackPending}
@@ -157,10 +198,9 @@ export default function SessionHeader({
         {hasSession && (
           <IconButton
             ref={shellButton}
-            id="terminal-toggle"
             label={showShell ? "Hide terminal" : "Show terminal"}
             aria-expanded={showShell}
-            aria-controls="terminal-panel"
+            aria-controls={showShell ? terminalPanelId : undefined}
             onClick={onTerminal}
             className={
               showShell ? "bg-white/8 text-foreground" : "text-muted-foreground"
@@ -170,19 +210,48 @@ export default function SessionHeader({
           </IconButton>
         )}
         <IconButton
-          id="github-toggle"
           label={
             showGithub ? "Close GitHub inspector" : "Open GitHub inspector"
           }
           aria-expanded={showGithub}
           aria-controls={showGithub ? "github-inspector" : undefined}
-          onClick={onGithub}
+          onClick={(event) => onGithub(event.currentTarget)}
           className={
             showGithub ? "bg-white/8 text-foreground" : "text-muted-foreground"
           }
         >
           <GitBranch className="size-4" />
         </IconButton>
+        {pane && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <IconButton label="Pane options" className="text-muted-foreground">
+                <LayoutPanelLeft className="size-4" />
+              </IconButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem disabled={!pane.canSplit} onSelect={pane.onSplitRight}>
+                <SquareSplitHorizontal />
+                Split right
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!pane.canSplit} onSelect={pane.onSplitDown}>
+                <SquareSplitVertical />
+                Split down
+              </DropdownMenuItem>
+              {pane.onMoveToTab && (
+                <DropdownMenuItem onSelect={pane.onMoveToTab}>
+                  <SquareArrowOutUpRight />
+                  Move to its own tab
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={pane.onClose}>
+                <X />
+                Close pane
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </header>
   );

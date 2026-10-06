@@ -8,6 +8,7 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
+import type { RefObject } from "react";
 import type { GithubPanelProps } from "./GithubPanel";
 import type { SessionSummary } from "@/lib/types";
 
@@ -18,6 +19,7 @@ export default function GithubInspector({
   projectRemoved,
   session,
   onGitAction,
+  returnFocus,
 }: {
   open: boolean;
   onClose: () => void;
@@ -25,6 +27,8 @@ export default function GithubInspector({
   projectRemoved: boolean;
   session?: SessionSummary;
   onGitAction?: GithubPanelProps["onGitAction"];
+  /** The toggle that opened the sheet (one per pane); focus returns there when it closes. */
+  returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const desktop = useMediaQuery("(min-width: 1280px)");
   const panel = (
@@ -59,7 +63,7 @@ export default function GithubInspector({
           showCloseButton={false}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            document.getElementById("github-toggle")?.focus();
+            (returnFocus?.current ?? document.getElementById("github-toggle"))?.focus();
           }}
         >
           <SheetTitle className="sr-only">GitHub inspector</SheetTitle>

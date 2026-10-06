@@ -11,6 +11,8 @@ import type { ItemCardHandlers } from "../PortalItemCard";
 import { useSend } from "../useSend";
 import { openSettings } from "../useSettings";
 import { usePortalEvents, usePortalLive } from "./PortalLive";
+import { useWorkspace } from "../WorkspaceProvider";
+import { useStableCallback } from "@/hooks/use-stable-callback";
 import { Button } from "@/components/ui/button";
 import {
   MessageScroller,
@@ -22,6 +24,8 @@ import {
 import { daySections, formatDateTime } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
+import { panelSessionFromSearch } from "@/lib/session-routes";
+import type { WorkspaceView } from "@portal/contracts/workspace";
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
 
@@ -172,6 +176,13 @@ export default function PortalThread({
 }) {
   const live = usePortalLive();
   const { status } = live;
+  const { focus } = useWorkspace();
+  /** The view at send time (stable, so the transport memoised on the routes sees the latest focus). */
+  const currentView = useStableCallback((): WorkspaceView => {
+    const panelSession = panelSessionFromSearch(window.location.search);
+    if (panelSession) return { sessionId: panelSession, tabId: null, paneId: null };
+    return { sessionId: focus.sessionId, tabId: focus.tabId, paneId: focus.paneId };
+  });
   const routes = useMemo(() => threadRoutes(threadId), [threadId]);
   const key = threadDraftKey(threadId);
   const [ack] = useState(() => new Acknowledgement());
@@ -179,14 +190,15 @@ export default function PortalThread({
     () =>
       new DefaultChatTransport<OrchestratorMessage>({
         api: routes.messages,
-        prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
+        // Decision 16: what this device is looking at goes with the message (the tracked panel's open session, else the focused pane).
+        prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1), view: currentView() } }),
         fetch: async (input, init) => {
           const response = await fetch(input, init);
           if (response.ok) ack.accept();
           return response;
         },
       }),
-    [routes, ack],
+    [routes, ack, currentView],
   );
   /** Bumped whenever the server's thread should replace the local one; the load waits for our own turn to end. */
   const [historyRequest, setHistoryRequest] = useState(0);

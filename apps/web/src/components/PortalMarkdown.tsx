@@ -5,14 +5,39 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import CodeBlock from "./CodeBlock";
+import { pushPath } from "@/lib/navigation";
+import { inAppLinkPath } from "@/lib/session-routes";
+
+/**
+ * Links to tabs (`/tabs/<id>`) and sessions (`/sessions/<id>`) in a reply navigate in place, the way the
+ * app's own links do (the session path resolves to its tab); everything else opens in a new browser tab.
+ */
+function MarkdownLink({ children, href, ...props }: ComponentProps<"a">) {
+  const inApp = href && typeof window !== "undefined" ? inAppLinkPath(href, window.location.origin) : null;
+  if (inApp)
+    return (
+      <a
+        {...props}
+        href={inApp}
+        onClick={(event) => {
+          if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          pushPath(inApp);
+        }}
+      >
+        {children}
+      </a>
+    );
+  return (
+    <a {...props} href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  );
+}
 
 const components = {
   pre: CodeBlock,
-  a: ({ children, ...props }: ComponentProps<"a">) => (
-    <a {...props} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
+  a: MarkdownLink,
 };
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];

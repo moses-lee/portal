@@ -66,7 +66,8 @@ export default function PortalPage({
   pathname: string;
   /** Change the URL within the app (no server round trip). */
   onNavigate: (path: string) => void;
-  onOpenSidebar: () => void;
+  /** Open the sidebar; the opener is where focus returns when its sheet closes. */
+  onOpenSidebar: (opener?: HTMLElement | null) => void;
   /** Navigate to a session's full page, the way the sidebar does (the tracked panel's "Open full page"). */
   onOpenSession: (sessionId: string) => void;
 }) {
@@ -196,7 +197,7 @@ export default function PortalPage({
       <main className="flex min-w-0 flex-1 flex-col">
         <RoomBackground activity={portalActivity(status, approvals)} />
         <header className="workspace-header !items-start max-sm:!items-center">
-          <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={onOpenSidebar} className="text-muted-foreground">
+          <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
             <PanelLeft className="size-4" />
           </IconButton>
           <div className="min-w-0 flex-1 pt-1.5 max-sm:pt-0">

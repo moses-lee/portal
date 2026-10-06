@@ -110,3 +110,52 @@ test("the tracked panel's session rides along as ?session= on any Portal path", 
   assert.equal(portalPathKeepingPanel({ view: "watches", session: "s2" }, "?session=s1"), "/watches?session=s2");
   assert.equal(portalPathKeepingPanel({ view: "watches", session: null }, "?session=s1"), "/watches");
 });
+
+test("tab paths carry the tab id and, in a split, the focused pane; /new and /sessions are resolvers, not Portal", async () => {
+  const { isResolverPath, isTabPath, isWorkspacePath, tabFromPath, tabPath, workspaceRoute } = await import("../src/lib/session-routes.ts");
+  assert.equal(tabPath("t1"), "/tabs/t1");
+  assert.equal(tabPath("t 1", "p/1"), "/tabs/t%201?pane=p%2F1");
+  assert.equal(tabPath("t1", null), "/tabs/t1");
+  assert.deepEqual(tabFromPath("/tabs/t%201", "?pane=p%2F1"), { tabId: "t 1", paneId: "p/1" });
+  assert.deepEqual(tabFromPath("/tabs/t1/", "pane=p1"), { tabId: "t1", paneId: "p1" });
+  assert.deepEqual(tabFromPath("/tabs/t1", ""), { tabId: "t1", paneId: null });
+  assert.deepEqual(tabFromPath("/tabs/t1", "?pane="), { tabId: "t1", paneId: null });
+  assert.equal(tabFromPath("/tabs", ""), null);
+  assert.equal(tabFromPath("/tabs/t1/extra", ""), null);
+  assert.equal(tabFromPath("/tabs/%E0%A4%A", ""), null);
+  assert.equal(isTabPath("/tabs/t1"), true);
+  assert.equal(isTabPath("/tabsx/t1"), false);
+  assert.equal(isPortalPath("/tabs/t1"), false);
+  assert.equal(isWorkspacePath("/tabs/t1"), true);
+  assert.equal(isWorkspacePath("/sessions/s1"), true);
+  assert.equal(isWorkspacePath("/new"), true);
+  assert.equal(isWorkspacePath("/terminal"), false);
+  assert.equal(isWorkspacePath("/"), false);
+  assert.equal(isResolverPath("/sessions/s1"), true);
+  assert.equal(isResolverPath("/new"), true);
+  assert.equal(isResolverPath("/tabs/t1"), false);
+  assert.deepEqual(workspaceRoute("/tabs/t1", "?pane=p1"), { kind: "tab", tabId: "t1", paneId: "p1" });
+  assert.deepEqual(workspaceRoute("/new"), { kind: "start" });
+  assert.deepEqual(workspaceRoute("/sessions/s%201"), { kind: "session", sessionId: "s 1" });
+  assert.equal(workspaceRoute("/"), null);
+  assert.equal(workspaceRoute("/terminal"), null);
+  assert.equal(workspaceRoute("/watches"), null);
+});
+
+test("links in Portal replies to tabs and sessions are in-app paths; everything else is not", async () => {
+  const { inAppLinkPath } = await import("../src/lib/session-routes.ts");
+  const origin = "https://portal.example";
+  assert.equal(inAppLinkPath("/tabs/t1", origin), "/tabs/t1");
+  assert.equal(inAppLinkPath("/tabs/t1?pane=p1", origin), "/tabs/t1?pane=p1");
+  assert.equal(inAppLinkPath("/tabs/t1?pane=p1#x", origin), "/tabs/t1?pane=p1");
+  assert.equal(inAppLinkPath("/sessions/s1", origin), "/sessions/s1");
+  assert.equal(inAppLinkPath("/sessions/s1?foo=1", origin), "/sessions/s1");
+  assert.equal(inAppLinkPath("https://portal.example/tabs/t1?pane=p1", origin), "/tabs/t1?pane=p1");
+  assert.equal(inAppLinkPath("https://portal.example/sessions/s1", origin), "/sessions/s1");
+  assert.equal(inAppLinkPath("https://elsewhere.example/tabs/t1", origin), null);
+  assert.equal(inAppLinkPath("https://github.com/x/y/pull/1", origin), null);
+  assert.equal(inAppLinkPath("/watches", origin), null);
+  assert.equal(inAppLinkPath("/", origin), null);
+  assert.equal(inAppLinkPath("mailto:x@y.z", origin), null);
+  assert.equal(inAppLinkPath("not a url", origin), null);
+});

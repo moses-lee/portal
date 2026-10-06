@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { Button } from "@/components/ui/button";
@@ -104,6 +104,8 @@ export default function SessionControls({
   onChange: (request: SetConfigRequest) => void;
 }) {
   const [open, setOpen] = useState(false);
+  /** The mode select's id; several panes each render these controls. */
+  const modeId = useId();
   const options = orderConfigOptions(state.configOptions);
   const modes = state.modes;
   const showModes =
@@ -159,7 +161,7 @@ export default function SessionControls({
         {showModes && modes && (
           <div className="space-y-2.5">
             <label
-              htmlFor="config-session-mode"
+              htmlFor={modeId}
               className="text-sm font-medium"
             >
               Mode
@@ -169,7 +171,7 @@ export default function SessionControls({
               disabled={disabled}
               onValueChange={(modeId) => onChange({ modeId })}
             >
-              <SelectTrigger id="config-session-mode" className="!h-10 w-full">
+              <SelectTrigger id={modeId} className="!h-10 w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

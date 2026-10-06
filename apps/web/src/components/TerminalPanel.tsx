@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import TerminalView, { type TerminalViewHandle } from "./TerminalView";
 import type { ShellViewState } from "@/lib/shell-client";
 import type { TerminalInfo } from "@/lib/shell-types";
@@ -10,6 +10,8 @@ export type TerminalPanelProps = {
   endpoint: string;
   /** Hide the panel; the caller returns focus to the header's Terminal toggle. Omitted where the panel is the page. */
   onHide?: () => void;
+  /** The section's element id (a header's `aria-controls` names it); per instance by default, since several panes may each show a terminal. */
+  panelId?: string;
   /** Open a first tab when there is none (the standalone terminal page); a session's panel shows its empty state instead. */
   autoCreate?: boolean;
 };
@@ -80,7 +82,9 @@ function statusText(view: ShellViewState | undefined) {
 }
 
 /** A collection of terminals as tabs; each tab is its own PTY, started on first attach and kept running while hidden. */
-export default function TerminalPanel({ endpoint, onHide, autoCreate = false }: TerminalPanelProps) {
+export default function TerminalPanel({ endpoint, onHide, autoCreate = false, panelId }: TerminalPanelProps) {
+  /** Prefix for the tab, tabpanel and new-tab element ids, so two panels on one page do not collide. */
+  const baseId = useId();
   const [tabs, setTabs] = useState<Tabs>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [views, setViews] = useState<Record<string, ShellViewState>>({});
@@ -160,7 +164,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false }: 
   }, [fetchTerminals, createTerminal, autoCreate]);
 
   const focusTab = (id: string | null) => {
-    (id ? document.getElementById(`terminal-tab-${id}`) : document.getElementById("terminal-new-tab"))?.focus();
+    (id ? document.getElementById(`${baseId}-tab-${id}`) : document.getElementById(`${baseId}-new-tab`))?.focus();
   };
 
   const newTab = async () => {
@@ -236,7 +240,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false }: 
   const activeError = activeView?.error && !activeView.closed ? activeView.error : null;
 
   return (
-    <section id="terminal-panel" aria-label="Terminal" className="flex h-full min-h-0 flex-col bg-zinc-950">
+    <section id={panelId ?? `${baseId}-panel`} aria-label="Terminal" className="flex h-full min-h-0 flex-col bg-zinc-950">
       <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-xs text-zinc-400">
         <span className="shrink-0 font-medium text-zinc-200">Terminal</span>
         <div role="tablist" aria-label="Terminals" onKeyDown={onTabKeyDown} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
@@ -248,9 +252,9 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false }: 
                 <button
                   type="button"
                   role="tab"
-                  id={`terminal-tab-${t.id}`}
+                  id={`${baseId}-tab-${t.id}`}
                   aria-selected={selected}
-                  aria-controls={`terminal-tabpanel-${t.id}`}
+                  aria-controls={`${baseId}-tabpanel-${t.id}`}
                   tabIndex={selected ? 0 : -1}
                   onClick={() => setTabs((prev) => activate(prev, t.id))}
                   className="px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400"
@@ -272,7 +276,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false }: 
           })}
           <button
             type="button"
-            id="terminal-new-tab"
+            id={`${baseId}-new-tab`}
             aria-label="New terminal"
             title="New terminal"
             onClick={() => void newTab()}
