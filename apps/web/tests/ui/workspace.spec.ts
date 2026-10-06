@@ -305,7 +305,7 @@ test("/new opens a start-page tab whose pane becomes the new session's; + reuses
   await expect(tabs).toHaveCount(3);
   // `/new` from another tab focuses the existing start page (decision 7): no new tab, no op.
   await tabs.nth(0).click();
-  await expect(page).toHaveURL(/\/tabs\/w2$/);
+  await expect(page).toHaveURL(/\/tabs\/t1$/);
   await page.evaluate(() => window.history.pushState(null, "", "/new"));
   await expect(page).toHaveURL(/\/tabs\/w4$/);
   await expect(tabs).toHaveCount(3);
