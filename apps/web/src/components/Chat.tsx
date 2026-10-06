@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import { useMediaQuery } from "./useMediaQuery";
 import { useStableCallback } from "@/hooks/use-stable-callback";
 import { usePreference } from "./usePreference";
-import { clearSubmittedDraft, writeDraft } from "@/lib/drafts";
+import { clearSubmittedDraft, startKey, writeDraft } from "@/lib/drafts";
 import {
   forgetPromptHistory,
   recordPrompt,
@@ -47,6 +47,7 @@ import {
 } from "@/lib/session-config";
 import { useLastUsed } from "./useLastUsed";
 import { navigateTo, pushPath } from "@/lib/navigation";
+import { sessionDisplayTitle } from "@/lib/session-title";
 import {
   isPortalPath,
   isTerminalPath,
@@ -116,7 +117,7 @@ function ChatShell() {
    * resolver (`/new`, `/sessions/<id>`) the view settles; null on Portal and the terminal.
    */
   const route = useMemo(() => workspaceRoute(pathname ?? "/"), [pathname]);
-  const { workspace, focus, apply } = useWorkspace();
+  const { workspace, focus, apply, keyOf } = useWorkspace();
   const actions = useWorkspaceActions();
   /** The focused pane's session (decision 27): the sidebar's highlight, the GitHub inspector's session, the title. */
   const active = focus.sessionId;
@@ -150,9 +151,11 @@ function ChatShell() {
       ? lastUsed.agentId
       : defaultAgentId;
   const selectAgent = (agentId: string) => saveLastUsed({ agentId });
-  const [creating, setCreating] = useState(false);
-  const [createError, setSessionError] = useState<string | null>(null);
-  const sessionError = createError ?? loadError;
+  /** The start page creating a session (its `startKey`), and the last creation failure with the page it happened in: per pane, not shared. */
+  const [creatingIn, setCreatingIn] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<{ startKey: string; message: string } | null>(null);
+  const creating = creatingIn !== null;
+  const sessionError = createError?.message ?? loadError;
   /** The current list, for handlers that must not close over a stale render. */
   const sessionsRef = useRef(sessions);
   useEffect(() => {
@@ -467,13 +470,15 @@ function ChatShell() {
 
   /**
    * Start a session in `projectId`, first turning a non-Original `choice` into its worktree project.
-   * It opens in `paneId` (the start-page pane that asked, decision 9), else in a new tab.
+   * It opens in `paneId` (the start-page pane that asked, decision 9), else in a new tab. `key` is
+   * the asking start page's `startKey`: its draft, and where the spinner and any error show.
    */
   const newSession = async (
     projectId: string = selectedProjectId,
     choice: WorktreeChoice = ORIGINAL,
     firstPrompt = "",
     paneId: string | null = null,
+    key: string = startKey(null),
   ) => {
     if (
       creatingRef.current ||
@@ -484,8 +489,9 @@ function ChatShell() {
     )
       return;
     creatingRef.current = true;
-    setCreating(true);
-    setSessionError(null);
+    setCreatingIn(key);
+    setCreateError(null);
+    const setSessionError = (message: string) => setCreateError({ startKey: key, message });
     const agentId = selectedAgentId;
     const desiredSettings = startSettings;
     if (projectId !== selectedProjectId) selectProject(projectId);
@@ -524,7 +530,7 @@ function ChatShell() {
       putSession({ ...session, liveness: session.liveness.state });
       if (firstPrompt.trim()) {
         writeDraft(session.id, firstPrompt);
-        clearSubmittedDraft("new", firstPrompt);
+        clearSubmittedDraft(key, firstPrompt);
         setInitialSend({ sessionId: session.id, pending: true, error: null });
       }
       await placeNewSession(session.id, paneId);
@@ -590,7 +596,7 @@ function ChatShell() {
       );
     } finally {
       creatingRef.current = false;
-      setCreating(false);
+      setCreatingIn(null);
     }
   };
 
@@ -627,7 +633,8 @@ function ChatShell() {
 
   /**
    * A source control panel action: draft its prompt on the start page for the panel's project, so
-   * the user picks the agent and model and sends. Nothing is created until they do.
+   * the user picks the agent and model and sends. Nothing is created until they do. The draft goes
+   * to the start page that opens (or is reused), under that pane's key.
    */
   const startGitAction = (kind: GitActionKind, summary: GithubSummary) => {
     if (!githubProjectId) return;
@@ -636,40 +643,72 @@ function ChatShell() {
     selectProject(githubProjectId);
     // The start page begins at Original again; the draft replaces whatever was there.
     setWorktreePick(null);
-    writeDraft("new", text);
-    void actions.openStartTab();
+    void actions.openStartTab().then((location) => {
+      writeDraft(startKey(location ? keyOf(location.paneId) : null), text);
+    });
     setShowSidebar(false);
   };
-  /** The sessions open somewhere in the workspace: their sidebar rows get the tab glyph. */
+  /** The sessions open somewhere in the workspace: their sidebar rows get the tab glyph (not the focused one's, decision 27). */
   const openSessionIds = useMemo(
-    () => new Set(allPanes(workspace).flatMap(({ pane }) => (pane.sessionId === null ? [] : [pane.sessionId]))),
-    [workspace],
+    () => new Set(allPanes(workspace).flatMap(({ pane }) => (pane.sessionId === null || pane.sessionId === active ? [] : [pane.sessionId]))),
+    [workspace, active],
   );
-  // Decision: the document title is the focused session's title, else "Portal".
+  // Decision: the document title is the focused session's display title, else "Portal".
+  const activeTitle = activeSession ? sessionDisplayTitle(activeSession.title) : null;
   useEffect(() => {
-    document.title = activeSession?.title || (active ? "Conversation" : "Portal");
-  }, [activeSession?.title, active]);
-  /** The start page's props, shared by every start-page pane; `onCreate` names the pane that asked. */
-  const start: StartPaneProps = {
-    projects: orderedProjects,
-    selectedProjectId,
-    onSelectProject: selectProject,
-    onAddProject: () => setShowAddProject(true),
-    worktree: worktreeChoice,
-    onWorktreeChange: (choice) =>
-      setWorktreePick({ projectId: selectedProjectId, choice }),
-    agents,
-    selectedAgentId,
-    onSelectAgent: selectAgent,
-    settings: startSettings,
-    onSettingsChange: changeStartSetting,
-    loading: loading || projectsLoading || !lastUsed,
-    canCreate,
-    creating,
-    error: sessionError,
-    onCreate: (text, paneId) =>
-      void newSession(selectedProjectId, worktreeChoice, text, paneId),
-  };
+    document.title = activeTitle ?? "Portal";
+  }, [activeTitle]);
+  // The start page's handlers, stable so `start` (and the memoised panes holding it) only changes with its data.
+  const startSelectProject = useStableCallback(selectProject);
+  const startAddProject = useStableCallback(() => setShowAddProject(true));
+  const startWorktreeChange = useStableCallback((choice: WorktreeChoice) => setWorktreePick({ projectId: selectedProjectId, choice }));
+  const startSelectAgent = useStableCallback(selectAgent);
+  const startSettingsChange = useStableCallback(changeStartSetting);
+  const startCreate = useStableCallback((text: string | undefined, paneId: string | null, key: string) => {
+    void newSession(selectedProjectId, worktreeChoice, text, paneId, key);
+  });
+  const startLoading = loading || projectsLoading || !lastUsed;
+  /** The start page's props, shared by every start-page pane; the per-pane parts are keyed by `startKey` (see `StartPaneProps`). */
+  const start = useMemo<StartPaneProps>(
+    () => ({
+      projects: orderedProjects,
+      selectedProjectId,
+      onSelectProject: startSelectProject,
+      onAddProject: startAddProject,
+      worktree: worktreeChoice,
+      onWorktreeChange: startWorktreeChange,
+      agents,
+      selectedAgentId,
+      onSelectAgent: startSelectAgent,
+      settings: startSettings,
+      onSettingsChange: startSettingsChange,
+      loading: startLoading,
+      canCreate,
+      creatingIn,
+      createError,
+      loadError,
+      onCreate: startCreate,
+    }),
+    [
+      orderedProjects,
+      selectedProjectId,
+      startSelectProject,
+      startAddProject,
+      worktreeChoice,
+      startWorktreeChange,
+      agents,
+      selectedAgentId,
+      startSelectAgent,
+      startSettings,
+      startSettingsChange,
+      startLoading,
+      canCreate,
+      creatingIn,
+      createError,
+      loadError,
+      startCreate,
+    ],
+  );
   // Stable identities for the sidebar: its rows are memoised, and this component re-renders on
   // every list-stream event, so an inline arrow here would re-render every row each time.
   const sidebarSelect = useStableCallback((id: string) => selectSession(id));

@@ -28,19 +28,25 @@ import {
   WorkspaceError,
 } from "@portal/shared/workspace";
 import { tabPath } from "./session-routes.ts";
+import { sessionDisplayTitle } from "./session-title.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Names
 // ---------------------------------------------------------------------------------------------
 
-/** The name a tab shows, from its sessions' titles (an untitled session reads "Untitled"); decision 25. */
-export function tabTitle(tab: Tab, sessions: readonly { id: string; title: string | null }[]): string {
-  return defaultTabTitle(tab, (sessionId) => sessions.find((s) => s.id === sessionId)?.title || null);
+/** A session's display title from the list: the sidebar's vocabulary ("New conversation" for an untitled one). */
+export function sessionTitleIn(sessions: readonly { id: string; title: string | null }[], sessionId: string): string {
+  return sessionDisplayTitle(sessions.find((s) => s.id === sessionId)?.title);
 }
 
-/** One pane's name: its session's title ("Untitled" without one), or "New session" for a start page. */
+/** The name a tab shows, from its sessions' display titles (decision 25); the shared fallback "Untitled" never shows. */
+export function tabTitle(tab: Tab, sessions: readonly { id: string; title: string | null }[]): string {
+  return defaultTabTitle(tab, (sessionId) => sessionTitleIn(sessions, sessionId));
+}
+
+/** One pane's name: its session's display title, or "New session" for a start page. */
 export function paneTitle(pane: PaneNode, sessions: readonly { id: string; title: string | null }[]): string {
-  return tabTitle({ id: pane.id, title: null, titleSource: null, root: pane, createdAt: 0 }, sessions);
+  return pane.sessionId === null ? "New session" : sessionTitleIn(sessions, pane.sessionId);
 }
 
 /** The preset's label in menus. */
@@ -78,6 +84,33 @@ export function iconCells(root: LayoutNode): IconCell[] {
   return out;
 }
 
+/** An icon cell with its session's state drawn in (null for a start page, or a session the list lacks). */
+export type IconCellState = IconCell & { state: string | null };
+
+/** The cells with their states: what a tab item needs to draw its icon, as plain values so it can skip renders. */
+export function tabCells(root: LayoutNode, stateOf: (sessionId: string) => string | null): IconCellState[] {
+  return iconCells(root).map((cell) => ({ ...cell, state: cell.sessionId === null ? null : stateOf(cell.sessionId) }));
+}
+
+/** Whether two cell lists draw the same icon (a memoised tab item skips a render on a session-list patch that changed nothing of its own). */
+export function sameCells(a: readonly IconCellState[], b: readonly IconCellState[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((cell, i) => {
+      const other = b[i];
+      return (
+        cell.paneId === other.paneId &&
+        cell.sessionId === other.sessionId &&
+        cell.state === other.state &&
+        cell.x === other.x &&
+        cell.y === other.y &&
+        cell.width === other.width &&
+        cell.height === other.height
+      );
+    })
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Flat order (mobile) and focus
 // ---------------------------------------------------------------------------------------------
@@ -85,11 +118,6 @@ export function iconCells(root: LayoutNode): IconCell[] {
 /** Every pane of every tab, tab order then tree order: the phone's flat list (decision 18). */
 export function flatPanes(ws: Workspace): { tabId: string; pane: PaneNode }[] {
   return allPanes(ws);
-}
-
-/** The pane's position in the flat list (0-based), or -1. */
-export function flatIndexOf(ws: Workspace, paneId: string): number {
-  return flatPanes(ws).findIndex(({ pane }) => pane.id === paneId);
 }
 
 /**
@@ -103,10 +131,10 @@ export function resolveFocus(ws: Workspace, tabId: string | null, paneId: string
   return { tab, pane: panes.find((pane) => pane.id === paneId) ?? panes[0] ?? null };
 }
 
-/** The first start-page pane in the workspace, if any. */
-export function startPaneLocation(ws: Workspace): WorkspaceLocation | null {
-  const hit = allPanes(ws).find(({ pane }) => pane.sessionId === null);
-  return hit ? { tabId: hit.tabId, paneId: hit.pane.id } : null;
+/** The first start-page pane of `tab`, if any: the one a "new session" entry point reuses (see `resolveRoute`). */
+export function startPaneIn(tab: Tab): WorkspaceLocation | null {
+  const pane = tabPanes(tab).find((candidate) => candidate.sessionId === null);
+  return pane ? { tabId: tab.id, paneId: pane.id } : null;
 }
 
 /** Whether a location's path should carry `?pane=`: only in a split (decision 7). */
@@ -121,18 +149,26 @@ export function locationPath(ws: Workspace, location: WorkspaceLocation): string
 }
 
 /**
- * What the shell does with a resolver path (decision 7 and 9): focus the tab holding the session or a
- * start-page pane, open one when none does, or stay on the bare start page while the workspace is empty.
+ * What the shell does with a resolver path (decision 7 and 9): focus the tab holding the session, else
+ * open it in a new tab. For `/new`: stay on the bare start page while the workspace is empty; else the
+ * one rule every "new session" entry point follows (`+`, a project's `+`, a drafted prompt, `/new`): a
+ * start-page pane is reused only when it is in the focused tab (`focusedTabId`; `/new` itself names
+ * none), otherwise a new start-page tab opens.
  */
 export type RouteResolution = { kind: "focus"; location: WorkspaceLocation } | { kind: "open"; op: WorkspaceOp } | { kind: "stay" };
 
-export function resolveRoute(ws: Workspace, route: { kind: "start" } | { kind: "session"; sessionId: string }): RouteResolution {
+export function resolveRoute(
+  ws: Workspace,
+  route: { kind: "start" } | { kind: "session"; sessionId: string },
+  focusedTabId: string | null = null,
+): RouteResolution {
   if (route.kind === "session") {
     const location = locateSession(ws, route.sessionId);
     return location ? { kind: "focus", location } : { kind: "open", op: { op: "open", sessionId: route.sessionId } };
   }
   if (ws.tabs.length === 0) return { kind: "stay" };
-  const start = startPaneLocation(ws);
+  const focused = focusedTabId ? findTab(ws, focusedTabId) : null;
+  const start = focused ? startPaneIn(focused) : null;
   return start ? { kind: "focus", location: start } : { kind: "open", op: { op: "open", sessionId: null } };
 }
 
@@ -169,11 +205,19 @@ export function canSplitPane(ws: Workspace, tabId: string, paneId: string, edge:
   }
 }
 
-/** The tab to show once `tabId` closes: its right neighbour, else its left one, else none. */
-export function neighbourTab(ws: Workspace, tabId: string): Tab | null {
-  const index = ws.tabs.findIndex((tab) => tab.id === tabId);
+/** The tab to show (and to focus in the strip) once `tabId` closes: its right neighbour, else its left one, else none. */
+export function neighbourTab(tabs: readonly Tab[], tabId: string): Tab | null {
+  const index = tabs.findIndex((tab) => tab.id === tabId);
   if (index < 0) return null;
-  return ws.tabs[index + 1] ?? ws.tabs[index - 1] ?? null;
+  return tabs[index + 1] ?? tabs[index - 1] ?? null;
+}
+
+/**
+ * History for a focus move to `location`: a pane change inside the focused tab replaces the entry,
+ * a move to another tab pushes one. True means replace.
+ */
+export function staysInTab(focusedTabId: string | null, location: WorkspaceLocation): boolean {
+  return focusedTabId !== null && location.tabId === focusedTabId;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -292,8 +336,8 @@ export function sizesFromLayout(split: SplitNode, layout: Readonly<Record<string
   return split.children.map((child, i) => layout[keyOf(child.id)] ?? split.sizes[i]);
 }
 
-/** Equal within the rounding the reducer applies (two decimals). */
-export function sameSizes(a: readonly number[], b: readonly number[]): boolean {
+/** Equal within the rounding the reducer applies (two decimals); the shared reducer's own `sameSizes` is exact. */
+export function closeSizes(a: readonly number[], b: readonly number[]): boolean {
   return a.length === b.length && a.every((size, i) => Math.abs(size - b[i]) < 0.01);
 }
 
@@ -301,31 +345,61 @@ export function sameSizes(a: readonly number[], b: readonly number[]): boolean {
 // Optimistic ids
 // ---------------------------------------------------------------------------------------------
 
+/** Every tab, split and pane id in the workspace. */
+function idsOf(ws: Workspace): Set<string> {
+  const out = new Set<string>();
+  const walk = (node: LayoutNode) => {
+    out.add(node.id);
+    if (node.kind === "split") node.children.forEach(walk);
+  };
+  for (const tab of ws.tabs) {
+    out.add(tab.id);
+    walk(tab.root);
+  }
+  return out;
+}
+
 /**
- * Which server ids stand for which optimistic ones: the two workspaces walked side by side, tabs by
- * position and nodes by position where the shape agrees. A pane keyed by the optimistic id keeps its
- * key when the server's copy lands, so it does not remount. Ids that already agree are left out.
+ * Which of the server's ids stand for which optimistic ones, for one op: `optimistic` is the guess
+ * made from `base`, `server` a copy that includes the op's outcome. Only the ids the guess made up
+ * (absent from `base`) are paired, and only with ids the server introduced (also absent from `base`):
+ * tabs already in `base` match by id and their trees walk by position where the shape agrees; the
+ * new tabs pair up in order. A real id is never aliased to another real id, so a concurrent
+ * `move_tab` or `close_tab` from another device (or the orchestrator) that shifts positions cannot
+ * cross-alias live tabs and remount them. A pane keyed by the optimistic id keeps its key when the
+ * server's copy lands, so it does not remount.
  */
-export function idAliases(optimistic: Workspace, server: Workspace): Map<string, string> {
+export function idAliases(base: Workspace, optimistic: Workspace, server: Workspace): Map<string, string> {
+  const known = idsOf(base);
   const aliases = new Map<string, string>();
+  const pair = (mine: string, theirs: string) => {
+    if (mine !== theirs && !known.has(mine) && !known.has(theirs)) aliases.set(theirs, mine);
+  };
   const walk = (a: LayoutNode, b: LayoutNode) => {
-    if (a.kind !== b.kind) return;
     if (a.kind === "pane" && b.kind === "pane") {
-      if (a.id !== b.id && a.sessionId === b.sessionId) aliases.set(b.id, a.id);
+      if (a.sessionId === b.sessionId) pair(a.id, b.id);
       return;
     }
     if (a.kind === "split" && b.kind === "split") {
       if (a.direction !== b.direction || a.children.length !== b.children.length) return;
-      if (a.id !== b.id) aliases.set(b.id, a.id);
+      pair(a.id, b.id);
       a.children.forEach((child, i) => walk(child, b.children[i]));
     }
   };
-  server.tabs.forEach((tab, i) => {
-    const mine = optimistic.tabs[i];
-    if (!mine) return;
-    if (mine.id !== tab.id) aliases.set(tab.id, mine.id);
-    walk(mine.root, tab.root);
-  });
+  for (const tab of server.tabs) {
+    if (!known.has(tab.id)) continue;
+    const mine = findTab(optimistic, tab.id);
+    if (mine) walk(mine.root, tab.root);
+  }
+  const newMine = optimistic.tabs.filter((tab) => !known.has(tab.id));
+  server.tabs
+    .filter((tab) => !known.has(tab.id))
+    .forEach((tab, i) => {
+      const mine = newMine[i];
+      if (!mine) return;
+      pair(mine.id, tab.id);
+      walk(mine.root, tab.root);
+    });
   return aliases;
 }
 

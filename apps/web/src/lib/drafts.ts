@@ -3,6 +3,15 @@ const drafts = new Map<string, string>();
 const listeners = new Set<() => void>();
 const prefix = "portal.draft.v1:";
 
+/**
+ * The draft key of a start page: one per start-page pane (`paneKey` is the key the device renders the
+ * pane under, so it survives the server replacing an optimistic id), and `new` for the bare start page
+ * of an empty workspace. Also names the pane in the shell's per-pane creating and error state.
+ */
+export function startKey(paneKey: string | null): string {
+  return paneKey === null ? "new" : `new:${paneKey}`;
+}
+
 export function readDraft(id: string): string {
   const cached = drafts.get(id);
   if (cached !== undefined) return cached;

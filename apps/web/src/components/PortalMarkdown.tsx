@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, type ComponentProps } from "react";
+import { memo, useSyncExternalStore, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -8,12 +8,25 @@ import CodeBlock from "./CodeBlock";
 import { pushPath } from "@/lib/navigation";
 import { inAppLinkPath } from "@/lib/session-routes";
 
+const noSubscription = () => () => {};
+
+/** The page's origin, read outside render: null on the server and during hydration, the browser's after. */
+function useOrigin(): string | null {
+  return useSyncExternalStore(
+    noSubscription,
+    () => window.location.origin,
+    () => null,
+  );
+}
+
 /**
  * Links to tabs (`/tabs/<id>`) and sessions (`/sessions/<id>`) in a reply navigate in place, the way the
  * app's own links do (the session path resolves to its tab); everything else opens in a new browser tab.
+ * Paths are recognised without the origin; a full URL on this origin once the browser has said what it is.
  */
 function MarkdownLink({ children, href, ...props }: ComponentProps<"a">) {
-  const inApp = href && typeof window !== "undefined" ? inAppLinkPath(href, window.location.origin) : null;
+  const origin = useOrigin();
+  const inApp = href ? inAppLinkPath(href, origin) : null;
   if (inApp)
     return (
       <a

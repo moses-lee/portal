@@ -5,6 +5,7 @@ import {
   advancedSessions,
   arrangeOp,
   canSplitPane,
+  closeSizes,
   flatPanes,
   iconCells,
   idAliases,
@@ -16,16 +17,19 @@ import {
   rememberFocused,
   resolveFocus,
   resolveRoute,
-  sameSizes,
+  sameCells,
   signalsOf,
   sizesFromLayout,
-  startPaneLocation,
+  startPaneIn,
+  staysInTab,
+  tabCells,
   tabTitle,
   unreadAfter,
   unreadTabIds,
   visiblePaneIds,
   withoutUnread,
 } from "../src/lib/workspace.ts";
+import { startKey } from "../src/lib/drafts.ts";
 
 /** Deterministic ids: t1, t2, ... */
 function ids() {
@@ -45,7 +49,7 @@ const sessions = [
   { id: "c", title: "" },
 ];
 
-test("tab names: the session title, A + B, N sessions, New session, and a rename on top", () => {
+test("tab names: the session title, A + B, N sessions, New session, and a rename on top; untitled reads as the sidebar does", () => {
   const ws = build([
     { op: "open", sessionId: "a" },
     { op: "arrange", sessionIds: ["b", "c"], preset: "columns-2" },
@@ -55,12 +59,31 @@ test("tab names: the session title, A + B, N sessions, New session, and a rename
   // The columns-3 arrange moved a, b and c out of their earlier tabs, which went away.
   assert.deepEqual(ws.tabs.map((tab) => tabTitle(tab, sessions)), ["3 sessions", "New session"]);
   const two = build([{ op: "arrange", sessionIds: ["b", "c"], preset: "columns-2" }]);
-  assert.equal(tabTitle(two.tabs[0], sessions), "Beta + Untitled");
+  // An untitled session is "New conversation" everywhere (the sidebar's word), never the shared fallback "Untitled".
+  assert.equal(tabTitle(two.tabs[0], sessions), "Beta + New conversation");
+  assert.equal(tabTitle(build([{ op: "open", sessionId: "unknown" }]).tabs[0], sessions), "New conversation");
   const renamed = applyWorkspaceOp(two, { op: "rename_tab", tabId: two.tabs[0].id, title: "Review", source: "user" }, ids()).workspace;
   assert.equal(tabTitle(renamed.tabs[0], sessions), "Review");
-  // A pane's own name: its session's title, Untitled, or New session; a tab's rename does not reach it.
-  assert.deepEqual(flatPanes(renamed).map(({ pane }) => paneTitle(pane, sessions)), ["Beta", "Untitled"]);
+  // A pane's own name: its session's title, New conversation, or New session; a tab's rename does not reach it.
+  assert.deepEqual(flatPanes(renamed).map(({ pane }) => paneTitle(pane, sessions)), ["Beta", "New conversation"]);
   assert.equal(paneTitle(ws.tabs[1].root, sessions), "New session");
+});
+
+test("tab cells carry each pane's state, and compare by value so a memoised tab item can skip renders", () => {
+  const ws = build([{ op: "arrange", sessionIds: ["a", null], preset: "columns-2" }]);
+  const stateOf = (id) => (id === "a" ? "busy" : null);
+  const cells = tabCells(ws.tabs[0].root, stateOf);
+  assert.deepEqual(cells.map(({ sessionId, state }) => ({ sessionId, state })), [{ sessionId: "a", state: "busy" }, { sessionId: null, state: null }]);
+  assert.equal(sameCells(cells, tabCells(ws.tabs[0].root, stateOf)), true);
+  assert.equal(sameCells(cells, tabCells(ws.tabs[0].root, () => "finished")), false);
+  assert.equal(sameCells(cells, cells.slice(0, 1)), false);
+  assert.equal(sameCells([], []), true);
+});
+
+test("a start page's draft key is per pane, and `new` for the bare start page", () => {
+  assert.equal(startKey(null), "new");
+  assert.equal(startKey("p1"), "new:p1");
+  assert.notEqual(startKey("p1"), startKey("p2"));
 });
 
 test("icon cells divide the box equally by the tree's shape, in reading order", () => {
@@ -103,7 +126,7 @@ test("focus resolution: the named pane when the tab holds it, else the first pan
   assert.equal(paneInPath(single, { tabId: single.tabs[0].id, paneId: single.tabs[0].root.id }), false);
 });
 
-test("resolvers: a session focuses its pane or opens a tab; /new focuses a start page, opens one, or stays while empty", () => {
+test("resolvers: a session focuses its pane or opens a tab; /new reuses a start page only in the focused tab, else opens one, or stays while empty", () => {
   assert.deepEqual(resolveRoute(EMPTY_WORKSPACE, { kind: "start" }), { kind: "stay" });
   assert.deepEqual(resolveRoute(EMPTY_WORKSPACE, { kind: "session", sessionId: "a" }), { kind: "open", op: { op: "open", sessionId: "a" } });
   const ws = build([{ op: "open", sessionId: "a" }, { op: "open", sessionId: null }]);
@@ -112,10 +135,29 @@ test("resolvers: a session focuses its pane or opens a tab; /new focuses a start
     location: { tabId: ws.tabs[0].id, paneId: ws.tabs[0].root.id },
   });
   assert.deepEqual(resolveRoute(ws, { kind: "session", sessionId: "zzz" }), { kind: "open", op: { op: "open", sessionId: "zzz" } });
-  assert.deepEqual(resolveRoute(ws, { kind: "start" }), { kind: "focus", location: startPaneLocation(ws) });
-  assert.deepEqual(startPaneLocation(ws), { tabId: ws.tabs[1].id, paneId: ws.tabs[1].root.id });
+  const [sessionTab, startTab] = ws.tabs;
+  assert.deepEqual(startPaneIn(startTab), { tabId: startTab.id, paneId: startTab.root.id });
+  assert.equal(startPaneIn(sessionTab), null);
+  // The one rule of every "new session" entry point: a start pane is reused only when it is in the focused tab.
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }, startTab.id), { kind: "focus", location: startPaneIn(startTab) });
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }, sessionTab.id), { kind: "open", op: { op: "open", sessionId: null } });
+  // `/new` itself names no focused tab: a start pane elsewhere is not reused.
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }), { kind: "open", op: { op: "open", sessionId: null } });
+  assert.deepEqual(resolveRoute(ws, { kind: "start" }, "gone"), { kind: "open", op: { op: "open", sessionId: null } });
+  // A split with a start pane in the focused tab: that pane.
+  const split = build([{ op: "arrange", sessionIds: ["a", null], preset: "columns-2" }]);
+  assert.deepEqual(resolveRoute(split, { kind: "start" }, split.tabs[0].id), {
+    kind: "focus",
+    location: { tabId: split.tabs[0].id, paneId: split.tabs[0].root.children[1].id },
+  });
   const noStart = build([{ op: "open", sessionId: "a" }]);
-  assert.deepEqual(resolveRoute(noStart, { kind: "start" }), { kind: "open", op: { op: "open", sessionId: null } });
+  assert.deepEqual(resolveRoute(noStart, { kind: "start" }, noStart.tabs[0].id), { kind: "open", op: { op: "open", sessionId: null } });
+});
+
+test("history: a move inside the focused tab replaces the entry, a move to another tab pushes one", () => {
+  assert.equal(staysInTab("t1", { tabId: "t1", paneId: "p1" }), true);
+  assert.equal(staysInTab("t1", { tabId: "t2", paneId: "p1" }), false);
+  assert.equal(staysInTab(null, { tabId: "t1", paneId: "p1" }), false);
 });
 
 test("arrange from a tab lists only as many sessions as the preset holds, so the rest overflow to new tabs", () => {
@@ -150,11 +192,11 @@ test("canSplitPane says no where the reducer would refuse: a full tab, or a thir
 test("the neighbour of a closing tab is the one to its right, else its left", () => {
   const ws = build([{ op: "open", sessionId: "a" }, { op: "open", sessionId: "b" }, { op: "open", sessionId: "c" }]);
   const [t1, t2, t3] = ws.tabs;
-  assert.equal(neighbourTab(ws, t1.id), t2);
-  assert.equal(neighbourTab(ws, t2.id), t3);
-  assert.equal(neighbourTab(ws, t3.id), t2);
-  assert.equal(neighbourTab(ws, "gone"), null);
-  assert.equal(neighbourTab(build([{ op: "open", sessionId: "a" }]), build([{ op: "open", sessionId: "a" }]).tabs[0].id), null);
+  assert.equal(neighbourTab(ws.tabs, t1.id), t2);
+  assert.equal(neighbourTab(ws.tabs, t2.id), t3);
+  assert.equal(neighbourTab(ws.tabs, t3.id), t2);
+  assert.equal(neighbourTab(ws.tabs, "gone"), null);
+  assert.equal(neighbourTab([t1], t1.id), null);
 });
 
 test("unread: a turn ending or a permission request in a session whose pane the device does not show marks the pane; showing it clears it", () => {
@@ -253,31 +295,100 @@ test("split sizes round-trip through the panel library's layout", () => {
   assert.deepEqual(sizesFromLayout(split, { [p1]: 50, [p2]: 25, [p3]: 25 }), [50, 25, 25]);
   // A child the layout lacks keeps its stored size.
   assert.deepEqual(sizesFromLayout(split, { [p1]: 50 }), [50, 33.33, 33.33]);
-  assert.equal(sameSizes([33.33, 33.33, 33.34], [33.333, 33.333, 33.334]), true);
-  assert.equal(sameSizes([50, 50], [60, 40]), false);
-  assert.equal(sameSizes([50, 50], [100]), false);
+  assert.equal(closeSizes([33.33, 33.33, 33.34], [33.333, 33.333, 33.334]), true);
+  assert.equal(closeSizes([50, 50], [60, 40]), false);
+  assert.equal(closeSizes([50, 50], [100]), false);
 });
 
-test("id aliases pair the server's ids with the optimistic ones by position, so keys survive adoption", () => {
+/** Ids with a prefix, for telling an op's optimistic ids from the server's. */
+function prefixed(prefix) {
+  let n = 0;
+  return () => `${prefix}-${n++}`;
+}
+
+test("id aliases pair an op's temporary ids with the ids the server's answer introduced, so keys survive adoption", () => {
   const base = build([{ op: "open", sessionId: "a" }]);
   const op = { op: "open", sessionId: "b", target: { tabId: base.tabs[0].id, paneId: base.tabs[0].root.id, edge: "right" } };
-  let n = 0;
-  const optimistic = applyWorkspaceOp(base, op, () => `tmp-${n++}`, 1000).workspace;
-  const server = { ...applyWorkspaceOp(base, op, () => `real-${n++}`, 1000).workspace, version: 1 };
-  const aliases = idAliases(optimistic, server);
+  const optimistic = applyWorkspaceOp(base, op, prefixed("tmp"), 1000).workspace;
+  const server = { ...applyWorkspaceOp(base, op, prefixed("real"), 1000).workspace, version: 1 };
+  const aliases = idAliases(base, optimistic, server);
   const serverSplit = server.tabs[0].root;
   const optimisticSplit = optimistic.tabs[0].root;
   assert.equal(aliases.get(serverSplit.id), optimisticSplit.id);
   assert.equal(aliases.get(serverSplit.children[1].id), optimisticSplit.children[1].id);
   // The pane that existed before keeps its id on both sides: no alias.
   assert.equal(aliases.has(serverSplit.children[0].id), false);
+  assert.equal(aliases.size, 2);
   // A new tab too.
-  const opened = applyWorkspaceOp(base, { op: "open", sessionId: "c" }, () => `tmp-${n++}`, 1000).workspace;
-  const openedServer = applyWorkspaceOp(base, { op: "open", sessionId: "c" }, () => `real-${n++}`, 1000).workspace;
-  const tabAliases = idAliases(opened, openedServer);
+  const opened = applyWorkspaceOp(base, { op: "open", sessionId: "c" }, prefixed("tmp"), 1000).workspace;
+  const openedServer = applyWorkspaceOp(base, { op: "open", sessionId: "c" }, prefixed("real"), 1000).workspace;
+  const tabAliases = idAliases(base, opened, openedServer);
   assert.equal(tabAliases.get(openedServer.tabs[1].id), opened.tabs[1].id);
   assert.equal(tabAliases.get(openedServer.tabs[1].root.id), opened.tabs[1].root.id);
+  assert.equal(tabAliases.size, 2);
   // Shapes that disagree (another device changed things meanwhile) alias nothing below the disagreement.
   const other = build([{ op: "arrange", sessionIds: ["a", "b", "c"], preset: "columns-3" }]);
-  assert.equal(idAliases(optimistic, other).size, 1);
+  assert.equal(idAliases(base, optimistic, other).size, 0);
+});
+
+test("id aliases never pair a real id with another real one: a concurrent move_tab shifts positions without cross-aliasing", () => {
+  const base = build([{ op: "open", sessionId: "a" }, { op: "open", sessionId: "b" }]);
+  const [tabA, tabB] = base.tabs;
+  // This device opens c (a third tab at the end); meanwhile another device moved b to the front.
+  const optimistic = applyWorkspaceOp(base, { op: "open", sessionId: "c" }, prefixed("tmp"), 1000).workspace;
+  const moved = applyWorkspaceOp(base, { op: "move_tab", tabId: tabB.id, index: 0 }, prefixed("x"), 1000).workspace;
+  const server = { ...applyWorkspaceOp(moved, { op: "open", sessionId: "c" }, prefixed("real"), 1000).workspace, version: 2 };
+  assert.deepEqual(server.tabs.map((tab) => tab.root.sessionId), ["b", "a", "c"]);
+  const aliases = idAliases(base, optimistic, server);
+  // By position, a and b would have been swapped; by identity, only c's new tab and pane pair up.
+  assert.equal(aliases.has(tabA.id), false);
+  assert.equal(aliases.has(tabB.id), false);
+  assert.equal(aliases.has(tabA.root.id), false);
+  assert.equal(aliases.has(tabB.root.id), false);
+  assert.equal(aliases.get(server.tabs[2].id), optimistic.tabs[2].id);
+  assert.equal(aliases.get(server.tabs[2].root.id), optimistic.tabs[2].root.id);
+  assert.equal(aliases.size, 2);
+  // A concurrent close of a tab before the new one: still only the new tab pairs.
+  const closed = applyWorkspaceOp(base, { op: "close_tab", tabId: tabA.id }, prefixed("x"), 1000).workspace;
+  const serverAfterClose = applyWorkspaceOp(closed, { op: "open", sessionId: "c" }, prefixed("real"), 1000).workspace;
+  const afterClose = idAliases(base, optimistic, serverAfterClose);
+  assert.deepEqual([...afterClose.entries()], [
+    [serverAfterClose.tabs[1].id, optimistic.tabs[2].id],
+    [serverAfterClose.tabs[1].root.id, optimistic.tabs[2].root.id],
+  ]);
+});
+
+test("id aliases are scoped to each op: two splits in flight each pair their own ids when their answers land", () => {
+  const base = build([{ op: "open", sessionId: "a" }]);
+  const pane = base.tabs[0].root;
+  const tabId = base.tabs[0].id;
+  // Op 1: split right (a start page beside a). Op 2, before op 1 answers: split the new pane down.
+  const op1 = { op: "open", sessionId: null, target: { tabId, paneId: pane.id, edge: "right" } };
+  const guess1 = applyWorkspaceOp(base, op1, prefixed("tmp1"), 1000).workspace;
+  const tmpSplit1 = guess1.tabs[0].root;
+  const tmpPane1 = tmpSplit1.children[1];
+  const op2 = { op: "open", sessionId: null, target: { tabId, paneId: tmpPane1.id, edge: "bottom" } };
+  const guess2 = applyWorkspaceOp(guess1, op2, prefixed("tmp2"), 1000).workspace;
+  // The server answers op 1 with its ids, then op 2 (sent with the temporary pane id, as the client would once it knows the real one; here the server's copy is built from its own ids).
+  const server1 = applyWorkspaceOp(base, op1, prefixed("real1"), 1000).workspace;
+  const realSplit1 = server1.tabs[0].root;
+  const realPane1 = realSplit1.children[1];
+  const server2 = applyWorkspaceOp(server1, { ...op2, target: { ...op2.target, paneId: realPane1.id } }, prefixed("real2"), 1000).workspace;
+  // Answer 1 against op 1's base and guess: op 1's split and pane.
+  const first = idAliases(base, guess1, server1);
+  assert.deepEqual([...first.entries()], [
+    [realSplit1.id, tmpSplit1.id],
+    [realPane1.id, tmpPane1.id],
+  ]);
+  // Answer 2 against op 2's base (guess 1) and guess: only op 2's split and pane; op 1's ids, already in op 2's base, are left to answer 1.
+  const second = idAliases(guess1, guess2, server2);
+  const realSplit2 = server2.tabs[0].root.children[1];
+  const tmpSplit2 = guess2.tabs[0].root.children[1];
+  assert.deepEqual([...second.entries()], [
+    [realSplit2.id, tmpSplit2.id],
+    [realSplit2.children[1].id, tmpSplit2.children[1].id],
+  ]);
+  // A stream copy carrying both ops, checked against op 1's entry: op 1's pairs, and nothing of op 2's, whose ids op 1 never made up.
+  const streamed = idAliases(base, guess1, server2);
+  assert.deepEqual([...streamed.entries()], [[realSplit1.id, tmpSplit1.id]]);
 });

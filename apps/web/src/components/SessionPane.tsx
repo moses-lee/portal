@@ -15,8 +15,10 @@ import { Button } from "@/components/ui/button";
 import { useSessions } from "./SessionsProvider";
 import { sessionUrl, useSessionStream } from "./useSessionStream";
 import type { AgentActivity } from "@/lib/agent-activity";
+import { startKey } from "@/lib/drafts";
 import { sessionHistoryKey } from "@/lib/prompt-history";
 import { queueEditLabel } from "@/lib/prompt-queue";
+import { sessionDisplayTitle } from "@/lib/session-title";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ssr: false,
@@ -25,9 +27,20 @@ const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ),
 });
 
-/** The start page's props as a pane hands them on: `onCreate` also says which pane asked, so the new session lands in it. */
-export type StartPaneProps = Omit<StartPageProps, "onCreate"> & {
-  onCreate: (firstPrompt: string | undefined, paneId: string | null) => void;
+/**
+ * The start page's props as the shell hands them to every start-page pane. What is per pane (its
+ * draft, whether it is creating, its creation error) is keyed by the pane's `startKey`: the pane
+ * picks its own out, so two start pages open at once do not share a spinner or an error. `onCreate`
+ * also says which pane asked, so the new session lands in it (decision 9).
+ */
+export type StartPaneProps = Omit<StartPageProps, "onCreate" | "creating" | "error"> & {
+  /** The `startKey` of the pane whose session is being created; null when none is. */
+  creatingIn: string | null;
+  /** The last creation failure and the pane it happened in. */
+  createError: { startKey: string; message: string } | null;
+  /** A session-list load failure: every start page shows it. */
+  loadError: string | null;
+  onCreate: (firstPrompt: string | undefined, paneId: string | null, startKey: string) => void;
 };
 
 export type InitialSend = {
@@ -41,6 +54,12 @@ export type SessionPaneProps = {
   sessionId: string | null;
   /** The workspace pane this is; null for the bare start page of an empty workspace. */
   paneId: string | null;
+  /**
+   * The key this device renders the pane under (the provider's `keyOf`): stable when the server
+   * replaces an optimistic id, so per-pane state keyed by it (a start page's draft) survives. Defaults
+   * to `paneId`.
+   */
+  paneKey?: string | null;
   /** Props for the start page shown when no session is open. */
   start: StartPaneProps;
   /** Only the first pane of a tab carries the sidebar toggle. */
@@ -61,6 +80,22 @@ export type SessionPaneProps = {
 };
 
 /**
+ * What a pane shows for a session the server does not have (deleted, or from another Portal), and
+ * what the workspace view shows when `/sessions/<id>` names one: the way back is a new conversation.
+ */
+export function MissingConversation({ onNew }: { onNew: () => void }) {
+  return (
+    <div data-missing-conversation className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+      <h2 className="text-lg">This conversation is no longer here.</h2>
+      <p className="text-sm text-muted-foreground">It may have been deleted, or opened from a different Portal.</p>
+      <Button onClick={onNew} variant="secondary">
+        Start a conversation
+      </Button>
+    </div>
+  );
+}
+
+/**
  * One pane: header, transcript, message box, controls, and terminals for one session, or the start
  * page. The terminal's open state and height are this pane's own (decision 26); element ids are per
  * instance, since several panes render at once.
@@ -68,6 +103,7 @@ export type SessionPaneProps = {
 export default function SessionPane({
   sessionId,
   paneId,
+  paneKey = paneId,
   start,
   showSidebarToggle = true,
   onOpenSidebar,
@@ -159,6 +195,9 @@ export default function SessionPane({
   const composerError =
     sendError ??
     (initialSend?.sessionId === sessionId ? initialSend.error : null);
+  /** This start page's share of the shell's start-page state (see `StartPaneProps`). */
+  const key = startKey(paneKey);
+  const { creatingIn, createError, loadError, onCreate, ...startPage } = start;
 
   return (
     <div
@@ -169,7 +208,7 @@ export default function SessionPane({
       <SessionHeader
         title={
           session
-            ? session.title || "New conversation"
+            ? sessionDisplayTitle(session.title)
             : sessionId
               ? "Conversation"
               : "Your workspace"
@@ -200,7 +239,13 @@ export default function SessionPane({
       )}
       {!sessionId ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <StartPage {...start} onCreate={(text) => start.onCreate(text, paneId)} />
+          <StartPage
+            {...startPage}
+            draftKey={key}
+            creating={creatingIn === key}
+            error={createError?.startKey === key ? createError.message : loadError}
+            onCreate={(text) => onCreate(text, paneId, key)}
+          />
         </div>
       ) : (
         <Group
@@ -212,17 +257,7 @@ export default function SessionPane({
         >
           <Panel id="chat" minSize="25%" className="flex min-h-0 flex-col">
             {notFound ? (
-              <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-                <h2 className="text-lg">
-                  This conversation is no longer here.
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  It may have been deleted, or opened from a different Portal.
-                </p>
-                <Button onClick={onNew} variant="secondary">
-                  Start a conversation
-                </Button>
-              </div>
+              <MissingConversation onNew={onNew} />
             ) : (
               <Conversation
                 history={history}

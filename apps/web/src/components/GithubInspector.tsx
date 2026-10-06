@@ -63,7 +63,9 @@ export default function GithubInspector({
           showCloseButton={false}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            (returnFocus?.current ?? document.getElementById("github-toggle"))?.focus();
+            // The opener may be gone (its pane closed, its tab unmounted): then the first toggle on the page.
+            const opener = returnFocus?.current;
+            (opener?.isConnected ? opener : document.getElementById("github-toggle"))?.focus();
           }}
         >
           <SheetTitle className="sr-only">GitHub inspector</SheetTitle>

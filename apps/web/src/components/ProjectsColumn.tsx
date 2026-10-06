@@ -58,6 +58,7 @@ import {
 } from "@/lib/collapsed-projects";
 import { sessionState, sessionStateLabels } from "@/lib/session-state";
 import { relativeAge } from "@/lib/relative-age";
+import { sessionDisplayTitle } from "@/lib/session-title";
 import { worktreeRetention } from "@/lib/session-lifecycle";
 import { defaultSettings } from "@/lib/settings";
 import type { PinMap } from "@/lib/pins";
@@ -151,7 +152,7 @@ const SessionRow = memo(function SessionRow({
     },
     [],
   );
-  const title = session.title || "New conversation";
+  const title = sessionDisplayTitle(session.title);
   const state = sessionState(session);
   const age = relativeAge(now - session.lastActiveAt);
   const cancelHover = () => {
@@ -219,8 +220,8 @@ const SessionRow = memo(function SessionRow({
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-1">
                 <span className="sidebar-title min-w-0 text-foreground/90">{title}</span>
-                {inWorkspace && (
-                  <PanelsTopLeft className="size-2.5 shrink-0 text-muted-foreground" aria-label="Open in the workspace" />
+                {inWorkspace && !active && (
+                  <PanelsTopLeft role="img" aria-label="Open in the workspace" className="size-2.5 shrink-0 text-muted-foreground" />
                 )}
               </span>
               <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">

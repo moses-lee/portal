@@ -44,6 +44,8 @@ export type StartPageProps = {
   creating: boolean;
   error: string | null;
   onCreate: (firstPrompt?: string) => void;
+  /** Where the first message is drafted (`startKey`): one per start-page pane, so two open at once do not share a draft. */
+  draftKey?: string;
 };
 
 export default function StartPage({
@@ -63,8 +65,9 @@ export default function StartPage({
   creating,
   error,
   onCreate,
+  draftKey = "new",
 }: StartPageProps) {
-  const [draft, setDraft] = useDraft("new");
+  const [draft, setDraft] = useDraft(draftKey);
   /** Per instance: two start pages may be open at once (one per pane), and ids and radio group names must not collide. */
   const uid = useId();
   const titleId = `${uid}-title`;

@@ -83,7 +83,6 @@ export type WorkspaceContextValue = {
   unread: ReadonlySet<string>;
   /** The panes with news since the device last showed them: the source of `unread`, and the sheet's row markers on a phone. */
   unreadPanes: ReadonlySet<string>;
-  markRead: (tabId: string) => void;
   /**
    * The key to render a tab, split or pane under: the id this device first saw it with. A pane opened
    * here keeps its optimistic key once the server's id lands, so it does not remount.
@@ -94,6 +93,9 @@ export type WorkspaceContextValue = {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 const OPS_URL = "/api/workspace/ops";
+
+/** One op on its way to the server: the workspace it was applied to and the optimistic result. */
+type InFlight = { base: Workspace; guess: Workspace };
 
 /**
  * The workspace for the whole app (docs/WORKSPACE.md, "Web / State"): one REST read so it does not
@@ -116,8 +118,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const workspaceRef = useRef(workspace);
   /** Set once the stream has delivered a copy: a slower REST read must not overwrite it then. */
   const fromStreamRef = useRef(false);
-  /** The optimistic workspace of the op in flight, to pair the server's ids with its temporary ones. */
-  const pendingRef = useRef<Workspace | null>(null);
+  /**
+   * The ops in flight, oldest first, each with its base and guess, to pair the server's ids with the
+   * temporary ones each op made up. A list, not one slot: a resize followed by a split within one
+   * round trip must not lose the split's pairing when the resize answers.
+   */
+  const inFlightRef = useRef<InFlight[]>([]);
   /** Server id to the key this device first rendered the node under (see `keyOf`); only grows. */
   const aliasesRef = useRef(new Map<string, string>());
   const [nextTemporaryId] = useState(temporaryIds);
@@ -127,11 +133,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setWorkspaceState(next);
   }, []);
 
-  /** Take a copy from the server (the stream or an op's answer), unless a newer one is already held. */
+  /**
+   * Take a copy from the server, unless a newer one is already held. An op's answer pairs ids for that
+   * op alone; a stream copy (which may land before the answer) is checked against every op in flight.
+   * Either way only an op's own temporary ids are aliased, never a real id to another real one.
+   */
   const adopt = useCallback(
-    (server: Workspace) => {
-      const pending = pendingRef.current;
-      if (pending) for (const [serverId, key] of idAliases(pending, server)) aliasesRef.current.set(serverId, key);
+    (server: Workspace, of?: InFlight) => {
+      for (const { base, guess } of of ? [of] : inFlightRef.current) {
+        for (const [serverId, key] of idAliases(base, guess, server)) aliasesRef.current.set(serverId, key);
+      }
       if (server.version < workspaceRef.current.version) return;
       setWorkspace(server);
     },
@@ -175,7 +186,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       // Nothing to change (a rename to the same title, a resize to the same sizes): no round trip.
       if (!guess.changed) return { workspace: base, location: guess.location ?? null };
-      pendingRef.current = guess.workspace;
+      const pending: InFlight = { base, guess: guess.workspace };
+      inFlightRef.current = [...inFlightRef.current, pending];
+      const settle = () => {
+        inFlightRef.current = inFlightRef.current.filter((entry) => entry !== pending);
+      };
       setWorkspace(guess.workspace);
       setInFlight((n) => n + 1);
       const rollback = () => {
@@ -192,25 +207,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           });
         } catch {
           rollback();
-          pendingRef.current = null;
           const message = "Could not reach the server. Check the connection and try again.";
           setError(message);
           throw new Error(message);
         }
         if (!r.ok) {
           rollback();
-          pendingRef.current = null;
           const j = (await r.json().catch(() => ({}))) as { error?: string };
           const message = j.error ?? "Could not change the workspace. Try again.";
           setError(message);
           throw new Error(message);
         }
         const answer = (await r.json()) as { workspace: Workspace; location?: WorkspaceLocation | null };
-        adopt(answer.workspace);
-        pendingRef.current = null;
+        adopt(answer.workspace, pending);
         setError(null);
         return { workspace: answer.workspace, location: answer.location ?? guess.location ?? null };
       } finally {
+        settle();
         setInFlight((n) => n - 1);
       }
     },
@@ -220,11 +233,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const locate = useCallback((sessionId: string) => locateSession(workspace, sessionId), [workspace]);
   const keyOf = useCallback((id: string) => aliasesRef.current.get(id) ?? id, []);
   const dismissError = useCallback(() => setError(null), []);
-  const markRead = useCallback(
-    (tabId: string) =>
-      setUnreadPanes((prev) => withoutUnread(prev, visiblePaneIds(workspaceRef.current, tabId, null))),
-    [],
-  );
 
   // Unread (decision 30): the session list's patches say when a turn ended or a permission request
   // appeared; the pane holding that session is marked unless the device shows it. The tab comes
@@ -256,8 +264,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const pending = inFlight > 0;
   const value = useMemo<WorkspaceContextValue>(
-    () => ({ workspace, loaded, pending, error, dismissError, apply, locate, focus, setFocus, unread, unreadPanes, markRead, keyOf }),
-    [workspace, loaded, pending, error, dismissError, apply, locate, focus, unread, unreadPanes, markRead, keyOf],
+    () => ({ workspace, loaded, pending, error, dismissError, apply, locate, focus, setFocus, unread, unreadPanes, keyOf }),
+    [workspace, loaded, pending, error, dismissError, apply, locate, focus, unread, unreadPanes, keyOf],
   );
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }

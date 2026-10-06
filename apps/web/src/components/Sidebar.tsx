@@ -30,6 +30,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import type { PortalView } from "@/lib/session-routes";
+import { sessionDisplayTitle } from "@/lib/session-title";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, RemovedProjectSummary, SessionSummary } from "@/lib/types";
@@ -226,7 +227,7 @@ const HomeColumn = memo(function HomeColumn({
               >
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/45 text-foreground/60 group-hover:text-foreground" aria-hidden="true"><DoorOpen className="size-4" /></span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-medium text-foreground/90">{session.title || "New conversation"}</span>
+                  <span className="block truncate text-xs font-medium text-foreground/90">{sessionDisplayTitle(session.title)}</span>
                   <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{session.project?.name ?? session.agentName}</span>
                 </span>
                 <span className={`size-1.5 shrink-0 rounded-full ${session.awaitingPermission ? "bg-amber-300" : session.busy ? "bg-emerald-400" : "bg-muted-foreground/35"}`} aria-hidden="true" />
@@ -447,7 +448,9 @@ export default function Sidebar(props: SidebarProps) {
           className="!w-[min(320px,88vw)] gap-0 p-0"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            (props.returnFocus?.current ?? document.getElementById("sidebar-toggle"))?.focus();
+            // The opener may be gone (its pane closed, its tab unmounted): then the first toggle on the page.
+            const opener = props.returnFocus?.current;
+            (opener?.isConnected ? opener : document.getElementById("sidebar-toggle"))?.focus();
           }}
         >
           <SheetTitle className="sr-only">Your workspace</SheetTitle>

@@ -134,7 +134,8 @@ test("tab paths carry the tab id and, in a split, the focused pane; /new and /se
   assert.equal(isResolverPath("/sessions/s1"), true);
   assert.equal(isResolverPath("/new"), true);
   assert.equal(isResolverPath("/tabs/t1"), false);
-  assert.deepEqual(workspaceRoute("/tabs/t1", "?pane=p1"), { kind: "tab", tabId: "t1", paneId: "p1" });
+  // The route names the tab alone; the focused pane is the query's business, read by the view.
+  assert.deepEqual(workspaceRoute("/tabs/t1"), { kind: "tab", tabId: "t1" });
   assert.deepEqual(workspaceRoute("/new"), { kind: "start" });
   assert.deepEqual(workspaceRoute("/sessions/s%201"), { kind: "session", sessionId: "s 1" });
   assert.equal(workspaceRoute("/"), null);
@@ -158,4 +159,7 @@ test("links in Portal replies to tabs and sessions are in-app paths; everything 
   assert.equal(inAppLinkPath("/", origin), null);
   assert.equal(inAppLinkPath("mailto:x@y.z", origin), null);
   assert.equal(inAppLinkPath("not a url", origin), null);
+  // No origin known yet (server rendering): paths still qualify, URLs do not.
+  assert.equal(inAppLinkPath("/tabs/t1?pane=p1", null), "/tabs/t1?pane=p1");
+  assert.equal(inAppLinkPath("https://portal.example/tabs/t1", null), null);
 });

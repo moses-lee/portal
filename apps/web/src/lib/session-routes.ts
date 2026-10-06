@@ -69,17 +69,18 @@ export function tabFromPath(pathname: string, search = ""): { tabId: string; pan
 }
 
 /**
- * Where a workspace path points: a tab (with its pane when the query names one), or one of the two
- * resolvers, the start page (`/new`) and a session (`/sessions/<id>`). Null for Portal and the terminal.
+ * Where a workspace path points: a tab (the focused pane is the query's business, read by the view),
+ * or one of the two resolvers, the start page (`/new`) and a session (`/sessions/<id>`). Null for
+ * Portal and the terminal.
  */
 export type WorkspaceRoute =
-  | { kind: "tab"; tabId: string; paneId: string | null }
+  | { kind: "tab"; tabId: string }
   | { kind: "start" }
   | { kind: "session"; sessionId: string };
 
-export function workspaceRoute(pathname: string, search = ""): WorkspaceRoute | null {
-  const tab = tabFromPath(pathname, search);
-  if (tab) return { kind: "tab", ...tab };
+export function workspaceRoute(pathname: string): WorkspaceRoute | null {
+  const tab = tabFromPath(pathname);
+  if (tab) return { kind: "tab", tabId: tab.tabId };
   if (isStartPath(pathname)) return { kind: "start" };
   const sessionId = sessionIdFromPath(pathname);
   return sessionId === null ? null : { kind: "session", sessionId };
@@ -88,9 +89,9 @@ export function workspaceRoute(pathname: string, search = ""): WorkspaceRoute | 
 /**
  * The in-app path a link in a Portal reply points at (`/tabs/<id>` or `/sessions/<id>`, as a path or
  * a URL on `origin`), so the renderer navigates in place instead of opening a new browser tab; null
- * for every other link.
+ * for every other link. With no `origin` known yet (server rendering), only paths qualify.
  */
-export function inAppLinkPath(href: string, origin: string): string | null {
+export function inAppLinkPath(href: string, origin: string | null): string | null {
   let pathname: string;
   let search = "";
   if (href.startsWith("/")) {
@@ -108,7 +109,7 @@ export function inAppLinkPath(href: string, origin: string): string | null {
     } catch {
       return null;
     }
-    if (url.origin !== origin) return null;
+    if (origin === null || url.origin !== origin) return null;
     pathname = url.pathname;
     search = url.search;
   }

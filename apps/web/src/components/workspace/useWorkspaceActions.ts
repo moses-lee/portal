@@ -5,27 +5,28 @@ import type { LayoutPreset, PaneNode, SplitEdge, Tab, WorkspaceLocation } from "
 import { locateSession } from "@portal/shared/workspace";
 import { useWorkspace } from "../WorkspaceProvider";
 import { useStableCallback } from "@/hooks/use-stable-callback";
-import { navigateTo } from "@/lib/navigation";
+import { currentPath, navigateTo, replacePath } from "@/lib/navigation";
 import { startPath, tabPath } from "@/lib/session-routes";
-import { arrangeOp, locationPath, neighbourTab } from "@/lib/workspace";
+import { arrangeOp, locationPath, neighbourTab, startPaneIn, staysInTab } from "@/lib/workspace";
 
 /**
  * What the shell, the sidebar, the tab strip and the pane menus do to the workspace (decision 8:
  * every way of opening a session does the same thing). Each action applies its op through the
  * provider (optimistic, errors shown by the view) and moves this device's focus (the URL) where
- * the result is. Opening somewhere new pushes a history entry; a focus change in place replaces it.
- * Rejections are swallowed: the provider's `error` reports them. The callbacks are stable (they
- * always read the latest workspace and focus), so memoised rows can hold them.
+ * the result is. History: a pane change inside the focused tab replaces the entry, a move to
+ * another tab (or a new one) pushes one (`staysInTab`). Rejections are swallowed: the provider's
+ * `error` reports them. The callbacks are stable (they always read the latest workspace and
+ * focus), so memoised rows can hold them.
  */
 export function useWorkspaceActions() {
   const { workspace, apply, focus } = useWorkspace();
 
-  /** Focus the session's pane when it is open (push), else open it in a new tab. */
+  /** Focus the session's pane when it is open (replace within the focused tab, else push), else open it in a new tab. */
   const openSession = useStableCallback(
     async (sessionId: string): Promise<WorkspaceLocation | null> => {
       const located = locateSession(workspace, sessionId);
       if (located) {
-        navigateTo(locationPath(workspace, located));
+        navigateTo(locationPath(workspace, located), { replace: staysInTab(focus.tabId, located) });
         return located;
       }
       try {
@@ -38,15 +39,24 @@ export function useWorkspaceActions() {
     },
   );
 
-  /** A start page: the focused pane when it already is one, else a new start-page tab (push). */
-  const openStartTab = useStableCallback(async () => {
-    const { tab, pane } = focus;
-    if (tab && pane && pane.sessionId === null) return;
+  /**
+   * A start page, by the one rule of every "new session" entry point (`resolveRoute`): a start-page
+   * pane in the focused tab is reused (focused, replace), else a new start-page tab opens (push).
+   * Answers where it is, so a caller can address that pane (a drafted prompt).
+   */
+  const openStartTab = useStableCallback(async (): Promise<WorkspaceLocation | null> => {
+    const reuse = focus.tab ? startPaneIn(focus.tab) : null;
+    if (reuse) {
+      navigateTo(locationPath(workspace, reuse), { replace: true });
+      return reuse;
+    }
     try {
       const { workspace: next, location } = await apply({ op: "open", sessionId: null });
       if (location) navigateTo(locationPath(next, location));
+      return location;
     } catch {
       // Reported by the provider.
+      return null;
     }
   });
 
@@ -57,7 +67,7 @@ export function useWorkspaceActions() {
       if (!tab || !pane) return void (await openSession(sessionId));
       try {
         const { workspace: next, location } = await apply({ op: "open", sessionId, target: { tabId: tab.id, paneId: pane.id, edge: "right" } });
-        if (location) navigateTo(locationPath(next, location), { replace: true });
+        if (location) navigateTo(locationPath(next, location), { replace: staysInTab(tab.id, location) });
       } catch {
         // Reported by the provider.
       }
@@ -112,23 +122,32 @@ export function useWorkspaceActions() {
     },
   );
 
-  /** Close the tab; when it is the focused one, its neighbour takes over (else the start page of an empty workspace). */
+  /**
+   * Close the tab. When it is the focused one, its neighbour (right, else left; else the start page
+   * of an empty workspace) takes over before the op applies, so the view never sees the URL name a
+   * tab the optimistic workspace lacks (it would jump to the first tab for a round trip); a refusal
+   * puts the URL back with the tab.
+   */
   const closeTab = useStableCallback(
     async (tabId: string) => {
       const focused = focus.tabId === tabId;
-      const neighbour = focused ? neighbourTab(workspace, tabId) : null;
+      const before = focused ? currentPath() : null;
+      if (focused) {
+        const neighbour = neighbourTab(workspace.tabs, tabId);
+        navigateTo(neighbour ? tabPath(neighbour.id) : startPath(), { replace: true });
+      }
       try {
         await apply({ op: "close_tab", tabId });
       } catch {
-        return;
+        if (before !== null) replacePath(before);
       }
-      if (focused) navigateTo(neighbour ? tabPath(neighbour.id) : startPath(), { replace: true });
     },
   );
 
-  /** Close every other tab, then focus this one. */
+  /** Close every other tab, this one focused first so no closing tab is the URL's. */
   const closeOtherTabs = useStableCallback(
     async (tabId: string) => {
+      if (focus.tabId !== tabId) navigateTo(tabPath(tabId), { replace: true });
       for (const tab of workspace.tabs) {
         if (tab.id === tabId) continue;
         try {
@@ -137,7 +156,6 @@ export function useWorkspaceActions() {
           return;
         }
       }
-      if (focus.tabId !== tabId) navigateTo(tabPath(tabId), { replace: true });
     },
   );
 

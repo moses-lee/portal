@@ -3,17 +3,20 @@
  * the native history API, and the app's routes render nothing of their own, so a router navigation
  * (which fetches the route's payload first) would only delay the switch.
  */
-const current = () => `${window.location.pathname}${window.location.search}`;
+/** The current path with its query string: what to restore when an optimistic move is undone. */
+export function currentPath(): string {
+  return `${window.location.pathname}${window.location.search}`;
+}
 
 /** A new history entry, unless `path` is already the current URL. */
 export function pushPath(path: string) {
-  if (current() === path) return;
+  if (currentPath() === path) return;
   window.history.pushState(null, "", path);
 }
 
 /** Rewrite the current entry (resolvers, focus changes). */
 export function replacePath(path: string) {
-  if (current() === path) return;
+  if (currentPath() === path) return;
   window.history.replaceState(null, "", path);
 }
 

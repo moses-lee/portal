@@ -4,7 +4,7 @@ import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import { Group, Panel, Separator, useGroupRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
 import type { LayoutNode, PaneNode, SplitNode } from "@portal/contracts/workspace";
 import { panesOf } from "@portal/shared/workspace";
-import { layoutOf, sameSizes, sizesFromLayout } from "@/lib/workspace";
+import { closeSizes, layoutOf, sizesFromLayout } from "@/lib/workspace";
 
 /** How long after the pointer is released a drag's sizes are sent as a `resize` op. */
 const RESIZE_DEBOUNCE_MS = 300;
@@ -62,7 +62,7 @@ function SplitGroup({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sizesKey = node.sizes.join(",");
   useEffect(() => {
-    if (sameSizes(node.sizes, applied.current)) return;
+    if (closeSizes(node.sizes, applied.current)) return;
     const countChanged = node.sizes.length !== applied.current.length;
     applied.current = node.sizes;
     // A panel was added or removed in this commit: the group registers the new count on its next
