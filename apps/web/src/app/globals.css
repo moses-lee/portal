@@ -502,6 +502,10 @@
   margin-inline: auto;
   padding: 8px 28px max(20px, env(safe-area-inset-bottom));
 }
+/* Under the pane bar (phone, tablet switcher) the bar carries the safe-area inset; the composer sits right above it. */
+[data-pane-bar-host] .composer-wrap {
+  padding-bottom: 6px;
+}
 .composer {
   border-radius: 24px;
   transition:

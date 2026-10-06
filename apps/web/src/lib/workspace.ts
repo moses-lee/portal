@@ -1,9 +1,10 @@
 /**
  * The web app's pure workspace helpers (docs/WORKSPACE.md), on top of the shared reducer in
- * `@portal/shared/workspace`: tab names, the tab icon's cells, the resolver's decisions, unread
- * derivation from session-list patches, the mounting policy, split sizes for the panel library, and
- * the key aliases that keep panes mounted when the server replaces optimistic ids. No React, no `@/`
- * imports: the node test runner loads this file directly.
+ * `@portal/shared/workspace`: tab and pane names, the tab icon's cells, the resolver's decisions,
+ * unread derivation from session-list patches (per pane, so a pane a phone hides counts), the
+ * mounting policy, split sizes for the panel library, and the key aliases that keep panes mounted
+ * when the server replaces optimistic ids. No React, no `@/` imports: the node test runner loads
+ * this file directly.
  */
 import type {
   LayoutNode,
@@ -32,6 +33,11 @@ import { tabPath } from "./session-routes.ts";
 /** The name a tab shows, from its sessions' titles (an untitled session reads "Untitled"); decision 25. */
 export function tabTitle(tab: Tab, sessions: readonly { id: string; title: string | null }[]): string {
   return defaultTabTitle(tab, (sessionId) => sessions.find((s) => s.id === sessionId)?.title || null);
+}
+
+/** One pane's name: its session's title ("Untitled" without one), or "New session" for a start page. */
+export function paneTitle(pane: PaneNode, sessions: readonly { id: string; title: string | null }[]): string {
+  return tabTitle({ id: pane.id, title: null, titleSource: null, root: pane, createdAt: 0 }, sessions);
 }
 
 /** The preset's label in menus. */
@@ -180,30 +186,51 @@ export function advancedSessions(prev: ReadonlyMap<string, SessionSignal>, next:
 }
 
 /**
- * The unread set after `advanced` sessions' news: their tabs are marked unless focused. Answers the
- * same set when nothing changes, so React state stays put.
+ * The panes a device shows, for unread: every pane of `tabId` (a desktop tab, a tablet split), or
+ * only `onlyPaneId` when the device shows one pane at a time (a phone, a tablet tab too big for a
+ * split; `FocusScope` "pane" in `workspace-mobile.ts`). Empty off the workspace.
+ */
+export function visiblePaneIds(ws: Workspace, tabId: string | null, onlyPaneId: string | null): ReadonlySet<string> {
+  if (onlyPaneId !== null) return new Set([onlyPaneId]);
+  const tab = tabId ? findTab(ws, tabId) : null;
+  return new Set(tab ? tabPanes(tab).map((pane) => pane.id) : []);
+}
+
+/**
+ * The unread pane set after `advanced` sessions' news: the pane of each is marked unless the device
+ * shows it (`visible`). Answers the same set when nothing changes, so React state stays put.
  */
 export function unreadAfter(
   unread: ReadonlySet<string>,
   ws: Workspace,
   advanced: readonly string[],
-  focusedTabId: string | null,
+  visible: ReadonlySet<string>,
 ): ReadonlySet<string> {
   let next: Set<string> | null = null;
   for (const sessionId of advanced) {
     const location = locateSession(ws, sessionId);
-    if (!location || location.tabId === focusedTabId || unread.has(location.tabId) || next?.has(location.tabId)) continue;
-    (next ??= new Set(unread)).add(location.tabId);
+    if (!location || visible.has(location.paneId) || unread.has(location.paneId) || next?.has(location.paneId)) continue;
+    (next ??= new Set(unread)).add(location.paneId);
   }
   return next ?? unread;
 }
 
-/** The unread set without `tabId` (focusing reads it); the same set when it was not marked. */
-export function withoutUnread(unread: ReadonlySet<string>, tabId: string | null): ReadonlySet<string> {
-  if (tabId === null || !unread.has(tabId)) return unread;
-  const next = new Set(unread);
-  next.delete(tabId);
-  return next;
+/** The unread set without `paneIds` (showing them reads them); the same set when none was marked. */
+export function withoutUnread(unread: ReadonlySet<string>, paneIds: Iterable<string>): ReadonlySet<string> {
+  let next: Set<string> | null = null;
+  for (const paneId of paneIds) {
+    if (!unread.has(paneId)) continue;
+    (next ??= new Set(unread)).delete(paneId);
+  }
+  return next ?? unread;
+}
+
+/** The tabs with an unread pane, for the strip's ring (decision 10). */
+export function unreadTabIds(ws: Workspace, unreadPanes: ReadonlySet<string>): ReadonlySet<string> {
+  const out = new Set<string>();
+  if (unreadPanes.size === 0) return out;
+  for (const tab of ws.tabs) if (tabPanes(tab).some((pane) => unreadPanes.has(pane.id))) out.add(tab.id);
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------

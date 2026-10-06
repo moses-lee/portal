@@ -11,6 +11,7 @@ import {
   mountedTabIds,
   neighbourTab,
   paneInPath,
+  paneTitle,
   rememberFocused,
   resolveFocus,
   resolveRoute,
@@ -20,6 +21,8 @@ import {
   startPaneLocation,
   tabTitle,
   unreadAfter,
+  unreadTabIds,
+  visiblePaneIds,
   withoutUnread,
 } from "../src/lib/workspace.ts";
 
@@ -54,6 +57,9 @@ test("tab names: the session title, A + B, N sessions, New session, and a rename
   assert.equal(tabTitle(two.tabs[0], sessions), "Beta + Untitled");
   const renamed = applyWorkspaceOp(two, { op: "rename_tab", tabId: two.tabs[0].id, title: "Review", source: "user" }, ids()).workspace;
   assert.equal(tabTitle(renamed.tabs[0], sessions), "Review");
+  // A pane's own name: its session's title, Untitled, or New session; a tab's rename does not reach it.
+  assert.deepEqual(flatPanes(renamed).map(({ pane }) => paneTitle(pane, sessions)), ["Beta", "Untitled"]);
+  assert.equal(paneTitle(ws.tabs[1].root, sessions), "New session");
 });
 
 test("icon cells divide the box equally by the tree's shape, in reading order", () => {
@@ -130,12 +136,19 @@ test("the neighbour of a closing tab is the one to its right, else its left", ()
   assert.equal(neighbourTab(build([{ op: "open", sessionId: "a" }]), build([{ op: "open", sessionId: "a" }]).tabs[0].id), null);
 });
 
-test("unread: a turn ending or a permission request in a session whose tab is not focused marks the tab; focusing clears it", () => {
-  const ws = build([{ op: "open", sessionId: "a" }, { op: "open", sessionId: "b" }, { op: "open", sessionId: null }]);
-  const [tabA, tabB] = ws.tabs;
+test("unread: a turn ending or a permission request in a session whose pane the device does not show marks the pane; showing it clears it", () => {
+  const ws = build([
+    { op: "open", sessionId: "a" },
+    { op: "arrange", sessionIds: ["b", "d"], preset: "columns-2" },
+    { op: "open", sessionId: null },
+  ]);
+  const [tabA, tabBD] = ws.tabs;
+  const paneA = tabA.root.id;
+  const [paneB, paneD] = tabBD.root.children.map((child) => child.id);
   const before = signalsOf([
     { id: "a", turnEndedAt: null, awaitingPermission: false },
     { id: "b", turnEndedAt: 100, awaitingPermission: false },
+    { id: "d", turnEndedAt: 100, awaitingPermission: false },
   ]);
   // The first load is not news.
   assert.deepEqual(advancedSessions(new Map(), before), []);
@@ -145,6 +158,7 @@ test("unread: a turn ending or a permission request in a session whose tab is no
     { id: "a", turnEndedAt: 200, awaitingPermission: false },
     { id: "b", turnEndedAt: 100, awaitingPermission: true },
     { id: "c", turnEndedAt: 300, awaitingPermission: false },
+    { id: "d", turnEndedAt: 100, awaitingPermission: false },
   ]);
   assert.deepEqual(advancedSessions(before, after), ["a", "b"]);
   // A later turn end counts again; an older or equal time does not.
@@ -153,17 +167,34 @@ test("unread: a turn ending or a permission request in a session whose tab is no
   // Permission answered: not news.
   assert.deepEqual(advancedSessions(after, signalsOf([{ id: "b", turnEndedAt: 100, awaitingPermission: false }])), []);
 
+  // What a device shows: a whole tab (desktop), one pane (phone, or a tablet tab too big for a split), nothing off the workspace.
+  assert.deepEqual([...visiblePaneIds(ws, tabBD.id, null)], [paneB, paneD]);
+  assert.deepEqual([...visiblePaneIds(ws, tabBD.id, paneD)], [paneD]);
+  assert.deepEqual([...visiblePaneIds(ws, null, null)], []);
+  assert.deepEqual([...visiblePaneIds(ws, "gone", null)], []);
+
   const none = new Set();
-  const marked = unreadAfter(none, ws, ["a", "b", "c"], tabA.id);
-  assert.deepEqual([...marked], [tabB.id]);
-  // Same set back when nothing changes (tab B already marked, A focused, c not open).
-  assert.equal(unreadAfter(marked, ws, ["a", "b", "c"], tabA.id), marked);
-  assert.equal(unreadAfter(none, ws, [], null), none);
-  // No focused tab (a Portal page): every open session's tab counts.
-  assert.deepEqual([...unreadAfter(none, ws, ["a", "b"], null)].sort(), [tabA.id, tabB.id].sort());
-  assert.deepEqual([...withoutUnread(marked, tabB.id)], []);
-  assert.equal(withoutUnread(marked, tabA.id), marked);
-  assert.equal(withoutUnread(marked, null), marked);
+  // Looking at tab A: b's pane is marked, a's is shown, c is not open.
+  const marked = unreadAfter(none, ws, ["a", "b", "c"], visiblePaneIds(ws, tabA.id, null));
+  assert.deepEqual([...marked], [paneB]);
+  // Same set back when nothing changes.
+  assert.equal(unreadAfter(marked, ws, ["a", "b", "c"], visiblePaneIds(ws, tabA.id, null)), marked);
+  assert.equal(unreadAfter(none, ws, [], new Set()), none);
+  // Off the workspace (a Portal page): every open session's pane counts.
+  assert.deepEqual([...unreadAfter(none, ws, ["a", "b"], new Set())].sort(), [paneA, paneB].sort());
+  // On a phone showing d: b is in the same tab but hidden, so it is marked; d is not.
+  assert.deepEqual([...unreadAfter(none, ws, ["b", "d"], visiblePaneIds(ws, tabBD.id, paneD))], [paneB]);
+  // On a desktop showing the whole tab, neither is.
+  assert.equal(unreadAfter(none, ws, ["b", "d"], visiblePaneIds(ws, tabBD.id, null)), none);
+
+  // The strip's ring: a tab with any unread pane.
+  assert.deepEqual([...unreadTabIds(ws, marked)], [tabBD.id]);
+  assert.deepEqual([...unreadTabIds(ws, none)], []);
+  // Showing panes reads them; the same set when none was marked.
+  assert.deepEqual([...withoutUnread(marked, visiblePaneIds(ws, tabBD.id, null))], []);
+  assert.deepEqual([...withoutUnread(marked, [paneD])], [paneB]);
+  assert.equal(withoutUnread(marked, visiblePaneIds(ws, tabA.id, null)), marked);
+  assert.equal(withoutUnread(marked, []), marked);
 });
 
 test("mounting: the focused tab plus the 3 most recently focused that still exist, in strip order", () => {

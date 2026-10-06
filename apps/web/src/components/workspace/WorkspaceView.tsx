@@ -9,7 +9,9 @@ import { MAX_PANES_PER_TAB } from "@portal/shared/workspace";
 import RoomBackground from "../RoomBackground";
 import SessionPane, { type InitialSend, type StartPaneProps } from "../SessionPane";
 import { useSessions } from "../SessionsProvider";
+import { useMediaQuery } from "../useMediaQuery";
 import { NO_FOCUS, useWorkspace, type WorkspaceFocus } from "../WorkspaceProvider";
+import MobileWorkspace from "./MobileWorkspace";
 import SplitTree from "./SplitTree";
 import TabStrip from "./TabStrip";
 import { useWorkspaceActions } from "./useWorkspaceActions";
@@ -17,7 +19,8 @@ import type { AgentActivity } from "@/lib/agent-activity";
 import { navigateTo } from "@/lib/navigation";
 import { startPath, tabPath, type WorkspaceRoute } from "@/lib/session-routes";
 import { sessionState } from "@/lib/session-state";
-import { locationPath, mountedTabIds, rememberFocused, resolveFocus, resolveRoute, tabTitle } from "@/lib/workspace";
+import { locationPath, mountedTabIds, paneTitle, rememberFocused, resolveFocus, resolveRoute, tabTitle } from "@/lib/workspace";
+import { focusScope, MOBILE_QUERY, NARROW_QUERY, switcherPanes, tabRendersSplit, viewportKind, type PaneRef } from "@/lib/workspace-mobile";
 
 export type WorkspaceViewProps = {
   /** The tab in the URL, or a resolver path (`/new`, `/sessions/<id>`) while it resolves. */
@@ -39,8 +42,10 @@ export type WorkspaceViewProps = {
  * in Suspense for the prerendered `/new`) and reports it to the provider for the sidebar, the GitHub
  * inspector and the title. The resolvers (`/sessions/<id>`, `/new`) are settled here once the
  * workspace has loaded. An empty workspace is the start page without a strip; creating a session
- * there opens the first tab. Below 768 px the flat pane list (`MobileWorkspace`, step 7) will take
- * over from the strip and tree; the pane rendering below is shared with it.
+ * there opens the first tab. The viewport decides the shape (`viewportKind`): below 768 px the flat
+ * pane list (`MobileWorkspace`) replaces the strip and the trees; up to 1100 px the strip stays and
+ * tabs of 3 or 4 panes show one pane with the switcher (decisions 18 and 20). The pane rendering is
+ * shared by all three.
  */
 export default function WorkspaceView({
   route,
@@ -54,33 +59,38 @@ export default function WorkspaceView({
 }: WorkspaceViewProps) {
   const searchParams = useSearchParams();
   const paneParam = searchParams.get("pane");
-  const { workspace, loaded, apply, error, dismissError, setFocus, unread, keyOf } = useWorkspace();
+  const { workspace, loaded, apply, error, dismissError, setFocus, unread, unreadPanes, keyOf } = useWorkspace();
   const { sessions } = useSessions();
   const actions = useWorkspaceActions();
+  // The viewport class, the same breakpoints the shell uses for the sidebar (768) and `ResponsiveDialog`.
+  const mobile = useMediaQuery(MOBILE_QUERY);
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const kind = viewportKind(mobile, narrow);
   const routeTabId = route.kind === "tab" ? route.tabId : null;
   const { tab, pane } = useMemo(() => resolveFocus(workspace, routeTabId, paneParam), [workspace, routeTabId, paneParam]);
   const focusedTabId = tab?.id ?? null;
   const focusedPaneId = pane?.id ?? null;
   const focusedSessionId = pane?.sessionId ?? (route.kind === "session" ? route.sessionId : null);
+  /** Whether the device shows the whole tab or only the focused pane (unread treats the rest as hidden). */
+  const scope = focusScope(tab, kind);
 
   // What this device is looking at, for the shell around the view.
   useEffect(() => {
-    const focus: WorkspaceFocus = { tabId: focusedTabId, paneId: focusedPaneId, sessionId: focusedSessionId, tab, pane };
+    const focus: WorkspaceFocus = { tabId: focusedTabId, paneId: focusedPaneId, sessionId: focusedSessionId, tab, pane, scope };
     setFocus(focus);
-  }, [setFocus, focusedTabId, focusedPaneId, focusedSessionId, tab, pane]);
+  }, [setFocus, focusedTabId, focusedPaneId, focusedSessionId, tab, pane, scope]);
   useEffect(() => () => setFocus(NO_FOCUS), [setFocus]);
 
-  /** The pane last focused in each tab, so switching back lands where the user was (memory only). */
-  const lastPane = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (tab && pane && tabPanes(tab).length > 1) lastPane.current.set(tab.id, pane.id);
-  }, [tab, pane]);
+  /** The pane last focused in each tab, so switching back lands where the user was (memory only; a hidden tablet tab shows it too). */
+  const [lastPane, setLastPane] = useState<ReadonlyMap<string, string>>(() => new Map());
+  // Derived from the focus during render (no effect, no extra pass), like the focus history below.
+  if (tab && pane && tabPanes(tab).length > 1 && lastPane.get(tab.id) !== pane.id) setLastPane(new Map(lastPane).set(tab.id, pane.id));
   const pathOfTab = useCallback(
     (tabId: string) => {
       const target = workspace.tabs.find((t) => t.id === tabId);
-      return target && tabPanes(target).length > 1 ? tabPath(tabId, lastPane.current.get(tabId) ?? null) : tabPath(tabId);
+      return target && tabPanes(target).length > 1 ? tabPath(tabId, lastPane.get(tabId) ?? null) : tabPath(tabId);
     },
-    [workspace],
+    [workspace, lastPane],
   );
 
   // Mounting policy (decision 30).
@@ -135,17 +145,24 @@ export default function WorkspaceView({
   const roomActivity = activities.get(focusedPaneId ?? "start") ?? "idle";
 
   const titleOf = useCallback((t: Tab) => tabTitle(t, sessions), [sessions]);
+  const paneTitleOf = useCallback((p: PaneNode) => paneTitle(p, sessions), [sessions]);
+  const sessionOf = useCallback((sessionId: string) => sessions.find((s) => s.id === sessionId), [sessions]);
   const stateOf = useCallback(
     (sessionId: string) => {
-      const session = sessions.find((s) => s.id === sessionId);
+      const session = sessionOf(sessionId);
       return session ? sessionState(session) : null;
     },
-    [sessions],
+    [sessionOf],
   );
 
   const focusPane = useCallback(
     (tabId: string, paneId: string) => navigateTo(tabPath(tabId, paneId), { replace: true }),
     [],
+  );
+  /** The switcher's move (the bar, the sheet): within the tab it replaces the entry, like a focus change; to another tab it pushes, like the strip. */
+  const showPane = useCallback(
+    (tabId: string, paneId: string) => navigateTo(locationPath(workspace, { tabId, paneId }), { replace: tabId === focusedTabId }),
+    [workspace, focusedTabId],
   );
   const resize = useCallback(
     (splitId: string, sizes: number[]) => {
@@ -183,6 +200,15 @@ export default function WorkspaceView({
     );
   };
 
+  /** The pane's content for the switcher, which hands back the tab by id. */
+  const renderPaneIn = (tabId: string, p: PaneNode): ReactNode => {
+    const t = workspace.tabs.find((candidate) => candidate.id === tabId);
+    return t ? renderPane(t, p, true) : null;
+  };
+  /** The switcher's list for this viewport: every pane on a phone, the focused tab's on a tablet when it is too big for a split, else none. */
+  const switcher = useMemo(() => switcherPanes(workspace, tab, kind), [workspace, tab, kind]);
+  const focusedRef = useMemo<PaneRef | null>(() => (tab && pane ? { tabId: tab.id, pane } : null), [tab, pane]);
+
   /** No tabs: the bare start page (also before the workspace has loaded, when `/new` is the path, so it shows at once). */
   const empty = workspace.tabs.length === 0 && (loaded || route.kind === "start");
 
@@ -212,6 +238,20 @@ export default function WorkspaceView({
           onNew={actions.openStartTab}
           onSessionDeleted={onSessionDeleted}
           onActivity={reportActivity}
+        />
+      ) : kind === "mobile" && switcher ? (
+        // Decision 18: the flat list, one pane at a time; no strip, no splits.
+        <MobileWorkspace
+          panes={switcher}
+          focused={focusedRef}
+          renderPane={renderPaneIn}
+          titleOf={paneTitleOf}
+          stateOf={stateOf}
+          sessionOf={sessionOf}
+          unreadPanes={unreadPanes}
+          onFocus={showPane}
+          onClosePane={(paneId) => void actions.closePane(paneId)}
+          onNewSession={() => void actions.openStartTab()}
         />
       ) : (
         <Tabs.Root
@@ -246,18 +286,42 @@ export default function WorkspaceView({
                 tabIndex={-1}
                 className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
               >
-                <SplitTree
-                  root={t.root}
-                  focusedPaneId={t.id === focusedTabId ? focusedPaneId : null}
-                  renderPane={(p, first) => renderPane(t, p, first)}
-                  onFocusPane={(paneId) => focusPane(t.id, paneId)}
-                  onResize={resize}
-                  keyOf={keyOf}
-                />
+                {tabRendersSplit(t, kind) ? (
+                  <SplitTree
+                    root={t.root}
+                    focusedPaneId={t.id === focusedTabId ? focusedPaneId : null}
+                    renderPane={(p, first) => renderPane(t, p, first)}
+                    onFocusPane={(paneId) => focusPane(t.id, paneId)}
+                    onResize={resize}
+                    keyOf={keyOf}
+                  />
+                ) : (
+                  // Decision 20: a tablet shows one pane of a 3- or 4-pane tab, with the switcher scoped to the tab.
+                  <MobileWorkspace
+                    panes={tabPanes(t).map((p) => ({ tabId: t.id, pane: p }))}
+                    focused={t.id === focusedTabId ? focusedRef : paneRefIn(t, lastPane.get(t.id) ?? null)}
+                    renderPane={renderPaneIn}
+                    titleOf={paneTitleOf}
+                    stateOf={stateOf}
+                    sessionOf={sessionOf}
+                    unreadPanes={unreadPanes}
+                    onFocus={showPane}
+                    onClosePane={(paneId) => void actions.closePane(paneId)}
+                    onNewSession={() => void actions.openStartTab()}
+                    sheetDescription="The panes of this tab, in order."
+                  />
+                )}
               </Tabs.Content>
             ))}
         </Tabs.Root>
       )}
     </main>
   );
+}
+
+/** The tab's pane named by `paneId`, else its first, as a switcher entry (a hidden tablet tab shows where the user left it). */
+function paneRefIn(tab: Tab, paneId: string | null): PaneRef | null {
+  const panes = tabPanes(tab);
+  const pane = panes.find((p) => p.id === paneId) ?? panes[0];
+  return pane ? { tabId: tab.id, pane } : null;
 }

@@ -22,9 +22,12 @@ import {
   signalsOf,
   temporaryIds,
   unreadAfter,
+  unreadTabIds,
+  visiblePaneIds,
   withoutUnread,
   type SessionSignal,
 } from "@/lib/workspace";
+import type { FocusScope } from "@/lib/workspace-mobile";
 
 /** What the device is looking at (decision 6: per device, from the URL, never stored). */
 export type WorkspaceFocus = {
@@ -34,9 +37,14 @@ export type WorkspaceFocus = {
   sessionId: string | null;
   tab: Tab | null;
   pane: PaneNode | null;
+  /**
+   * Which of the tab's panes the device shows: all of them (`tab`), or only the focused one (`pane`:
+   * a phone, or a tablet tab too big for a split). The others count as hidden for unread.
+   */
+  scope: FocusScope;
 };
 
-export const NO_FOCUS: WorkspaceFocus = { tabId: null, paneId: null, sessionId: null, tab: null, pane: null };
+export const NO_FOCUS: WorkspaceFocus = { tabId: null, paneId: null, sessionId: null, tab: null, pane: null, scope: "tab" };
 
 export type WorkspaceApplied = {
   /** The server's workspace after the op. */
@@ -67,6 +75,8 @@ export type WorkspaceContextValue = {
   setFocus: (focus: WorkspaceFocus) => void;
   /** Tabs with news since they were last focused (decision 10 and 30); in memory only. */
   unread: ReadonlySet<string>;
+  /** The panes with news since the device last showed them: the source of `unread`, and the sheet's row markers on a phone. */
+  unreadPanes: ReadonlySet<string>;
   markRead: (tabId: string) => void;
   /**
    * The key to render a tab, split or pane under: the id this device first saw it with. A pane opened
@@ -93,7 +103,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState<WorkspaceFocus>(NO_FOCUS);
-  const [unread, setUnread] = useState<ReadonlySet<string>>(() => new Set());
+  const [unreadPanes, setUnreadPanes] = useState<ReadonlySet<string>>(() => new Set());
   /** The current workspace, for handlers that must not close over a stale render. */
   const workspaceRef = useRef(workspace);
   /** Set once the stream has delivered a copy: a slower REST read must not overwrite it then. */
@@ -197,12 +207,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const locate = useCallback((sessionId: string) => locateSession(workspace, sessionId), [workspace]);
   const keyOf = useCallback((id: string) => aliasesRef.current.get(id) ?? id, []);
   const dismissError = useCallback(() => setError(null), []);
-  const markRead = useCallback((tabId: string) => setUnread((prev) => withoutUnread(prev, tabId)), []);
+  const markRead = useCallback(
+    (tabId: string) =>
+      setUnreadPanes((prev) => withoutUnread(prev, visiblePaneIds(workspaceRef.current, tabId, null))),
+    [],
+  );
 
   // Unread (decision 30): the session list's patches say when a turn ended or a permission request
-  // appeared; a hidden tab holding that session is marked. Read from the URL here, not from the
-  // reported focus, so the mark is never set for the tab being looked at.
+  // appeared; the pane holding that session is marked unless the device shows it. The tab comes
+  // from the URL, not from the reported focus, so the mark is never set for the tab being looked
+  // at; which of its panes show (all, or only the focused one on a phone) is the view's report.
   const focusedTabId = useMemo(() => tabFromPath(pathname ?? "/")?.tabId ?? null, [pathname]);
+  const onePane = focus.scope === "pane";
+  const reportedTabId = focus.tabId;
+  const reportedPaneId = focus.paneId;
+  const visible = useMemo(() => {
+    if (!onePane) return visiblePaneIds(workspace, focusedTabId, null);
+    // The report lags the URL by a render; while they disagree, nothing is shown for certain (so no mark is cleared early).
+    return reportedTabId === focusedTabId ? visiblePaneIds(workspace, focusedTabId, reportedPaneId) : new Set<string>();
+  }, [workspace, focusedTabId, onePane, reportedTabId, reportedPaneId]);
   const signalsRef = useRef<ReadonlyMap<string, SessionSignal> | null>(null);
   useEffect(() => {
     const next = signalsOf(sessions);
@@ -211,14 +234,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!previous) return;
     const advanced = advancedSessions(previous, next);
     if (advanced.length === 0) return;
-    setUnread((prev) => unreadAfter(prev, workspaceRef.current, advanced, focusedTabId));
-  }, [sessions, focusedTabId]);
-  // Focusing a tab reads it: derived during render, the way the Portal page clears a thread's mark.
-  if (focusedTabId !== null && unread.has(focusedTabId)) setUnread(withoutUnread(unread, focusedTabId));
+    setUnreadPanes((prev) => unreadAfter(prev, workspaceRef.current, advanced, visible));
+  }, [sessions, visible]);
+  // Showing a pane reads it: derived during render, the way the Portal page clears a thread's mark.
+  const read = withoutUnread(unreadPanes, visible);
+  if (read !== unreadPanes) setUnreadPanes(read);
+  const unread = useMemo(() => unreadTabIds(workspace, unreadPanes), [workspace, unreadPanes]);
 
   const value = useMemo<WorkspaceContextValue>(
-    () => ({ workspace, loaded, error, dismissError, apply, locate, focus, setFocus, unread, markRead, keyOf }),
-    [workspace, loaded, error, dismissError, apply, locate, focus, unread, markRead, keyOf],
+    () => ({ workspace, loaded, error, dismissError, apply, locate, focus, setFocus, unread, unreadPanes, markRead, keyOf }),
+    [workspace, loaded, error, dismissError, apply, locate, focus, unread, unreadPanes, markRead, keyOf],
   );
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }
