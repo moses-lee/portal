@@ -1,6 +1,6 @@
 # Workspace: tabs and split panes for sessions
 
-Date: 2026-10-05. Status: spec agreed with Moses, nothing built yet. Branch `feat/workspace`.
+Date: 2026-10-05, built 2026-10-06. Status: implemented on `feat/workspace` (steps 1 to 8, reviewed); the live instance needs a restart for the new routes and tools. No migration.
 
 ## Why
 
@@ -50,7 +50,7 @@ This spec adds a **workspace**: a strip of tabs, each tab holding one session or
 | 27 | Sidebar | The focused pane's session gets the active highlight. Other sessions open in the workspace get a small tab glyph on their row. |
 | 28 | Libraries | Splits: `react-resizable-panels` (already installed, upgrade 4.12 to 4.14), nested, structure from our tree, sizes seeded on mount and applied from server pushes through its ref. Tabs: Radix Tabs from the installed `radix-ui`, force-mounted and hidden. Reorder, later: the stable `@dnd-kit/core` + `@dnd-kit/sortable` line, not `@dnd-kit/react` 0.x. Not dockview. |
 | 29 | Dragging | None in round one: no tab reorder by drag, no drag-to-split. Presets and menus do the arranging. |
-| 30 | Hidden tabs | The focused tab plus the 3 most recently focused stay mounted (their streams run). Others mount on focus from the history cache. Unread is computed from the session-list stream, so it works for unmounted tabs too. |
+| 30 | Hidden tabs | The focused tab plus the 3 most recently focused stay mounted (their streams run). Others mount on focus from the history cache. Unread is computed from the session-list stream, so it works for unmounted tabs too. Found while building: a browser allows six HTTP/1.1 connections per host and Portal runs on plain HTTP, so one stream per mounted pane could not work (a 2x2 tab alone used the whole budget). Mounted panes now share one multiplexed session stream; see Server routes and Web mounting. |
 
 ## Model
 
@@ -100,7 +100,8 @@ Deleting a session (route, orchestrator tool, lifecycle purge of removed session
 | Method and path | Body | Response |
 |---|---|---|
 | `GET /api/workspace` | | `{ workspace }` |
-| `POST /api/workspace/ops` | one `WorkspaceOp` | `{ workspace, location? }`; 400 for a malformed op, 404 for an unknown session, 409 when the reducer refuses (cap reached) |
+| `POST /api/workspace/ops` | one `WorkspaceOp` | `{ workspace, location? }`; 400 for a malformed op, 404 for an unknown session, 409 when the reducer refuses (cap reached). The route stamps `source`/`titleSource` as `user` whatever the body says. |
+| `GET /api/sessions/streams?ids=a,b&since=a:12,b:30` | | One SSE socket carrying several sessions' streams (same frames as `/api/sessions/:id/stream`, each tagged with `sessionId`; `meta`, `reset`, `deleted` per session; unknown ids answer `deleted`; at most 32 ids). Both routes run on `sessions/viewer.ts`. |
 
 Origin-checked like every mutation. Both act as `user`.
 
@@ -209,6 +210,20 @@ None new. `portal.sidebar.*`, `portal.githubInspector.open`, `portal.tracked.*` 
 8. Playwright specs, then the live check.
 
 Commit per step as it lands green. Merge to main waits for Moses. The live instance needs a restart for the new routes and tools; there is no migration.
+
+## As built (2026-10-06)
+
+Calls made during the build that the decisions table does not cover:
+
+- **One session stream for the page.** `GET /api/sessions/streams` multiplexes every mounted pane's session (and the tracked panel's) onto one socket, held by `lib/session-stream-hub.ts` in `SessionsProvider`; the per-session route stays for other clients. Reason: the six-connection HTTP/1.1 limit (decision 30).
+- **Ops act as the caller.** The REST routes stamp `source`/`titleSource` as `user`; the tools pass `portal`. `rename_tab` from the orchestrator takes a title only (no clearing). The four writers are offered only on turns whose origin is chat, so a helper or job that names them does not get them; `get_workspace` stays readable.
+- **Ghost panes.** After every write the service re-checks the sessions the op named; one deleted in between is cascaded out and the op answers 404.
+- **"You are looking at"** is a prompt section headed as data, with the title clipped to 60 and the tab name to 50 characters.
+- **World section everywhere.** `get_world`, `GET /api/portal/world` and the turn prompt all render `Workspace tabs:`.
+- **Reducer details.** `arrange` carries `titleSource`; `open` without a `sessionId` key is a 400; a zero size clamps to 10 like any small size; three-way splits are 33.34/33.33/33.33.
+- **Web.** Optimistic ids are aliased to the server's per op, so concurrent edits from another device never re-key live panes. Closing the focused tab moves the URL to the right neighbour (else left) before the op, and back if refused. `/new`, the strip `+`, the project `+` and draft-from-prompt all reuse a start-page pane only when it is in the focused tab. Untitled sessions read "New conversation" everywhere. `/sessions/<gone>` shows the missing-conversation pane under the strip. "Open in new tab" is one `arrange single` op. Split items are disabled when the depth cap would refuse them. Pane menus and presets are radio items; closing a tab moves focus to the neighbouring trigger.
+- **Mobile.** Only the shown pane is mounted on a phone (no 3-tab mounting policy there); unread marks are per pane so a hidden sibling pane counts as hidden.
+- **Verified.** Shared, server and web unit suites; the Playwright suite including `workspace.spec.ts` and the mobile additions. Not done: the live check on a scratch instance with a real orchestrator turn (the tools are covered by server tests with fakes and the real route stack).
 
 ## Out of scope
 
