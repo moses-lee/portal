@@ -453,6 +453,10 @@ export async function setupPortal(
     cancelQueued?: QueuedPrompt[];
     /** What `DELETE /api/sessions/:id/queue/:itemId` answers as `removed` (false: the prompt had already gone out). */
     queueRemoved?: boolean;
+    /** `POST /api/sessions/:id/queue/:itemId/edit` answers 404: the prompt had already gone out. */
+    queueEditMissing?: boolean;
+    /** `PATCH /api/sessions/:id/queue/:itemId` answers 404: the prompt left the queue while it was being edited. */
+    queueSaveMissing?: boolean;
     /** Replaces the default two projects. */
     projects?: ProjectSummary[];
     /**
@@ -848,8 +852,24 @@ export async function setupPortal(
     }
     if (path.endsWith("/permission")) return json({ ok: true });
     if (path.endsWith("/cancel")) return json({ ok: true, queued: options.cancelQueued ?? [] });
-    if (/\/queue\/[^/]+$/.test(path))
-      return method === "DELETE" ? json({ removed: options.queueRemoved ?? true }) : json({ item: { id: "q", text: body.text, queuedAt: 0 } });
+    // The queue routes answer in the contract's shapes; the queue's new state itself arrives as `meta.queue`, which tests emit.
+    const queueEdit = path.match(/\/queue\/([^/]+)\/edit$/);
+    if (queueEdit) {
+      const id = decodeURIComponent(queueEdit[1]);
+      if (method === "POST")
+        return options.queueEditMissing
+          ? json({ error: "That queued prompt is no longer in the queue." }, 404)
+          : json({ item: { id, text: "", queuedAt: 0, editing: true } });
+      return json({ item: { id, text: "", queuedAt: 0, editing: false } });
+    }
+    const queueItem = path.match(/\/queue\/([^/]+)$/);
+    if (queueItem) {
+      const id = decodeURIComponent(queueItem[1]);
+      if (method === "DELETE") return json({ removed: options.queueRemoved ?? true });
+      return options.queueSaveMissing
+        ? json({ error: "That queued prompt is no longer in the queue." }, 404)
+        : json({ item: { id, text: body.text, queuedAt: 0, editing: false } });
+    }
     if (path.endsWith("/branches"))
       return json({
         defaultBranch: "main",

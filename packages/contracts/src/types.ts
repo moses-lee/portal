@@ -327,6 +327,12 @@ export type QueuedPrompt = {
   text: string;
   /** Epoch ms it was queued. */
   queuedAt: number;
+  /**
+   * True while a viewer has this prompt in its composer to change it (`POST .../queue/:itemId/edit`).
+   * The queue sends nothing while any prompt is being edited; the pause ends when the edit is saved
+   * (`PATCH`), cancelled (`DELETE .../edit`), or the prompt is removed or dropped by Stop.
+   */
+  editing: boolean;
 };
 
 /** The most prompts one session queues; a further one is refused. */

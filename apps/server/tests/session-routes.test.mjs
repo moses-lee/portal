@@ -767,3 +767,46 @@ test("a prompt sent with queue while the session is busy waits in the queue; the
   await until(async () => (await events(app, session.id)).events.at(-1)?.type === "turn_end", "turn end");
   assert.equal((await events(app, session.id)).events.filter(({ type }) => type === "user").length, 1);
 });
+
+test("a queued prompt is edited in place: begin marks it editing, PATCH saves and clears the flag, DELETE .../edit cancels", async (t) => {
+  const { app } = await setup(t);
+  const session = await createSession(app);
+  const post = (suffix, payload, headers) => app.inject({ method: "POST", url: `/api/sessions/${session.id}/${suffix}`, payload, headers });
+  assert.equal((await post("prompt", { text: "tool", queue: true })).statusCode, 202);
+  const { queued: item } = (await post("prompt", { text: "next", queue: true })).json();
+  assert.equal(item.editing, false);
+
+  const begin = (itemId, headers) => post(`queue/${itemId}/edit`, undefined, headers);
+  const cancelEdit = (itemId, headers) => app.inject({ method: "DELETE", url: `/api/sessions/${session.id}/queue/${itemId}/edit`, headers });
+  assert.equal((await begin(item.id, EVIL)).statusCode, 403);
+  assert.equal((await cancelEdit(item.id, EVIL)).statusCode, 403);
+  const began = await begin(item.id);
+  assert.equal(began.statusCode, 200, began.body);
+  assert.deepEqual(began.json(), { item: { ...item, editing: true } });
+  const gone = await begin("nope");
+  assert.equal(gone.statusCode, 404);
+  assert.match(gone.json().error, /no longer in the queue/);
+  assert.equal((await app.inject({ method: "POST", url: "/api/sessions/nope/queue/x/edit" })).statusCode, 404);
+  assert.equal((await app.inject({ method: "DELETE", url: "/api/sessions/nope/queue/x/edit" })).statusCode, 404);
+  const detail = await app.inject({ method: "GET", url: `/api/sessions/${session.id}` });
+  assert.deepEqual(detail.json().queue, [{ ...item, editing: true }]);
+
+  // Saving keeps the slot and ends the edit.
+  const saved = await app.inject({ method: "PATCH", url: `/api/sessions/${session.id}/queue/${item.id}`, payload: { text: "changed" } });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.deepEqual(saved.json(), { item: { ...item, text: "changed", editing: false } });
+
+  // Cancelling keeps the text; a prompt that is no longer queued answers null rather than an error.
+  assert.deepEqual((await begin(item.id)).json(), { item: { ...item, text: "changed", editing: true } });
+  const cancelled = await cancelEdit(item.id);
+  assert.equal(cancelled.statusCode, 200, cancelled.body);
+  assert.deepEqual(cancelled.json(), { item: { ...item, text: "changed", editing: false } });
+  assert.deepEqual((await cancelEdit("nope")).json(), { item: null });
+  assert.deepEqual((await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })).json().queue, [{ ...item, text: "changed", editing: false }]);
+
+  // Stop drops the queue, an edited prompt included.
+  await begin(item.id);
+  const stopped = await post("cancel");
+  assert.deepEqual(stopped.json(), { ok: true, queued: [{ ...item, text: "changed", editing: true }] });
+  await until(async () => (await events(app, session.id)).events.at(-1)?.type === "turn_end", "turn end");
+});

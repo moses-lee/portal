@@ -1091,11 +1091,15 @@ export function createAcpRuntime(
    * queued item, or null when the prompt went out at once. The browser's composer and Portal's
    * `send_prompt` both use this, so a turn ending between the viewer's last look and the request
    * never refuses the message.
+   *
+   * A manual send is not held by a paused queue (see `beginEdit`): while a prompt is being edited
+   * and the agent is free, the text goes out at once, ahead of the waiting queue. A busy session
+   * queues it as usual; it then waits behind the edit like the rest.
    */
   async function sendOrQueue(id: string, text: string): Promise<{ queued: QueuedPrompt | null; position: number }> {
     await ready;
     const session = requireSession(id);
-    if (session.busy || session.queueFiring || session.queue.length > 0) return queuePrompt(id, text);
+    if (session.busy || session.queueFiring || (session.queue.length > 0 && !queuePaused(session))) return queuePrompt(id, text);
     try {
       await openTurn(id, text);
     } catch (error) {
@@ -1117,7 +1121,7 @@ export function createAcpRuntime(
     const trimmed = text.trim();
     if (!trimmed) throw new Error("A queued prompt cannot be empty.");
     if (session.queue.length >= MAX_QUEUED_PROMPTS) throw new Error(`The queue is full (${MAX_QUEUED_PROMPTS} prompts). Edit or remove one first.`);
-    const queued: QueuedPrompt = { id: randomUUID(), text: trimmed, queuedAt: Date.now() };
+    const queued: QueuedPrompt = { id: randomUUID(), text: trimmed, queuedAt: Date.now(), editing: false };
     session.queue.push(queued);
     // Taken before the queue may send it at once, so a free session answers "position 1", not 0.
     const position = session.queue.length;
@@ -1126,7 +1130,10 @@ export function createAcpRuntime(
     return { queued, position };
   }
 
-  /** Replace a queued prompt's text in place. Throws for an unknown item or blank text. */
+  /**
+   * Replace a queued prompt's text in place; it keeps its slot. Saving also ends an edit begun
+   * with `beginEdit`, so the queue resumes. Throws for an unknown item or blank text.
+   */
   async function updateQueued(id: string, itemId: string, text: string): Promise<QueuedPrompt> {
     await ready;
     const session = requireSession(id);
@@ -1134,11 +1141,50 @@ export function createAcpRuntime(
     if (!trimmed) throw new Error("A queued prompt cannot be empty.");
     const index = session.queue.findIndex((item) => item.id === itemId);
     if (index === -1) throw new Error("That queued prompt is no longer in the queue.");
-    const updated = { ...session.queue[index], text: trimmed };
+    const updated = { ...session.queue[index], text: trimmed, editing: false };
     session.queue[index] = updated;
     notifyQueue(session);
     fireQueue(session);
     return updated;
+  }
+
+  /**
+   * Mark a queued prompt as being edited: it keeps its slot, and the queue sends nothing while any
+   * prompt is in that state (see `queuePaused`), so the viewer can take its time. The pause ends
+   * with `updateQueued` (save), `cancelEdit`, `removeQueued`, or a stop. Already editing: answers
+   * the item unchanged. Throws when the item has gone out or was removed.
+   */
+  async function beginEdit(id: string, itemId: string): Promise<QueuedPrompt> {
+    await ready;
+    const session = requireSession(id);
+    const index = session.queue.findIndex((item) => item.id === itemId);
+    if (index === -1) throw new Error("That queued prompt is no longer in the queue.");
+    if (session.queue[index].editing) return session.queue[index];
+    const editing = { ...session.queue[index], editing: true };
+    session.queue[index] = editing;
+    notifyQueue(session);
+    return editing;
+  }
+
+  /**
+   * End an edit without saving: the prompt keeps its text, and the queue resumes unless another
+   * prompt is still being edited. Null when the item is no longer queued; an item that was not
+   * being edited is answered unchanged.
+   */
+  async function cancelEdit(id: string, itemId: string): Promise<QueuedPrompt | null> {
+    await ready;
+    const session = requireSession(id);
+    const index = session.queue.findIndex((item) => item.id === itemId);
+    if (index === -1) return null;
+    let item = session.queue[index];
+    if (item.editing) {
+      item = { ...item, editing: false };
+      session.queue[index] = item;
+      notifyQueue(session);
+    }
+    // Taken first: a live agent starts the head synchronously here, which may be this very item.
+    fireQueue(session);
+    return item;
   }
 
   /** Take a prompt out of the queue; null when it was not there (already sent or removed). */
@@ -1158,20 +1204,26 @@ export function createAcpRuntime(
     for (const listener of session.queueListeners) listener(snapshot);
   }
 
+  /** Whether the queue is paused: some prompt is being edited (see `beginEdit`). */
+  function queuePaused(session: Session): boolean {
+    return session.queue.some((item) => item.editing);
+  }
+
   /**
    * Start the queue's first prompt when the session is free. Runs after every completed turn and
-   * every change to the queue; nothing happens while a turn is open or one is already starting.
+   * every change to the queue; nothing happens while a turn is open, one is already starting, or
+   * the queue is paused for an edit (`queuePaused`; the change that ends the edit calls this again).
    * A prompt that fails to start (the agent could not be reattached) stays at the head with an
    * error in the log, and the queue waits for the next change to it or the next completed turn.
    * The queue also waits after a turn that failed or an agent that was lost: those branches do
    * not call this, so a crash does not run through every queued prompt.
    *
-   * The head may change while the agent attaches: removed or edited, the attach ends without a
-   * turn and the queue is looked at again; a direct prompt that took the turn meanwhile is no
-   * error, the queue simply goes after it.
+   * The head may change while the agent attaches: removed, or now being edited, the attach ends
+   * without a turn and the queue is looked at again; a direct prompt that took the turn meanwhile
+   * is no error, the queue simply goes after it.
    */
   function fireQueue(session: Session) {
-    if (!current(session) || session.busy || session.queueFiring || session.queue.length === 0) return;
+    if (!current(session) || session.busy || session.queueFiring || session.queue.length === 0 || queuePaused(session)) return;
     const head = session.queue[0];
     session.queueFiring = true;
     openTurn(session.id, head)
@@ -1188,17 +1240,17 @@ export function createAcpRuntime(
   /**
    * Open a turn with a prompt: the text itself, or a queued item, which leaves the queue as the
    * turn starts. Attaches the agent first when it is not connected. Resolves to whether a turn
-   * started: false when the queued item was removed meanwhile. Throws "Session busy" when a turn
-   * is already open.
+   * started: false when the queued item was removed, or began being edited, meanwhile. Throws
+   * "Session busy" when a turn is already open.
    */
   async function openTurn(id: string, prompt: string | QueuedPrompt): Promise<boolean> {
     const target = requireSession(id);
     if (target.link.status !== "live") await attach(id);
     const { session, process: instance, upstreamId } = sessionOwner(id);
     if (session.busy) throw new Error("Session busy");
-    // A queued item may have been edited or removed while the agent was attaching.
+    // A queued item may have been removed, or taken into a composer, while the agent was attaching.
     const index = typeof prompt === "string" ? -1 : session.queue.findIndex((item) => item.id === prompt.id);
-    if (typeof prompt !== "string" && index === -1) return false;
+    if (typeof prompt !== "string" && (index === -1 || session.queue[index].editing)) return false;
     // Claim the turn before yielding so concurrent requests cannot both start it.
     session.busy = true;
     let text: string;
@@ -1275,9 +1327,10 @@ export function createAcpRuntime(
   }
 
   /**
-   * Ask the agent to stop the open turn. The queue is emptied first and its prompts answered, so
-   * a stop stops everything: the caller gets them back (the browser puts them in the composer),
-   * and nothing starts a new turn when this one ends.
+   * Ask the agent to stop the open turn. The queue is emptied first and its prompts answered
+   * (one being edited included, which ends that pause), so a stop stops everything: the caller
+   * gets them back (the browser puts them in the composer), and nothing starts a new turn when
+   * this one ends.
    */
   async function cancel(id: string): Promise<QueuedPrompt[]> {
     const { session, process: instance, upstreamId } = sessionOwner(id);
@@ -1569,7 +1622,7 @@ export function createAcpRuntime(
   }
 
   return {
-    ready, listSessions, getSession, createSession, attach, sendPrompt, sendOrQueue, queuePrompt, updateQueued, removeQueued, setTitle, cancel, stopBackgroundTask,
+    ready, listSessions, getSession, createSession, attach, sendPrompt, sendOrQueue, queuePrompt, updateQueued, beginEdit, cancelEdit, removeQueued, setTitle, cancel, stopBackgroundTask,
     respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
     probe, probeSession, setLivenessOptions,
   };

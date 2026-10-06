@@ -346,7 +346,11 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     }
   });
 
-  /** Edit a queued prompt's text. 404 once it has gone out or was removed. */
+  /**
+   * Save a queued prompt's new text. The prompt keeps its slot, and the edit begun with
+   * `POST .../edit` ends (`editing: false`), so the queue resumes. 404 once it has gone out or was
+   * removed.
+   */
   app.patch<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     const { text } = (req.body ?? {}) as { text?: unknown };
@@ -358,6 +362,34 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     } catch (err) {
       return reply.code(404).send({ error: errorMessage(err) });
     }
+  });
+
+  /**
+   * Begin editing a queued prompt: it is marked `editing` and the whole queue pauses until the
+   * edit is saved (PATCH), cancelled (DELETE below), or the prompt is removed or dropped by a
+   * stop. Answers `{ item }`; 404 once the prompt has gone out or was removed.
+   */
+  app.post<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId/edit", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    await ready();
+    if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
+    try {
+      return { item: await ctx.sessions.beginEdit(req.params.id, req.params.itemId) };
+    } catch (err) {
+      return reply.code(404).send({ error: errorMessage(err) });
+    }
+  });
+
+  /**
+   * Cancel an edit without saving: the prompt keeps its text and the queue resumes. Answers
+   * `{ item }`, null when the prompt is no longer queued (no error: there is nothing left to
+   * resume).
+   */
+  app.delete<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId/edit", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    await ready();
+    if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
+    return { item: await ctx.sessions.cancelEdit(req.params.id, req.params.itemId) };
   });
 
   /**

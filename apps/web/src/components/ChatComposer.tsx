@@ -8,13 +8,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowUp, LoaderCircle, Square } from "lucide-react";
+import { ArrowUp, LoaderCircle, Square, X } from "lucide-react";
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import CommandPalette, {
   commandInsertText,
   findCommandToken,
   matchCommands,
 } from "./CommandPalette";
+import IconButton from "./IconButton";
 import { Button } from "@/components/ui/button";
 import {
   InputGroup,
@@ -45,12 +46,19 @@ export default function ChatComposer({
   describedBy,
   historyKey,
   paletteId = "command-palette",
+  editing,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
   onStop?: () => void;
   busy?: boolean;
+  /**
+   * The text is a queued prompt being edited in place (agent sessions): a line above the textarea
+   * says which, with a button to cancel, and Enter or the arrow calls `onSend` to save it (even
+   * while `busy`); what the send does is the parent's call.
+   */
+  editing?: { label: string; onCancel: () => void };
   /**
    * The conversation queues prompts sent while `busy` (agent sessions): the send button stays,
    * beside Stop, and Enter sends as usual. Without it, Stop replaces the send button while busy.
@@ -150,10 +158,15 @@ export default function ChatComposer({
     textarea.current?.focus();
     textarea.current?.setSelectionRange(position, position);
   }, [value]);
-  // With a queue, a send while the agent works queues the text; without one (a Portal thread) it waits.
+  // With a queue, a send while the agent works queues the text; without one (a Portal thread) it
+  // waits. Saving an edited queued prompt does not start a turn, so it goes through while busy too.
   const send = () => {
-    if (!disabled && !sending && (queues || !busy) && value.trim()) onSend();
+    if (!disabled && !sending && (queues || !!editing || !busy) && value.trim()) onSend();
   };
+  const sendLabel = editing ? "Save queued prompt" : busy && queues ? "Queue message" : "Send message";
+  // The edit line describes the textarea too, so assistive tech hears that Enter now saves a queued prompt.
+  const editLineId = `${paletteId}-editing`;
+  const describedByIds = [describedBy, editing ? editLineId : undefined].filter(Boolean).join(" ") || undefined;
   return (
     <div>
       <div className="relative">
@@ -174,12 +187,29 @@ export default function ChatComposer({
           }}
         >
           <InputGroup className="composer glass !ring-0">
+            {editing && (
+              <InputGroupAddon
+                align="block-start"
+                className="!justify-between gap-2 pb-0 text-[11px] font-normal text-muted-foreground"
+              >
+                <span id={editLineId} className="min-w-0 truncate pl-2">
+                  {editing.label}. Enter saves it in place.
+                </span>
+                <IconButton
+                  label="Cancel edit"
+                  className="size-6 flex-none text-muted-foreground"
+                  onClick={editing.onCancel}
+                >
+                  <X className="size-3.5" />
+                </IconButton>
+              </InputGroupAddon>
+            )}
             <InputGroupTextarea
               ref={textarea}
               value={value}
               disabled={disabled}
               aria-label={label}
-              aria-describedby={describedBy}
+              aria-describedby={describedByIds}
               placeholder={placeholder}
               rows={2}
               enterKeyHint={touch ? "enter" : "send"}
@@ -249,7 +279,7 @@ export default function ChatComposer({
                 {settings ??
                   (!touch && (
                     <span className="pl-2 text-[11px] font-normal text-muted-foreground">
-                      {busy && queues ? "Enter to queue" : "Enter to send"}{" "}
+                      {editing ? "Enter to save" : busy && queues ? "Enter to queue" : "Enter to send"}{" "}
                       <span className="hidden sm:inline">
                         · Shift + Enter for a new line
                       </span>
@@ -272,11 +302,11 @@ export default function ChatComposer({
                   )}
                 </Button>
               )}
-              {(!busy || !onStop || queues) && (
+              {(!busy || !onStop || queues || editing) && (
                 <Button
                   type="submit"
-                  aria-label={sending ? "Sending message" : busy && queues ? "Queue message" : "Send message"}
-                  title={busy && queues ? "Queue message" : "Send message"}
+                  aria-label={sending ? "Sending message" : sendLabel}
+                  title={sendLabel}
                   disabled={disabled || sending || !value.trim()}
                   className="composer-send !p-0"
                 >

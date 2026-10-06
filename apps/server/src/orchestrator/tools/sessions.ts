@@ -36,6 +36,8 @@ export function sessionRow(meta: SessionMeta) {
     activity: snapshotActivity(meta),
     ...(meta.liveness ? { liveness: meta.liveness.state, status: meta.liveness.summary } : {}),
     ...(meta.queue?.length ? { queuedPrompts: meta.queue.length } : {}),
+    // The queue sends nothing while the user edits one of its prompts in the browser.
+    ...(meta.queue?.some((item) => item.editing) ? { queuePaused: true } : {}),
     lastActiveAt: meta.lastActiveAt,
   };
 }
@@ -234,7 +236,7 @@ export function sessionTools(ctx: ToolContext) {
       ),
     } : {}),
     send_prompt: define(
-      "Send a prompt to a session; the agent works on it asynchronously. While the session is busy the prompt is queued (up to 10 per session) and goes out, in order, once the turn ends; the answer says which happened.",
+      "Send a prompt to a session; the agent works on it asynchronously. While the session is busy the prompt is queued (up to 10 per session) and goes out, in order, once the turn ends; the answer says which happened. A queue paused for an edit (queuePaused in the session row) does not hold this: when the agent is free the prompt is sent at once, as a browser send is.",
       z.object({ sessionId, text: z.string().min(1) }),
       async (input) => {
         const sessionId = await full(input.sessionId);

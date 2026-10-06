@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { useSessions } from "./SessionsProvider";
 import { sessionUrl, useSessionStream } from "./useSessionStream";
 import { sessionHistoryKey } from "@/lib/prompt-history";
+import { queueEditLabel } from "@/lib/prompt-queue";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ssr: false,
@@ -105,7 +106,9 @@ export default function SessionPane({
     stop,
     stopping,
     queue,
+    editingId,
     editQueued,
+    cancelEdit,
     removeQueued,
     answerPermission,
     setConfig,
@@ -208,6 +211,7 @@ export default function SessionPane({
               <PromptQueue
                 queue={queue}
                 busy={busy}
+                editingId={editingId}
                 onEdit={(item) => void editQueued(item)}
                 onRemove={(item) => void removeQueued(item)}
               />
@@ -223,6 +227,11 @@ export default function SessionPane({
                 onStop={() => void stop()}
                 busy={busy}
                 queues
+                editing={
+                  editingId
+                    ? { label: queueEditLabel(queue, editingId), onCancel: () => void cancelEdit() }
+                    : undefined
+                }
                 sending={sending || initialPending}
                 stopping={stopping}
                 disabled={notFound}

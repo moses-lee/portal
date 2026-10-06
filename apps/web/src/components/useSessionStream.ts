@@ -1,12 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useSend } from "./useSend";
 import { useSessions } from "./SessionsProvider";
 import { sessionHistoryKey } from "@/lib/prompt-history";
 import { restoreToDraft } from "@/lib/prompt-queue";
 import { readDraft, writeDraft } from "@/lib/drafts";
+import { readEditing, subscribeEditing, writeEditing } from "@/lib/queue-edit";
 import { applyConfigChange } from "@/lib/session-config";
 import { agentActivity } from "@/lib/agent-activity";
 import { sessionState as deriveSessionState } from "@/lib/session-state";
@@ -36,6 +44,37 @@ import {
 
 export const sessionUrl = (id: string, suffix = "") =>
   `/api/sessions/${encodeURIComponent(id)}${suffix}`;
+
+const queueItemUrl = (sessionId: string, itemId: string, suffix = "") =>
+  sessionUrl(sessionId, `/queue/${encodeURIComponent(itemId)}${suffix}`);
+
+const QUEUED_PROMPT_GONE = "That queued prompt is no longer in the queue.";
+
+/** The server's `error`, else `fallback`; a 404 means the queued prompt has gone (sent, removed, or dropped by Stop). */
+async function queueRequestError(response: Response, fallback: string) {
+  const result = (await response.json().catch(() => ({}))) as { error?: string };
+  return new Error(result.error ?? (response.status === 404 ? QUEUED_PROMPT_GONE : fallback));
+}
+
+/**
+ * `PATCH /queue/:itemId` with the composer's text: the prompt keeps its place in the queue and
+ * the edit (with the queue's pause) ends. A prompt that has gone meanwhile (404) ends the edit
+ * too; the text stays in the composer, and the error says why.
+ */
+async function saveQueuedEdit(sessionId: string, itemId: string, text: string) {
+  const response = await fetch(queueItemUrl(sessionId, itemId), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (response.status === 404) {
+    writeEditing(sessionId, null);
+    throw new Error(`${QUEUED_PROMPT_GONE} Your text is still here; send it to queue it again.`);
+  }
+  if (!response.ok)
+    throw await queueRequestError(response, "Could not save the queued prompt. Your text is still here; try again.");
+  writeEditing(sessionId, null);
+}
 
 export type SessionStreamOptions = {
   /** The session was deleted (by this or another viewer); its cache entry is already gone. */
@@ -115,6 +154,17 @@ export function useSessionStream(
   const [busy, setBusy] = useState(initial.seed.busy);
   /** The prompts waiting for the agent, as the stream's `meta` keeps them (see `QueuedPrompt`). */
   const [queue, setQueue] = useState<QueuedPrompt[]>(initial.seed.queue);
+  /** Whether `queue` came from the stream yet; the seed's copy (the list entry) may be stale. */
+  const [queueLive, setQueueLive] = useState(false);
+  /**
+   * The queued prompt this session's composer is editing (see `@/lib/queue-edit`): shared by every
+   * view of the session in this tab, as the draft is, and kept across a reload.
+   */
+  const editingId = useSyncExternalStore(
+    subscribeEditing,
+    () => (sessionId ? readEditing(sessionId) : null),
+    () => null,
+  );
   const [sessionState, setSessionState] = useState<SessionState | null>(
     initial.seed.state,
   );
@@ -143,6 +193,7 @@ export function useSessionStream(
     setLink(next.link);
     setBusy(next.busy);
     setQueue(next.queue);
+    setQueueLive(false);
     setSessionState(next.state);
     setConfigInFlight(false);
     setConfigError(null);
@@ -183,7 +234,10 @@ export function useSessionStream(
       if (meta.link) setLink(meta.link);
       // Agent state (modes, config options, commands) changes from any viewer; the stream is the source of truth.
       if (meta.state) setSessionState(meta.state);
-      if (meta.queue) setQueue(meta.queue);
+      if (meta.queue) {
+        setQueue(meta.queue);
+        setQueueLive(true);
+      }
       const patch: Partial<SessionSummary> = {};
       if (meta.busy !== undefined) patch.busy = meta.busy;
       if (meta.queue) patch.queue = meta.queue;
@@ -315,11 +369,15 @@ export function useSessionStream(
 
   /**
    * `POST /prompt` with `queue`: resolves once the server has the prompt, sent (its `turn_start`
-   * follows on the stream) or, while the agent works, queued (it shows up in `queue`).
+   * follows on the stream) or, while the agent works, queued (it shows up in `queue`). While a
+   * queued prompt is being edited, the text saves into that prompt's slot instead (see
+   * `saveQueuedEdit`); `useSend` then clears the draft as after any send.
    */
   const submitPrompt = useCallback(
     async (text: string) => {
       if (!sessionId) throw new Error("No active session.");
+      const editing = readEditing(sessionId);
+      if (editing) return saveQueuedEdit(sessionId, editing, text);
       submitted(sessionId);
       const response = await fetch(sessionUrl(sessionId, "/prompt"), {
         method: "POST",
@@ -376,7 +434,8 @@ export function useSessionStream(
 
   /**
    * Stop the turn. The server drops the queue with it and hands the prompts back; they go into
-   * this composer, so nothing typed is lost and nothing starts a turn by itself after a stop.
+   * this composer, so nothing typed is lost and nothing starts a turn by itself after a stop. An
+   * edit in progress ends with its prompt (see the effect below), the composer keeping its text.
    */
   const stop = async () => {
     if (!sessionId || stopping) return;
@@ -394,7 +453,10 @@ export function useSessionStream(
       // The server has already dropped the queue; an unreadable answer must not pass as an empty one.
       const result = (await response.json()) as { queued?: QueuedPrompt[] };
       if (currentIdRef.current !== sessionId) return;
-      takeBack((result.queued ?? []).map((item) => item.text));
+      // The prompt this composer is editing is already in it (with any changes), so it is not handed
+      // back twice; an emptied composer gets it back, so the text is not lost.
+      const editing = readDraft(draftKey).trim() ? readEditing(sessionId) : null;
+      takeBack((result.queued ?? []).filter((item) => item.id !== editing).map((item) => item.text));
     } catch (error) {
       if (currentIdRef.current !== sessionId) return;
       setStopping(false);
@@ -425,13 +487,55 @@ export function useSessionStream(
   };
 
   /**
-   * Take a queued prompt back into the composer to change it (as Codex's TUI edits its queue):
-   * it leaves the queue and goes ahead of the draft, and Enter sends or queues it again. A prompt
-   * that already went out is not restored, so nothing runs twice.
+   * Edit a queued prompt in place: `POST /queue/:itemId/edit` marks it (the queue sends nothing
+   * while a prompt is being edited), its text goes into the composer ahead of the draft, and
+   * Enter saves it back into the same slot (see `submitPrompt`). A prompt that already went out
+   * (404) is not restored, so nothing runs twice. Starting on another prompt while one is being
+   * edited moves the edit: the new prompt is marked first, then the old edit is cancelled, so
+   * the queue stays paused throughout (ending the old edit first could send the head) and no
+   * prompt is left pausing it afterwards.
    */
   const editQueued = async (item: QueuedPrompt) => {
-    if (await removeQueued(item)) takeBack([item.text]);
+    if (!sessionId) return;
+    try {
+      const previous = readEditing(sessionId);
+      const response = await fetch(queueItemUrl(sessionId, item.id, "/edit"), { method: "POST" });
+      if (!response.ok) throw await queueRequestError(response, "Could not edit the queued prompt. Try again.");
+      const result = (await response.json().catch(() => ({}))) as { item?: QueuedPrompt };
+      if (previous && previous !== item.id)
+        await fetch(queueItemUrl(sessionId, previous, "/edit"), { method: "DELETE" }).catch(() => undefined);
+      if (currentIdRef.current !== sessionId) return;
+      writeEditing(sessionId, item.id);
+      // The server's copy is current (another viewer may have saved an edit); a queued prompt is never blank.
+      takeBack([result.item?.text || item.text]);
+    } catch (error) {
+      if (currentIdRef.current === sessionId)
+        showRequestError(error instanceof Error ? error.message : "Could not edit the queued prompt. Try again.");
+    }
   };
+
+  /** Leave the edit: `DELETE /queue/:itemId/edit` keeps the prompt's original text in its slot, and the composer keeps its text. */
+  const cancelEdit = async () => {
+    if (!sessionId) return;
+    const itemId = readEditing(sessionId);
+    if (!itemId) return;
+    try {
+      const response = await fetch(queueItemUrl(sessionId, itemId, "/edit"), { method: "DELETE" });
+      if (!response.ok) throw await queueRequestError(response, "Could not cancel the edit. Try again.");
+      writeEditing(sessionId, null);
+    } catch (error) {
+      if (currentIdRef.current === sessionId)
+        showRequestError(error instanceof Error ? error.message : "Could not cancel the edit. Try again.");
+    }
+  };
+
+  // The edit ends with the prompt: removed by another viewer, sent, or dropped by Stop, it leaves
+  // `meta.queue`, and the composer keeps its text. Only the stream's queue counts, so an edit
+  // restored after a reload survives until the first `meta` says the prompt is gone.
+  useEffect(() => {
+    if (!sessionId || !editingId || !queueLive) return;
+    if (!queue.some((item) => item.id === editingId)) writeEditing(sessionId, null);
+  }, [sessionId, editingId, queueLive, queue]);
 
   /** Ask the server to reconnect the agent; the outcome arrives as `meta.link` on the stream. */
   const retryAttach = async () => {
@@ -564,7 +668,10 @@ export function useSessionStream(
     stopping,
     /** The prompts waiting for the agent, first to go out first. */
     queue,
+    /** The queued prompt this composer is editing (Enter saves it in place), or null. */
+    editingId,
     editQueued,
+    cancelEdit,
     removeQueued,
     answerPermission,
     setConfig,

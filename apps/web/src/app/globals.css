@@ -587,6 +587,18 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* A prompt being edited: its text is in a composer (this view's or another tab's), so the row reads as pending. */
+.prompt-queue-item-editing .prompt-queue-text {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.prompt-queue-mark {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .composer-context {
   display: flex;
   min-width: 0;

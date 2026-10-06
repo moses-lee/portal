@@ -10,6 +10,7 @@ import SessionLinkBanner from "../SessionLinkBanner";
 import { useSessions } from "../SessionsProvider";
 import { useSessionStream } from "../useSessionStream";
 import { sessionHistoryKey } from "@/lib/prompt-history";
+import { queueEditLabel } from "@/lib/prompt-queue";
 import { trackedState } from "@/lib/tracked-sessions";
 import type { SessionSummary } from "@/lib/types";
 import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, type TrackedRowActions } from "./parts";
@@ -53,7 +54,9 @@ export default function TrackedSessionView({
     stop,
     stopping,
     queue,
+    editingId,
     editQueued,
+    cancelEdit,
     removeQueued,
     answerPermission,
     retryAttach,
@@ -107,7 +110,7 @@ export default function TrackedSessionView({
             scrollRequest={scrollRequest}
           />
           <div className="composer-wrap !px-3">
-            <PromptQueue queue={queue} busy={busy} onEdit={(item) => void editQueued(item)} onRemove={(item) => void removeQueued(item)} />
+            <PromptQueue queue={queue} busy={busy} editingId={editingId} onEdit={(item) => void editQueued(item)} onRemove={(item) => void removeQueued(item)} />
             <SessionLinkBanner link={link} agentName={agentName} onRetry={() => void retryAttach()} />
             <ChatComposer
               value={draft}
@@ -116,6 +119,7 @@ export default function TrackedSessionView({
               onStop={() => void stop()}
               busy={busy}
               queues
+              editing={editingId ? { label: queueEditLabel(queue, editingId), onCancel: () => void cancelEdit() } : undefined}
               sending={sending}
               stopping={stopping}
               commands={sessionState?.commands}

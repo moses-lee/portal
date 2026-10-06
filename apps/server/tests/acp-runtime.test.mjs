@@ -1786,3 +1786,149 @@ test("while an offline agent reattaches for the queue: a removed head is skipped
   assert.deepEqual(again.events.filter(({ type }) => type === "user").map(({ text }) => text), ["name:Direct", "finish-tool"]);
   assert.equal(again.events.some(({ type }) => type === "error"), false);
 });
+
+test("while an offline agent reattaches for the queue: a head taken into a composer waits, with its edit, until the edit ends", async (t) => {
+  const first = await persistentSetup(t);
+  const { runtime, cwd } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "finish-tool");
+  await until(() => !session.busy, "first turn");
+  await runtime.dispose();
+
+  const next = restart(t, first, { claude: "resume" });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  assert.equal(restored.link.status, "offline");
+  const a = await next.queuePrompt(session.id, "name:A");
+  assert.equal(restored.queueFiring, true, "the head starts reattaching the agent");
+  // Edited while the agent attaches: the attach ends without a turn, and the queue stays paused.
+  const editing = await next.beginEdit(session.id, a.queued.id);
+  assert.equal(editing.editing, true);
+  await until(() => !restored.queueFiring && restored.link.status === "live", "the attach to finish");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(restored.busy, false);
+  assert.deepEqual(restored.queue.map(({ text, editing }) => [text, editing]), [["name:A", true]]);
+  assert.equal(restored.events.some(({ type }) => type === "user"), false, "the edited head was not sent");
+  assert.equal(restored.events.some(({ type }) => type === "error"), false);
+  // Saving the edit resumes the queue with the new text.
+  await next.updateQueued(session.id, a.queued.id, "name:A2");
+  await until(() => restored.queue.length === 0 && !restored.busy && restored.events.some((e) => e.type === "user" && e.text === "name:A2"), "the saved head to run");
+});
+
+/** Send a prompt the fake agent holds open on a permission request, so the test chooses when the turn ends. */
+async function holdTurn(runtime, session) {
+  await runtime.sendPrompt(session.id, "hello");
+  await until(() => session.pendingPermissions.size > 0, "the held turn's permission request");
+}
+
+test("editing a queued prompt pauses the queue; saving keeps its slot, clears the flag, and sends the head", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  const queues = [];
+  runtime.subscribe(session.id, { onQueue: (queue) => queues.push(queue.map(({ text, editing }) => `${text}${editing ? "*" : ""}`)) });
+  await holdTurn(runtime, session);
+  const { queued: first } = await runtime.queuePrompt(session.id, "name:First");
+  const { queued: second } = await runtime.queuePrompt(session.id, "finish-tool");
+  assert.equal(first.editing, false);
+
+  const editing = await runtime.beginEdit(session.id, first.id);
+  assert.deepEqual(editing, { ...first, editing: true });
+  assert.deepEqual(toMeta(session).queue, [{ ...first, editing: true }, second]);
+  // Idempotent: a second begin answers the same item and tells viewers nothing new.
+  assert.deepEqual(await runtime.beginEdit(session.id, first.id), editing);
+  assert.deepEqual(queues.at(-1), ["name:First*", "finish-tool"]);
+  await assert.rejects(runtime.beginEdit(session.id, "nope"), /no longer in the queue/);
+
+  // The turn ends; nothing goes out while the edit is open.
+  await answerPermission(runtime, session);
+  await until(() => !session.busy, "the held turn to end");
+  await delay(100);
+  assert.equal(session.queueFiring, false);
+  assert.deepEqual(session.queue.map(({ text }) => text), ["name:First", "finish-tool"]);
+  assert.equal(session.events.filter(({ type }) => type === "user").length, 1, "a paused queue sends nothing");
+
+  // Saving keeps the slot and the id, ends the edit, and the queue resumes from the head.
+  const saved = await runtime.updateQueued(session.id, first.id, " name:Edited ");
+  assert.deepEqual(saved, { ...first, text: "name:Edited", editing: false });
+  await until(() => session.queue.length === 0 && !session.busy, "the queue to drain");
+  assert.deepEqual(session.events.filter(({ type }) => type === "user").map(({ text }) => text), ["hello", "name:Edited", "finish-tool"]);
+  assert.equal(session.title, "Edited");
+  // Viewers heard the save, the head going out, and the drain.
+  assert.deepEqual(queues.slice(-3), [["name:Edited", "finish-tool"], ["finish-tool"], []]);
+});
+
+test("cancelling an edit keeps the text and resumes the queue; a gone item answers null", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await holdTurn(runtime, session);
+  const { queued: first } = await runtime.queuePrompt(session.id, "name:A");
+  const { queued: second } = await runtime.queuePrompt(session.id, "finish-tool");
+  // Editing the second item pauses the first too.
+  await runtime.beginEdit(session.id, second.id);
+  await answerPermission(runtime, session);
+  await until(() => !session.busy, "the held turn to end");
+  await delay(100);
+  assert.deepEqual(session.queue, [first, { ...second, editing: true }]);
+  // An item that is not being edited is answered as it is; the queue stays paused by the other.
+  assert.deepEqual(await runtime.cancelEdit(session.id, first.id), first);
+  await delay(50);
+  assert.equal(session.queue.length, 2);
+
+  assert.deepEqual(await runtime.cancelEdit(session.id, second.id), second);
+  await until(() => session.queue.length === 0 && !session.busy, "the queue to drain");
+  assert.deepEqual(session.events.filter(({ type }) => type === "user").map(({ text }) => text), ["hello", "name:A", "finish-tool"]);
+  assert.equal(await runtime.cancelEdit(session.id, second.id), null);
+  assert.equal(await runtime.cancelEdit(session.id, "nope"), null);
+});
+
+test("removing the prompt being edited resumes the rest of the queue", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await holdTurn(runtime, session);
+  const { queued: first } = await runtime.queuePrompt(session.id, "finish-tool");
+  await runtime.queuePrompt(session.id, "name:B");
+  await runtime.beginEdit(session.id, first.id);
+  await answerPermission(runtime, session);
+  await until(() => !session.busy, "the held turn to end");
+  await delay(100);
+  assert.equal(session.queue.length, 2);
+  assert.deepEqual(await runtime.removeQueued(session.id, first.id), { ...first, editing: true });
+  await until(() => session.queue.length === 0 && !session.busy, "the rest to go out");
+  assert.deepEqual(session.events.filter(({ type }) => type === "user").map(({ text }) => text), ["hello", "name:B"]);
+});
+
+test("a manual send bypasses a paused queue when the agent is free, queues behind it when busy; a stop drops the edited prompt too", async (t) => {
+  const { runtime, cwd } = setup(t);
+  const session = await runtime.createSession(cwd, "claude");
+  await holdTurn(runtime, session);
+  const { queued: waiting } = await runtime.queuePrompt(session.id, "finish-tool");
+  await runtime.beginEdit(session.id, waiting.id);
+  await answerPermission(runtime, session);
+  await until(() => !session.busy, "the held turn to end");
+  await delay(100);
+  assert.equal(session.queue.length, 1);
+
+  // Free and paused: the text goes out at once, ahead of the waiting queue, which stays as it was.
+  const direct = await runtime.sendOrQueue(session.id, "name:Direct");
+  assert.deepEqual(direct, { queued: null, position: 0 });
+  assert.equal(session.busy, true);
+  assert.deepEqual(session.queue, [{ ...waiting, editing: true }]);
+  await until(() => !session.busy, "the direct turn to end");
+  await delay(100);
+  assert.deepEqual(session.queue, [{ ...waiting, editing: true }], "still paused after the direct turn");
+
+  // Busy and paused: queued as usual, behind the edit.
+  await holdTurn(runtime, session);
+  const later = await runtime.sendOrQueue(session.id, "name:Later");
+  assert.equal(later.position, 2);
+  assert.deepEqual(later.queued, { ...later.queued, editing: false });
+  assert.deepEqual(toMeta(session).queue.map(({ text, editing }) => [text, editing]), [["finish-tool", true], ["name:Later", false]]);
+
+  // Stop drains everything, the edited prompt included, and hands it all back.
+  const dropped = await runtime.cancel(session.id);
+  assert.deepEqual(dropped, [{ ...waiting, editing: true }, later.queued]);
+  assert.equal(session.queue.length, 0);
+  await until(() => !session.busy, "the stopped turn to end");
+  await delay(100);
+  assert.deepEqual(session.events.filter(({ type }) => type === "user").map(({ text }) => text), ["hello", "name:Direct", "hello"]);
+});
