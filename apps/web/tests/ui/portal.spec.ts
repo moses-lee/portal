@@ -10,6 +10,7 @@ import {
   secondTitle,
   setupPortal,
   removedProject,
+  tabUrl,
   worktree,
 } from "./fixtures";
 import { buildGitActionPrompt } from "../../src/lib/git-action-prompt";
@@ -144,7 +145,9 @@ test("new conversation sends the first prompt once and retains a failed first pr
     .getByRole("textbox", { name: "First message" })
     .fill("Build a project dashboard");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page).toHaveURL(/\/sessions\/created$/);
+  // The start page's pane becomes the new session's (decision 9): same tab, the session in it.
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="created"]')).toBeVisible();
   await expect(page.getByRole("main").getByRole("alert")).toContainText(
     "Your draft is saved",
   );
@@ -708,7 +711,9 @@ test("each project has a new conversation button, and the start page applies cho
   await page
     .getByRole("button", { name: "New conversation in portal", exact: true })
     .click();
-  await expect(page).toHaveURL(/\/new$/);
+  // A start-page tab of its own.
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(
     page.getByRole("combobox", { name: "Project", exact: true }),
   ).toContainText("portal");
@@ -733,7 +738,8 @@ test("each project has a new conversation button, and the start page applies cho
     .getByRole("textbox", { name: "First message" })
     .fill("Build a project dashboard");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page).toHaveURL(/\/sessions\/created$/);
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="created"]')).toBeVisible();
   await expect(
     page.getByRole("combobox", { name: "Message Claude Code" }),
   ).toHaveValue("");
@@ -907,7 +913,9 @@ test("source control actions draft a prompt on the start page without creating a
   const prompts = defaultSettings.gitActions.prompts;
 
   await checks.click();
-  await expect(page).toHaveURL(/\/new$/);
+  // The draft lands on a start-page tab, not in a session (the session's own tab stays mounted, hidden).
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator("[data-pane][data-session]:visible")).toHaveCount(0);
   await expect(
     page.getByRole("combobox", { name: "Project", exact: true }),
   ).toContainText("portal");
@@ -993,7 +1001,7 @@ test("the sidebar opens a standalone terminal page with its own URL", async ({
   await page
     .getByRole("button", { name: "New conversation in portal", exact: true })
     .click();
-  await expect(page).toHaveURL(/\/new$/);
+  await expect(page).toHaveURL(tabUrl);
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await page.getByRole("button", { name: "Back to Portal" }).click();
   await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
@@ -1029,7 +1037,9 @@ test("the Removed view lists removed projects, restores one, and opens its conve
         request.method === "POST",
     ),
   ).toHaveLength(1);
-  await expect(page).toHaveURL(/\/sessions\/s9$/);
+  // The restored project's conversation opens in a tab of its own.
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="s9"]')).toBeVisible();
   await expect(
     workspace.getByRole("button", {
       name: "Finish the old branch",

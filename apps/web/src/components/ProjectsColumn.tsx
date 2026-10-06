@@ -728,7 +728,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
                     key={session.id}
                     session={session}
                     active={session.id === active}
-                    inWorkspace={openSessionIds.has(session.id)}
+                    // Decision 27: the glyph marks sessions open elsewhere; the focused one has the highlight.
+                    inWorkspace={session.id !== active && openSessionIds.has(session.id)}
                     onOpenInNewTab={onOpenInNewTab}
                     onOpenBeside={onOpenBeside}
                     pinned={session.id in sessionPins}

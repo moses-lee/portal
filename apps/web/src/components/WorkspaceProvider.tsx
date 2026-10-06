@@ -58,6 +58,12 @@ export type WorkspaceContextValue = {
   workspace: Workspace;
   /** True once `GET /api/workspace` or the stream has answered; the resolvers wait for it. */
   loaded: boolean;
+  /**
+   * True while an op this device applied is in flight: the workspace shows the guess, and the
+   * caller's navigation to the result is still to come. The resolvers wait for it too, or a start
+   * page that just opened a session would see a workspace without a start pane and open another.
+   */
+  pending: boolean;
   /** The last refused or failed op's message, until dismissed or the next op succeeds. */
   error: string | null;
   dismissError: () => void;
@@ -104,6 +110,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState<WorkspaceFocus>(NO_FOCUS);
   const [unreadPanes, setUnreadPanes] = useState<ReadonlySet<string>>(() => new Set());
+  /** Ops posted and not yet answered (`pending` is any). */
+  const [inFlight, setInFlight] = useState(0);
   /** The current workspace, for handlers that must not close over a stale render. */
   const workspaceRef = useRef(workspace);
   /** Set once the stream has delivered a copy: a slower REST read must not overwrite it then. */
@@ -169,37 +177,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (!guess.changed) return { workspace: base, location: guess.location ?? null };
       pendingRef.current = guess.workspace;
       setWorkspace(guess.workspace);
+      setInFlight((n) => n + 1);
       const rollback = () => {
         // Only undo our own guess: a copy the stream delivered since stays.
         if (workspaceRef.current === guess.workspace) setWorkspace(base);
       };
-      let r: Response;
       try {
-        r = await fetch(OPS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(op),
-        });
-      } catch {
-        rollback();
+        let r: Response;
+        try {
+          r = await fetch(OPS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(op),
+          });
+        } catch {
+          rollback();
+          pendingRef.current = null;
+          const message = "Could not reach the server. Check the connection and try again.";
+          setError(message);
+          throw new Error(message);
+        }
+        if (!r.ok) {
+          rollback();
+          pendingRef.current = null;
+          const j = (await r.json().catch(() => ({}))) as { error?: string };
+          const message = j.error ?? "Could not change the workspace. Try again.";
+          setError(message);
+          throw new Error(message);
+        }
+        const answer = (await r.json()) as { workspace: Workspace; location?: WorkspaceLocation | null };
+        adopt(answer.workspace);
         pendingRef.current = null;
-        const message = "Could not reach the server. Check the connection and try again.";
-        setError(message);
-        throw new Error(message);
+        setError(null);
+        return { workspace: answer.workspace, location: answer.location ?? guess.location ?? null };
+      } finally {
+        setInFlight((n) => n - 1);
       }
-      if (!r.ok) {
-        rollback();
-        pendingRef.current = null;
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        const message = j.error ?? "Could not change the workspace. Try again.";
-        setError(message);
-        throw new Error(message);
-      }
-      const answer = (await r.json()) as { workspace: Workspace; location?: WorkspaceLocation | null };
-      adopt(answer.workspace);
-      pendingRef.current = null;
-      setError(null);
-      return { workspace: answer.workspace, location: answer.location ?? guess.location ?? null };
     },
     [adopt, nextTemporaryId, setWorkspace],
   );
@@ -241,9 +254,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   if (read !== unreadPanes) setUnreadPanes(read);
   const unread = useMemo(() => unreadTabIds(workspace, unreadPanes), [workspace, unreadPanes]);
 
+  const pending = inFlight > 0;
   const value = useMemo<WorkspaceContextValue>(
-    () => ({ workspace, loaded, error, dismissError, apply, locate, focus, setFocus, unread, unreadPanes, markRead, keyOf }),
-    [workspace, loaded, error, dismissError, apply, locate, focus, unread, unreadPanes, markRead, keyOf],
+    () => ({ workspace, loaded, pending, error, dismissError, apply, locate, focus, setFocus, unread, unreadPanes, markRead, keyOf }),
+    [workspace, loaded, pending, error, dismissError, apply, locate, focus, unread, unreadPanes, markRead, keyOf],
   );
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { failingGithubSummary, githubSummary, setupPortal } from "./fixtures";
+import { failingGithubSummary, githubSummary, setupPortal, tabUrl } from "./fixtures";
 import type { GithubSummary } from "../../src/lib/types";
 
 const actionNames = [
@@ -93,11 +93,12 @@ test("source control reports clipboard failure without navigating", async ({
     document.execCommand = () => false;
   });
   const { panel } = await openInspector(page);
+  const before = page.url();
   await panel
     .getByRole("button", { name: "Copy PR link", exact: true })
     .click();
   await expect(panel.getByText("Copy failed", { exact: true })).toBeVisible();
-  await expect(page).toHaveURL(/\/sessions\/s3$/);
+  await expect(page).toHaveURL(before);
 });
 
 test("source control retains disabled rows and committed diff context without a PR", async ({
@@ -260,7 +261,8 @@ test("mobile source control keeps long names in bounds and closes after drafting
     .getByRole("button", { name: actionNames[1], exact: true })
     .click();
   await expect(panel).toHaveCount(0);
-  await expect(page).toHaveURL(/\/new$/);
+  // The draft lands on a start-page tab.
+  await expect(page).toHaveURL(tabUrl);
   await expect(
     page.getByRole("textbox", { name: "First message" }),
   ).toHaveValue(/PR #42/);

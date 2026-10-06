@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { portalItem, setupPortal } from "./fixtures";
+import { firstTitle, portalItem, setupPortal, thirdTitle } from "./fixtures";
 import { approval, globalEntity, helperJob, intent, intentJob, mainThread, memoryRecords, repoEntity, reviewThread } from "./orchestrator-fixtures";
+import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
 
 test.use({ viewport: { width: 390, height: 844 } });
 
@@ -85,5 +86,82 @@ test.describe("on a touch screen", () => {
     expect(prompts()).toHaveLength(0);
     await page.getByRole("button", { name: "Send message" }).click();
     await expect.poll(() => prompts().length).toBe(1);
+  });
+});
+
+test.describe("the workspace on a phone", () => {
+  /** One tab of its own, then a split of two: three panes flat (docs/WORKSPACE.md, decision 18). */
+  const threePanes = () => workspaceOf([tab("t1", pane("p1", "s1")), tab("t2", split("x1", "row", [pane("p2", "s2"), pane("p3", "s3")]))]);
+
+  test("the pane bar counts the flat list; chevrons and a swipe switch panes; the sheet lists, closes and opens them", async ({ page }) => {
+    const fixture = await setupPortal(page, { workspace: threePanes() });
+    await page.goto("/tabs/t1");
+    const bar = page.getByRole("group", { name: "Panes" });
+    const counter = bar.locator("[data-pane-counter]");
+    await expect(bar).toBeVisible();
+    await expect(counter).toHaveText("1 of 3");
+    await expect(bar.getByRole("button", { name: "Previous pane" })).toBeDisabled();
+    // No strip and no splits on a phone: one pane at a time.
+    await expect(page.getByRole("tablist", { name: "Workspace tabs" })).toHaveCount(0);
+    await expect(page.locator("[data-pane]")).toHaveCount(1);
+    await bar.getByRole("button", { name: "Next pane" }).click();
+    await expect(page).toHaveURL(/\/tabs\/t2\?pane=p2$/);
+    await expect(counter).toHaveText("2 of 3");
+    await expect(page.locator('[data-pane="p2"]')).toBeVisible();
+    await expect(page.locator('[data-pane="p1"]')).toHaveCount(0);
+
+    // A swipe to the left on the bar pulls the next pane in; a swipe is not a tap, so no sheet.
+    const title = bar.locator("[data-pane-bar-title]");
+    const box = (await title.boundingBox())!;
+    const y = box.y + box.height / 2;
+    const swipe = async (from: number, to: number) => {
+      await page.mouse.move(from, y);
+      await page.mouse.down();
+      await page.mouse.move(to, y, { steps: 8 });
+      await page.mouse.up();
+    };
+    await swipe(box.x + box.width * 0.8, box.x + box.width * 0.2);
+    await expect(counter).toHaveText("3 of 3");
+    await expect(page).toHaveURL(/\/tabs\/t2\?pane=p3$/);
+    await expect(bar.getByRole("button", { name: "Next pane" })).toBeDisabled();
+    await expect(page.getByRole("dialog", { name: "Panes" })).toHaveCount(0);
+    // And back to the right.
+    await swipe(box.x + box.width * 0.2, box.x + box.width * 0.8);
+    await expect(counter).toHaveText("2 of 3");
+    await expect(page).toHaveURL(/\/tabs\/t2\?pane=p2$/);
+
+    // A tap on the title opens the sheet: every pane in order, the current one marked.
+    await title.click();
+    const sheet = page.getByRole("dialog", { name: "Panes" });
+    await expect(sheet).toBeVisible();
+    await expect(sheet.locator("[data-pane-row]")).toHaveCount(3);
+    await expect(sheet.locator("[data-pane-row][data-current]")).toHaveAttribute("data-pane-row", "p2");
+    // Closing a pane from the sheet removes it from its split, for every device (decision 19).
+    await sheet.getByRole("button", { name: `Close pane ${thirdTitle}` }).click();
+    await expect(sheet.locator("[data-pane-row]")).toHaveCount(2);
+    // (The modal sheet hides the bar from role queries while it is open; the attribute still reads.)
+    await expect(page.locator("[data-pane-bar] [data-pane-counter]")).toHaveText("2 of 2");
+    expect(fixture.requests.filter((request) => request.path === "/api/workspace/ops").map((request) => request.body)).toEqual([
+      { op: "close_pane", paneId: "p3" },
+    ]);
+    // Tapping a row shows that pane and closes the sheet.
+    // The row's own button (its close button carries the title too).
+    await sheet.locator('[data-pane-row="p1"]').getByRole("button", { name: firstTitle }).first().click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page).toHaveURL(/\/tabs\/t1$/);
+    await expect(counter).toHaveText("1 of 2");
+    await expect(page.locator('[data-pane="p1"]')).toBeVisible();
+  });
+
+  test("the pane bar hides while the on-screen keyboard is up", async ({ page }) => {
+    await setupPortal(page, { workspace: threePanes() });
+    await page.goto("/tabs/t1");
+    const bar = page.getByRole("group", { name: "Panes" });
+    await expect(bar).toBeVisible();
+    // The keyboard: the visual viewport loses more than 150 px of height at the same width.
+    await page.setViewportSize({ width: 390, height: 500 });
+    await expect(bar).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(bar).toBeVisible();
   });
 });

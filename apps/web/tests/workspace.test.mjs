@@ -4,6 +4,7 @@ import { applyWorkspaceOp, EMPTY_WORKSPACE } from "@portal/shared/workspace";
 import {
   advancedSessions,
   arrangeOp,
+  canSplitPane,
   flatPanes,
   iconCells,
   idAliases,
@@ -124,6 +125,26 @@ test("arrange from a tab lists only as many sessions as the preset holds, so the
   assert.deepEqual(arrangeOp(tab, "grid-2x2").sessionIds, ["a", "b", "c"]);
   const after = applyWorkspaceOp(ws, arrangeOp(tab, "single"), ids()).workspace;
   assert.deepEqual(after.tabs.map((t) => flatPanes({ tabs: [t], version: 0 }).map(({ pane }) => pane.sessionId)), [["a"], ["b"], ["c"]]);
+});
+
+test("canSplitPane says no where the reducer would refuse: a full tab, or a third level of nesting", () => {
+  const grid = build([{ op: "arrange", sessionIds: ["a", "b"], preset: "grid-2x2" }]);
+  const [g] = grid.tabs;
+  for (const { pane } of flatPanes(grid)) {
+    assert.equal(canSplitPane(grid, g.id, pane.id, "right"), false);
+    assert.equal(canSplitPane(grid, g.id, pane.id, "bottom"), false);
+  }
+  const beside = build([{ op: "arrange", sessionIds: ["a", "b", "c"], preset: "one-beside-two" }]);
+  const [t] = beside.tabs;
+  const [p1, p2] = flatPanes(beside).map(({ pane }) => pane);
+  // p1 under the root row: a sibling to its right, or a column in its place, both fit.
+  assert.equal(canSplitPane(beside, t.id, p1.id, "right"), true);
+  assert.equal(canSplitPane(beside, t.id, p1.id, "bottom"), true);
+  // p2 in the column under the row: another row inside would be three deep; a sibling below fits.
+  assert.equal(canSplitPane(beside, t.id, p2.id, "right"), false);
+  assert.equal(canSplitPane(beside, t.id, p2.id, "bottom"), true);
+  // Unknown ids are a refusal too, not a throw.
+  assert.equal(canSplitPane(beside, t.id, "gone", "right"), false);
 });
 
 test("the neighbour of a closing tab is the one to its right, else its left", () => {

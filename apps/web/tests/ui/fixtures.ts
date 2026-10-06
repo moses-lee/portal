@@ -80,6 +80,7 @@ export const firstTitle =
   "Improve the chat experience and simplify the agent settings";
 export const secondTitle =
   "Investigate long session titles overlapping the pin icon";
+export const thirdTitle = "Review the pull request and its checks";
 /** A list entry that also carries the slash commands, as the fixture stream's `meta` sends them. */
 export type FixtureSession = SessionSummary & { state: SessionState };
 
@@ -167,7 +168,7 @@ export function makeSession(
 export const sessions = [
   makeSession("s1", firstTitle),
   makeSession("s2", secondTitle, "codex"),
-  makeSession("s3", "Review the pull request and its checks", "codex", project),
+  makeSession("s3", thirdTitle, "codex", project),
 ];
 /**
  * Eight conversations in `project`, most recently active first, and one in the worktree: enough to
@@ -415,8 +416,20 @@ declare global {
       tracked: TrackedSession[];
       workspace: Workspace;
     };
+    /**
+     * Later copies of `__portalLive` fields, installed by init scripts the fixture adds after setup
+     * (the workspace after an op), so a reload replays the current state rather than the snapshot
+     * `setupPortal` captured. Init scripts run in no promised order, so both sides merge.
+     */
+    __portalLiveOverride?: Partial<Window["__portalLive"]>;
   }
 }
+
+/**
+ * The URL of a tab the fixture's op handler opened (`/tabs/w<n>`): where a session or start page
+ * lands now that `/sessions/<id>` and `/new` resolve into the workspace (docs/WORKSPACE.md, decision 7).
+ */
+export const tabUrl = /\/tabs\/w\d+$/;
 
 export async function emit(
   page: Page,
@@ -519,6 +532,18 @@ export async function setupPortal(
     workspace: structuredClone(options.workspace ?? EMPTY_WORKSPACE),
   };
   let workspaceIds = 0;
+  /**
+   * Adopt `next` as the server's workspace and push it on the stream, as the server does after an op
+   * or another device's edit; a reload replays it too (the init script's snapshot is overridden).
+   */
+  const publishWorkspace = async (next: Workspace) => {
+    live.workspace = next;
+    await page.addInitScript((workspace) => {
+      window.__portalLiveOverride = { ...(window.__portalLiveOverride ?? {}), workspace };
+      if (window.__portalLive) window.__portalLive.workspace = workspace;
+    }, next);
+    await page.evaluate((workspace) => window.__portalEmit("/api/portal/stream", { type: "workspace", workspace }, "message"), next);
+  };
   const orch = {
     threadMessages: structuredClone(options.portal?.threadMessages ?? {}),
     jobs: structuredClone(options.portal?.jobs ?? []),
@@ -546,7 +571,7 @@ export async function setupPortal(
   await page.addInitScript(
     ({ sessions, live }) => {
       window.__portalSessions = sessions;
-      window.__portalLive = live;
+      window.__portalLive = Object.assign(live, window.__portalLiveOverride ?? {});
       const sources = new Set<PreviewEventSource>();
       class PreviewEventSource extends EventTarget {
         url: string;
@@ -677,10 +702,7 @@ export async function setupPortal(
         if (op.op === "open" && op.sessionId !== null && !currentSessions.some((session) => session.id === op.sessionId))
           return json({ error: `Unknown session "${op.sessionId}".` }, 404);
         const result = applyWorkspaceOp(live.workspace, op, () => `w${++workspaceIds}`);
-        if (result.changed) {
-          live.workspace = { ...result.workspace, version: live.workspace.version + 1 };
-          await page.evaluate((workspace) => window.__portalEmit("/api/portal/stream", { type: "workspace", workspace }, "message"), live.workspace);
-        }
+        if (result.changed) await publishWorkspace({ ...result.workspace, version: live.workspace.version + 1 });
         return json({ workspace: live.workspace, ...(result.location ? { location: result.location } : {}) });
       } catch (error) {
         const status = error instanceof WorkspaceError ? (error.code === "not_found" ? 404 : error.code === "refused" ? 409 : 400) : 400;
@@ -1001,6 +1023,12 @@ export async function setupPortal(
       );
       return release;
     },
+    /**
+     * Another device (or the orchestrator) changed the workspace: the server's copy becomes
+     * `workspace` and the stream delivers it. Its `version` must exceed the current one or the
+     * provider ignores it, as it would a stale copy.
+     */
+    pushWorkspace: publishWorkspace,
     /** The mocked server's orchestrator data, for asserting what a request changed. */
     orchestrator: orch,
     /** What the stream opened with (status, items, threads, intents, approvals); the mocked routes read it too. */
