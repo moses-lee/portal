@@ -13,6 +13,7 @@ import {
 import { writeDraft } from "@/lib/drafts";
 import { forgetPromptHistory, sessionHistoryKey } from "@/lib/prompt-history";
 import { PAGE_TURNS, createHistoryCache, type HistoryCache } from "@/lib/history-cache";
+import { createSessionStreamHub, type SessionStreamHub } from "@/lib/session-stream-hub";
 import type {
   AgentInfo,
   EventPage,
@@ -47,6 +48,8 @@ export type Sessions = {
   refetchSessions: (signal?: AbortSignal) => Promise<SessionSummary[]>;
   /** Reduced transcripts of visited (and hovered) sessions, shared by every session view. */
   historyCache: HistoryCache;
+  /** The one stream every session view's events arrive on (see `@/lib/session-stream-hub`). */
+  sessionStreams: SessionStreamHub;
   /** `PUT /api/portal/tracked/:id`; rejects with the server's message. */
   track: (id: string) => Promise<void>;
   /** `DELETE /api/portal/tracked/:id`; rejects with the server's message. */
@@ -101,6 +104,8 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   /** Sessions untracked here before any full set arrived; the REST read skips them. */
   const untrackedEarly = useRef(new Set<string>());
   const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
+  const [sessionStreams] = useState(() => createSessionStreamHub());
+  useEffect(() => () => sessionStreams.close(), [sessionStreams]);
 
   const refetchSessions = useCallback(async (signal?: AbortSignal) => {
     const r = await fetch("/api/sessions", { signal });
@@ -319,11 +324,12 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       removeSession,
       refetchSessions,
       historyCache,
+      sessionStreams,
       track,
       untrack,
       renameSession,
     }),
-    [agents, defaultAgentId, sessions, tracked, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, track, untrack, renameSession],
+    [agents, defaultAgentId, sessions, tracked, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, sessionStreams, track, untrack, renameSession],
   );
   return <SessionsContext.Provider value={value}>{children}</SessionsContext.Provider>;
 }

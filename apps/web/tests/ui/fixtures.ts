@@ -577,9 +577,14 @@ export async function setupPortal(
         url: string;
         closed = false;
         onmessage: ((event: MessageEvent) => void) | null = null;
+        /** The sessions a multiplexed `/api/sessions/streams?ids=…` source carries; null for the other streams. */
+        sessionIds: string[] | null;
         constructor(url: string) {
           super();
           this.url = url;
+          this.sessionIds = url.startsWith("/api/sessions/streams?")
+            ? (new URL(url, location.origin).searchParams.get("ids") ?? "").split(",").filter(Boolean)
+            : null;
           sources.add(this);
           setTimeout(() => {
             if (this.closed) return;
@@ -588,7 +593,13 @@ export async function setupPortal(
                 { type: "snapshot", sessions: window.__portalSessions },
                 "message",
               );
-            else if (url === "/api/portal/stream") {
+            else if (this.sessionIds) {
+              // Like the server: each session's `meta` on connect, tagged with its id.
+              for (const id of this.sessionIds) {
+                const session = window.__portalSessions.find((s) => s.id === id);
+                if (session) this.send({ sessionId: id, ...session }, "meta");
+              }
+            } else if (url === "/api/portal/stream") {
               this.send({ type: "status", status: window.__portalLive.status }, "message");
               this.send({ type: "items", items: window.__portalLive.items }, "message");
               this.send({ type: "threads", threads: window.__portalLive.threads }, "message");
@@ -622,8 +633,18 @@ export async function setupPortal(
         value: PreviewEventSource,
       });
       window.__portalEmit = (match, data, type = "meta", seq = 0) => {
-        for (const source of sources)
+        // A session's own stream path (`/api/sessions/<id>/stream`) also names its frames on the
+        // multiplexed stream, where they carry the session id (and a message its seq).
+        const sessionId = match.match(/^\/api\/sessions\/([^/]+)\/stream$/)?.[1];
+        for (const source of sources) {
           if (source.url.includes(match)) source.send(data, type, seq);
+          else if (sessionId && source.sessionIds?.includes(sessionId))
+            source.send(
+              { sessionId, ...(data as Record<string, unknown>), ...(type === "message" ? { seq } : {}) },
+              type,
+              seq,
+            );
+        }
       };
     },
     { sessions: currentSessions, live },

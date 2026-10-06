@@ -28,7 +28,6 @@ import type {
   SessionSummary,
   SetConfigRequest,
   StoredEvent,
-  StreamedEvent,
 } from "@/lib/types";
 import {
   appendEvent,
@@ -123,7 +122,7 @@ export function useSessionStream(
   historyCache: HistoryCache,
   { onDeleted, onSubmit, sendBlocked = false }: SessionStreamOptions = {},
 ) {
-  const { sessions, updateSession } = useSessions();
+  const { sessions, updateSession, sessionStreams } = useSessions();
   const session: SessionSummary | undefined = sessionId
     ? sessions.find((s) => s.id === sessionId)
     : undefined;
@@ -200,14 +199,16 @@ export function useSessionStream(
     setStopping(false);
   }
 
-  // Load the newest page, then follow the live tail. Opening the stream also asks the server to
-  // reattach the agent when the session was persisted by an earlier run.
+  // Load the newest page, then follow the live tail on the page's shared session stream (see
+  // `@/lib/session-stream-hub`). Subscribing also asks the server to reattach the agent when the
+  // session was persisted by an earlier run.
   useEffect(() => {
     currentIdRef.current = sessionId;
     if (loadedForRef.current !== sessionId) loadedForRef.current = null;
     if (!sessionId) return;
     const controller = new AbortController();
-    let es: EventSource | null = null;
+    /** Ends the current subscription; null before the first page has loaded. */
+    let unsubscribe: (() => void) | null = null;
     // Streamed events are applied once per animation frame: an agent sends many small chunks a
     // second, and each `setHistory` is a render of the live turn.
     let pending: StoredEvent[] = [];
@@ -264,36 +265,23 @@ export function useSessionStream(
         cursorRef.current = entry.cursor;
         loadedForRef.current = sessionId;
         setHistory(entry.history);
-        es?.close();
-        const mine = new EventSource(
-          sessionUrl(sessionId, `/stream?since=${entry.cursor}`),
-        );
-        es = mine;
-        mine.onmessage = (m) => {
-          if (es !== mine) return;
-          const ev = JSON.parse(m.data) as StreamedEvent;
-          const seq = Number(m.lastEventId);
-          cursorRef.current = Math.max(cursorRef.current, seq);
-          // `appendEvent` drops an event the history already holds (a replay after reconnect).
-          // The server stamps each event with its logged time; an older server sent none.
-          pending.push({ ...ev, seq, ts: typeof ev.ts === "number" ? ev.ts : Date.now() });
-          frame ??= requestAnimationFrame(flushEvents);
-        };
-        mine.addEventListener("meta", (m) => {
-          if (es === mine)
-            applyMeta(
-              JSON.parse((m as MessageEvent).data) as Partial<SessionMetaEvent>,
-            );
-        });
-        // The server no longer holds the events between our cursor and now: start over from a fresh page.
-        mine.addEventListener("reset", () => {
-          if (es === mine) void open({ fresh: true });
-        });
-        mine.addEventListener("deleted", () => {
-          if (es !== mine) return;
-          mine.close();
-          historyCache.delete(sessionId);
-          sessionDeleted(sessionId);
+        unsubscribe?.();
+        unsubscribe = sessionStreams.subscribe(sessionId, entry.cursor, {
+          onEvent: (seq, ev) => {
+            cursorRef.current = Math.max(cursorRef.current, seq);
+            // `appendEvent` drops an event the history already holds (a replay after reconnect).
+            // The server stamps each event with its logged time; an older server sent none.
+            pending.push({ ...ev, seq, ts: typeof ev.ts === "number" ? ev.ts : Date.now() });
+            frame ??= requestAnimationFrame(flushEvents);
+          },
+          onMeta: applyMeta,
+          // The server no longer holds the events between our cursor and now: start over from a fresh page.
+          onReset: () => void open({ fresh: true }),
+          // The subscription has ended with the session; the cache entry goes with it.
+          onDeleted: () => {
+            historyCache.delete(sessionId);
+            sessionDeleted(sessionId);
+          },
         });
       } catch {
         if (!controller.signal.aborted)
@@ -307,12 +295,12 @@ export function useSessionStream(
     void open();
     return () => {
       controller.abort();
-      es?.close();
-      es = null;
+      unsubscribe?.();
+      unsubscribe = null;
       if (frame !== null) cancelAnimationFrame(frame);
       pending = [];
     };
-  }, [sessionId, updateSession, sessionDeleted, historyCache]);
+  }, [sessionId, updateSession, sessionDeleted, historyCache, sessionStreams]);
 
   // Keep the cache entry current so the next visit starts from this history and cursor.
   useEffect(() => {
