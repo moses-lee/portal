@@ -21,12 +21,14 @@ function setup({ worldStore = createMemoryWorldStore(), ...options } = {}) {
   });
   const events = [];
   const timers = fakeTimers();
+  // The workspace as get_world reads it beside the world; tests put tabs in it.
+  const workspace = { tabs: [], version: 0 };
   const hub = {
     deps, store: createMemoryOrchestratorStore(), timers, db: null, sql: null, emit: (event) => events.push(event),
-    jobs: { listIntents: async () => [] },
+    jobs: { listIntents: async () => [] }, workspace: { read: async () => workspace },
   };
   hub.world = createWorldService(hub, { store: worldStore, ...options });
-  return { hub, world: hub.world, deps, state, events, timers, worldStore };
+  return { hub, world: hub.world, deps, state, events, timers, worldStore, workspace };
 }
 
 test("refresh builds with GitHub, stores the build, and emits world; current answers from memory while fresh", async () => {
@@ -117,7 +119,7 @@ test("a store that fails does not fail the refresh", async (t) => {
 });
 
 test("chat turns get all five world tools, background turns only resolve_pull and resolve_repo; the tools answer from the world", async () => {
-  const { world, hub } = setup();
+  const { world, hub, workspace } = setup();
   await world.refresh("tick");
   const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
   const chat = world.tools({ interactive: true, deps: hub.deps, hub, turn });
@@ -132,6 +134,10 @@ test("chat turns get all five world tools, background turns only resolve_pull an
   assert.equal((await chat.resolve_session.execute({ query: "login" }, {})).match.id, "s1");
   const text = await chat.get_world.execute({}, {});
   assert.match(text.text, /acme\/monorepo/);
+  assert.doesNotMatch(text.text, /Workspace tabs/, "an empty workspace has no section");
+  workspace.tabs.push({ id: "tab-aaaa-1111", title: null, titleSource: null, createdAt: T0, root: { kind: "pane", id: "pane-1", sessionId: "s1" } });
+  const withTabs = await chat.get_world.execute({}, {});
+  assert.match(withTabs.text, /\nWorkspace tabs:\n- "Fix the login bug" \[tab-aaaa\]: s1 \(\w+\)\n/, "get_world reads the workspace beside the world, as the prompt's section does");
   const slice = await chat.get_world.execute({ scope: "repos" }, {});
   assert.deepEqual(slice.repos, [{ repo: "acme/monorepo", defaultBranch: "main", projectIds: ["p1"] }]);
   assert.equal(slice.truncated, false);

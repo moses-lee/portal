@@ -1,7 +1,8 @@
 /**
  * The workspace tools a chat turn always has (the `workspace` tool group), none on background turns:
  * `get_workspace` (read-only), `open_in_workspace`, `arrange_tab`, `close_in_workspace`, and
- * `rename_tab`. Every edit goes through the workspace service as `portal`, which logs it with the
+ * `rename_tab`. A background turn that names its tools (a helper, a scheduled job) can get
+ * `get_workspace`, never the four writers (decision 14). Every edit goes through the workspace service as `portal`, which logs it with the
  * turn's run and thread and pushes the new workspace to every page. Session ids resolve through
  * `requireSession` (a full id or a unique 4+ character prefix); tab ids the same way through
  * `pickById`. Results that open or arrange carry the tab's id and its path (`/tabs/<id>`), which the
@@ -17,7 +18,7 @@ import { pickById } from "../ids.ts";
 import { requireSession } from "../ops.ts";
 import { define } from "../tools/context.ts";
 import { sessionRow } from "../tools/sessions.ts";
-import { SHORT_ID } from "../world/render.ts";
+import { shortId } from "../world/render.ts";
 import { describeView } from "./view.ts";
 
 const sessionId = z.string().min(1);
@@ -26,7 +27,6 @@ const tabTitle = z.string().trim().min(1).max(WORKSPACE_TAB_TITLE_MAX);
 const preset = z.enum(["single", "columns-2", "columns-3", "rows-2", "grid-2x2", "one-beside-two"]);
 const edge = z.enum(["left", "right", "top", "bottom"]);
 
-const shortId = (id: string) => id.slice(0, SHORT_ID);
 const tabPath = (id: string) => `/tabs/${id}`;
 
 /** A layout as one line: `pane`, `row[pane, column[pane, pane]]`. */
@@ -40,7 +40,7 @@ export function workspaceTools(ctx: DomainToolContext): ToolSet {
   const context = () => ({ runId: ctx.turn.runId, ...(ctx.turn.threadId ? { threadId: ctx.turn.threadId } : {}) });
   const pickTab = (workspace: Workspace, id: string): Tab => pickById(workspace.tabs, id, "tab", (tab) => tab.title, "tabId");
 
-  return {
+  const reading: ToolSet = {
     get_workspace: define(
       "The workspace: the user's tabs in order, each with its name, shape (row[pane, column[pane, pane]]) and panes (session short id, title, live state; a pane with no session is the start page), plus what the user is looking at as they sent this message. Read-only.",
       z.object({}),
@@ -71,10 +71,19 @@ export function workspaceTools(ctx: DomainToolContext): ToolSet {
         };
       },
     ),
+  };
+  // Decision 14: only the conversation where the user asked edits the workspace. `interactive` is
+  // overridden to true for a turn that names its tools (a helper, a scheduled job), so the writers
+  // hang on the turn's real origin; such a turn may still read.
+  if (ctx.turn.origin !== "chat") return reading;
+
+  return {
+    ...reading,
     open_in_workspace: define(
       "Open a session in the workspace: in a new tab at the end, or (besideSessionId) split the pane that holds that session, on its right unless edge says otherwise. A session already open is left where it is. Returns the tab and its path; link the path in your reply, the user decides when to look.",
       z.object({ sessionId, besideSessionId: sessionId.optional(), edge: edge.optional() }),
       async (input) => {
+        if (input.edge && !input.besideSessionId) throw new Error("edge says where to split beside a session; pass besideSessionId with it, or leave edge out to open a new tab.");
         const id = (await requireSession(deps, input.sessionId)).id;
         let target: { tabId: string; paneId: string; edge: z.infer<typeof edge> } | undefined;
         if (input.besideSessionId) {

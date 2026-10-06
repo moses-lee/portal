@@ -49,8 +49,8 @@ function until(at: number, now: number): string {
   return `in ${Math.round(minutes / 1440)}d`;
 }
 
-/** One line of text, shortened to `max` characters. */
-function clip(text: string, max = 80): string {
+/** One line of text, shortened to `max` characters; what every untrusted title goes through before it reaches a prompt. */
+export function clip(text: string, max = 80): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }

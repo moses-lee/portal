@@ -7,7 +7,11 @@ import type { SessionMeta } from "../../lib/types.ts";
 import type { Workspace, WorkspaceView } from "@portal/contracts/workspace";
 import { defaultTabTitle, findTab, tabPanes } from "@portal/shared/workspace";
 import { httpError } from "../../http/errors.ts";
-import { SHORT_ID } from "../world/render.ts";
+import { clip, shortId } from "../world/render.ts";
+
+/** Session titles and tab names are the user's (or an agent's) text: clipped in the sentence as the World section clips them. */
+const TITLE_MAX = 60;
+const TAB_NAME_MAX = 50;
 
 /** `view` from a message body, or a 400: each of `sessionId`, `tabId`, `paneId` a non-empty string or null (absent counts as null). */
 export function parseView(input: unknown): WorkspaceView {
@@ -42,7 +46,7 @@ export function describeView(view: WorkspaceView, workspace: Workspace | null, t
   const title = found === undefined ? "no longer exists" : found?.trim() || "Untitled";
   const tab = view.tabId && workspace ? findTab(workspace, view.tabId) : null;
   const tabName = tab ? defaultTabTitle(tab, (id) => titleOf(id)?.trim() || null) : null;
-  const text = `session ${view.sessionId.slice(0, SHORT_ID)} (${title})${tabName === null ? "" : `, in tab "${tabName}"`}.`;
+  const text = `session ${shortId(view.sessionId)} (${clip(title, TITLE_MAX)})${tabName === null ? "" : `, in tab "${clip(tabName, TAB_NAME_MAX)}"`}.`;
   return { sessionId: view.sessionId, title: found?.trim() || null, tabId: tab?.id ?? null, tabName, paneId: view.paneId, text };
 }
 

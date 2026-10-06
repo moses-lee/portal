@@ -105,7 +105,9 @@ export function worldTools(ctx: DomainToolContext, source: WorldToolSource, look
       async ({ scope, detail, refresh }) => {
         const current = refresh ? await source.refresh("tool") : await world();
         if (!scope) {
-          return { at: current.at, text: source.render(current, { budgetTokens: detail ? GET_WORLD_DETAIL_TOKENS : GET_WORLD_TOKENS, scope: ctx.turn.scope }) };
+          // The Workspace tabs section reads the workspace service directly: the workspace is neither snapshotted nor diffed.
+          const workspace = await ctx.hub.workspace.read().catch(() => null);
+          return { at: current.at, text: source.render(current, { budgetTokens: detail ? GET_WORLD_DETAIL_TOKENS : GET_WORLD_TOKENS, scope: ctx.turn.scope, workspace }) };
         }
         const rows = current[scope] as unknown[];
         const limit = detail ? SLICE_DETAIL_ROWS : SLICE_ROWS;

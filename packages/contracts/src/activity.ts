@@ -35,9 +35,11 @@ export type ActivityActor = "user" | "agent" | "system";
  * and `detail.branchDeleted`) and carry `refs.projectId`.
  *
  * `workspace.*` entries come from the workspace service (docs/WORKSPACE.md), each with `detail.tabId` and
- * `refs.sessionId` where there is one: `workspace.opened` (a session or start page opened in a tab or
+ * `refs.sessionId` where there is one (the session opened or closed; for a tab closed or renamed, its
+ * only session): `workspace.opened` (a session or start page opened in a tab or
  * pane), `workspace.closed` (`detail.what`: "tab" or "pane"), `workspace.arranged` (`detail.preset`,
- * `detail.sessionIds`), `workspace.renamed` (`detail.from`, `detail.to`). `resize` and `move_tab` are
+ * `detail.sessionIds`), `workspace.renamed` (`detail.from`, `detail.to`). `detail.actor` says who asked:
+ * "user" (the workspace routes) or "portal" (the orchestrator's tools). `resize` and `move_tab` are
  * not logged.
  *
  * `item.resolved` and `item.dismissed` from the bulk route (`POST /api/portal/items/bulk`) are one

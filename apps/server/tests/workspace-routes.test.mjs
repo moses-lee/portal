@@ -139,15 +139,30 @@ test("400 for a malformed op, 404 for an unknown session, tab, or pane, 409 when
   const duplicate = await post({ op: "arrange", sessionIds: ["s1", "s1"], preset: "columns-2" });
   assert.equal(duplicate.statusCode, 409);
   assert.deepEqual(duplicate.json(), { error: "A session can be open in only one pane." });
-  const { location } = (await post({ op: "arrange", sessionIds: ["s1"], preset: "single", title: "Mine", source: "user" })).json();
-  const overUser = await post({ op: "rename_tab", tabId: location.tabId, title: "Portal's", source: "portal" });
-  assert.equal(overUser.statusCode, 409);
-  assert.deepEqual(overUser.json(), { error: 'The user named this tab "Mine"; Portal does not rename it.' });
+  const { location } = (await post({ op: "arrange", sessionIds: ["s1"], preset: "single", title: "Mine" })).json();
   const tooLong = await post({ op: "rename_tab", tabId: location.tabId, title: "x".repeat(61), source: "user" });
   assert.equal(tooLong.statusCode, 400);
 
   assert.equal((await read()).version, 1, "only the arrange was written");
   assert.equal(events.length, 1, "refused ops push nothing");
+});
+
+test("the routes act as the user whatever the body claims: a rename or an arrange's title is the user's, so the orchestrator cannot rename over it", async (t) => {
+  const { ctx, post, read, activity } = await setup(t);
+  const arranged = await post({ op: "arrange", sessionIds: ["s1"], preset: "single", title: "Mine", titleSource: "portal" });
+  assert.equal(arranged.statusCode, 200, arranged.body);
+  const { tabId } = arranged.json().location;
+  assert.deepEqual((await read()).tabs.map((tab) => [tab.title, tab.titleSource]), [["Mine", "user"]], "titleSource is stamped user over the body's portal");
+
+  const renamed = await post({ op: "rename_tab", tabId, title: "Still mine", source: "portal" });
+  assert.equal(renamed.statusCode, 200, renamed.body);
+  assert.deepEqual((await read()).tabs.map((tab) => [tab.title, tab.titleSource]), [["Still mine", "user"]], "source is stamped user: the user may rename their own tab");
+  assert.deepEqual((await activity()).map((entry) => [entry.kind, entry.detail.actor]), [["workspace.renamed", "user"], ["workspace.arranged", "user"]]);
+
+  await assert.rejects(ctx.orchestrator.hub.workspace.apply({ op: "rename_tab", tabId, title: "Portal's", source: "portal" }, "portal"), /The user named this tab "Still mine"/, "the service still refuses Portal");
+  const untitled = await post({ op: "arrange", sessionIds: ["s2"], preset: "single", titleSource: "portal" });
+  assert.equal(untitled.statusCode, 200, untitled.body);
+  assert.deepEqual((await read()).tabs.at(-1).titleSource, null, "no title, no stamp");
 });
 
 test("structural ops are logged as workspace.* entries by the user; move_tab and resize are not", async (t) => {

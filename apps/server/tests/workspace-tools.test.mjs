@@ -70,6 +70,9 @@ test("the five workspace tools are a chat turn's always-on group; get_workspace 
   for (const name of names.slice(1)) assert.ok(!READ_ONLY_TOOLS.has(name), `${name} changes things`);
   const { ctx } = setup({ interactive: false });
   assert.deepEqual(workspaceTools(ctx), {}, "a background turn offers no workspace tools");
+  // A turn that names its tools (a helper, a scheduled job) is built with interactive overridden to true; its origin still says job.
+  const named = setup();
+  assert.deepEqual(Object.keys(workspaceTools({ ...named.ctx, turn: { ...named.ctx.turn, origin: "job" } })), ["get_workspace"], "a background turn naming its tools can read the workspace, never edit it");
 });
 
 test("open_in_workspace takes an id prefix, opens a new tab with its path, logs as Portal, and says when the session was already open", async (t) => {
@@ -96,6 +99,8 @@ test("open_in_workspace takes an id prefix, opens a new tab with its path, logs 
   assert.match((await run(tools.open_in_workspace, { sessionId: "5e0f" })).error, /ambiguous: 2 sessions start with it/);
   assert.match((await run(tools.open_in_workspace, { sessionId: "zzzz" })).error, /^No session has id "zzzz"/);
   assert.equal((await run(tools.open_in_workspace, { sessionId: "" })).invalidInput, true);
+  assert.match((await run(tools.open_in_workspace, { sessionId: FIRST, edge: "left" })).error, /^edge says where to split beside a session; pass besideSessionId with it/, "an edge without a session to split beside is an error, not a silent new tab");
+  assert.equal(events.length, 1, "and opens nothing");
 });
 
 test("open_in_workspace beside a session splits its pane on the given edge; get_workspace shows the shape, names, states, and the view", async () => {
@@ -185,7 +190,11 @@ test("rename_tab renames as Portal by id or prefix and is refused, with a note, 
   assert.deepEqual(renamed, { tabId, title: "Auth review", path: `/tabs/${tabId}` });
   assert.deepEqual(activity.at(-1).detail, { actor: "portal", tabId, from: null, to: "Auth review" });
   assert.equal(activity.at(-1).kind, "workspace.renamed");
+  assert.deepEqual(activity.at(-1).refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" }, "the tab's only session is the entry's, like a closed tab's");
   assert.deepEqual(await run(tools.rename_tab, { tabId, title: "Auth review" }), { tabId, title: "Auth review", path: `/tabs/${tabId}`, note: "It already had that name." });
+  await run(tools.open_in_workspace, { sessionId: FIRST, besideSessionId: REVIEW });
+  await run(tools.rename_tab, { tabId, title: "Auth pair" });
+  assert.deepEqual(activity.at(-1).refs, { runId: "run1", threadId: "main" }, "two sessions, no session ref");
 
   await hub.workspace.apply({ op: "rename_tab", tabId, title: "Mine", source: "user" }, "user");
   const refused = await run(tools.rename_tab, { tabId, title: "Portal's pick" });

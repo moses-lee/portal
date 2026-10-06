@@ -91,6 +91,19 @@ test("a corrupt or foreign row reads as the empty workspace, with a warning, and
   assert.deepEqual(await createMemoryWorkspaceStore("garbage", { warn: () => {} }).read(), EMPTY_WORKSPACE);
 });
 
+test("a corrupt row warns once per store, however many times it is read before something is written over it", async () => {
+  const warnings = [];
+  const store = createMemoryWorkspaceStore({ tabs: "no", version: 1 }, { warn: (message) => warnings.push(message) });
+  await store.read();
+  await store.read();
+  await store.mutate(() => null);
+  assert.equal(warnings.length, 1, warnings.join("\n"));
+  assert.match(warnings[0], /Stored workspace is invalid and was reset/);
+  const another = createMemoryWorkspaceStore({ tabs: "no", version: 1 }, { warn: (message) => warnings.push(message) });
+  await another.read();
+  assert.equal(warnings.length, 2, "another store (another process) warns on its own");
+});
+
 test("parseWorkspace passes a valid workspace through and resets anything else", () => {
   const valid = { tabs: [{ id: "t1", title: "Review", titleSource: "user", createdAt: 1, root: { kind: "pane", id: "p1", sessionId: "s1" } }], version: 3 };
   assert.deepEqual(parseWorkspace(valid), valid);

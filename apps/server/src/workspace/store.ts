@@ -45,8 +45,14 @@ export function parseWorkspace(raw: unknown, warn: (message: string) => void = (
   }
 }
 
-export function createWorkspaceStore(backend: WorkspaceBackend, { warn }: { warn?: (message: string) => void } = {}): WorkspaceStore {
-  const warnOnce = warn ?? ((message: string) => console.warn(message));
+export function createWorkspaceStore(backend: WorkspaceBackend, { warn = (message) => console.warn(message) }: { warn?: (message: string) => void } = {}): WorkspaceStore {
+  // A corrupt row is read on every operation until something is written over it; one warning says so, not one per read.
+  let warned = false;
+  const warnOnce = (message: string) => {
+    if (warned) return;
+    warned = true;
+    warn(message);
+  };
   const read = async () => parseWorkspace(await backend.load(), warnOnce);
 
   // One chain for every write so concurrent operations never interleave their read-modify-write.

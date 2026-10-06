@@ -15,6 +15,7 @@ import type { ActivityActor, ActivityRefs } from "@portal/contracts/activity";
 import type { Tab, Workspace, WorkspaceLocation, WorkspaceOp } from "@portal/contracts/workspace";
 import { WorkspaceError, applyWorkspaceOp, defaultTabTitle, findTab, locatePane, locateSession, tabPanes } from "@portal/shared/workspace";
 import type { OrchestratorHub } from "../orchestrator/hub.ts";
+import { errorMessage } from "../orchestrator/tools/context.ts";
 import type { WorkspaceStore } from "./store.ts";
 
 /** Who asked: the routes act as the user, the orchestrator's tools as Portal. */
@@ -34,7 +35,8 @@ export interface WorkspaceService {
   read(): Promise<Workspace>;
   /**
    * Apply one operation. Throws `WorkspaceError`: `invalid` for malformed input, `not_found` for an
-   * unknown tab, pane, split, or session, `refused` when the workspace's rules say no (a cap, a
+   * unknown tab, pane, split, or session (also one deleted while the operation ran: its pane is
+   * closed again, as the delete would have), `refused` when the workspace's rules say no (a cap, a
    * session listed twice, a `portal` rename over a `user` one); see `workspaceErrorStatus`.
    */
   apply(op: WorkspaceOp, actor: WorkspaceActor, context?: WorkspaceOpContext): Promise<WorkspaceApplyResult>;
@@ -48,10 +50,6 @@ export interface WorkspaceService {
 export function workspaceErrorStatus(err: unknown): number | null {
   if (!(err instanceof WorkspaceError)) return null;
   return err.code === "invalid" ? 400 : err.code === "not_found" ? 404 : 409;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** The session ids an operation must find in Portal before it runs. */
@@ -142,7 +140,7 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
         const from = findTab(before, op.tabId)?.title ?? null;
         const to = findTab(after, op.tabId)?.title ?? null;
         const summary = to === null ? `Cleared the name of tab "${from ?? op.tabId}"` : `Renamed tab "${from ?? "(default name)"}" to "${to}"`;
-        return { kind: "workspace.renamed", summary, sessionId: null, detail: { tabId: op.tabId, from, to } };
+        return { kind: "workspace.renamed", summary, sessionId: soleSession(findTab(after, op.tabId)), detail: { tabId: op.tabId, from, to } };
       }
       case "move_tab":
       case "resize":
@@ -182,9 +180,14 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
     read: () => store.read(),
     async apply(op, actor, context = {}) {
       // The reducer knows tabs and panes; whether a session exists is Portal's to say.
-      for (const sessionId of sessionsNamedBy(op)) {
-        if (!(await hub.deps.sessions.get(sessionId).catch(() => null))) throw new WorkspaceError("not_found", `No session has id "${sessionId}".`);
-      }
+      const named = sessionsNamedBy(op);
+      const missing = async () => {
+        const gone: string[] = [];
+        for (const sessionId of named) if (!(await hub.deps.sessions.get(sessionId).catch(() => null))) gone.push(sessionId);
+        return gone;
+      };
+      const [unknown] = await missing();
+      if (unknown) throw new WorkspaceError("not_found", `No session has id "${unknown}".`);
       let before: Workspace | null = null;
       let location: WorkspaceLocation | undefined;
       let changed = false;
@@ -195,6 +198,15 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
         changed = result.changed;
         return result.changed ? result.workspace : null;
       });
+      // A session deleted between that check and the write: its delete event ran the cascade
+      // before the pane existed, so the pane would stay, with nothing left to close it by session
+      // (the tracked service rechecks the same way). Close it now as the delete would have, one
+      // push and no entry, and answer as the check would have a moment earlier.
+      const vanished = await missing();
+      if (vanished.length > 0) {
+        for (const sessionId of vanished) await onSessionDeleted(sessionId);
+        throw new WorkspaceError("not_found", `No session has id "${vanished[0]}".`);
+      }
       if (changed) {
         push(workspace);
         const entry = await entryFor(op, before ?? workspace, workspace, location);

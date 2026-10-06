@@ -43,6 +43,17 @@ test("GET /api/portal/world builds the first world and then answers the stored o
   assert.equal(again.json().world.at, body.world.at);
   assert.equal(state.searches.length, 1, "the second request did not rebuild");
   assert.equal(await rows(database), 1);
+
+  // The rendering carries the Workspace tabs section the prompt would: the workspace is read beside the world.
+  assert.doesNotMatch(body.rendered, /Workspace tabs/, "no tabs, no section");
+  const opened = await app.inject({ method: "POST", url: "/api/workspace/ops", payload: { op: "open", sessionId: "s1" } });
+  assert.equal(opened.statusCode, 200, opened.body);
+  const withTabs = (await app.inject({ method: "GET", url: "/api/portal/world" })).json();
+  assert.match(withTabs.rendered, /\nWorkspace tabs:\n- "Fix the login bug" \[[0-9a-f]{8}\]: s1 \(\w+\)\n/);
+  assert.equal(withTabs.tokens, Math.ceil(withTabs.rendered.length / 4), "the token count covers the section");
+  assert.equal(withTabs.world.at, body.world.at, "no rebuild for it");
+  const refreshed = (await app.inject({ method: "POST", url: "/api/portal/world/refresh" })).json();
+  assert.match(refreshed.rendered, /Workspace tabs:/, "the refresh route renders it too");
 });
 
 test("POST /api/portal/world/refresh rebuilds and stores; both routes refuse cross-origin requests", async (t) => {
