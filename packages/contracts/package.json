@@ -13,7 +13,8 @@
     "./jobs": "./src/jobs.ts",
     "./world": "./src/world.ts",
     "./memory": "./src/memory.ts",
-    "./approvals": "./src/approvals.ts"
+    "./approvals": "./src/approvals.ts",
+    "./workspace": "./src/workspace.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.0",

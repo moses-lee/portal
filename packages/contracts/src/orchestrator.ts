@@ -25,12 +25,13 @@
  *   GET    /api/portal/tracked         { sessions: TrackedSession[] }
  *   PUT    /api/portal/tracked/:sessionId -> { session: TrackedSession }; 404 when the session does not exist
  *   DELETE /api/portal/tracked/:sessionId -> 204
- *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `tracked`
+ *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `tracked`, `workspace`
  */
 import type { UIMessage } from "ai";
 import type { ActivityEntry } from "./activity.ts";
 import type { Approval } from "./approvals.ts";
 import type { Intent, JobRun } from "./jobs.ts";
+import type { Workspace } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Settings (the pure settings module owns storage; these are the shapes it exposes)
@@ -424,4 +425,6 @@ export type OrchestratorEvent =
   | { type: "world"; at: number }
   | { type: "items"; items: Item[] }
   /** The tracked sessions changed (tracked, untracked, or deleted); the full list. */
-  | TrackedSessionsEvent;
+  | TrackedSessionsEvent
+  /** The workspace (tabs and panes) changed on any device or by the orchestrator; the whole thing. */
+  | { type: "workspace"; workspace: Workspace };

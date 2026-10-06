@@ -23,7 +23,8 @@ export type ActivityActor = "user" | "agent" | "system";
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
  * approval.requested · approval.decided · approval.executed · world.refreshed · session.tracked ·
- * session.untracked · session.renamed · worktree.kept · worktree.removed_idle
+ * session.untracked · session.renamed · worktree.kept · worktree.removed_idle · workspace.opened ·
+ * workspace.closed · workspace.arranged · workspace.renamed
  *
  * `session.tracked` and `session.untracked` carry `refs.sessionId` and `detail.trackedBy` (who:
  * "user" or "portal"), plus `detail.reason` when one was given. `session.renamed` (the
@@ -32,6 +33,12 @@ export type ActivityActor = "user" | "agent" | "system";
  * `worktree.kept` and `worktree.removed_idle` come from the lifecycle sweep (an idle worktree project
  * kept, with `detail.reason`, logged only when the reason changes; or removed, with `detail.branch`
  * and `detail.branchDeleted`) and carry `refs.projectId`.
+ *
+ * `workspace.*` entries come from the workspace service (docs/WORKSPACE.md), each with `detail.tabId` and
+ * `refs.sessionId` where there is one: `workspace.opened` (a session or start page opened in a tab or
+ * pane), `workspace.closed` (`detail.what`: "tab" or "pane"), `workspace.arranged` (`detail.preset`,
+ * `detail.sessionIds`), `workspace.renamed` (`detail.from`, `detail.to`). `resize` and `move_tab` are
+ * not logged.
  *
  * `item.resolved` and `item.dismissed` from the bulk route (`POST /api/portal/items/bulk`) are one
  * entry per batch: `detail.itemIds` lists the items, and `refs.itemId` is set only when there was one.

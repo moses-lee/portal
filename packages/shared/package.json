@@ -12,7 +12,8 @@
     "./scripts": "./src/scripts.ts",
     "./session-state": "./src/session-state.ts",
     "./settings": "./src/settings.ts",
-    "./transcript": "./src/transcript.ts"
+    "./transcript": "./src/transcript.ts",
+    "./workspace": "./src/workspace.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
