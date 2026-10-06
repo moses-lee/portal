@@ -19,12 +19,16 @@ import { tabFromPath } from "@/lib/session-routes";
 import {
   advancedSessions,
   idAliases,
+  opIds,
+  replayIds,
+  rewriteOpIds,
   signalsOf,
   temporaryIds,
   unreadAfter,
   unreadTabIds,
   visiblePaneIds,
   withoutUnread,
+  type OpOutcome,
   type SessionSignal,
 } from "@/lib/workspace";
 import type { FocusScope } from "@/lib/workspace-mobile";
@@ -94,8 +98,8 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 const OPS_URL = "/api/workspace/ops";
 
-/** One op on its way to the server: the workspace it was applied to and the optimistic result. */
-type InFlight = { base: Workspace; guess: Workspace };
+/** One op on its way to the server: what it was applied to, the ids it made up (in the order it drew them) and its guess. */
+type InFlight = { op: WorkspaceOp; base: Workspace; made: string[]; guess: OpOutcome };
 
 /**
  * The workspace for the whole app (docs/WORKSPACE.md, "Web / State"): one REST read so it does not
@@ -103,6 +107,14 @@ type InFlight = { base: Workspace; guess: Workspace };
  * wins over a slower read, the tracked pattern), optimistic `apply`, the focus the view reports, and
  * unread tabs derived from the session list's patches. Needs `PortalLiveProvider` and
  * `SessionsProvider` above it.
+ *
+ * Optimistic ids: the shown workspace is the last copy the server gave (`truthRef`) with the ops in
+ * flight replayed on it, each with the temporary ids it first drew. An op's answer pairs those ids
+ * with the server's from the answer's own `location` (`idAliases`), so `keyOf` keeps the node's first
+ * key and nothing remounts. The server pushes its stream copy before it answers the POST, so a copy
+ * that lands while an op is in flight is held (newest wins) and adopted when the last op settles: shown
+ * at once, its real ids would be keyed before the answer could pair them. An op that names an id
+ * another op made up waits for that op's answer and posts the real id.
  */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -114,18 +126,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [unreadPanes, setUnreadPanes] = useState<ReadonlySet<string>>(() => new Set());
   /** Ops posted and not yet answered (`pending` is any). */
   const [inFlight, setInFlight] = useState(0);
+  const inFlightRef = useRef(0);
   /** The current workspace, for handlers that must not close over a stale render. */
   const workspaceRef = useRef(workspace);
+  /** The last copy the server gave (an answer, the stream, the REST read): what the guesses replay on. */
+  const truthRef = useRef<Workspace>(EMPTY_WORKSPACE);
+  /** A server copy that landed while an op was in flight, adopted once none is. */
+  const heldRef = useRef<Workspace | null>(null);
   /** Set once the stream has delivered a copy: a slower REST read must not overwrite it then. */
   const fromStreamRef = useRef(false);
-  /**
-   * The ops in flight, oldest first, each with its base and guess, to pair the server's ids with the
-   * temporary ones each op made up. A list, not one slot: a resize followed by a split within one
-   * round trip must not lose the split's pairing when the resize answers.
-   */
-  const inFlightRef = useRef<InFlight[]>([]);
+  /** The ops whose guesses still show, oldest first; an answer drops the answered op and every older one (the server applied those before it). */
+  const replayRef = useRef<InFlight[]>([]);
   /** Server id to the key this device first rendered the node under (see `keyOf`); only grows. */
   const aliasesRef = useRef(new Map<string, string>());
+  /** The reverse: a temporary id to the server's, once the answer said; for ops that name a temporary id. */
+  const realIdsRef = useRef(new Map<string, string>());
+  /** Each temporary id still unanswered to the op that made it, so an op naming it can wait for the real one. */
+  const makersRef = useRef(new Map<string, Promise<unknown>>());
   const [nextTemporaryId] = useState(temporaryIds);
 
   const setWorkspace = useCallback((next: Workspace) => {
@@ -133,20 +150,38 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setWorkspaceState(next);
   }, []);
 
-  /**
-   * Take a copy from the server, unless a newer one is already held. An op's answer pairs ids for that
-   * op alone; a stream copy (which may land before the answer) is checked against every op in flight.
-   * Either way only an op's own temporary ids are aliased, never a real id to another real one.
-   */
-  const adopt = useCallback(
-    (server: Workspace, of?: InFlight) => {
-      for (const { base, guess } of of ? [of] : inFlightRef.current) {
-        for (const [serverId, key] of idAliases(base, guess, server)) aliasesRef.current.set(serverId, key);
+  const realOf = useCallback((id: string) => realIdsRef.current.get(id) ?? id, []);
+
+  /** Show the truth with the guesses still in flight replayed on it; a replay the reducer refuses is left to its answer. */
+  const render = useCallback(() => {
+    let next = truthRef.current;
+    for (const entry of replayRef.current) {
+      try {
+        next = applyWorkspaceOp(next, rewriteOpIds(entry.op, realOf), replayIds(entry.made, nextTemporaryId)).workspace;
+      } catch {
+        // Refused on the newer copy (its pane closed elsewhere): the server will say so, and the answer settles it.
       }
-      if (server.version < workspaceRef.current.version) return;
-      setWorkspace(server);
+    }
+    setWorkspace(next);
+  }, [nextTemporaryId, realOf, setWorkspace]);
+
+  /** Take a server copy as the truth unless a newer one is held already, and show it. */
+  const adopt = useCallback(
+    (server: Workspace) => {
+      if (server.version < truthRef.current.version) return;
+      truthRef.current = server;
+      render();
     },
-    [setWorkspace],
+    [render],
+  );
+
+  /** A copy from the stream or the REST read: adopted now, or held until this device's ops have answered. */
+  const receive = useCallback(
+    (server: Workspace) => {
+      if (inFlightRef.current === 0) return adopt(server);
+      if (!heldRef.current || server.version > heldRef.current.version) heldRef.current = server;
+    },
+    [adopt],
   );
 
   // One REST read; the stream's copy, when it got here first, is the fresher one. A server without
@@ -158,27 +193,33 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (!r.ok) return;
         const { workspace: fetched } = (await r.json()) as { workspace: Workspace };
         if (controller.signal.aborted || fromStreamRef.current) return;
-        adopt(fetched);
+        receive(fetched);
       })
       .catch(() => {})
       .finally(() => {
         if (!controller.signal.aborted) setLoaded(true);
       });
     return () => controller.abort();
-  }, [adopt]);
+  }, [receive]);
   usePortalEvents((event) => {
     if (event.type !== "workspace") return;
     fromStreamRef.current = true;
-    adopt(event.workspace);
+    receive(event.workspace);
     setLoaded(true);
   });
 
   const apply = useCallback(
     async (op: WorkspaceOp): Promise<WorkspaceApplied> => {
       const base = workspaceRef.current;
+      const made: string[] = [];
+      const drawIds = () => {
+        const id = nextTemporaryId();
+        made.push(id);
+        return id;
+      };
       let guess: ReturnType<typeof applyWorkspaceOp>;
       try {
-        guess = applyWorkspaceOp(base, op, nextTemporaryId);
+        guess = applyWorkspaceOp(base, op, drawIds);
       } catch (e) {
         const message = e instanceof WorkspaceError ? e.message : "Could not change the workspace.";
         setError(message);
@@ -186,48 +227,65 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       // Nothing to change (a rename to the same title, a resize to the same sizes): no round trip.
       if (!guess.changed) return { workspace: base, location: guess.location ?? null };
-      const pending: InFlight = { base, guess: guess.workspace };
-      inFlightRef.current = [...inFlightRef.current, pending];
-      const settle = () => {
-        inFlightRef.current = inFlightRef.current.filter((entry) => entry !== pending);
-      };
+      const entry: InFlight = { op, base, made, guess: { workspace: guess.workspace, location: guess.location ?? null } };
+      replayRef.current = [...replayRef.current, entry];
       setWorkspace(guess.workspace);
+      inFlightRef.current += 1;
       setInFlight((n) => n + 1);
-      const rollback = () => {
-        // Only undo our own guess: a copy the stream delivered since stays.
-        if (workspaceRef.current === guess.workspace) setWorkspace(base);
+      const fail = (message: string): never => {
+        // Only this op's guess goes: the others in flight, and a copy the stream delivered since, stay.
+        replayRef.current = replayRef.current.filter((e) => e !== entry);
+        render();
+        setError(message);
+        throw new Error(message);
       };
-      try {
-        let r: Response;
+      const run = async (): Promise<WorkspaceApplied> => {
         try {
-          r = await fetch(OPS_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(op),
-          });
-        } catch {
-          rollback();
-          const message = "Could not reach the server. Check the connection and try again.";
-          setError(message);
-          throw new Error(message);
+          // An id another op made up: wait for that op's answer, then post the server's id for it.
+          for (const id of opIds(op)) await makersRef.current.get(id)?.catch(() => {});
+          let r: Response;
+          try {
+            r = await fetch(OPS_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(rewriteOpIds(op, realOf)),
+            });
+          } catch {
+            return fail("Could not reach the server. Check the connection and try again.");
+          }
+          if (!r.ok) {
+            const j = (await r.json().catch(() => ({}))) as { error?: string };
+            return fail(j.error ?? "Could not change the workspace. Try again.");
+          }
+          const answer = (await r.json()) as { workspace: Workspace; location?: WorkspaceLocation | null };
+          const location = answer.location ?? null;
+          const known = (id: string) => aliasesRef.current.has(id) || realIdsRef.current.has(id);
+          for (const [serverId, key] of idAliases(base, entry.guess, { workspace: answer.workspace, location }, known)) {
+            aliasesRef.current.set(serverId, key);
+            realIdsRef.current.set(key, serverId);
+          }
+          // The answer holds this op and every older one; the newer ones replay on it.
+          const index = replayRef.current.indexOf(entry);
+          if (index >= 0) replayRef.current = replayRef.current.slice(index + 1);
+          adopt(answer.workspace);
+          setError(null);
+          return { workspace: answer.workspace, location: location ?? entry.guess.location };
+        } finally {
+          for (const id of made) makersRef.current.delete(id);
+          inFlightRef.current -= 1;
+          setInFlight((n) => n - 1);
+          if (inFlightRef.current === 0 && heldRef.current) {
+            const held = heldRef.current;
+            heldRef.current = null;
+            adopt(held);
+          }
         }
-        if (!r.ok) {
-          rollback();
-          const j = (await r.json().catch(() => ({}))) as { error?: string };
-          const message = j.error ?? "Could not change the workspace. Try again.";
-          setError(message);
-          throw new Error(message);
-        }
-        const answer = (await r.json()) as { workspace: Workspace; location?: WorkspaceLocation | null };
-        adopt(answer.workspace, pending);
-        setError(null);
-        return { workspace: answer.workspace, location: answer.location ?? guess.location ?? null };
-      } finally {
-        settle();
-        setInFlight((n) => n - 1);
-      }
+      };
+      const promise = run();
+      for (const id of made) makersRef.current.set(id, promise);
+      return promise;
     },
-    [adopt, nextTemporaryId, setWorkspace],
+    [adopt, nextTemporaryId, realOf, render, setWorkspace],
   );
 
   const locate = useCallback((sessionId: string) => locateSession(workspace, sessionId), [workspace]);

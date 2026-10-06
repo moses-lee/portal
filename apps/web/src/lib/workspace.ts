@@ -359,47 +359,57 @@ function idsOf(ws: Workspace): Set<string> {
   return out;
 }
 
+/** What one side made of an op: the workspace after it and where it put things (null for ops that place nothing: a close, a move, a rename, a resize). */
+export type OpOutcome = { workspace: Workspace; location: WorkspaceLocation | null };
+
 /**
- * Which of the server's ids stand for which optimistic ones, for one op: `optimistic` is the guess
- * made from `base`, `server` a copy that includes the op's outcome. Only the ids the guess made up
- * (absent from `base`) are paired, and only with ids the server introduced (also absent from `base`):
- * tabs already in `base` match by id and their trees walk by position where the shape agrees; the
- * new tabs pair up in order. A real id is never aliased to another real id, so a concurrent
- * `move_tab` or `close_tab` from another device (or the orchestrator) that shifts positions cannot
- * cross-alias live tabs and remount them. A pane keyed by the optimistic id keeps its key when the
- * server's copy lands, so it does not remount.
+ * Which of the server's ids stand for which optimistic ones, for one op, read off the op's own
+ * answer: `mine` is the guess made from `base`, `theirs` the server's answer to the same op. The
+ * answer's `location` names exactly what is ours: the optimistic tab pairs with the answer's tab, the
+ * optimistic pane with the answer's pane, and that tab's trees walk by position (the same shape by
+ * construction: the reducer built both) to pair the split and pane ids below. An `arrange` that
+ * overflowed sessions into tabs of their own pairs those by session. An id already in `base`, or one
+ * `known` already (a real id paired earlier, or the key it was paired with), is never aliased: so
+ * neither an earlier op's temporary ids (which sit in a later op's base) nor another device's new tab
+ * (which no location of ours names) can be paired with ours, however the strip is ordered. An op
+ * without a location on either side (nothing placed, or a stream copy, which answers no op) aliases
+ * nothing. A pane keyed by the optimistic id keeps its key when the answer lands, so it does not remount.
  */
-export function idAliases(base: Workspace, optimistic: Workspace, server: Workspace): Map<string, string> {
-  const known = idsOf(base);
+export function idAliases(base: Workspace, mine: OpOutcome, theirs: OpOutcome, known: (id: string) => boolean = () => false): Map<string, string> {
   const aliases = new Map<string, string>();
-  const pair = (mine: string, theirs: string) => {
-    if (mine !== theirs && !known.has(mine) && !known.has(theirs)) aliases.set(theirs, mine);
+  if (!mine.location || !theirs.location) return aliases;
+  const inBase = idsOf(base);
+  const fresh = (id: string) => !inBase.has(id) && !known(id);
+  const pair = (a: string, b: string) => {
+    if (a !== b && fresh(a) && fresh(b) && !aliases.has(b)) aliases.set(b, a);
   };
   const walk = (a: LayoutNode, b: LayoutNode) => {
     if (a.kind === "pane" && b.kind === "pane") {
       if (a.sessionId === b.sessionId) pair(a.id, b.id);
       return;
     }
-    if (a.kind === "split" && b.kind === "split") {
-      if (a.direction !== b.direction || a.children.length !== b.children.length) return;
+    if (a.kind === "split" && b.kind === "split" && a.direction === b.direction && a.children.length === b.children.length) {
       pair(a.id, b.id);
       a.children.forEach((child, i) => walk(child, b.children[i]));
     }
   };
-  for (const tab of server.tabs) {
-    if (!known.has(tab.id)) continue;
-    const mine = findTab(optimistic, tab.id);
-    if (mine) walk(mine.root, tab.root);
+  const { tabId: myTabId, paneId: myPaneId } = mine.location;
+  const { tabId: theirTabId, paneId: theirPaneId } = theirs.location;
+  pair(myTabId, theirTabId);
+  pair(myPaneId, theirPaneId);
+  const myTab = findTab(mine.workspace, myTabId);
+  const theirTab = findTab(theirs.workspace, theirTabId);
+  if (myTab && theirTab) walk(myTab.root, theirTab.root);
+  // Overflow tabs (one session each, right after the arranged tab) by their session.
+  for (const tab of mine.workspace.tabs) {
+    if (tab.id === myTabId || tab.root.kind !== "pane" || tab.root.sessionId === null || !fresh(tab.id)) continue;
+    const sessionId = tab.root.sessionId;
+    const match = theirs.workspace.tabs.find((t) => t.id !== theirTabId && t.root.kind === "pane" && t.root.sessionId === sessionId && fresh(t.id));
+    if (match) {
+      pair(tab.id, match.id);
+      pair(tab.root.id, match.root.id);
+    }
   }
-  const newMine = optimistic.tabs.filter((tab) => !known.has(tab.id));
-  server.tabs
-    .filter((tab) => !known.has(tab.id))
-    .forEach((tab, i) => {
-      const mine = newMine[i];
-      if (!mine) return;
-      pair(mine.id, tab.id);
-      walk(mine.root, tab.root);
-    });
   return aliases;
 }
 
@@ -407,4 +417,50 @@ export function idAliases(base: Workspace, optimistic: Workspace, server: Worksp
 export function temporaryIds(): () => string {
   let n = 0;
   return () => `tmp-${Date.now().toString(36)}-${(n++).toString(36)}`;
+}
+
+/** The ids `made` in order, then fresh ones: replaying an op on a newer copy gives its nodes the ids they were first rendered under. */
+export function replayIds(made: readonly string[], fresh: () => string): () => string {
+  let i = 0;
+  return () => made[i++] ?? fresh();
+}
+
+/** The tab, pane and split ids an op names (sessions are not ids of ours): each must be real before the server sees the op. */
+export function opIds(op: WorkspaceOp): string[] {
+  switch (op.op) {
+    case "open":
+      return op.target ? [op.target.tabId, op.target.paneId] : [];
+    case "replace_pane":
+    case "close_pane":
+      return [op.paneId];
+    case "arrange":
+      return op.tabId ? [op.tabId] : [];
+    case "close_tab":
+    case "move_tab":
+    case "rename_tab":
+      return [op.tabId];
+    case "resize":
+      return [op.splitId];
+  }
+}
+
+/** `op` with the tab, pane and split ids it names mapped through `idOf`; the same object when none changes. */
+export function rewriteOpIds(op: WorkspaceOp, idOf: (id: string) => string): WorkspaceOp {
+  const ids = opIds(op);
+  if (ids.every((id) => idOf(id) === id)) return op;
+  switch (op.op) {
+    case "open":
+      return op.target ? { ...op, target: { ...op.target, tabId: idOf(op.target.tabId), paneId: idOf(op.target.paneId) } } : op;
+    case "replace_pane":
+    case "close_pane":
+      return { ...op, paneId: idOf(op.paneId) };
+    case "arrange":
+      return op.tabId ? { ...op, tabId: idOf(op.tabId) } : op;
+    case "close_tab":
+    case "move_tab":
+    case "rename_tab":
+      return { ...op, tabId: idOf(op.tabId) };
+    case "resize":
+      return { ...op, splitId: idOf(op.splitId) };
+  }
 }
