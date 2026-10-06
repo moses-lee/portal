@@ -3,7 +3,9 @@
  * cursor replayed from memory (or `reset` when they have aged out), `meta` on connect and whenever
  * the agent's state, link or queue changes, the folder's git state, presence and owning project
  * re-read every second and re-announced when they change, and `deleted` once the session goes
- * away. Opening a viewer also reattaches the agent to a persisted session.
+ * away. Opening a viewer also reattaches the agent to a persisted session, unless the caller says
+ * the session is already introduced (`attach: false`: the web's hub reopening its stream for
+ * another session).
  *
  * `/api/sessions/:id/stream` carries one viewer per socket; `/api/sessions/streams` multiplexes
  * several onto one. Both are framed by their routes; this module only produces the frames.
@@ -31,9 +33,16 @@ export type SessionViewerSink = (frame: SessionViewerFrame) => void;
  * Attach a viewer of session `id` that holds events up to `since` (-1 for none). Frames reach
  * `sink` in order: the replay (or `reset`), the first `meta`, then the live tail. Answers the
  * function that detaches the viewer (safe to call more than once), or null when there is no such
- * session.
+ * session. With `attach` (the default) a persisted session's agent is reattached; the outcome
+ * arrives as `meta.link`.
  */
-export function attachSessionViewer(ctx: AppContext, id: string, since: number, sink: SessionViewerSink): (() => void) | null {
+export function attachSessionViewer(
+  ctx: AppContext,
+  id: string,
+  since: number,
+  sink: SessionViewerSink,
+  { attach = true }: { attach?: boolean } = {},
+): (() => void) | null {
   const session = ctx.sessions.getSession(id);
   if (!session) return null;
 
@@ -101,6 +110,6 @@ export function attachSessionViewer(ctx: AppContext, id: string, since: number, 
   };
   void refreshMeta(true);
   // Reconnect a persisted session's agent; the outcome arrives as `meta.link`.
-  if (session.link.status !== "live") ctx.sessions.attach(id).catch(() => {});
+  if (attach && session.link.status !== "live") ctx.sessions.attach(id).catch(() => {});
   return detach;
 }

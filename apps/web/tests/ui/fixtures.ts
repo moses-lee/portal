@@ -644,7 +644,7 @@ export async function setupPortal(
         const deliver = () => {
           let delivered = false;
           for (const source of sources) {
-            if (source.url.includes(match)) {
+            if (new URL(source.url, location.origin).pathname === match) {
               source.send(data, type, seq);
               delivered = true;
             } else if (sessionId && source.sessionIds?.includes(sessionId)) {

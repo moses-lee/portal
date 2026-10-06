@@ -246,16 +246,19 @@ export function segment(events: StoredEvent[]): Turn[] {
 
 /**
  * The history with one more event. An event the history already holds (at or below the last
- * turn's `lastSeq`) leaves it unchanged, so a replayed or twice-applied event is harmless.
+ * turn's `lastSeq`) leaves it unchanged whatever its type, so a replayed or twice-applied event
+ * is harmless: a replayed `user` event does not open a second turn. Client-only notices
+ * (negative seqs) are always applied.
  */
-export function appendEvent({ turns, hasMore }: History, event: StoredEvent): History {
+export function appendEvent(history: History, event: StoredEvent): History {
+  const { turns, hasMore } = history;
   const current = turns.at(-1);
+  if (current && event.seq >= 0 && event.seq <= current.lastSeq) return history;
   if (!current || event.type === "user") {
     const reducer = createTurnReducer();
     reducer.apply(event);
     return { turns: [...turns, snapshot(event.seq, reducer)], hasMore };
   }
-  if (event.seq >= 0 && event.seq <= current.lastSeq) return { turns, hasMore };
   current.reducer.apply(event);
   return { turns: [...turns.slice(0, -1), snapshot(current.key, current.reducer)], hasMore };
 }

@@ -73,6 +73,29 @@ test("appendEvent updates only the block an event touches and ignores an event i
   assert.deepEqual(reduce([user(0, "go"), text(1, "one"), call(3, { status: "in_progress" })]).map((b) => b.kind), ["user", "assistant"], "an update for an unknown call is dropped");
 });
 
+test("appendEvent ignores a replayed user event, so a replay opens no second turn; a first event or a client notice still applies", () => {
+  const turnEnd = (seq) => ({ seq, ts: 0, type: "turn_end", stopReason: "end_turn" });
+  const history = { turns: segment([user(0, "a"), text(1, "x"), turnEnd(2), user(3, "b"), turnEnd(4)]), hasMore: false };
+  const span = (h) => h.turns.map((t) => [t.key, t.lastSeq]);
+  assert.deepEqual(span(history), [[0, 2], [3, 4]]);
+  // The stream reopened from an older cursor and replayed 2..4 (see `lib/session-stream-hub`).
+  const replayed = [turnEnd(2), user(3, "b"), turnEnd(4)].reduce(appendEvent, history);
+  assert.equal(replayed, history, "nothing changes, and the history keeps its identity");
+  assert.deepEqual(span(replayed), [[0, 2], [3, 4]]);
+  // The next prompt still opens a turn, and a replay of it is dropped too.
+  const next = appendEvent(replayed, user(5, "c"));
+  assert.deepEqual(span(next), [[0, 2], [3, 4], [5, 5]]);
+  assert.equal(appendEvent(next, user(5, "c")), next);
+  // A user event with a stale seq (below the last turn) is a replay as well.
+  assert.equal(appendEvent(next, user(1, "old")), next);
+  // The first event of an empty history always opens a turn, whatever its seq; a client notice (negative seq) always applies.
+  assert.deepEqual(span(appendEvent({ turns: [], hasMore: false }, user(0, "first"))), [[0, 0]]);
+  assert.deepEqual(span(appendEvent({ turns: [], hasMore: false }, text(7, "mid-turn"))), [[7, 7]]);
+  const noticed = appendEvent(next, { seq: -1, ts: 0, type: "error", message: "offline" });
+  assert.equal(noticed.turns.at(-1).blocks.at(-1).message, "offline");
+  assert.equal(lastSeq(noticed), 5);
+});
+
 test("a page that starts inside a turn reduces on its own; the turn is keyed by its first event", () => {
   const turns = segment([text(40, "tail"), { seq: 41, ts: 0, type: "turn_end", stopReason: "end_turn" }, user(42, "next")]);
   assert.deepEqual(turns.map((t) => t.key), [40, 42]);

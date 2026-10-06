@@ -372,6 +372,12 @@ export type SessionDetail = SessionMeta & {
  */
 export type SessionSummary = Omit<SessionDetail, "state" | "liveness"> & { state: SessionListState; liveness: LivenessState };
 
+/**
+ * The most sessions one `GET /api/sessions/streams` socket carries; the server refuses more with
+ * a 400, and the web's session-stream hub keeps the rest waiting.
+ */
+export const STREAM_IDS_MAX = 32;
+
 /** Payload of the SSE `meta` event on `/api/sessions/[id]/stream`. */
 export type SessionMetaEvent = {
   busy: boolean;

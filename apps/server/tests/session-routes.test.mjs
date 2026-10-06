@@ -568,6 +568,7 @@ test("GET /api/sessions/streams refuses an empty id list, bad cursors, and more 
     [`?ids=${session.id}&since=${session.id}:-2`, "invalid event cursor"],
     [`?ids=${session.id}&since=5`, "invalid event cursor"],
     [`?ids=${session.id}&since=other:1`, "invalid event cursor"],
+    [`?ids=${session.id}&attach=other`, "invalid attach id"],
     [`?ids=${tooMany}`, "at most 32 session ids"],
   ]) {
     const response = await app.inject({ method: "GET", url: `/api/sessions/streams${query}` });
@@ -701,6 +702,56 @@ test("opening a persisted session's stream reattaches its agent and reports it t
   await stream.cancel();
   const page = await events(app, session.id);
   assert.equal(page.nextSeq, 6);
+});
+
+test("GET /api/sessions/streams reattaches only the sessions named in attach; an empty attach reattaches none, an absent one all", async (t) => {
+  const ctx = await setup(t);
+  const a = await createSession(ctx.app);
+  const b = await createSession(ctx.app);
+  await runTurn(ctx.app, a.id);
+  await runTurn(ctx.app, b.id);
+  await ctx.app.close();
+
+  const app = await ctx.makeApp();
+  const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const link = async (id) => (await app.inject({ method: "GET", url: `/api/sessions/${id}` })).json().link.status;
+  const open = async (query) => {
+    const response = await fetch(`${base}/api/sessions/streams${query}`);
+    assert.equal(response.status, 200);
+    return sseReader(response);
+  };
+  /** Reads frames until `predicate` holds, answering that frame. */
+  const frameWhere = async (stream, predicate) => {
+    for (;;) {
+      const frame = await stream.next();
+      assert.ok(frame, "stream ended early");
+      if (predicate(frame)) return frame;
+    }
+  };
+
+  // The web's hub reopening for another session: `a` is already introduced, so it is not attached again.
+  const quiet = await open(`?ids=${a.id},${b.id}&since=${a.id}:5,${b.id}:5&attach=`);
+  const metas = [await quiet.next(), await quiet.next()];
+  assert.deepEqual(metas.map(({ event, data }) => [event, data.sessionId, data.link.status]), [["meta", a.id, "offline"], ["meta", b.id, "offline"]]);
+  await delay(300);
+  assert.equal(ctx.messages("session/resume").length, 0, "no agent was resumed");
+  assert.deepEqual([await link(a.id), await link(b.id)], ["offline", "offline"]);
+  await quiet.cancel();
+
+  // Only the id named in `attach` is reattached.
+  const partial = await open(`?ids=${a.id},${b.id}&since=${a.id}:5,${b.id}:5&attach=${b.id}`);
+  const live = await frameWhere(partial, (frame) => frame.event === "meta" && frame.data.link.status === "live");
+  assert.equal(live.data.sessionId, b.id);
+  assert.equal(ctx.messages("session/resume").length, 1);
+  assert.deepEqual([await link(a.id), await link(b.id)], ["offline", "live"]);
+  await partial.cancel();
+
+  // Without the parameter every session is attached, as the per-session route does.
+  const all = await open(`?ids=${a.id},${b.id}&since=${a.id}:5,${b.id}:5`);
+  const liveA = await frameWhere(all, (frame) => frame.event === "meta" && frame.data.sessionId === a.id && frame.data.link.status === "live");
+  assert.equal(liveA.data.sessionId, a.id);
+  assert.equal(ctx.messages("session/resume").length, 2, "b was live already: nothing to resume");
+  await all.cancel();
 });
 
 test("GET /api/sessions/:id/events pages by turns, and images a tool returned are served from /api/blobs", async (t) => {

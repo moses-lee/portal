@@ -12,10 +12,8 @@ import { displayPath } from "../lib/git-info.ts";
 import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
 import { deleteRemovedSessions, deleteSessionFully } from "./delete.ts";
 import { attachSessionViewer } from "./viewer.ts";
-import { SESSION_TITLE_MAX, type PermissionAnswerRequest, type SessionListEvent, type SetConfigRequest } from "../lib/types.ts";
+import { SESSION_TITLE_MAX, STREAM_IDS_MAX, type PermissionAnswerRequest, type SessionListEvent, type SetConfigRequest } from "../lib/types.ts";
 
-/** The most sessions one `/api/sessions/streams` socket carries. */
-export const STREAM_IDS_MAX = 32;
 const DEFAULT_PAGE = 300;
 const MAX_PAGE = 2000;
 const MAX_TURNS = 50;
@@ -38,10 +36,15 @@ const CURSOR = /^-1$|^\d{1,15}$/;
 
 /**
  * `/api/sessions/streams`' query: `ids=a,b` names the sessions, `since=a:5,b:-1` the last seq the
- * viewer holds for each (-1, the default, for none). Answers the cursor per id in `ids` order, or
- * the text of the 400.
+ * viewer holds for each (-1, the default, for none), and `attach=a` the sessions whose agent to
+ * reattach (every one when the parameter is absent; none when it is empty). Answers the cursor
+ * per id in `ids` order and the set to attach, or the text of the 400.
  */
-function parseStreamsQuery(ids: string | null, since: string | null): { cursors: Map<string, number> } | { error: string } {
+function parseStreamsQuery(
+  ids: string | null,
+  since: string | null,
+  attach: string | null,
+): { cursors: Map<string, number>; attach: Set<string> } | { error: string } {
   const list = (ids ?? "").split(",").map((id) => id.trim()).filter(Boolean);
   if (list.length === 0) return { error: "no session ids" };
   const cursors = new Map(list.map((id) => [id, -1]));
@@ -53,7 +56,9 @@ function parseStreamsQuery(ids: string | null, since: string | null): { cursors:
     if (at < 1 || !cursors.has(id) || !CURSOR.test(cursor)) return { error: "invalid event cursor" };
     cursors.set(id, Number(cursor));
   }
-  return { cursors };
+  const attached = attach === null ? [...cursors.keys()] : attach.split(",").map((id) => id.trim()).filter(Boolean);
+  if (attached.some((id) => !cursors.has(id))) return { error: "invalid attach id" };
+  return { cursors, attach: new Set(attached) };
 }
 
 function parseConfigBody(body: unknown): SetConfigRequest | null {
@@ -179,10 +184,13 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
    * `deleted` carry `{ sessionId, ...payload }`. An unknown id gets `deleted` at once and the rest
    * proceed; the socket ends once every session on it is gone. The cursors travel in the query,
    * not `Last-Event-ID`, so the viewer reopens the stream itself instead of the browser's retry.
+   * `&attach=<id>,...` names the sessions new to the viewer, whose persisted agent is reattached
+   * as the per-session route does; the others (already on the viewer's previous socket) get
+   * their replay and `meta` only. Without the parameter every session is attached.
    */
   app.get("/api/sessions/streams", async (req, reply) => {
     const query = searchParams(req);
-    const parsed = parseStreamsQuery(query.get("ids"), query.get("since"));
+    const parsed = parseStreamsQuery(query.get("ids"), query.get("since"), query.get("attach"));
     if ("error" in parsed) return reply.code(400).type("text/plain; charset=utf-8").send(parsed.error);
     await ready();
     const stream = openEventStream(req, reply);
@@ -204,7 +212,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
             stream.send({ sessionId }, { event: "deleted" });
             if (--attached === 0) stream.close();
         }
-      });
+      }, { attach: parsed.attach.has(sessionId) });
       if (!detach) {
         stream.send({ sessionId }, { event: "deleted" });
         continue;

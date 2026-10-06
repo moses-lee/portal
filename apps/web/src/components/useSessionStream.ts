@@ -200,8 +200,8 @@ export function useSessionStream(
   }
 
   // Load the newest page, then follow the live tail on the page's shared session stream (see
-  // `@/lib/session-stream-hub`). Subscribing also asks the server to reattach the agent when the
-  // session was persisted by an earlier run.
+  // `@/lib/session-stream-hub`). The first subscription to put the session on the stream also
+  // asks the server to reattach the agent when the session was persisted by an earlier run.
   useEffect(() => {
     currentIdRef.current = sessionId;
     if (loadedForRef.current !== sessionId) loadedForRef.current = null;
@@ -269,7 +269,8 @@ export function useSessionStream(
         unsubscribe = sessionStreams.subscribe(sessionId, entry.cursor, {
           onEvent: (seq, ev) => {
             cursorRef.current = Math.max(cursorRef.current, seq);
-            // `appendEvent` drops an event the history already holds (a replay after reconnect).
+            // The hub hands over only events past this view's cursor (a replay serves the view
+            // furthest behind); `appendEvent` drops a held event too, should one get through.
             // The server stamps each event with its logged time; an older server sent none.
             pending.push({ ...ev, seq, ts: typeof ev.ts === "number" ? ev.ts : Date.now() });
             frame ??= requestAnimationFrame(flushEvents);
