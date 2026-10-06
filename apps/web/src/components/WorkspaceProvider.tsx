@@ -97,6 +97,7 @@ export type WorkspaceContextValue = {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 const OPS_URL = "/api/workspace/ops";
+const isTemporaryId = (id: string) => id.startsWith("tmp-");
 
 /** One op on its way to the server: what it was applied to, the ids it made up (in the order it drew them) and its guess. */
 type InFlight = { op: WorkspaceOp; base: Workspace; made: string[]; guess: OpOutcome };
@@ -137,6 +138,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const fromStreamRef = useRef(false);
   /** The ops whose guesses still show, oldest first; an answer drops the answered op and every older one (the server applied those before it). */
   const replayRef = useRef<InFlight[]>([]);
+  /** The last op posted: ops go out one at a time so the server applies them in the order they were made. */
+  const lastPostRef = useRef<Promise<unknown>>(Promise.resolve());
   /** Server id to the key this device first rendered the node under (see `keyOf`); only grows. */
   const aliasesRef = useRef(new Map<string, string>());
   /** The reverse: a temporary id to the server's, once the answer said; for ops that name a temporary id. */
@@ -241,14 +244,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       };
       const run = async (): Promise<WorkspaceApplied> => {
         try {
-          // An id another op made up: wait for that op's answer, then post the server's id for it.
+          // Ops post one at a time: the answer to an op stands in for every older one, which only
+          // holds if the server applied them in order. An id another op made up: wait for that op's
+          // answer, then post the server's id for it.
+          await previous.catch(() => {});
           for (const id of opIds(op)) await makersRef.current.get(id)?.catch(() => {});
+          const posted = rewriteOpIds(op, realOf);
+          if (opIds(posted).some(isTemporaryId)) return fail("The pane this change needs was not created.");
           let r: Response;
           try {
             r = await fetch(OPS_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(rewriteOpIds(op, realOf)),
+              body: JSON.stringify(posted),
             });
           } catch {
             return fail("Could not reach the server. Check the connection and try again.");
@@ -257,7 +265,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             const j = (await r.json().catch(() => ({}))) as { error?: string };
             return fail(j.error ?? "Could not change the workspace. Try again.");
           }
-          const answer = (await r.json()) as { workspace: Workspace; location?: WorkspaceLocation | null };
+          let answer: { workspace: Workspace; location?: WorkspaceLocation | null };
+          try {
+            answer = (await r.json()) as typeof answer;
+            if (!answer || typeof answer !== "object" || !Array.isArray(answer.workspace?.tabs)) throw new Error("bad answer");
+          } catch {
+            // A 2xx with an unreadable body: the op may have landed; the next copy from the stream says.
+            return fail("The server's answer could not be read. The workspace will catch up.");
+          }
           const location = answer.location ?? null;
           const known = (id: string) => aliasesRef.current.has(id) || realIdsRef.current.has(id);
           for (const [serverId, key] of idAliases(base, entry.guess, { workspace: answer.workspace, location }, known)) {
@@ -281,7 +296,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           }
         }
       };
+      const previous = lastPostRef.current;
       const promise = run();
+      lastPostRef.current = promise;
       for (const id of made) makersRef.current.set(id, promise);
       return promise;
     },
