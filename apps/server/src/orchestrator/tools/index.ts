@@ -48,6 +48,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "list_items", "list_threads", "get_settings", "get_schedule",
   "list_jobs", "list_runs", "list_watches",
   "get_world", "get_changes", "resolve_pull", "resolve_repo", "resolve_session",
+  "get_workspace",
   "search_memory", "explain_memory",
 ]);
 

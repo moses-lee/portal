@@ -7,6 +7,7 @@
 import type {
   BulkItemStatus, BulkItemsResponse, Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
 } from "@portal/contracts/orchestrator";
+import type { WorkspaceView } from "@portal/contracts/workspace";
 
 import type { OrchestratorHub } from "./hub.ts";
 
@@ -98,9 +99,10 @@ export interface OrchestratorRuntime {
    * SDK UI message stream response (`toUIMessageStreamResponse`); the runtime persists the user
    * message immediately and the assistant message when the stream finishes, then emits a
    * `messages` event. Each thread has its own lock: rejects with status 409 while that thread is
-   * answering or when no key is stored, 404 for an unknown thread. Jobs never block it.
+   * answering or when no key is stored, 404 for an unknown thread. Jobs never block it. `view` is
+   * what the sending device is looking at (docs/WORKSPACE.md); the turn's prompt names it.
    */
-  chat(userMessage: OrchestratorMessage, threadId?: string): Promise<Response>;
+  chat(userMessage: OrchestratorMessage, threadId?: string, view?: WorkspaceView | null): Promise<Response>;
   /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
   cancel(threadId?: string): void;
 

@@ -9,6 +9,8 @@
  */
 import type { Scope } from "@portal/contracts/orchestrator";
 import type { WorldProject, WorldRepo, WorldSession, WorldState } from "@portal/contracts/world";
+import type { PaneNode, Workspace } from "@portal/contracts/workspace";
+import { defaultTabTitle, tabPanes } from "@portal/shared/workspace";
 import { attentionReasons, pullKey } from "../github-attention.ts";
 import { findById } from "../ids.ts";
 import type { PullAttention } from "../types.ts";
@@ -18,7 +20,7 @@ export const CHARS_PER_TOKEN = 4;
 /** The prefix length ids are shown with; tools accept a unique prefix (see ids.ts), the resolve tools return full ids. */
 export const SHORT_ID = 8;
 
-const caps = { tracked: 20, attentionPulls: 15, recentSessions: 8, otherPulls: 10, intents: 10, jobs: 8, items: 10, terminals: 8, errors: 3 };
+const caps = { tracked: 20, workspaceTabs: 8, attentionPulls: 15, recentSessions: 8, otherPulls: 10, intents: 10, jobs: 8, items: 10, terminals: 8, errors: 3 };
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -176,10 +178,22 @@ class Writer {
   }
 }
 
-export type RenderOptions = { budgetTokens?: number; scope?: Scope };
+export type RenderOptions = {
+  budgetTokens?: number;
+  scope?: Scope;
+  /** The workspace (tabs and panes) for the Workspace tabs section; not part of `WorldState`, since it is neither snapshotted nor diffed. */
+  workspace?: Workspace | null;
+};
+
+/** One pane of a tab: the session's short id and state, or "new session" for a start page. */
+function paneText(pane: PaneNode, sessionsById: Map<string, WorldSession>): string {
+  if (pane.sessionId === null) return "new session";
+  const session = sessionsById.get(pane.sessionId);
+  return `${shortId(pane.sessionId)} (${session ? session.liveness ?? session.activity : "unknown"})`;
+}
 
 /** The world as prompt text within `budgetTokens`. Deterministic: the same world and options give the same text. */
-export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_TOKENS, scope }: RenderOptions = {}): string {
+export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_TOKENS, scope, workspace = null }: RenderOptions = {}): string {
   const now = world.at;
   const projectsById = new Map(world.projects.map((p) => [p.id, p]));
   const lookup: Lookup = { project: (id) => (id ? projectsById.get(id) : undefined) };
@@ -236,6 +250,15 @@ export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_T
   });
   if (trackedRows.length) out.section("Tracked sessions:", trackedRows, { reserve, cap: caps.tracked });
   else if (out.fits("Tracked sessions: none.", reserve)) out.push("Tracked sessions: none.");
+
+  // The workspace's tabs in strip order: where the user is working (docs/WORKSPACE.md). Tab ids are prefixes the workspace tools accept.
+  if (workspace && workspace.tabs.length > 0) {
+    const titleOf = (id: string) => sessionsById.get(id)?.title ?? null;
+    const tabRows = workspace.tabs.slice(0, caps.workspaceTabs).map((tab) =>
+      `- ${quoted(defaultTabTitle(tab, titleOf), 50)} [${shortId(tab.id)}]: ${tabPanes(tab).map((pane) => paneText(pane, sessionsById)).join(", ")}`);
+    if (workspace.tabs.length > caps.workspaceTabs) tabRows.push(`- and ${workspace.tabs.length - caps.workspaceTabs} more`);
+    out.section("Workspace tabs:", tabRows, { reserve });
+  }
 
   const active = world.sessions
     .filter((s) => sessionActive(s) && !shownSessions.has(s.id))

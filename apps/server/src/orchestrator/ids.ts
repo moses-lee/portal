@@ -13,9 +13,9 @@ export const MIN_ID_PREFIX = 4;
 /** Candidates an ambiguity error names. */
 const MAX_NAMED = 5;
 
-export type IdKind = "session" | "project";
+export type IdKind = "session" | "project" | "tab";
 
-const lookupHint: Record<IdKind, string> = { session: "use resolve_session", project: "use resolve_repo or list_projects" };
+const lookupHint: Record<IdKind, string> = { session: "use resolve_session", project: "use resolve_repo or list_projects", tab: "use get_workspace" };
 
 /** The item with id `query`, else the only one whose id starts with it; `candidates` holds every prefix match (none, or several, when `match` is null). */
 export function matchId<T extends { id: string }>(items: readonly T[], query: string): { match: T | null; candidates: T[] } {

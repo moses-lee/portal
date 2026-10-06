@@ -431,17 +431,17 @@ test("a chat turn starts with the common tools and loads a group with use_tools 
   const [first, second, third] = offered;
   assert.ok(first.has("use_tools") && first.has("resolve_pull") && first.has("setup_pr_reviews"));
   for (const [name, group] of Object.entries(TOOL_GROUPS)) {
-    if (name === "tracked") continue;
-    for (const tool of group.tools) assert.ok(!first.has(tool), `${tool} is not offered up front`);
+    if (group.always) continue;
+    for (const tool of group.tools) assert.ok(!first.has(tool), `${tool} (${name}) is not offered up front`);
   }
-  // The tracked group is always offered: its tools from the first step, and it is not one use_tools loads.
-  for (const name of TOOL_GROUPS.tracked.tools) assert.ok(first.has(name) && second.has(name), `${name} is offered from the start`);
+  // The tracked and workspace groups are always offered: their tools from the first step, and neither is one use_tools loads.
+  for (const name of [...TOOL_GROUPS.tracked.tools, ...TOOL_GROUPS.workspace.tools]) assert.ok(first.has(name) && second.has(name), `${name} is offered from the start`);
   for (const name of [...TOOL_GROUPS.items.tools, ...TOOL_GROUPS.memory.tools]) assert.ok(second.has(name) && third.has(name), `${name} stays loaded`);
   assert.ok(!second.has("delete_session"), "groups not asked for stay out");
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.match(system, /use_tools\(\{ groups \}\)/);
   assert.match(system, /- items: change Needs-you items \(create_item, /);
-  assert.doesNotMatch(system, /- tracked: /, "the always-on group is not listed as loadable");
+  assert.doesNotMatch(system, /- tracked: |- workspace: /, "the always-on groups are not listed as loadable");
   assert.match(system, /Tracked sessions:\n- The tracked list/, "the tracked guidance");
   assert.match(system, /Tracked sessions: none\./, "the world's tracked section");
   const [assistant] = (await runtime.hub.store.readMessages()).filter((message) => message.role === "assistant");

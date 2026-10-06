@@ -27,6 +27,7 @@ import { createSettingsService } from "./settings/service.ts";
 import { registerSettingsRoutes } from "./settings/routes.ts";
 import { createTerminalsService } from "./terminals/service.ts";
 import { registerTerminalRoutes } from "./terminals/routes.ts";
+import { registerWorkspaceRoutes } from "./workspace/routes.ts";
 
 export interface AppOptions {
   config?: ServerConfig;
@@ -111,7 +112,11 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   registerProjectRoutes(app, ctx);
   registerSettingsRoutes(app, ctx);
   registerTerminalRoutes(app, ctx);
-  if (orchestrator) registerOrchestratorRoutes(app, ctx);
+  if (orchestrator) {
+    registerOrchestratorRoutes(app, ctx);
+    // The workspace lives on the orchestrator's hub (it pushes over the portal stream and the agent edits it).
+    registerWorkspaceRoutes(app, ctx);
+  }
 
   // `preClose`, not `onClose`: Fastify runs `onClose` only once `server.close()` has seen every
   // in-flight request finish, and each open tab holds an event stream (a hijacked, never-ending

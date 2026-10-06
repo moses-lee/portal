@@ -10,6 +10,7 @@ import { type OrchestratorRuntimeOptions, createOrchestratorRuntime } from "./ru
 import type { OrchestratorRuntime } from "./types.ts";
 import { createPgOrchestratorStore } from "./pg-store.ts";
 import { createPgTrackedStore } from "./tracked/pg-store.ts";
+import { createPgWorkspaceStore } from "../workspace/store.ts";
 
 export type OrchestratorService = OrchestratorRuntime;
 
@@ -17,13 +18,14 @@ export type OrchestratorService = OrchestratorRuntime;
 export type OrchestratorOptions = Partial<OrchestratorRuntimeOptions>;
 
 export function createOrchestratorService(
-  ctx: Pick<AppContext, "db" | "sql" | "presence" | "sessions" | "projects" | "settings" | "terminals" | "config" | "lastUsed">,
+  ctx: Pick<AppContext, "db" | "sql" | "presence" | "sessions" | "projects" | "settings" | "terminals" | "config" | "lastUsed" | "log">,
   options: OrchestratorOptions = {},
 ): OrchestratorService {
   return createOrchestratorRuntime({
     store: createPgOrchestratorStore({ db: ctx.db }),
     activityStore: createPgActivityStore({ db: ctx.db }),
     trackedStore: createPgTrackedStore({ db: ctx.db }),
+    workspaceStore: createPgWorkspaceStore(ctx.db, { warn: (message) => ctx.log.warn(message) }),
     settingsStore: liveSettingsStore(ctx),
     deps: liveDeps(ctx),
     presence: ctx.presence,

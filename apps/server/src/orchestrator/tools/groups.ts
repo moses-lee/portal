@@ -13,6 +13,7 @@ import { define } from "./context.ts";
 /** The groups a chat turn can load, with what each is for. Tool names only; a name the turn lacks is ignored. */
 export const TOOL_GROUPS = {
   tracked: { about: "the tracked sessions beside the thread", tools: ["track_session", "untrack_session", "list_tracked_sessions"], always: true },
+  workspace: { about: "the user's tabs and split panes", tools: ["get_workspace", "open_in_workspace", "arrange_tab", "close_in_workspace", "rename_tab"], always: true },
   items: { about: "change Needs-you items", tools: ["create_item", "update_item", "resolve_item", "snooze_item", "dismiss_item"] },
   projects: {
     about: "manage projects, clones, branches, worktrees",

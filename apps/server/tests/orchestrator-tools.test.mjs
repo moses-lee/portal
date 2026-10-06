@@ -18,6 +18,9 @@ import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
 import { createTrackedService } from "../src/orchestrator/tracked/service.ts";
 import { createMemoryTrackedStore } from "../src/orchestrator/tracked/store.ts";
 import { trackedTools } from "../src/orchestrator/tracked/tools.ts";
+import { createWorkspaceService } from "../src/workspace/service.ts";
+import { createMemoryWorkspaceStore } from "../src/workspace/store.ts";
+import { workspaceTools } from "../src/orchestrator/workspace/tools.ts";
 import { T0, attentionPull, fakeDeps, fakeSettings, liveness, project, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 
 const options = { toolCallId: "call", messages: [] };
@@ -52,11 +55,12 @@ function setup({ interactive = true, settings = fakeSettings(), memory = [], ...
     world: { current: async () => world, trackedChanged: (ids) => { world.tracked = ids; } },
   });
   hub.tracked = createTrackedService(hub, createMemoryTrackedStore({ sessionExists: (id) => state.sessions.some((meta) => meta.id === id) }));
+  hub.workspace = createWorkspaceService(hub, createMemoryWorkspaceStore());
   const ctx = {
     store, deps, touched, settings, interactive, now: () => T0,
     hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job" },
   };
-  return { tools: { ...createTools(ctx), ...trackedTools(ctx) }, store, deps, state, touched, intents, hub, activity, events, world };
+  return { tools: { ...createTools(ctx), ...trackedTools(ctx), ...workspaceTools(ctx) }, store, deps, state, touched, intents, hub, activity, events, world };
 }
 
 /** Call a tool the way the SDK does: the input goes through its zod schema first, so bounds are asserted for real. */

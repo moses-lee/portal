@@ -9,6 +9,16 @@ import { flush, jobsHarness, started } from "./fixtures/jobs-harness.mjs";
 
 const url = (n) => `https://github.com/acme/app/pull/${n}`;
 
+/**
+ * Settling runs in the background and stats the worktree folders on the way (real I/O, off the
+ * event loop), so a fixed number of loop turns is not enough under load: wait for the outcome itself,
+ * bounded, and let the assertion that follows say what is missing.
+ */
+async function until(predicate) {
+  for (let i = 0; i < 200 && !(await predicate()); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const hasKeptItem = (h) => async () => (await h.store.listItems()).some((row) => row.kind === "worktree_dirty");
+
 /** A parent project and a review worktree project, both on real folders so the removal reaches git. */
 function projects() {
   const root = mkdtempSync(path.join(os.tmpdir(), "portal-review-cleanup-"));
@@ -19,7 +29,7 @@ function projects() {
 
 async function harness(t, { sessions, worktreeCreated = true, git = {} } = {}) {
   const { parent, worktree } = projects();
-  for (const dir of [parent.path, worktree.path]) (await import("node:fs/promises")).mkdir(dir, { recursive: true });
+  for (const dir of [parent.path, worktree.path]) await (await import("node:fs/promises")).mkdir(dir, { recursive: true });
   const h = await started(jobsHarness(t, { sessions: sessions ?? [sessionMeta({ id: "s1", projectId: "p2", busy: false })], projects: [parent, worktree] }));
   const removals = [];
   h.deps.git.removeWorktree = async (opts) => {
@@ -44,6 +54,7 @@ async function harness(t, { sessions, worktreeCreated = true, git = {} } = {}) {
 test("settling a findings item removes the review worktree Portal created, deletes a branch that is on origin, and says so in the thread", async (t) => {
   const { h, item, removals } = await harness(t);
   await h.runtime.updateItem(item.id, { status: "resolved" });
+  await until(() => removals.length === 1);
   await flush();
   assert.equal(removals.length, 1);
   assert.equal(removals[0].branch, "feature-x");
@@ -65,6 +76,7 @@ test("dismissing counts as read too, and a branch with local commits stays with 
     return { branchDeleted: false };
   };
   await h.runtime.updateItem(item.id, { status: "dismissed" });
+  await until(() => removals.length === 1);
   await flush();
   assert.equal(removals.length, 1);
   const note = (await h.store.readMessages("main")).at(-1);
@@ -74,6 +86,7 @@ test("dismissing counts as read too, and a branch with local commits stays with 
 test("a dirty worktree, or one a session still works in, is kept with a Needs-you item carrying the Remove worktree action", async (t) => {
   const dirty = await harness(t, { git: { worktreeState: async () => ({ exists: true, merged: false, dirty: true }) } });
   await dirty.h.runtime.updateItem(dirty.item.id, { status: "resolved" });
+  await until(hasKeptItem(dirty.h));
   await flush();
   assert.equal(dirty.removals.length, 0);
   assert.deepEqual(dirty.h.state.removed, []);
@@ -86,6 +99,7 @@ test("a dirty worktree, or one a session still works in, is kept with a Needs-yo
 
   const busy = await harness(t, { sessions: [sessionMeta({ id: "s1", projectId: "p2", busy: true })] });
   await busy.h.runtime.updateItem(busy.item.id, { status: "resolved" });
+  await until(hasKeptItem(busy.h));
   await flush();
   assert.equal(busy.removals.length, 0);
   assert.match((await busy.h.store.listItems()).find((row) => row.kind === "worktree_dirty").body, /^A session is still working in it\./);

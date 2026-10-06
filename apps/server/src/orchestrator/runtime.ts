@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
 import type { Sql } from "postgres";
+import type { WorkspaceView } from "@portal/contracts/workspace";
 import { needsAttention } from "@portal/shared/items";
 import type { Db } from "../db/client.ts";
 import { type ActivityStore, createMemoryActivityStore } from "./activity/store.ts";
@@ -27,6 +28,8 @@ import { httpError } from "./ops.ts";
 import { type SchedulerTimers, realTimers } from "./jobs/timers.ts";
 import { createTrackedService } from "./tracked/service.ts";
 import { type TrackedStore, createMemoryTrackedStore } from "./tracked/store.ts";
+import { createWorkspaceService } from "../workspace/service.ts";
+import { type WorkspaceStore, createMemoryWorkspaceStore } from "../workspace/store.ts";
 import { prepareTurn, runUsage } from "./turn.ts";
 import type {
   BulkItemStatus, Item, ItemFilter, ItemPatch, MessagePage, MessagePageQuery, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings,
@@ -84,6 +87,8 @@ export type OrchestratorRuntimeOptions = {
   activityStore?: ActivityStore;
   /** Where tracked sessions are kept; in memory unless given. */
   trackedStore?: TrackedStore;
+  /** Where the workspace (tabs and panes) is kept; in memory unless given. */
+  workspaceStore?: WorkspaceStore;
   domains?: DomainFactories;
 };
 
@@ -204,7 +209,7 @@ export function historyWindow(messages: OrchestratorMessage[], budgetTokens = HI
 
 export function createOrchestratorRuntime({
   store, settingsStore, deps, timers = realTimers, presence, model: buildModel = buildLanguageModel, db = null, sql = null,
-  activityStore = createMemoryActivityStore(), trackedStore = createMemoryTrackedStore(), domains = {},
+  activityStore = createMemoryActivityStore(), trackedStore = createMemoryTrackedStore(), workspaceStore = createMemoryWorkspaceStore(), domains = {},
 }: OrchestratorRuntimeOptions): OrchestratorRuntime {
   const listeners = new Set<(event: OrchestratorEvent) => void>();
   /** The chat turn running in each thread; a thread takes one turn at a time. */
@@ -247,6 +252,7 @@ export function createOrchestratorRuntime({
   } as OrchestratorHub;
   hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
   hub.tracked = createTrackedService(hub, trackedStore);
+  hub.workspace = createWorkspaceService(hub, workspaceStore);
   hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, { trimThread: trimStoredThread })))(hub);
   hub.world = (domains.world ?? createWorldService)(hub);
   hub.memory = (domains.memory ?? createMemoryService)(hub);
@@ -391,7 +397,7 @@ export function createOrchestratorRuntime({
     };
   }
 
-  async function chat(userMessage: OrchestratorMessage, threadId: string = MAIN_THREAD_ID): Promise<Response> {
+  async function chat(userMessage: OrchestratorMessage, threadId: string = MAIN_THREAD_ID, view: WorkspaceView | null = null): Promise<Response> {
     await ready;
     if (disposed) throw httpError("Portal is shutting down.", 409);
     const thread = await store.getThread(threadId);
@@ -417,7 +423,7 @@ export function createOrchestratorRuntime({
       const recent = historyWindow(await store.readMessages(threadId));
       const text = messageText(message);
       prepared = await prepareTurn(hub, {
-        kind: "chat", role: "chat", trigger: "user", threadId, interactive: true, query: text, touched,
+        kind: "chat", role: "chat", trigger: "user", threadId, interactive: true, query: text, touched, view,
         summary: threadId === MAIN_THREAD_ID ? "Answering" : `Answering in ${thread.title}`,
       });
       if (!prepared) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
@@ -574,6 +580,7 @@ export function createOrchestratorRuntime({
       disposed = true;
       deps.sessions.setPermissionAdvisor(null);
       hub.tracked.dispose();
+      hub.workspace.dispose();
       unsubscribePresence();
       unsubscribeSettings();
       if (statusTimer !== null) clearTimeout(statusTimer);

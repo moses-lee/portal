@@ -18,8 +18,11 @@ import { withRedaction } from "./tools/context.ts";
 import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
 import { threadTools } from "./tools/threads.ts";
 import { trackedTools } from "./tracked/tools.ts";
+import { lookingAtLine } from "./workspace/view.ts";
+import { workspaceTools } from "./workspace/tools.ts";
 import type { ModelRole, Scope } from "./types.ts";
 import type { WorldState } from "@portal/contracts/world";
+import type { WorkspaceView } from "@portal/contracts/workspace";
 
 export type TurnOptions = {
   kind: RunKind;
@@ -43,6 +46,8 @@ export type TurnOptions = {
   touched: Set<string>;
   /** A line for the status bar while the run is going. */
   summary?: string;
+  /** What the device that sent a chat message is looking at; the prompt gets a "You are looking at" line. Ignored on background turns. */
+  view?: WorkspaceView | null;
 };
 
 export type PreparedTurn = {
@@ -172,7 +177,9 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
   // An explicit list decides on its own; otherwise each tool family offers what suits the turn
   // (a background turn gets the background subset of the classic tools and the domains' background tools).
   const offered: DomainToolContext = toolNames ? { ...ctx, interactive: true } : ctx;
-  const domain: ToolSet = { ...threadTools(offered), ...trackedTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered) };
+  const domain: ToolSet = {
+    ...threadTools(offered), ...trackedTools(offered), ...workspaceTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered),
+  };
   const classic = createTools(offered) as unknown as ToolSet;
   let tools: ToolSet = { ...classic, ...withRedaction(ctx, domain) };
   if (toolNames) {
@@ -209,6 +216,7 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
     const turn: TurnInfo = {
       runId: run.id, kind: options.kind, role: options.role, origin: options.interactive ? "chat" : "job",
       threadId: options.threadId, jobId: options.jobId ?? null, intentId: options.intentId ?? null, scope,
+      view: options.interactive ? options.view ?? null : null,
     };
     const ctx: DomainToolContext = {
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: options.touched, interactive: options.interactive,
@@ -218,7 +226,9 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
     // A chat turn starts with the common tools and loads the rest by group; background turns name their tools.
     const loader = options.interactive && !options.toolNames ? createToolLoader(tools) : null;
     if (loader) tools = { ...tools, ...loader.tool };
-    const [login, world] = await Promise.all([hub.deps.github.login().catch(() => null), hub.world.current().catch(() => null)]);
+    const [login, world, workspace] = await Promise.all([
+      hub.deps.github.login().catch(() => null), hub.world.current().catch(() => null), hub.workspace.read().catch(() => null),
+    ]);
     // Memory is kept per repo as much as per project or session, so retrieval gets the repos behind them too.
     const memory = await hub.memory.promptContext({ scope: world ? widenScope(scope, world) : scope, query: options.query, threadId: options.threadId });
     // Only a chat turn with the user hears about changes; a failure to read them costs the section, not the turn.
@@ -227,9 +237,11 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       console.error(`Could not read the recent changes (${errorMessage(err)}).`);
       return "";
     }) : "";
+    // Only a chat turn is looking at anything; the line costs the turn nothing when it cannot be built.
+    const looking = turn.view ? await lookingAtLine(turn.view, workspace, hub.deps.sessions).catch(() => "") : "";
     const system = systemPrompt({
-      login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved, chat, changes,
-      world: world ? hub.world.render(world, { scope }) : "",
+      login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved, chat, changes, looking,
+      world: world ? hub.world.render(world, { scope, workspace }) : "",
       thread: thread && thread.kind === "side" ? { title: thread.title } : null,
       toolGroups: loader ? toolGroupsGuidance(new Set(Object.keys(tools))) : "",
     });

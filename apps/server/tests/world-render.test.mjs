@@ -208,3 +208,35 @@ test("a scope stored with an id prefix still finds its rows in focus, and a miss
   assert.doesNotMatch(text, /not found|deleted/);
   assert.equal(text.split('"Review auth"').length, 2, "shown once, in focus");
 });
+
+test("the Workspace tabs section follows the tracked sessions: one line per tab with its name and panes by short id and state, capped at 8", () => {
+  const pane = (id, sessionId = null) => ({ kind: "pane", id, sessionId });
+  const tab = (id, root, title = null) => ({ id, title, titleSource: title ? "user" : null, createdAt: T0, root });
+  const sessions = [
+    worldSession({ id: "17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01", title: "Review auth" }),
+    worldSession({ id: "5e0f1b2c-7d3e-4a1b-8c2d-000000000002", title: "First", activity: "working", liveness: "busy", status: "running tests" }),
+    worldSession({ id: "5e0f9d8e-1a2b-4c3d-9e8f-000000000003", title: null, activity: "waiting" }),
+  ];
+  const input = world({ projects: [worldProject()], sessions, tracked: ["17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01"] });
+  const split = { kind: "split", id: "split-1", direction: "row", sizes: [50, 50], children: [pane("pa", sessions[0].id), { kind: "split", id: "split-2", direction: "column", sizes: [50, 50], children: [pane("pb", sessions[1].id), pane("pc")] }] };
+  const tabs = [
+    tab("tab-aaaa-1111", split, "Auth work"),
+    tab("tab-bbbb-2222", pane("pd", sessions[2].id)),
+    tab("tab-cccc-3333", pane("pe", "deadbeef-0000-4000-8000-000000000000")),
+    ...Array.from({ length: 7 }, (_, i) => tab(`tab-more-${i}00`, pane(`pm${i}`))),
+  ];
+  const text = renderWorld(input, { workspace: { tabs, version: 9 } });
+  const at = (needle) => {
+    const index = text.indexOf(needle);
+    assert.ok(index >= 0, `${needle} in:\n${text}`);
+    return index;
+  };
+  assert.ok(at("Tracked sessions:") < at("Workspace tabs:"));
+  assert.ok(at("Workspace tabs:") < at("Repos and their Portal projects"));
+  assert.match(text, /Workspace tabs:\n- "Auth work" \[tab-aaaa\]: 17329ac6 \(idle\), 5e0f1b2c \(busy\), new session\n- "Untitled" \[tab-bbbb\]: 5e0f9d8e \(waiting\)\n- "Untitled" \[tab-cccc\]: deadbeef \(unknown\)\n- "New session" \[tab-more\]: new session\n/);
+  assert.equal(text.match(/^- "New session"/gm).length, 5, "8 tabs shown in all");
+  assert.match(text, /- and 2 more\n/);
+  assert.ok(!renderWorld(input).includes("Workspace tabs"), "no workspace, no section");
+  assert.ok(!renderWorld(input, { workspace: { tabs: [], version: 0 } }).includes("Workspace tabs"), "an empty workspace has no section");
+  assert.equal(renderWorld(input, { workspace: { tabs, version: 9 } }), text, "deterministic");
+});

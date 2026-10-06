@@ -13,6 +13,7 @@ import type { Approval } from "@portal/contracts/approvals";
 import type { Intent, IntentPatch, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus, RunTrigger, RunUsage } from "@portal/contracts/jobs";
 import type { CoreDocument, MemoryEntity, MemoryRecord } from "@portal/contracts/memory";
 import type { WorldState } from "@portal/contracts/world";
+import type { Workspace, WorkspaceView } from "@portal/contracts/workspace";
 import type { Sql } from "postgres";
 import type { Db } from "../db/client.ts";
 import type { ActivityService } from "./activity/service.ts";
@@ -20,6 +21,7 @@ import type { OrchestratorDeps, OrchestratorSettingsStore } from "./deps.ts";
 import type { ProviderOptions } from "./model.ts";
 import type { SchedulerTimers } from "./jobs/timers.ts";
 import type { TrackedService } from "./tracked/service.ts";
+import type { WorkspaceService } from "../workspace/service.ts";
 import type { ToolContext } from "./tools/context.ts";
 import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, OrchestratorStore, Scope } from "./types.ts";
 
@@ -42,6 +44,8 @@ export type TurnInfo = {
   intentId: string | null;
   /** What the turn is about; memory retrieval narrows to it. */
   scope: Scope;
+  /** What the device that sent a chat message is looking at (docs/WORKSPACE.md, decision 16); null when the message carried none, or on background turns. */
+  view?: WorkspaceView | null;
 };
 
 /** What domain tool factories receive: the classic tool context plus the hub and the turn. */
@@ -159,8 +163,8 @@ export interface WorldService {
    * none do.
    */
   recentChanges(input: { threadId: string | null; scope: Scope }): Promise<string>;
-  /** The world as prompt text within a token budget, the parts about `scope` first. */
-  render(world: WorldState, opts?: { budgetTokens?: number; scope?: Scope }): string;
+  /** The world as prompt text within a token budget, the parts about `scope` first; `workspace` adds the Workspace tabs section. */
+  render(world: WorldState, opts?: { budgetTokens?: number; scope?: Scope; workspace?: Workspace | null }): string;
   /** resolve_pull, resolve_repo, resolve_session, get_world, ... */
   tools(ctx: DomainToolContext): ToolSet;
   /** The tracked set changed (full ids, oldest tracked first): the latest world takes it at once, without a rebuild. */
@@ -222,6 +226,8 @@ export interface OrchestratorHub {
   activity: ActivityService;
   /** The tracked sessions: track and untrack (logged and pushed), list. */
   tracked: TrackedService;
+  /** The workspace (tabs and split panes): read and apply operations (logged and pushed). */
+  workspace: WorkspaceService;
   jobs: JobsService;
   world: WorldService;
   memory: MemoryService;

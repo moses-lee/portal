@@ -150,7 +150,7 @@ test("two concurrent tracks of one session make one row, one log entry, and one 
 
 test("deleting a tracked session drops its row and pushes the list, without logging an untrack", async (t) => {
   const { app, ctx, events, deleted } = await setup(t);
-  assert.equal(deleted.size, 1, "the service listens for deleted sessions");
+  assert.equal(deleted.size, 2, "the tracked and workspace services listen for deleted sessions");
   await inject(app, "PUT", "/api/portal/tracked/s1");
   await inject(app, "PUT", "/api/portal/tracked/s2");
   const response = await inject(app, "DELETE", "/api/sessions/s1");

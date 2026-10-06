@@ -19,6 +19,7 @@ import { registerTrackedRoutes } from "./tracked/routes.ts";
 import type { Item, OrchestratorEvent, OrchestratorMessage } from "./types.ts";
 import { MAIN_THREAD_ID, MAX_BULK_ITEMS } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
+import { parseView } from "./workspace/view.ts";
 
 type IdParams = { Params: { id: string } };
 
@@ -121,7 +122,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return runtime.history(MAIN_THREAD_ID, query);
   });
 
-  /** Answers a chat turn in `threadId` for the request's `{ message }` body. */
+  /** Answers a chat turn in `threadId` for the request's `{ message, view? }` body. */
   async function postMessage(req: FastifyRequest, reply: FastifyReply, threadId: string) {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
@@ -129,14 +130,21 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     if (!body) return notAnObject(reply);
     const message = parseUserMessage(body.message);
     if (!message) return reply.code(400).send({ error: "Expected { message } with role \"user\" and a non-empty text part." });
-    return sendWebResponse(reply, await runtime.chat(message, threadId));
+    let view = null;
+    try {
+      view = body.view === undefined || body.view === null ? null : parseView(body.view);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+    return sendWebResponse(reply, await runtime.chat(message, threadId, view));
   }
 
   /**
-   * `POST /api/portal/messages` — body `{ message }`, the newest user message only (the server owns
-   * the history); only its id and text are used. A turn in the main thread; answers with the AI SDK
-   * UI message stream; 409 (JSON) while not ready or while the main thread is answering. Not
-   * compressed: gzip would hold the stream's chunks back.
+   * `POST /api/portal/messages` — body `{ message, view? }`, the newest user message only (the server
+   * owns the history); only its id and text are used. `view` (`{ sessionId, tabId, paneId }`, each a
+   * string or null) is what the sending device is looking at; the turn's prompt names it. A turn in
+   * the main thread; answers with the AI SDK UI message stream; 409 (JSON) while not ready or while
+   * the main thread is answering. Not compressed: gzip would hold the stream's chunks back.
    */
   app.post("/api/portal/messages", { compress: false }, (req, reply) => postMessage(req, reply, MAIN_THREAD_ID));
 
@@ -248,7 +256,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `threads`, `approvals`, `intents`, and `tracked`, then forwards every runtime event as
+   * `items`, `threads`, `approvals`, `intents`, `tracked`, and `workspace`, then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter cadence of jobs that have an idle one.
    */
@@ -257,13 +265,13 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
     // The browser shows open and snoozed items only; resolved ones stay in the store for the agent.
-    const [status, items, threads, approvals, intents, tracked] = await Promise.all([
+    const [status, items, threads, approvals, intents, tracked, workspace] = await Promise.all([
       runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.listThreads(), runtime.hub.approvals.pending(),
-      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.tracked.list(),
+      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.tracked.list(), runtime.hub.workspace.read(),
     ]);
     const opening: OrchestratorEvent[] = [
       { type: "status", status }, { type: "items", items }, { type: "threads", threads },
-      { type: "approvals", approvals }, { type: "intents", intents }, { type: "tracked", sessions: tracked },
+      { type: "approvals", approvals }, { type: "intents", intents }, { type: "tracked", sessions: tracked }, { type: "workspace", workspace },
     ];
     const stream = openEventStream(req, reply);
     if (stream.closed) return reply;

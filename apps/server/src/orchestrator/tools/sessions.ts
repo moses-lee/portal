@@ -309,6 +309,8 @@ export function sessionTools(ctx: ToolContext) {
         const sessionId = await full(input.sessionId);
         // Untracked first, so the activity log shows the untrack before the delete (the cascade would drop the row unlogged).
         if (domain) await domain.hub.tracked.untrack(sessionId, "portal", trackContext(domain, "deleted"));
+        // Its workspace pane goes the same way (the delete event would close it a moment later; this keeps the order deterministic).
+        if (domain) await domain.hub.workspace.onSessionDeleted(sessionId);
         return { sessionId, deleted: await deps.sessions.remove(sessionId) };
       },
     ),
