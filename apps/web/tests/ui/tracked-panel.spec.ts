@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { makeSession, portalItem, project, setupPortal } from "./fixtures";
+import { makeSession, portalItem, project, setupPortal, tabUrl } from "./fixtures";
 import type { SessionSummary } from "../../src/lib/types";
 
 const finishedTitle = "Summarise the review of PR 42";
@@ -287,9 +287,10 @@ test("an item's open-session action opens the session in the panel instead of na
   const panel = panelOf(page);
   await expect(panel.getByRole("heading", { name: finishedTitle })).toBeVisible();
 
-  // "Open full page" still navigates.
+  // "Open full page" still navigates: through the resolver, into a workspace tab holding the session.
   await panel.getByRole("button", { name: "Open full page" }).click();
-  await expect(page).toHaveURL(/\/sessions\/s1$/);
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
 });
 
 test("Ask Portal from the chat view prefills its composer in place", async ({ page }) => {

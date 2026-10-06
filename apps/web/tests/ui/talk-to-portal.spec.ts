@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal } from "./fixtures";
+import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal, tabUrl } from "./fixtures";
 import { approval } from "./orchestrator-fixtures";
 import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
@@ -50,11 +50,13 @@ test("Portal is the home: the sidebar's Chat entry opens / and is marked current
   // Projects opens the projects column; a new conversation from there leaves Portal.
   await nav.getByRole("button", { name: "Projects", exact: true }).click();
   await sidebar.getByRole("button", { name: "New conversation in portal", exact: true }).click();
-  await expect(page).toHaveURL(/\/new$/);
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
   await sidebar.getByRole("button", { name: "Back to Portal" }).click();
   await recent.getByRole("button", { name: new RegExp(firstTitle) }).click();
-  await expect(page).toHaveURL(/\/sessions\/s1$/);
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
 });
 
 test("without an API key the page asks for one and Add API key opens settings", async ({
@@ -132,8 +134,10 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
     (request) => request.path === "/api/portal/messages" && request.method === "POST",
   );
   expect(sent).toHaveLength(1);
-  expect(Object.keys(sent[0].body as object)).toEqual(["message"]);
+  // Beside it, what this device is looking at (docs/WORKSPACE.md, decision 16): nothing, on the Portal page.
+  expect(Object.keys(sent[0].body as object).sort()).toEqual(["message", "view"]);
   expect((sent[0].body as { message: { role: string } }).message.role).toBe("user");
+  expect((sent[0].body as { view: unknown }).view).toEqual({ sessionId: null, tabId: null, paneId: null });
 
   // Resolve goes through PATCH and empties the page and the badge; the thread's messages are unchanged.
   await foyer.click();

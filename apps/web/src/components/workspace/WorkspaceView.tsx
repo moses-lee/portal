@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { Tabs } from "radix-ui";
 import type { PaneNode, Tab } from "@portal/contracts/workspace";
 import { tabPanes } from "@portal/shared/workspace";
-import { MAX_PANES_PER_TAB } from "@portal/shared/workspace";
 import RoomBackground from "../RoomBackground";
 import SessionPane, { type InitialSend, type StartPaneProps } from "../SessionPane";
 import { useSessions } from "../SessionsProvider";
@@ -17,9 +16,9 @@ import TabStrip from "./TabStrip";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 import type { AgentActivity } from "@/lib/agent-activity";
 import { navigateTo } from "@/lib/navigation";
-import { startPath, tabPath, type WorkspaceRoute } from "@/lib/session-routes";
+import { isResolverPath, startPath, tabPath, type WorkspaceRoute } from "@/lib/session-routes";
 import { sessionState } from "@/lib/session-state";
-import { locationPath, mountedTabIds, paneTitle, rememberFocused, resolveFocus, resolveRoute, tabTitle } from "@/lib/workspace";
+import { canSplitPane, locationPath, mountedTabIds, paneTitle, rememberFocused, resolveFocus, resolveRoute, tabTitle } from "@/lib/workspace";
 import { focusScope, MOBILE_QUERY, NARROW_QUERY, switcherPanes, tabRendersSplit, viewportKind, type PaneRef } from "@/lib/workspace-mobile";
 
 export type WorkspaceViewProps = {
@@ -59,7 +58,7 @@ export default function WorkspaceView({
 }: WorkspaceViewProps) {
   const searchParams = useSearchParams();
   const paneParam = searchParams.get("pane");
-  const { workspace, loaded, apply, error, dismissError, setFocus, unread, unreadPanes, keyOf } = useWorkspace();
+  const { workspace, loaded, pending, apply, error, dismissError, setFocus, unread, unreadPanes, keyOf } = useWorkspace();
   const { sessions } = useSessions();
   const actions = useWorkspaceActions();
   // The viewport class, the same breakpoints the shell uses for the sidebar (768) and `ResponsiveDialog`.
@@ -101,12 +100,17 @@ export default function WorkspaceView({
 
   // The resolvers (decision 7 and 9): once the workspace is known, `/sessions/<id>` focuses the
   // session's pane or opens it in a new tab, `/new` a start page. One try per path: a refused open
-  // is reported, not retried on every workspace change.
+  // is reported, not retried on every workspace change. Not while an op of this device is in
+  // flight: the bare start page creating a session shows the guessed workspace (a tab, no start
+  // pane) before the caller moves the URL to it, and resolving that would open a second start page.
   const resolving = useRef(false);
   const failedRoute = useRef<string | null>(null);
   const routeKey = route.kind === "session" ? `session:${route.sessionId}` : route.kind === "start" ? "start" : null;
   useEffect(() => {
-    if (!loaded || route.kind === "tab" || resolving.current || failedRoute.current === routeKey) return;
+    if (!loaded || pending || route.kind === "tab" || resolving.current || failedRoute.current === routeKey) return;
+    // The URL is read live: the op that just settled navigated in the same tick, and this render
+    // still carries the resolver path the next one will not.
+    if (!isResolverPath(window.location.pathname)) return;
     const resolution = resolveRoute(workspace, route);
     if (resolution.kind === "stay") return;
     if (resolution.kind === "focus") {
@@ -124,7 +128,7 @@ export default function WorkspaceView({
       .finally(() => {
         resolving.current = false;
       });
-  }, [loaded, route, routeKey, workspace, apply]);
+  }, [loaded, pending, route, routeKey, workspace, apply]);
   useEffect(() => {
     failedRoute.current = null;
   }, [routeKey]);
@@ -190,7 +194,9 @@ export default function WorkspaceView({
         onSessionDeleted={onSessionDeleted}
         onActivity={reportActivity}
         pane={{
-          canSplit: count < MAX_PANES_PER_TAB,
+          // What the reducer would refuse (the pane cap, the depth cap) is disabled, not offered.
+          canSplitRight: canSplitPane(workspace, t.id, p.id, "right"),
+          canSplitDown: canSplitPane(workspace, t.id, p.id, "bottom"),
           onSplitRight: () => void actions.splitPane(t.id, p.id, "right"),
           onSplitDown: () => void actions.splitPane(t.id, p.id, "bottom"),
           onMoveToTab: count > 1 ? () => void actions.moveToOwnTab(p) : null,

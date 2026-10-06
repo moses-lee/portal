@@ -63,7 +63,12 @@ function SplitGroup({
   const sizesKey = node.sizes.join(",");
   useEffect(() => {
     if (sameSizes(node.sizes, applied.current)) return;
+    const countChanged = node.sizes.length !== applied.current.length;
     applied.current = node.sizes;
+    // A panel was added or removed in this commit: the group registers the new count on its next
+    // render and lays out from `defaultLayout` (passed fresh each render) then. `setLayout` now
+    // would be refused as a layout for the old count, and the throw would take the page down.
+    if (countChanged) return;
     groupRef.current?.setLayout(layoutOf(node, keyOf));
     // The sizes are what matters; the node object changes with every workspace copy.
     // eslint-disable-next-line react-hooks/exhaustive-deps

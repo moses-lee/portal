@@ -31,8 +31,9 @@ import { activityLabels, type AgentActivity } from "@/lib/agent-activity";
 
 /** The pane menu's actions (docs/WORKSPACE.md, "Pane header"); absent on the bare start page of an empty workspace. */
 export type PaneMenu = {
-  /** False once the tab is full (4 panes): the split items are disabled. */
-  canSplit: boolean;
+  /** False when the workspace would refuse the split (the tab is full, or it would nest too deep): the item is disabled. */
+  canSplitRight: boolean;
+  canSplitDown: boolean;
   onSplitRight: () => void;
   onSplitDown: () => void;
   /** Offered when the pane shares its tab with others. */
@@ -230,11 +231,11 @@ export default function SessionHeader({
               </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={!pane.canSplit} onSelect={pane.onSplitRight}>
+              <DropdownMenuItem disabled={!pane.canSplitRight} onSelect={pane.onSplitRight}>
                 <SquareSplitHorizontal />
                 Split right
               </DropdownMenuItem>
-              <DropdownMenuItem disabled={!pane.canSplit} onSelect={pane.onSplitDown}>
+              <DropdownMenuItem disabled={!pane.canSplitDown} onSelect={pane.onSplitDown}>
                 <SquareSplitVertical />
                 Split down
               </DropdownMenuItem>

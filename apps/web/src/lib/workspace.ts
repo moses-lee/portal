@@ -10,6 +10,7 @@ import type {
   LayoutNode,
   LayoutPreset,
   PaneNode,
+  SplitEdge,
   SplitNode,
   Tab,
   Workspace,
@@ -18,11 +19,13 @@ import type {
 } from "@portal/contracts/workspace";
 import {
   allPanes,
+  applyWorkspaceOp,
   defaultTabTitle,
   findTab,
   locateSession,
   presetSlotCount,
   tabPanes,
+  WorkspaceError,
 } from "@portal/shared/workspace";
 import { tabPath } from "./session-routes.ts";
 
@@ -148,6 +151,22 @@ export function sessionIdsOf(tab: Tab): string[] {
  */
 export function arrangeOp(tab: Tab, preset: LayoutPreset): WorkspaceOp {
   return { op: "arrange", tabId: tab.id, preset, sessionIds: sessionIdsOf(tab).slice(0, presetSlotCount(preset)) };
+}
+
+/**
+ * Whether the reducer would let a start page split `paneId` on `edge`: false once the tab holds 4
+ * panes or the split would nest 3 deep (a pane in a column under a row, split sideways). The menus
+ * disable what it refuses rather than offer it and report the refusal.
+ */
+export function canSplitPane(ws: Workspace, tabId: string, paneId: string, edge: SplitEdge): boolean {
+  let n = 0;
+  try {
+    applyWorkspaceOp(ws, { op: "open", sessionId: null, target: { tabId, paneId, edge } }, () => `probe-${n++}`);
+    return true;
+  } catch (error) {
+    if (error instanceof WorkspaceError) return false;
+    throw error;
+  }
 }
 
 /** The tab to show once `tabId` closes: its right neighbour, else its left one, else none. */

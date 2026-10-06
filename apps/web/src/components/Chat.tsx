@@ -58,7 +58,7 @@ import {
   type PortalView,
 } from "@/lib/session-routes";
 import { allPanes } from "@portal/shared/workspace";
-import { locationPath } from "@/lib/workspace";
+import { canSplitPane, locationPath } from "@/lib/workspace";
 import type {
   GithubSummary,
   ProjectSummary,
@@ -711,7 +711,7 @@ function ChatShell() {
         onSelect={sidebarSelect}
         onOpenInNewTab={sidebarOpenInTab}
         onOpenBeside={sidebarOpenBeside}
-        canOpenBeside={focus.pane !== null}
+        canOpenBeside={focus.tab !== null && focus.pane !== null && canSplitPane(workspace, focus.tab.id, focus.pane.id, "right")}
         returnFocus={sidebarOpener}
         onPrefetch={sidebarPrefetch}
         onDeleteSession={sidebarDelete}
