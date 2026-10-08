@@ -71,6 +71,10 @@ test("Needs you groups the items by kind, approvals first, newest first inside a
   await expect(checks.getByRole("article")).toHaveText([new RegExp(checks1.title), new RegExp(checks2.title)]);
   await expect(view.getByRole("region", { name: /^Needs approval/ }).getByRole("article", { name: approvalItem.title })).toBeVisible();
   await expect(view.getByRole("region", { name: /^Watch update/ }).getByRole("article", { name: watch.title })).toBeVisible();
+  // A card's header opens its menu on right-click, as the … button does.
+  await view.getByRole("heading", { name: watch.title }).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Snooze 1h" })).toBeVisible();
+  await page.keyboard.press("Escape");
   await page.screenshot({ animations: "disabled", fullPage: true, path: info.outputPath("attention.png") });
 });
 

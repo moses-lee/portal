@@ -16,6 +16,17 @@ function PopoverTrigger({
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />
 }
 
+/**
+ * Portalled content is still a React child of its trigger's subtree, so a right-click inside it would
+ * bubble to an enclosing context-menu trigger. Stop it here; the browser's own menu still shows.
+ */
+function stopContextMenu<E extends React.SyntheticEvent>(handler?: (event: E) => void) {
+  return (event: E) => {
+    handler?.(event)
+    event.stopPropagation()
+  }
+}
+
 function PopoverContent({
   className,
   align = "center",
@@ -33,6 +44,7 @@ function PopoverContent({
           className
         )}
         {...props}
+        onContextMenu={stopContextMenu(props.onContextMenu)}
       />
     </PopoverPrimitive.Portal>
   )

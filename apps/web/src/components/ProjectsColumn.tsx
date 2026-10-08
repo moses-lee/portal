@@ -41,10 +41,9 @@ import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ContextActions, MenuItem, MenuSeparator } from "./ActionMenu";
 import {
   Tooltip,
   TooltipContent,
@@ -177,181 +176,189 @@ const SessionRow = memo(function SessionRow({
       setDeleting(false);
     }
   };
+  /** Rename swaps the row for its input: focus goes there, not back to the trigger. */
+  const onMenuCloseAutoFocus = (event: Event) => {
+    if (renameInput.current) {
+      event.preventDefault();
+      renameInput.current.focus();
+    }
+  };
+  const items = (
+    <>
+      <MenuItem onSelect={() => onOpenInNewTab(session.id)}>
+        <PanelsTopLeft />
+        Open in new tab
+      </MenuItem>
+      <MenuItem disabled={!onOpenBeside} onSelect={() => onOpenBeside?.(session.id)}>
+        <Columns2 />
+        Open beside current
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onSelect={() => setRenaming(true)}>
+        <PencilLine />
+        Rename
+      </MenuItem>
+      <MenuItem onSelect={() => onTogglePin(session.id)}>
+        {pinned ? <PinOff /> : <Pin />}
+        {pinned ? "Unpin session" : "Pin session"}
+      </MenuItem>
+      <MenuItem
+        onSelect={() => {
+          setTrackError(null);
+          onToggleTrack(session.id, !tracked).catch((e: unknown) =>
+            setTrackError(
+              e instanceof Error ? e.message : "Could not change tracking.",
+            ),
+          );
+        }}
+      >
+        {tracked ? <EyeOff /> : <Eye />}
+        {tracked ? "Untrack session" : "Track session"}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem
+        variant="destructive"
+        onSelect={() => setConfirming(true)}
+      >
+        <Trash2 />
+        Delete session
+      </MenuItem>
+    </>
+  );
   return (
-    <div className="sidebar-row group" data-active={active}>
-      {renaming ? (
-        <div className="min-w-0 px-2.5 py-1">
-          <RenameField
-            inputRef={renameInput}
-            initial={session.title ?? ""}
-            ariaLabel="Session title"
-            maxLength={SESSION_TITLE_MAX}
-            onCancel={() => setRenaming(false)}
-            onCommit={(next) => {
-              setRenaming(false);
-              setTrackError(null);
-              onRename(session.id, next).catch((e: unknown) =>
-                setTrackError(
-                  e instanceof Error ? e.message : "Could not rename the session.",
-                ),
-              );
-            }}
-          />
-        </div>
-      ) : (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={title}
-            aria-current={active ? "page" : undefined}
-            onClick={() => onSelect(session.id)}
-            onPointerEnter={startHover}
-            onPointerLeave={cancelHover}
-            className="flex min-w-0 gap-2.5 rounded-xl px-2.5 py-1.5 text-left"
-          >
-            <span
-              data-state={state}
-              className="mt-[6px] inline-flex shrink-0"
-              aria-label={sessionStateLabels[state]}
-            >
-              <span className="status-dot" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex min-w-0 items-center gap-1">
-                <span className="sidebar-title min-w-0 text-foreground/90">{title}</span>
-                {inWorkspace && !active && (
-                  <PanelsTopLeft role="img" aria-label="Open in the workspace" className="size-2.5 shrink-0 text-muted-foreground" />
-                )}
-              </span>
-              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
-                <AgentLogo
-                  agentId={session.agentId}
-                  className="!size-[11px] opacity-70"
-                />
-                {pinned && <Pin className="size-2.5" aria-label="Pinned" />}
-                {state !== "finished" && state !== "offline" ? (
-                  <span>{sessionStateLabels[state]}</span>
-                ) : session.cwdMissing ? (
-                  "Folder missing"
-                ) : state === "offline" ? (
-                  sessionStateLabels.offline
-                ) : (
-                  <span>{age === "now" ? "Just now" : `${age} ago`}</span>
-                )}
-              </span>
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="max-w-72 break-words">
-          {title}
-        </TooltipContent>
-      </Tooltip>
-      )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Actions for ${title}`}
-            className="mt-2 text-muted-foreground opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
-          >
-            <MoreHorizontal />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          side="right"
-          onCloseAutoFocus={(event) => {
-            // Rename swaps the row for its input: focus goes there, not back to the trigger.
-            if (renameInput.current) {
-              event.preventDefault();
-              renameInput.current.focus();
-            }
-          }}
-        >
-          <DropdownMenuItem onSelect={() => onOpenInNewTab(session.id)}>
-            <PanelsTopLeft />
-            Open in new tab
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!onOpenBeside} onSelect={() => onOpenBeside?.(session.id)}>
-            <Columns2 />
-            Open beside current
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setRenaming(true)}>
-            <PencilLine />
-            Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onTogglePin(session.id)}>
-            {pinned ? <PinOff /> : <Pin />}
-            {pinned ? "Unpin session" : "Pin session"}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => {
-              setTrackError(null);
-              onToggleTrack(session.id, !tracked).catch((e: unknown) =>
-                setTrackError(
-                  e instanceof Error ? e.message : "Could not change tracking.",
-                ),
-              );
-            }}
-          >
-            {tracked ? <EyeOff /> : <Eye />}
-            {tracked ? "Untrack session" : "Track session"}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            variant="destructive"
-            onSelect={() => setConfirming(true)}
-          >
-            <Trash2 />
-            Delete session
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {confirming && (
-        <div
-          role="group"
-          aria-label={`Delete ${title}?`}
-          className="col-span-2 m-2 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-xs"
-        >
-          <p className="leading-relaxed">
-            Delete this conversation and its terminals? This removes its
-            transcript from Portal.
-          </p>
-          {error && (
-            <p role="alert" className="mt-2 text-destructive">
-              {error}
-            </p>
-          )}
-          <div className="mt-3 flex gap-2">
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={deleting}
-              onClick={() => void remove()}
-            >
-              {deleting ? "Deleting…" : "Delete"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={deleting}
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </Button>
+    <ContextActions items={items} disabled={renaming} onCloseAutoFocus={onMenuCloseAutoFocus}>
+      <div className="sidebar-row group" data-active={active}>
+        {renaming ? (
+          <div className="min-w-0 px-2.5 py-1">
+            <RenameField
+              inputRef={renameInput}
+              initial={session.title ?? ""}
+              ariaLabel="Session title"
+              maxLength={SESSION_TITLE_MAX}
+              onCancel={() => setRenaming(false)}
+              onCommit={(next) => {
+                setRenaming(false);
+                setTrackError(null);
+                onRename(session.id, next).catch((e: unknown) =>
+                  setTrackError(
+                    e instanceof Error ? e.message : "Could not rename the session.",
+                  ),
+                );
+              }}
+            />
           </div>
-        </div>
-      )}
-      {trackError && (
-        <p role="alert" className="col-span-2 px-3 pb-1 text-[11px] text-destructive">
-          {trackError}
-        </p>
-      )}
-    </div>
+        ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={title}
+              aria-current={active ? "page" : undefined}
+              onClick={() => onSelect(session.id)}
+              onPointerEnter={startHover}
+              onPointerLeave={cancelHover}
+              className="flex min-w-0 gap-2.5 rounded-xl px-2.5 py-1.5 text-left"
+            >
+              <span
+                data-state={state}
+                className="mt-[6px] inline-flex shrink-0"
+                aria-label={sessionStateLabels[state]}
+              >
+                <span className="status-dot" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-center gap-1">
+                  <span className="sidebar-title min-w-0 text-foreground/90">{title}</span>
+                  {inWorkspace && !active && (
+                    <PanelsTopLeft role="img" aria-label="Open in the workspace" className="size-2.5 shrink-0 text-muted-foreground" />
+                  )}
+                </span>
+                <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+                  <AgentLogo
+                    agentId={session.agentId}
+                    className="!size-[11px] opacity-70"
+                  />
+                  {pinned && <Pin className="size-2.5" aria-label="Pinned" />}
+                  {state !== "finished" && state !== "offline" ? (
+                    <span>{sessionStateLabels[state]}</span>
+                  ) : session.cwdMissing ? (
+                    "Folder missing"
+                  ) : state === "offline" ? (
+                    sessionStateLabels.offline
+                  ) : (
+                    <span>{age === "now" ? "Just now" : `${age} ago`}</span>
+                  )}
+                </span>
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="max-w-72 break-words">
+            {title}
+          </TooltipContent>
+        </Tooltip>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Actions for ${title}`}
+              className="mt-2 text-muted-foreground opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+            >
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            side="right"
+            onCloseAutoFocus={onMenuCloseAutoFocus}
+          >
+            {items}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {confirming && (
+          <div
+            role="group"
+            aria-label={`Delete ${title}?`}
+            className="col-span-2 m-2 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-xs"
+          >
+            <p className="leading-relaxed">
+              Delete this conversation and its terminals? This removes its
+              transcript from Portal.
+            </p>
+            {error && (
+              <p role="alert" className="mt-2 text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={deleting}
+                onClick={() => void remove()}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={deleting}
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+        {trackError && (
+          <p role="alert" className="col-span-2 px-3 pb-1 text-[11px] text-destructive">
+            {trackError}
+          </p>
+        )}
+      </div>
+    </ContextActions>
   );
 });
 
@@ -410,6 +417,13 @@ const ProjectsColumn = memo(function ProjectsColumn({
     mode: "rename" | "remove";
   } | null>(null);
   const renameInput = useRef<HTMLInputElement>(null);
+  /** Rename swaps the project row for its input: focus goes there when a project menu closes. */
+  const onProjectMenuCloseAutoFocus = (event: Event) => {
+    if (renameInput.current) {
+      event.preventDefault();
+      renameInput.current.focus();
+    }
+  };
   const [error, setError] = useState<{ id: string; message: string } | null>(
     null,
   );
@@ -575,130 +589,132 @@ const ProjectsColumn = memo(function ProjectsColumn({
           const hiddenCount = rows.length - capped.length;
           const showingAll = expanded.has(project.id);
           const visible = query || showingAll ? rows : capped;
+          const projectItems = (
+            <>
+              <MenuItem
+                onSelect={() => onTogglePinProject(project.id)}
+              >
+                {isPinned ? <PinOff /> : <Pin />}
+                {isPinned ? "Unpin project" : "Pin project"}
+              </MenuItem>
+              <MenuItem
+                onSelect={() =>
+                  setEditing({ id: project.id, mode: "rename" })
+                }
+              >
+                Rename
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem
+                variant="destructive"
+                onSelect={() =>
+                  setEditing({ id: project.id, mode: "remove" })
+                }
+              >
+                <Trash2 />
+                Remove project
+              </MenuItem>
+            </>
+          );
           return (
             <section key={project.id} aria-label={project.name}>
-              <div className="mb-0.5 flex items-center gap-0.5 px-1">
-                {edit?.mode === "rename" ? (
-                  <RenameField
-                    inputRef={renameInput}
-                    initial={project.name}
-                    onCancel={() => setEditing(null)}
-                    onCommit={(name) => {
-                      setEditing(null);
-                      setError(null);
-                      Promise.resolve(onRenameProject(project.id, name)).catch(
-                        (e) =>
-                          setError({
-                            id: project.id,
-                            message:
-                              e instanceof Error
-                                ? e.message
-                                : "Could not rename project.",
-                          }),
-                      );
-                    }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => toggle(project.id)}
-                    aria-expanded={!isCollapsed}
-                    aria-controls={`project-${project.id}`}
-                    title={`${project.name} · ${project.displayPath}`}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
-                  >
-                    {project.git ? (
-                      <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-medium text-zinc-300">
-                        {project.name}
-                      </span>
-                      {parent && (
-                        <span className="block truncate text-[10px] text-muted-foreground">
-                          {parent.name}
-                        </span>
-                      )}
-                      {retention && (
-                        <span
-                          data-testid="worktree-retention"
-                          className={`block truncate text-[10px] ${project.keptReason ? "text-amber-300/80" : "text-muted-foreground/80"}`}
-                        >
-                          {retention}
-                        </span>
-                      )}
-                    </span>
-                    {isPinned && (
-                      <Pin className="size-2.5 shrink-0 text-muted-foreground" />
-                    )}
-                    {isCollapsed && working && (
-                      <span
-                        className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-[#2fe36b]"}`}
-                        aria-label={waiting ? "Needs approval" : "Working"}
-                      />
-                    )}
-                    <ChevronRight
-                      className={`size-3 shrink-0 text-muted-foreground transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-                    />
-                  </button>
-                )}
-                <IconButton
-                  label={`New conversation in ${project.name}`}
-                  size="icon-xs"
-                  onClick={() => onNewSession(project.id)}
-                  className="text-muted-foreground"
-                >
-                  <SquarePen />
-                </IconButton>
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Actions for project ${project.name}`}
-                        className="text-muted-foreground"
-                      >
-                        <MoreHorizontal />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="start"
-                      side="right"
-                      onCloseAutoFocus={(event) => {
-                        if (renameInput.current) {
-                          event.preventDefault();
-                          renameInput.current.focus();
-                        }
+              <ContextActions items={projectItems} disabled={edit?.mode === "rename"} onCloseAutoFocus={onProjectMenuCloseAutoFocus}>
+                <div className="mb-0.5 flex items-center gap-0.5 px-1">
+                  {edit?.mode === "rename" ? (
+                    <RenameField
+                      inputRef={renameInput}
+                      initial={project.name}
+                      onCancel={() => setEditing(null)}
+                      onCommit={(name) => {
+                        setEditing(null);
+                        setError(null);
+                        Promise.resolve(onRenameProject(project.id, name)).catch(
+                          (e) =>
+                            setError({
+                              id: project.id,
+                              message:
+                                e instanceof Error
+                                  ? e.message
+                                  : "Could not rename project.",
+                            }),
+                        );
                       }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => toggle(project.id)}
+                      aria-expanded={!isCollapsed}
+                      aria-controls={`project-${project.id}`}
+                      title={`${project.name} · ${project.displayPath}`}
+                      className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
                     >
-                      <DropdownMenuItem
-                        onSelect={() => onTogglePinProject(project.id)}
+                      {project.git ? (
+                        <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-zinc-300">
+                          {project.name}
+                        </span>
+                        {parent && (
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {parent.name}
+                          </span>
+                        )}
+                        {retention && (
+                          <span
+                            data-testid="worktree-retention"
+                            className={`block truncate text-[10px] ${project.keptReason ? "text-amber-300/80" : "text-muted-foreground/80"}`}
+                          >
+                            {retention}
+                          </span>
+                        )}
+                      </span>
+                      {isPinned && (
+                        <Pin className="size-2.5 shrink-0 text-muted-foreground" />
+                      )}
+                      {isCollapsed && working && (
+                        <span
+                          className={`size-1.5 shrink-0 rounded-full ${waiting ? "bg-amber-300" : "bg-[#2fe36b]"}`}
+                          aria-label={waiting ? "Needs approval" : "Working"}
+                        />
+                      )}
+                      <ChevronRight
+                        className={`size-3 shrink-0 text-muted-foreground transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                      />
+                    </button>
+                  )}
+                  <IconButton
+                    label={`New conversation in ${project.name}`}
+                    size="icon-xs"
+                    onClick={() => onNewSession(project.id)}
+                    className="text-muted-foreground"
+                  >
+                    <SquarePen />
+                  </IconButton>
+                  <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Actions for project ${project.name}`}
+                          className="text-muted-foreground"
+                        >
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        side="right"
+                        onCloseAutoFocus={onProjectMenuCloseAutoFocus}
                       >
-                        {isPinned ? <PinOff /> : <Pin />}
-                        {isPinned ? "Unpin project" : "Pin project"}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() =>
-                          setEditing({ id: project.id, mode: "rename" })
-                        }
-                      >
-                        Rename
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={() =>
-                          setEditing({ id: project.id, mode: "remove" })
-                        }
-                      >
-                        <Trash2 />
-                        Remove project
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-              </div>
+                        {projectItems}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
+              </ContextActions>
               {project.exists === false && (
                 <p className="px-3 pb-2 text-[11px] text-amber-300">
                   Project folder is missing

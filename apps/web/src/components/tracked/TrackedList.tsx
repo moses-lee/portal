@@ -8,7 +8,8 @@ import { relativeAge } from "@/lib/relative-age";
 import { untrackCountdown } from "@/lib/session-lifecycle";
 import { defaultSettings } from "@/lib/settings";
 import type { TrackedGroup, TrackedRow as Row } from "@/lib/tracked-sessions";
-import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, type TrackedRowActions } from "./parts";
+import { ContextActions } from "../ActionMenu";
+import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, useTrackedRowMenu, type TrackedRowActions } from "./parts";
 
 /**
  * One tracked session. Memoised: the list re-renders on every live change to any session, and the
@@ -38,45 +39,47 @@ const TrackedRow = memo(function TrackedRow({
   const age = relativeAge(now - session.lastActiveAt);
   // Only finished rows count down: anything else is doing something, so no idle clock runs.
   const untracks = state === "finished" ? untrackCountdown(session, untrackAfterHours, now, trackedAt) : null;
+  const menu = useTrackedRowMenu(session, state, actions);
   return (
-    <li className="group flex items-start gap-0.5 rounded-xl hover:bg-white/5" data-session-id={session.id}>
-      <button
-        type="button"
-        aria-labelledby={`${id}-title`}
-        aria-describedby={untracks ? `${id}-state ${id}-meta ${id}-untracks` : `${id}-state ${id}-meta`}
-        onClick={() => onSelect(session.id)}
-        className="flex min-w-0 flex-1 items-start gap-2.5 rounded-xl py-1.5 pl-2.5 text-left"
-      >
-        <AgentLogo agentId={session.agentId} className="mt-0.5 !size-[14px] opacity-80" />
-        <span className="min-w-0 flex-1">
-          <span id={`${id}-title`} className="block truncate text-[13px] leading-5 text-foreground/90">
-            {title}
-          </span>
-          <span
-            id={`${id}-meta`}
-            className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
-          >
-            <span className="min-w-0 truncate">{session.project?.name ?? "No project"}</span>
-            <span aria-hidden="true">·</span>
-            <span className="shrink-0">{age === "now" ? "just now" : `${age} ago`}</span>
-          </span>
-          {untracks && (
-            <span id={`${id}-untracks`} data-testid="tracked-untracks" className="mt-0.5 block text-[11px] leading-4 text-muted-foreground/75">
-              {untracks}
+    <ContextActions items={menu.items} disabled={menu.busy} onCloseAutoFocus={menu.onCloseAutoFocus}>
+      <li className="group flex items-start gap-0.5 rounded-xl hover:bg-white/5" data-session-id={session.id}>
+        <button
+          type="button"
+          aria-labelledby={`${id}-title`}
+          aria-describedby={untracks ? `${id}-state ${id}-meta ${id}-untracks` : `${id}-state ${id}-meta`}
+          onClick={() => onSelect(session.id)}
+          className="flex min-w-0 flex-1 items-start gap-2.5 rounded-xl py-1.5 pl-2.5 text-left"
+        >
+          <AgentLogo agentId={session.agentId} className="mt-0.5 !size-[14px] opacity-80" />
+          <span className="min-w-0 flex-1">
+            <span id={`${id}-title`} className="block truncate text-[13px] leading-5 text-foreground/90">
+              {title}
             </span>
-          )}
-        </span>
-        <span id={`${id}-state`} className="mt-0.5 shrink-0">
-          <TrackedStateBadge state={state} tasks={backgroundTaskCount(session)} />
-        </span>
-      </button>
-      <TrackedRowMenu
-        session={session}
-        state={state}
-        actions={actions}
-        className="mt-1.5 mr-1 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
-      />
-    </li>
+            <span
+              id={`${id}-meta`}
+              className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
+            >
+              <span className="min-w-0 truncate">{session.project?.name ?? "No project"}</span>
+              <span aria-hidden="true">·</span>
+              <span className="shrink-0">{age === "now" ? "just now" : `${age} ago`}</span>
+            </span>
+            {untracks && (
+              <span id={`${id}-untracks`} data-testid="tracked-untracks" className="mt-0.5 block text-[11px] leading-4 text-muted-foreground/75">
+                {untracks}
+              </span>
+            )}
+          </span>
+          <span id={`${id}-state`} className="mt-0.5 shrink-0">
+            <TrackedStateBadge state={state} tasks={backgroundTaskCount(session)} />
+          </span>
+        </button>
+        <TrackedRowMenu
+          menu={menu}
+          title={title}
+          className="mt-1.5 mr-1 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+        />
+      </li>
+    </ContextActions>
   );
 });
 

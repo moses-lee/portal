@@ -13,7 +13,8 @@ import { sessionHistoryKey } from "@/lib/prompt-history";
 import { queueEditLabel } from "@/lib/prompt-queue";
 import { trackedState } from "@/lib/tracked-sessions";
 import type { SessionSummary } from "@/lib/types";
-import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, type TrackedRowActions } from "./parts";
+import { ContextActions } from "../ActionMenu";
+import { TrackedRowMenu, TrackedStateBadge, backgroundTaskCount, trackedTitle, useTrackedRowMenu, type TrackedRowActions } from "./parts";
 
 /**
  * The panel's session mode: one session beside the Portal view, named by `?session=`. The same
@@ -71,26 +72,29 @@ export default function TrackedSessionView({
   const state = session ? trackedState(session) : null;
   const agentName = session?.agentName ?? "the agent";
   const missing = notFound || (!loading && !session);
+  const menu = useTrackedRowMenu(session ?? null, state, actions);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-panel-session={sessionId}>
-      <header className="flex items-center gap-1.5 border-b border-white/5 px-2 py-2">
-        <IconButton label="Back to tracked sessions" onClick={onBack} className="text-muted-foreground">
-          <ArrowLeft className="size-4" />
-        </IconButton>
-        {session && <AgentLogo agentId={session.agentId} className="!size-[14px] opacity-80" />}
-        <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium">
-          {session ? trackedTitle(session) : "Conversation"}
-        </h2>
-        {session && state && <TrackedStateBadge state={state} tasks={backgroundTaskCount(session)} />}
-        <IconButton
-          label="Open full page"
-          onClick={() => actions.onOpenFullPage(sessionId)}
-          className="text-muted-foreground"
-        >
-          <ExternalLink className="size-4" />
-        </IconButton>
-        {session && state && <TrackedRowMenu session={session} state={state} actions={actions} />}
-      </header>
+      <ContextActions items={menu.items} disabled={!menu.items || menu.busy} onCloseAutoFocus={menu.onCloseAutoFocus}>
+        <header className="flex items-center gap-1.5 border-b border-white/5 px-2 py-2">
+          <IconButton label="Back to tracked sessions" onClick={onBack} className="text-muted-foreground">
+            <ArrowLeft className="size-4" />
+          </IconButton>
+          {session && <AgentLogo agentId={session.agentId} className="!size-[14px] opacity-80" />}
+          <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium">
+            {session ? trackedTitle(session) : "Conversation"}
+          </h2>
+          {session && state && <TrackedStateBadge state={state} tasks={backgroundTaskCount(session)} />}
+          <IconButton
+            label="Open full page"
+            onClick={() => actions.onOpenFullPage(sessionId)}
+            className="text-muted-foreground"
+          >
+            <ExternalLink className="size-4" />
+          </IconButton>
+          {session && state && <TrackedRowMenu menu={menu} title={trackedTitle(session)} />}
+        </header>
+      </ContextActions>
       {missing ? (
         <p className="px-4 py-4 text-xs leading-relaxed text-muted-foreground">
           Portal has no session with this id. It may have been deleted.

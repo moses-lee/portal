@@ -95,6 +95,11 @@ test("untrack from a row's menu sends DELETE and drops the row", async ({ page }
   await panel.getByRole("button", { name: `Actions for ${finishedTitle}` }).click();
   await expect(page.getByRole("menuitem", { name: "Stop turn" })).toHaveCount(0);
   await page.keyboard.press("Escape");
+  // A right-click on the row opens the same menu.
+  await panel.getByRole("button", { name: finishedTitle, exact: true }).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Ask Portal about this" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Stop turn" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
 });
 
 test("a row click opens the session in the panel through ?session=, which survives a reload and view switches", async ({ page }) => {

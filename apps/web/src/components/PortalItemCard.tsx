@@ -16,11 +16,10 @@ import {
 import { needsAttention } from "@portal/shared/items";
 import PortalMarkdown from "./PortalMarkdown";
 import { Button } from "@/components/ui/button";
+import { ContextActions, MenuItem, MenuSeparator } from "./ActionMenu";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type {
@@ -227,76 +226,84 @@ export default function PortalItemCard({
   const approvalId = item.links.approvalId;
   const memoryLink = item.kind === "memory_reconfirm" && onOpenMemory ? onOpenMemory : null;
   const statusLabel = describeItemStatus(item);
+  const items = (
+    <>
+      {item.status !== "open" && (
+        <MenuItem onSelect={() => void patch({ status: "open", snoozedUntil: null })}>
+          <RotateCcw />
+          Reopen
+        </MenuItem>
+      )}
+      {!settled && (
+        <>
+          <MenuItem onSelect={() => void patch({ status: "resolved", snoozedUntil: null })}>
+            <Check />
+            Resolve
+          </MenuItem>
+          <MenuItem
+            onSelect={() => void patch({ status: "snoozed", snoozedUntil: Date.now() + 3_600_000 })}
+          >
+            <Timer />
+            Snooze 1h
+          </MenuItem>
+          <MenuItem
+            onSelect={() => void patch({ status: "snoozed", snoozedUntil: tomorrowMorning() })}
+          >
+            <Timer />
+            Snooze until tomorrow
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem
+            variant="destructive"
+            onSelect={() => void patch({ status: "dismissed", snoozedUntil: null })}
+          >
+            <EyeOff />
+            Dismiss
+          </MenuItem>
+        </>
+      )}
+    </>
+  );
   return (
     <article
       aria-label={item.title}
       data-status={item.status}
       className={`glass rounded-2xl p-4 text-[13px] ${settled ? "opacity-60" : ""}`}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase">
-            <span className="rounded-full bg-amber-300/15 px-1.5 leading-4 text-amber-200">
-              Needs you
-            </span>
-            <span className="text-muted-foreground">{kindLabels[item.kind]}</span>
-            {statusLabel && <span className="text-muted-foreground">· {statusLabel}</span>}
+      {/* The header takes the right-click; the body stays selectable text with the browser's own menu. */}
+      <ContextActions items={items} disabled={pending === "menu"}>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-medium tracking-wide uppercase">
+              <span className="rounded-full bg-amber-300/15 px-1.5 leading-4 text-amber-200">
+                Needs you
+              </span>
+              <span className="text-muted-foreground">{kindLabels[item.kind]}</span>
+              {statusLabel && <span className="text-muted-foreground">· {statusLabel}</span>}
+            </div>
+            <h3 className="text-[14px] font-medium leading-snug tracking-[-.01em]">
+              {item.title}
+            </h3>
           </div>
-          <h3 className="text-[14px] font-medium leading-snug tracking-[-.01em]">
-            {item.title}
-          </h3>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`More actions for ${item.title}`}
+                disabled={pending === "menu"}
+                className="-mt-1 -mr-1 text-muted-foreground"
+              >
+                {pending === "menu" ? <LoaderCircle className="animate-spin" /> : <MoreHorizontal />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {items}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`More actions for ${item.title}`}
-              disabled={pending === "menu"}
-              className="-mt-1 -mr-1 text-muted-foreground"
-            >
-              {pending === "menu" ? <LoaderCircle className="animate-spin" /> : <MoreHorizontal />}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {item.status !== "open" && (
-              <DropdownMenuItem onSelect={() => void patch({ status: "open", snoozedUntil: null })}>
-                <RotateCcw />
-                Reopen
-              </DropdownMenuItem>
-            )}
-            {!settled && (
-              <>
-                <DropdownMenuItem onSelect={() => void patch({ status: "resolved", snoozedUntil: null })}>
-                  <Check />
-                  Resolve
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => void patch({ status: "snoozed", snoozedUntil: Date.now() + 3_600_000 })}
-                >
-                  <Timer />
-                  Snooze 1h
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => void patch({ status: "snoozed", snoozedUntil: tomorrowMorning() })}
-                >
-                  <Timer />
-                  Snooze until tomorrow
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() => void patch({ status: "dismissed", snoozedUntil: null })}
-                >
-                  <EyeOff />
-                  Dismiss
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+      </ContextActions>
       {item.body && (
         <div className="mt-2 text-foreground/85">
           <PortalMarkdown text={item.body} compact />

@@ -201,6 +201,7 @@ export default function WorkspaceView({
       onCloseOthers={actions.closeOtherTabs}
       onRename={actions.renameTab}
       onArrange={actions.arrangeTab}
+      onMove={actions.moveTab}
     />
   );
 

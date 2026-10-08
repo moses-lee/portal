@@ -169,6 +169,17 @@ export function useWorkspaceActions() {
     },
   );
 
+  /** Move the tab to `index` in the strip (a drag); focus stays on whichever tab has it. */
+  const moveTab = useStableCallback(
+    async (tabId: string, index: number) => {
+      try {
+        await apply({ op: "move_tab", tabId, index });
+      } catch {
+        // Reported by the provider.
+      }
+    },
+  );
+
   /** Rebuild the tab as the preset with its sessions in order (extra sessions move to tabs of their own). */
   const arrangeTab = useStableCallback(
     async (tab: Tab, preset: LayoutPreset) => {
@@ -182,8 +193,8 @@ export function useWorkspaceActions() {
   );
 
   return useMemo(
-    () => ({ openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, closePane, closeTab, closeOtherTabs, renameTab, arrangeTab }),
-    [openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, closePane, closeTab, closeOtherTabs, renameTab, arrangeTab],
+    () => ({ openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, closePane, closeTab, closeOtherTabs, moveTab, renameTab, arrangeTab }),
+    [openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, closePane, closeTab, closeOtherTabs, moveTab, renameTab, arrangeTab],
   );
 }
 

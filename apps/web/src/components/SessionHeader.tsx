@@ -15,11 +15,10 @@ import {
 import IconButton from "./IconButton";
 import { RenameField } from "./ProjectActions";
 import { SESSION_TITLE_MAX } from "./SessionsProvider";
+import { ContextActions, MenuItem, MenuSeparator } from "./ActionMenu";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -106,154 +105,161 @@ export default function SessionHeader({
       if (!document.activeElement || document.activeElement === document.body) renameButton.current?.focus();
     });
   };
-  return (
-    <header className="workspace-header">
-      {showSidebarToggle && (
-        <IconButton
-          label="Toggle sidebar"
-          onClick={(event) => onSidebar(event.currentTarget)}
-          className="text-muted-foreground"
-        >
-          <PanelLeft className="size-4" />
-        </IconButton>
+  const paneItems = pane && (
+    <>
+      <MenuItem disabled={!pane.canSplitRight} onSelect={pane.onSplitRight}>
+        <SquareSplitHorizontal />
+        Split right
+      </MenuItem>
+      <MenuItem disabled={!pane.canSplitDown} onSelect={pane.onSplitDown}>
+        <SquareSplitVertical />
+        Split down
+      </MenuItem>
+      {pane.onMoveToTab && (
+        <MenuItem onSelect={pane.onMoveToTab}>
+          <SquareArrowOutUpRight />
+          Move to its own tab
+        </MenuItem>
       )}
-      <div className="min-w-0 flex-1">
-        {renaming && onRename ? (
-          <RenameField
-            inputRef={renameInput}
-            initial={renameFrom ?? ""}
-            ariaLabel="Conversation title"
-            maxLength={SESSION_TITLE_MAX}
-            className="w-full max-w-xl rounded-md border border-indigo-500 bg-zinc-900 px-2 py-0.5 text-[13px] font-medium leading-snug outline-none"
-            onCancel={stopRenaming}
-            onCommit={(next) => {
-              stopRenaming();
-              onRename(next);
-            }}
-          />
-        ) : (
-          <div className="group/title flex min-w-0 items-start gap-1">
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={`Conversation title: ${title}`}
-                  className="block min-w-0 max-w-full rounded text-left"
+      <MenuSeparator />
+      <MenuItem onSelect={pane.onClose}>
+        <X />
+        Close pane
+      </MenuItem>
+    </>
+  );
+  return (
+    <ContextActions items={paneItems} disabled={!pane || renaming}>
+      <header className="workspace-header">
+        {showSidebarToggle && (
+          <IconButton
+            label="Toggle sidebar"
+            onClick={(event) => onSidebar(event.currentTarget)}
+            className="text-muted-foreground"
+          >
+            <PanelLeft className="size-4" />
+          </IconButton>
+        )}
+        <div className="min-w-0 flex-1">
+          {renaming && onRename ? (
+            <RenameField
+              inputRef={renameInput}
+              initial={renameFrom ?? ""}
+              ariaLabel="Conversation title"
+              maxLength={SESSION_TITLE_MAX}
+              className="w-full max-w-xl rounded-md border border-indigo-500 bg-zinc-900 px-2 py-0.5 text-[13px] font-medium leading-snug outline-none"
+              onCancel={stopRenaming}
+              onCommit={(next) => {
+                stopRenaming();
+                onRename(next);
+              }}
+            />
+          ) : (
+            <div className="group/title flex min-w-0 items-start gap-1">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Conversation title: ${title}`}
+                    className="block min-w-0 max-w-full rounded text-left"
+                  >
+                    <h1 className="line-clamp-2 text-[13px] font-medium leading-snug tracking-[-.01em]">
+                      {title}
+                    </h1>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="max-w-[calc(100vw-32px)] rounded-2xl text-sm leading-relaxed break-words">
+                  {title}
+                </PopoverContent>
+              </Popover>
+              {onRename && (
+                <IconButton
+                  ref={renameButton}
+                  label="Rename conversation"
+                  size="icon-xs"
+                  onClick={() => setRenaming(true)}
+                  className="-my-0.5 shrink-0 text-muted-foreground opacity-60 group-hover/title:opacity-100 focus-visible:opacity-100"
                 >
-                  <h1 className="line-clamp-2 text-[13px] font-medium leading-snug tracking-[-.01em]">
-                    {title}
-                  </h1>
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="max-w-[calc(100vw-32px)] rounded-2xl text-sm leading-relaxed break-words">
-                {title}
-              </PopoverContent>
-            </Popover>
-            {onRename && (
-              <IconButton
-                ref={renameButton}
-                label="Rename conversation"
-                size="icon-xs"
-                onClick={() => setRenaming(true)}
-                className="-my-0.5 shrink-0 text-muted-foreground opacity-60 group-hover/title:opacity-100 focus-visible:opacity-100"
-              >
-                <PencilLine />
-              </IconButton>
-            )}
-          </div>
-        )}
-        {hasSession && (
-          <p
-            role="status"
-            data-activity={activity}
-            className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"
-          >
-            <span className="status-dot shrink-0" />
-            <span className="min-w-0 truncate">{statusLabel ?? activityLabels[activity]}</span>
-          </p>
-        )}
-      </div>
-      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
-        {hasSession && (
-          <IconButton
-            label="New conversation"
-            onClick={onNew}
-            className="hidden text-muted-foreground sm:inline-flex"
-          >
-            <SquarePen className="size-4" />
-          </IconButton>
-        )}
-        {hasSession && (
-          <IconButton
-            label="Track session"
-            aria-pressed={tracked}
-            disabled={trackPending}
-            onClick={onToggleTrack}
-            className={
-              tracked ? "bg-white/8 text-foreground" : "text-muted-foreground"
-            }
-          >
-            <Eye className="size-4" />
-          </IconButton>
-        )}
-        {hasSession && (
-          <IconButton
-            ref={shellButton}
-            label={showShell ? "Hide terminal" : "Show terminal"}
-            aria-expanded={showShell}
-            aria-controls={showShell ? terminalPanelId : undefined}
-            onClick={onTerminal}
-            className={
-              showShell ? "bg-white/8 text-foreground" : "text-muted-foreground"
-            }
-          >
-            <TerminalSquare className="size-4" />
-          </IconButton>
-        )}
-        <IconButton
-          label={
-            showGithub ? "Close GitHub inspector" : "Open GitHub inspector"
-          }
-          aria-expanded={showGithub}
-          aria-controls={showGithub ? "github-inspector" : undefined}
-          onClick={(event) => onGithub(event.currentTarget)}
-          className={
-            showGithub ? "bg-white/8 text-foreground" : "text-muted-foreground"
-          }
-        >
-          <GitBranch className="size-4" />
-        </IconButton>
-        {pane && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <IconButton label="Pane options" className="text-muted-foreground">
-                <LayoutPanelLeft className="size-4" />
-              </IconButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={!pane.canSplitRight} onSelect={pane.onSplitRight}>
-                <SquareSplitHorizontal />
-                Split right
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={!pane.canSplitDown} onSelect={pane.onSplitDown}>
-                <SquareSplitVertical />
-                Split down
-              </DropdownMenuItem>
-              {pane.onMoveToTab && (
-                <DropdownMenuItem onSelect={pane.onMoveToTab}>
-                  <SquareArrowOutUpRight />
-                  Move to its own tab
-                </DropdownMenuItem>
+                  <PencilLine />
+                </IconButton>
               )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={pane.onClose}>
-                <X />
-                Close pane
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-    </header>
+            </div>
+          )}
+          {hasSession && (
+            <p
+              role="status"
+              data-activity={activity}
+              className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"
+            >
+              <span className="status-dot shrink-0" />
+              <span className="min-w-0 truncate">{statusLabel ?? activityLabels[activity]}</span>
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+          {hasSession && (
+            <IconButton
+              label="New conversation"
+              onClick={onNew}
+              className="hidden text-muted-foreground sm:inline-flex"
+            >
+              <SquarePen className="size-4" />
+            </IconButton>
+          )}
+          {hasSession && (
+            <IconButton
+              label="Track session"
+              aria-pressed={tracked}
+              disabled={trackPending}
+              onClick={onToggleTrack}
+              className={
+                tracked ? "bg-white/8 text-foreground" : "text-muted-foreground"
+              }
+            >
+              <Eye className="size-4" />
+            </IconButton>
+          )}
+          {hasSession && (
+            <IconButton
+              ref={shellButton}
+              label={showShell ? "Hide terminal" : "Show terminal"}
+              aria-expanded={showShell}
+              aria-controls={showShell ? terminalPanelId : undefined}
+              onClick={onTerminal}
+              className={
+                showShell ? "bg-white/8 text-foreground" : "text-muted-foreground"
+              }
+            >
+              <TerminalSquare className="size-4" />
+            </IconButton>
+          )}
+          <IconButton
+            label={
+              showGithub ? "Close GitHub inspector" : "Open GitHub inspector"
+            }
+            aria-expanded={showGithub}
+            aria-controls={showGithub ? "github-inspector" : undefined}
+            onClick={(event) => onGithub(event.currentTarget)}
+            className={
+              showGithub ? "bg-white/8 text-foreground" : "text-muted-foreground"
+            }
+          >
+            <GitBranch className="size-4" />
+          </IconButton>
+          {pane && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton label="Pane options" className="text-muted-foreground">
+                  <LayoutPanelLeft className="size-4" />
+                </IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {paneItems}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </header>
+    </ContextActions>
   );
 }

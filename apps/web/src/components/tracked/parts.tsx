@@ -1,14 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Eye, EyeOff, ExternalLink, MessageCircleMore, MoreHorizontal, Square } from "lucide-react";
 import { useSessions } from "../SessionsProvider";
 import { Button } from "@/components/ui/button";
+import { MenuItem, MenuSeparator } from "../ActionMenu";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -142,28 +141,75 @@ async function stopTurn(sessionId: string) {
   }
 }
 
-/** A tracked session's `…` menu: open full page, stop turn (only while working), ask Portal, untrack. */
-export function TrackedRowMenu({
-  session,
-  state,
-  actions,
-  className,
-}: {
-  session: SessionSummary;
-  state: TrackedState;
-  actions: TrackedRowActions;
-  className?: string;
-}) {
+/** A tracked session's menu, shared by its `…` button (`TrackedRowMenu`) and a right-click on its row or header (`ContextActions`). */
+export type TrackedRowMenuState = {
+  /** The items: open full page, stop turn (only while working), ask Portal, untrack. Null without a session. */
+  items: ReactNode;
+  /** An action is running: the button is disabled and the context menu off. */
+  busy: boolean;
+  onCloseAutoFocus: (event: Event) => void;
+};
+
+export function useTrackedRowMenu(
+  session: SessionSummary | null,
+  state: TrackedState | null,
+  actions: TrackedRowActions,
+): TrackedRowMenuState {
   const [busy, setBusy] = useState(false);
   /** Set by "Ask Portal": focus goes to the composer it filled, not back to this trigger. */
   const focusElsewhere = useRef(false);
-  const title = trackedTitle(session);
   const run = (work: () => Promise<void>, fallback: string) => {
     setBusy(true);
     work()
       .catch((error: unknown) => actions.onError(error instanceof Error ? error.message : fallback))
       .finally(() => setBusy(false));
   };
+  const onCloseAutoFocus = (event: Event) => {
+    if (!focusElsewhere.current) return;
+    focusElsewhere.current = false;
+    event.preventDefault();
+  };
+  const items = session && state && (
+    <>
+      <MenuItem onSelect={() => actions.onOpenFullPage(session.id)}>
+        <ExternalLink />
+        Open full page
+      </MenuItem>
+      {state === "working" && (
+        <MenuItem onSelect={() => run(() => stopTurn(session.id), "Could not stop the agent. Try again.")}>
+          <Square />
+          Stop turn
+        </MenuItem>
+      )}
+      <MenuItem
+        onSelect={() => {
+          focusElsewhere.current = true;
+          actions.onAskPortal(session);
+        }}
+      >
+        <MessageCircleMore />
+        Ask Portal about this
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem onSelect={() => run(() => actions.untrack(session.id), "Could not untrack the session. Try again.")}>
+        <EyeOff />
+        Untrack
+      </MenuItem>
+    </>
+  );
+  return { items, busy, onCloseAutoFocus };
+}
+
+/** A tracked session's `…` button, opening the items from `useTrackedRowMenu`. */
+export function TrackedRowMenu({
+  menu,
+  title,
+  className,
+}: {
+  menu: TrackedRowMenuState;
+  title: string;
+  className?: string;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -172,44 +218,14 @@ export function TrackedRowMenu({
           variant="ghost"
           size="icon-xs"
           aria-label={`Actions for ${title}`}
-          disabled={busy}
+          disabled={menu.busy}
           className={cn("text-muted-foreground", className)}
         >
           <MoreHorizontal />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        onCloseAutoFocus={(event) => {
-          if (!focusElsewhere.current) return;
-          focusElsewhere.current = false;
-          event.preventDefault();
-        }}
-      >
-        <DropdownMenuItem onSelect={() => actions.onOpenFullPage(session.id)}>
-          <ExternalLink />
-          Open full page
-        </DropdownMenuItem>
-        {state === "working" && (
-          <DropdownMenuItem onSelect={() => run(() => stopTurn(session.id), "Could not stop the agent. Try again.")}>
-            <Square />
-            Stop turn
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem
-          onSelect={() => {
-            focusElsewhere.current = true;
-            actions.onAskPortal(session);
-          }}
-        >
-          <MessageCircleMore />
-          Ask Portal about this
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => run(() => actions.untrack(session.id), "Could not untrack the session. Try again.")}>
-          <EyeOff />
-          Untrack
-        </DropdownMenuItem>
+      <DropdownMenuContent align="end" onCloseAutoFocus={menu.onCloseAutoFocus}>
+        {menu.items}
       </DropdownMenuContent>
     </DropdownMenu>
   );

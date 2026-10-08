@@ -361,3 +361,92 @@ test("each pane has its own terminal: both can be open at once, and hiding one l
   await expect(rightTerminal).toBeVisible();
   await expect(left.getByRole("button", { name: "Show terminal" })).toBeFocused();
 });
+
+test("tabs reorder by dragging along the strip, or by Space and the arrow keys; each move is one move_tab", async ({ page }) => {
+  const fixture = await setupPortal(page, {
+    workspace: workspaceOf([tab("t1", pane("p1", "s1")), tab("t2", pane("p2", "s2")), tab("t3", pane("p3", "s3"))]),
+  });
+  await page.goto("/tabs/t1");
+  const order = () => strip(page).getByRole("tab").evaluateAll((els) => els.map((el) => el.getAttribute("data-tab-trigger")));
+  await expect.poll(order).toEqual(["t1", "t2", "t3"]);
+  // Every tab has one width, whatever its name.
+  const widths = await strip(page).locator("[data-tab]").evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().width)));
+  expect(new Set(widths).size).toBe(1);
+  // Drag the last tab to the front.
+  const from = (await strip(page).locator('[data-tab="t3"]').boundingBox())!;
+  const to = (await strip(page).locator('[data-tab="t1"]').boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 8, to.y + to.height / 2, { steps: 15 });
+  await page.mouse.up();
+  await expect.poll(order).toEqual(["t3", "t1", "t2"]);
+  expect(ops(fixture)).toEqual([{ op: "move_tab", tabId: "t3", index: 0 }]);
+  // Keyboard: Space picks the focused tab up, an arrow moves it, Space drops it; the focus stays on it.
+  const first = strip(page).getByRole("tab", { name: firstTitle });
+  await first.focus();
+  await page.keyboard.press("Space");
+  await expect(strip(page).locator('[data-tab="t1"]')).toHaveAttribute("data-dragging", "true");
+  await expect(page.getByRole("status").filter({ hasText: /^Tab .* moved to position 2 of 3\.$/ })).toHaveCount(1);
+  // An arrow pressed before the sensor has measured the strip is dropped; at the end of the strip a repeat does nothing.
+  await expect(async () => {
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByRole("status").filter({ hasText: /^Tab .* moved to position 3 of 3\.$/ })).toHaveCount(1, { timeout: 500 });
+  }).toPass();
+  await page.keyboard.press("Space");
+  await expect.poll(order).toEqual(["t3", "t2", "t1"]);
+  expect(ops(fixture).at(-1)).toEqual({ op: "move_tab", tabId: "t1", index: 2 });
+  await expect(first).toBeFocused();
+  // A plain click still just selects.
+  await strip(page).getByRole("tab", { name: secondTitle }).click();
+  await expect(page).toHaveURL(/\/tabs\/t2$/);
+  expect(ops(fixture)).toHaveLength(2);
+  // A press on the close button never drags: sliding off it neither moves nor closes the tab.
+  const close = (await strip(page).getByRole("button", { name: `Close tab ${secondTitle}` }).boundingBox())!;
+  await page.mouse.move(close.x + close.width / 2, close.y + close.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(close.x - 150, close.y + close.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(order).toEqual(["t3", "t2", "t1"]);
+  expect(ops(fixture)).toHaveLength(2);
+});
+
+test("right-clicking a tab opens its menu without selecting it; only the selected tab shows the … button", async ({ page }) => {
+  const fixture = await setupPortal(page, { workspace: workspaceOf([tab("t1", pane("p1", "s1")), tab("t2", pane("p2", "s2"))]) });
+  await page.goto("/tabs/t1");
+  await expect(strip(page).getByRole("button", { name: /^Tab menu for / })).toHaveCount(1);
+  await expect(strip(page).getByRole("button", { name: `Tab menu for ${firstTitle}` })).toBeVisible();
+  // A right-click inside the open … menu stays there: no second menu from the tab behind it.
+  await strip(page).getByRole("button", { name: `Tab menu for ${firstTitle}` }).click();
+  await page.getByRole("menuitem", { name: "Rename" }).click({ button: "right" });
+  await expect(page.getByRole("menu")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await strip(page).getByRole("tab", { name: secondTitle }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const field = page.getByRole("textbox", { name: "Tab name" });
+  await expect(field).toBeFocused();
+  await field.fill("Second");
+  await field.press("Enter");
+  await expect(strip(page).getByRole("tab", { name: "Second" })).toBeVisible();
+  await expect(page).toHaveURL(/\/tabs\/t1$/);
+  expect(ops(fixture)).toEqual([{ op: "rename_tab", tabId: "t2", title: "Second", source: "user" }]);
+  // The same items as the … menu, Layout included.
+  await strip(page).getByRole("tab", { name: "Second" }).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Layout" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Close tab" }).click();
+  await expect(strip(page).getByRole("tab")).toHaveCount(1);
+  expect(ops(fixture).at(-1)).toEqual({ op: "close_tab", tabId: "t2" });
+});
+
+test("a sidebar row and a pane header open their menus on right-click as well", async ({ page }) => {
+  const fixture = await setupPortal(page, { workspace: workspaceOf([tab("t1", pane("p1", "s1"))]) });
+  await page.goto("/tabs/t1");
+  await page.getByRole("button", { name: secondTitle, exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Open in new tab" }).click();
+  await expect(strip(page).getByRole("tab")).toHaveCount(2);
+  expect(ops(fixture)).toEqual([{ op: "arrange", preset: "single", sessionIds: ["s2"] }]);
+  await page.goto("/tabs/t1");
+  await paneOf(page, "p1").locator("header.workspace-header").click({ button: "right", position: { x: 4, y: 4 } });
+  await page.getByRole("menuitem", { name: "Split right" }).click();
+  await expect(page.getByRole("separator", { name: "Resize panes side by side" })).toBeVisible();
+});
