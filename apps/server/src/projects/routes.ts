@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { errorMessage, errorStatus } from "../http/errors.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
+import { query } from "../http/query.ts";
 import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
 import { displayPath, readGitInfo } from "../lib/git-info.ts";
 import { pullFastForward, readCommitPage, readGithubSummary, summaryEtag } from "../lib/github-summary.ts";
@@ -22,12 +23,6 @@ import { deleteSessionFully } from "../sessions/delete.ts";
 import { type ProjectError, summarizeProject } from "./store.ts";
 
 type IdParams = { Params: { id: string } };
-
-/** The first value of a query parameter, as `URLSearchParams#get` gave the web routes. */
-function query(req: FastifyRequest, name: string): string | null {
-  const value = (req.query as Record<string, string | string[] | undefined>)[name];
-  return (Array.isArray(value) ? value[0] : value) ?? null;
-}
 
 /** The parsed JSON body as a plain object, or null (absent, or not an object) for the caller's 400. */
 function bodyObject(req: FastifyRequest): Record<string, unknown> | null {

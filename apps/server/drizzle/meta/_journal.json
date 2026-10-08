@@ -99,6 +99,13 @@
       "when": 1791147559323,
       "tag": "0013_session_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791435770105,
+      "tag": "0014_session_messages",
+      "breakpoints": true
     }
   ]
 }

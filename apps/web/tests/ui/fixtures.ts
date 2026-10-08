@@ -33,6 +33,7 @@ import type {
 } from "../../src/lib/orchestrator/types";
 import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
 import type { Workspace } from "@portal/contracts/workspace";
+import type { SearchResponse } from "@portal/contracts/search";
 import { applyWorkspaceOp, EMPTY_WORKSPACE, parseWorkspaceOp, WorkspaceError } from "@portal/shared/workspace";
 
 const now = Date.now();
@@ -519,6 +520,8 @@ export async function setupPortal(
      * the shared reducer here and push the result on the stream, as the server does.
      */
     workspace?: Workspace;
+    /** What `GET /api/search?q=` answers for a query; no hits by default. */
+    search?: (q: string) => Omit<SearchResponse, "q">;
   } = {},
 ) {
   const currentSessions = structuredClone(options.sessions ?? sessions);
@@ -700,6 +703,10 @@ export async function setupPortal(
       });
     }
     if (path === "/api/portal") return json({ status: live.status });
+    if (path === "/api/search" && method === "GET") {
+      const q = url.searchParams.get("q") ?? "";
+      return json({ q, ...(options.search?.(q) ?? { messages: [], pulls: [] }) });
+    }
     if (path === "/api/portal/messages" && method === "GET")
       return json({ messages: portalThread });
     const threadRoute = path.match(/^\/api\/portal\/threads\/([^/]+)\/(messages|cancel)$/);

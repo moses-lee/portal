@@ -49,6 +49,15 @@ import { useLastUsed } from "./useLastUsed";
 import { navigateTo, pushPath } from "@/lib/navigation";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import {
+  isMacPlatform,
+  isSearchShortcut,
+  parseRecents,
+  pruneRecents,
+  RECENTS_KEY,
+  recentsAfterOpen,
+  type RecentItem,
+} from "@/lib/search";
+import {
   isPortalPath,
   isTerminalPath,
   portalLocation,
@@ -73,6 +82,7 @@ const GithubInspector = dynamic(() => import("./GithubInspector"));
 // Shown rarely, so their code (the settings dialog alone is the sidebar kit and a 1,500-line form) loads when first needed.
 const SettingsDialog = dynamic(() => import("./SettingsDialog"));
 const ApprovalsDialog = dynamic(() => import("./portal/ApprovalsDialog"));
+const SearchDialog = dynamic(() => import("./SearchDialog"));
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -213,6 +223,35 @@ function ChatShell() {
     setSettingsSection(section);
     setShowSettings(true);
   });
+  const [showSearch, setShowSearch] = useState(false);
+  /** What search opened, newest first, per device; the dialog's Recent section. */
+  const [searchRecents, setSearchRecents] = usePreference(RECENTS_KEY, "[]");
+  /**
+   * ⌘K (Ctrl+K off Apple platforms) toggles search from anywhere, a focused composer or terminal
+   * included: caught at the document in the capture phase, before xterm or a textarea sees it.
+   * Another open dialog (settings, add project, approvals, a sheet) keeps it, and keeps the key.
+   */
+  useEffect(() => {
+    const mac = isMacPlatform(navigator.platform);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isSearchShortcut(event, mac)) return;
+      // Held keys repeat; toggling on each would flicker the dialog. Still keep them from the page.
+      if (event.repeat) {
+        event.preventDefault();
+        return;
+      }
+      const searchOpen = !!document.querySelector("[data-search-dialog][data-state=open]");
+      const otherOpen = !!document.querySelector(
+        ":is([role=dialog], [role=alertdialog])[data-state=open]:not([data-search-dialog])",
+      );
+      if (!searchOpen && otherOpen) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowSearch(!searchOpen);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, []);
   const [showSidebar, setShowSidebar] = useState(false);
   /** The button that opened the sidebar sheet or the GitHub inspector sheet; focus returns there when it closes. */
   const sidebarOpener = useRef<HTMLElement | null>(null);
@@ -725,6 +764,23 @@ function ChatShell() {
   const sidebarNewSession = useStableCallback(startIn);
   const sidebarAddProject = useStableCallback(() => setShowAddProject(true));
   const sidebarOpenSettings = useStableCallback(() => setShowSettings(true));
+  const sidebarOpenSearch = useStableCallback(() => {
+    setShowSidebar(false);
+    setShowSearch(true);
+  });
+  /** Remember what search opened (its Recent section), newest first; entries for what is gone make room. */
+  const rememberSearchOpen = (kind: RecentItem["kind"], id: string) => {
+    const kept = pruneRecents(parseRecents(searchRecents), sessionsRef.current, projects);
+    setSearchRecents(JSON.stringify(recentsAfterOpen(kept, { kind, id, at: Date.now() })));
+  };
+  const searchOpenSession = useStableCallback((id: string) => {
+    rememberSearchOpen("session", id);
+    selectSession(id);
+  });
+  const searchOpenProject = useStableCallback((id: string) => {
+    rememberSearchOpen("project", id);
+    startIn(id);
+  });
   const sidebarRename = useStableCallback(async (id: string, name: string) => {
     await renameProject(id, name);
   });
@@ -757,6 +813,7 @@ function ChatShell() {
         onNewSession={sidebarNewSession}
         onAddProject={sidebarAddProject}
         onOpenSettings={sidebarOpenSettings}
+        onOpenSearch={sidebarOpenSearch}
         onRenameProject={sidebarRename}
         onRemoveProject={sidebarRemove}
         removedProjects={removedProjects}
@@ -790,6 +847,14 @@ function ChatShell() {
           setShowSettings(false);
           setSettingsSection(null);
         }}
+      />
+      <SearchDialog
+        open={showSearch}
+        onOpenChange={setShowSearch}
+        sessions={sessions}
+        projects={orderedProjects}
+        onOpenSession={searchOpenSession}
+        onOpenProject={searchOpenProject}
       />
       {portalOpen ? (
         <PortalPage

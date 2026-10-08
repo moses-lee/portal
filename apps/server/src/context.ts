@@ -11,6 +11,7 @@ import type { LifecycleSweeper } from "./lib/lifecycle-sweep.ts";
 import type { Presence } from "./lib/presence.ts";
 import type { OrchestratorService } from "./orchestrator/service.ts";
 import type { ProjectsService } from "./projects/service.ts";
+import type { MessageBackfill } from "./sessions/search-backfill.ts";
 import type { SessionsService } from "./sessions/service.ts";
 import type { LastUsedStore } from "./settings/last-used.ts";
 import type { SettingsService } from "./settings/service.ts";
@@ -32,4 +33,6 @@ export interface AppContext {
   orchestrator: OrchestratorService;
   /** The lifecycle sweep (idle untracking, idle worktree removal); runs with or without the orchestrator. */
   lifecycle: LifecycleSweeper;
+  /** Fills the search index for logs written before it existed; runs once after boot. */
+  searchBackfill: MessageBackfill;
 }

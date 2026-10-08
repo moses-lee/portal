@@ -52,6 +52,35 @@ export const sessionEvents = pgTable(
 );
 
 /**
+ * The searchable text of each session's log: user prompts and the agent's reply text, never
+ * thoughts or tool calls and output. Written with the events (`pg-session-store.ts`) and filled for
+ * older logs by the boot backfill (`sessions/search-backfill.ts`). One reply is one row however
+ * many event rows it spans: the runtime writes a long reply as a string of chunk rows, and each
+ * append that continues the run replaces the row with the joined text under the run's newest seq.
+ * The trigram index serves `ILIKE '%q%'`; it needs `pg_trgm`, which the migration creates.
+ */
+export const sessionMessages = pgTable(
+  "session_messages",
+  {
+    sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+    /** The seq of the last event the row covers. */
+    seq: integer("seq").notNull(),
+    /** The seq of the first event the row covers: a reply joined from several chunk rows starts below `seq`. */
+    firstSeq: integer("first_seq").notNull(),
+    /** "user" or "agent". */
+    role: text("role").$type<"user" | "agent">().notNull(),
+    /** When the prompt or the reply's first chunk was logged. */
+    ts: epochMs("ts").notNull(),
+    /** Capped at `MESSAGE_TEXT_MAX` characters. */
+    text: text("text").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sessionId, table.seq] }),
+    index("session_messages_text_trgm_idx").using("gin", table.text.op("gin_trgm_ops")),
+  ],
+);
+
+/**
  * Sessions the user or Portal chose to keep an eye on (the right sidebar's list). Membership is
  * explicit; deleting the session removes its row.
  */

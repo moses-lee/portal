@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, memo, useCallback, useMemo, useState, type RefObject } from "react";
+import { Activity, memo, useCallback, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
 import {
   ArrowUpRight,
   ChevronRight,
@@ -8,6 +8,7 @@ import {
   FolderKanban,
   House,
   PanelLeftClose,
+  Search,
   Settings,
   ShieldAlert,
   TerminalSquare,
@@ -30,6 +31,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import type { PortalView } from "@/lib/session-routes";
+import { isMacPlatform, newestSessions } from "@/lib/search";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
@@ -68,6 +70,8 @@ export type SidebarProps = {
   projectsActive: boolean;
   onAddProject: () => void;
   onOpenSettings: () => void;
+  /** Open global search (also ⌘K / Ctrl+K); on mobile the sheet closes first. */
+  onOpenSearch: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
   onRemoveProject: (
     id: string,
@@ -114,21 +118,6 @@ const PortalViewEntries = memo(function PortalViewEntries({
     );
   });
 });
-
-/** Find the newest few sessions without sorting the full list on every stream update. */
-function recentRooms(sessions: SessionSummary[]): SessionSummary[] {
-  const recent: SessionSummary[] = [];
-  for (const session of sessions) {
-    const index = recent.findIndex((row) => session.lastActiveAt > row.lastActiveAt);
-    if (index === -1) {
-      if (recent.length < 3) recent.push(session);
-    } else {
-      recent.splice(index, 0, session);
-      if (recent.length > 3) recent.pop();
-    }
-  }
-  return recent;
-}
 
 function foyerSummary(sessions: SessionSummary[], counts: PortalViewCounts) {
   let waitingCount = 0;
@@ -181,7 +170,7 @@ const HomeColumn = memo(function HomeColumn({
   onShowProjects: () => void;
 }) {
   const counts = usePortalViewCounts();
-  const recent = useMemo(() => recentRooms(sessions), [sessions]);
+  const recent = useMemo(() => newestSessions(sessions, 3), [sessions]);
   const { needsAttention, working, headline, detail } = foyerSummary(sessions, counts);
   // The card is the way to the Needs-your-attention page (it has no sidebar entry), whatever it says.
   const openStatus = () => onPortalView("attention");
@@ -267,6 +256,19 @@ const HomeColumn = memo(function HomeColumn({
     </div>
   );
 });
+
+const subscribeNever = () => () => {};
+
+/** "⌘K" on Apple platforms, "Ctrl K" elsewhere; nothing during server rendering, which cannot know. */
+function SearchShortcutHint() {
+  const mac = useSyncExternalStore(subscribeNever, () => isMacPlatform(navigator.platform), () => null);
+  if (mac === null) return null;
+  return (
+    <kbd aria-hidden="true" className="ml-auto font-sans text-[10px] tracking-wide text-muted-foreground/70">
+      {mac ? "⌘K" : "Ctrl K"}
+    </kbd>
+  );
+}
 
 function SidebarContent(props: SidebarProps) {
   const {
@@ -416,6 +418,11 @@ function SidebarContent(props: SidebarProps) {
       )}
       <div className="mt-auto shrink-0 pb-1 pt-2">
         <RoomModeControl />
+        <Button variant="ghost" onClick={props.onOpenSearch} className="mt-1 h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
+          <Search className="size-3.5" />
+          Search
+          <SearchShortcutHint />
+        </Button>
         <Button variant="ghost" onClick={props.onOpenSettings} className="mt-1 h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
           <Settings className="size-3.5" />
           Settings

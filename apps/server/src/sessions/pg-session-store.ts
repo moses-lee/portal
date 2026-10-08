@@ -3,13 +3,16 @@
  * backwards with `ORDER BY seq DESC LIMIT n`, so serving the latest page costs the same however
  * long the log is. Appends for one session are chained so they land in order even when callers
  * do not await each other. Values are stripped of U+0000 on the way in, which Postgres cannot store:
- * an agent's tool output may carry it, and the event would otherwise fail to save.
+ * an agent's tool output may carry it, and the event would otherwise fail to save. Each append also
+ * writes the batch's prompts and reply text to `session_messages` (global search) in the same
+ * transaction, so the search table never drifts from the log (see `search-index.ts`).
  */
 import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import type { StoredEvent } from "@portal/contracts/types";
 import type { Db } from "../db/client.ts";
 import { stripNul } from "../db/sanitize.ts";
 import { sessionEvents, sessions } from "../db/schema.ts";
+import { indexMessages } from "./search-index.ts";
 import type { SessionRecord, SessionStore, TailQuery, TailResult } from "./store.ts";
 
 type Row = typeof sessions.$inferSelect;
@@ -71,15 +74,20 @@ export function createPgSessionStore({ db }: { db: Db }): SessionStore {
     );
     let inserted: { seq: number }[];
     try {
-      inserted = await db
-        .insert(sessionEvents)
-        .select(
-          db
-            .select({ sessionId: sql`v.session_id`.as("session_id"), seq: sql`v.seq`.as("seq"), ts: sql`v.ts`.as("ts"), body: sql`v.body`.as("body") })
-            .from(sql`(values ${values}) as v(session_id, seq, ts, body)`)
-            .where(sql`not exists (select 1 from ${sessionEvents} where ${sessionEvents.sessionId} = ${id} and ${sessionEvents.seq} >= ${first})`),
-        )
-        .returning({ seq: sessionEvents.seq });
+      inserted = await db.transaction(async (tx) => {
+        const rows = await tx
+          .insert(sessionEvents)
+          .select(
+            tx
+              .select({ sessionId: sql`v.session_id`.as("session_id"), seq: sql`v.seq`.as("seq"), ts: sql`v.ts`.as("ts"), body: sql`v.body`.as("body") })
+              .from(sql`(values ${values}) as v(session_id, seq, ts, body)`)
+              .where(sql`not exists (select 1 from ${sessionEvents} where ${sessionEvents.sessionId} = ${id} and ${sessionEvents.seq} >= ${first})`),
+          )
+          .returning({ seq: sessionEvents.seq });
+        // The guard lets the whole batch in or none of it.
+        if (rows.length > 0) await indexMessages(tx, id, batch);
+        return rows;
+      });
     } catch (err) {
       if (isForeignKeyViolation(err)) throw new Error(`No such session: ${id}`);
       throw err;
