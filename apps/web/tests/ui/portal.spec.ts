@@ -1384,3 +1384,48 @@ test("pinned projects sit under a Pinned heading and are reordered by dragging t
   await expect(sidebar.getByRole("button", { name: `Move ${worktree.name}` })).toHaveCount(0);
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" }).getByRole("separator")).toHaveCount(1);
 });
+
+test("an expanded pinned project moves one place per arrow, and a drag swaps it past a short neighbour", async ({ page }) => {
+  const docs = { ...project, id: "p3", name: "docs", path: "/workspace/docs", pinnedAt: 1 };
+  const fixture = await setupPortal(page, {
+    projects: [{ ...project, pinnedAt: 3 }, { ...worktree, pinnedAt: 2 }, docs],
+    sessions: manySessions(),
+  });
+  // The two below are collapsed, so the expanded one is several times their height.
+  await page.addInitScript((ids) => localStorage.setItem("portal.sidebar.collapsed", JSON.stringify(ids)), [worktree.id, docs.id]);
+  await page.goto("/sessions/m1");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const order = () => sidebar.locator("section[aria-label]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+  const tall = sidebar.getByRole("region", { name: project.name, exact: true });
+  await expect(tall.getByRole("button", { name: "Conversation 5", exact: true })).toBeVisible();
+  await expect.poll(order).toEqual([project.name, worktree.name, docs.name]);
+  const status = (text: string) => page.getByRole("status").filter({ hasText: text });
+  // Keyboard: down twice to the end, then up once.
+  const grip = sidebar.getByRole("button", { name: `Move ${project.name}` });
+  await grip.focus();
+  await page.keyboard.press("Space");
+  await expect(tall).toHaveAttribute("data-dragging", "true");
+  await expect(status(`Project ${project.name} moved to position 1 of 3.`)).toHaveCount(1);
+  // An arrow pressed before the sensor has measured the list is dropped.
+  await expect(async () => {
+    await page.keyboard.press("ArrowDown");
+    await expect(status(`Project ${project.name} moved to position 2 of 3.`)).toHaveCount(1, { timeout: 500 });
+  }).toPass();
+  await page.keyboard.press("ArrowDown");
+  await expect(status(`Project ${project.name} moved to position 3 of 3.`)).toHaveCount(1);
+  await page.keyboard.press("ArrowUp");
+  await expect(status(`Project ${project.name} moved to position 2 of 3.`)).toHaveCount(1);
+  await page.keyboard.press("Space");
+  await expect.poll(order).toEqual([worktree.name, project.name, docs.name]);
+  const puts = () => fixture.requests.filter((r) => r.path === "/api/projects/pinned-order").map((r) => r.body);
+  expect(puts()).toEqual([{ ids: [worktree.id, project.id, docs.id] }]);
+  // Mouse: dragging the tall one up by the short one's height swaps them.
+  const short = (await sidebar.getByRole("region", { name: worktree.name }).boundingBox())!;
+  const from = (await grip.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - short.height, { steps: 15 });
+  await page.mouse.up();
+  await expect.poll(order).toEqual([project.name, worktree.name, docs.name]);
+  expect(puts()).toEqual([{ ids: [worktree.id, project.id, docs.id] }, { ids: [project.id, worktree.id, docs.id] }]);
+});

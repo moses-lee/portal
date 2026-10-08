@@ -15,14 +15,16 @@ import {
   DndContext,
   KeyboardSensor,
   MouseSensor,
-  closestCenter,
   useSensor,
   useSensors,
   type Announcements,
+  type ClientRect,
+  type CollisionDetection,
   type DragEndEvent,
+  type KeyboardCoordinateGetter,
   type Modifier,
 } from "@dnd-kit/core";
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import {
   ArchiveRestore,
@@ -125,6 +127,41 @@ const PREFETCH_HOVER_MS = 400;
 
 /** A dragged project moves up and down the list only. */
 const alongList: Modifier = ({ transform }) => ({ ...transform, x: 0 });
+
+/**
+ * Where the dragged section's top lands if dropped on `rect`: its top for a project above it (or
+ * itself), and bottom-aligned with a project below it. Sections differ in height (an expanded one
+ * holds its conversations), so dnd-kit's centre and corner measures stick on a tall one.
+ */
+const slotTop = (rect: ClientRect, activeRect: ClientRect) => (rect.top > activeRect.top ? rect.bottom - activeRect.height : rect.top);
+
+/** The project whose slot is nearest the dragged section's top. */
+const closestSlot: CollisionDetection = ({ active, collisionRect, droppableRects, droppableContainers }) => {
+  const activeRect = droppableRects.get(active.id);
+  if (!activeRect) return [];
+  return droppableContainers
+    .flatMap((container) => {
+      const rect = droppableRects.get(container.id);
+      return rect ? [{ id: container.id, data: { droppableContainer: container, value: Math.abs(slotTop(rect, activeRect) - collisionRect.top) } }] : [];
+    })
+    .sort((a, b) => a.data.value - b.data.value);
+};
+
+/** An arrow key moves the dragged section to the next project's slot up or down, by order rather than by distance. */
+const slotKeyboardCoordinates: KeyboardCoordinateGetter = (event, { currentCoordinates, context: { active, over, collisionRect, droppableRects, droppableContainers } }) => {
+  if (event.code !== "ArrowDown" && event.code !== "ArrowUp") return;
+  event.preventDefault();
+  const activeRect = active && droppableRects.get(active.id);
+  if (!active || !activeRect || !collisionRect) return;
+  const rects = droppableContainers
+    .getEnabled()
+    .flatMap((container) => droppableRects.get(container.id) ?? [])
+    .sort((a, b) => a.top - b.top);
+  const at = rects.indexOf(droppableRects.get(over?.id ?? active.id) ?? activeRect);
+  const target = rects[at + (event.code === "ArrowDown" ? 1 : -1)];
+  if (at < 0 || !target) return;
+  return { x: currentCoordinates.x, y: currentCoordinates.y + slotTop(target, activeRect) - collisionRect.top };
+};
 
 /**
  * A project's section of the tree. A pinned project (when `sortable`) can be dragged among the
@@ -503,7 +540,7 @@ const ProjectsColumn = memo(function ProjectsColumn({
     // A few pixels of travel before a drag starts, so a click on the grip does nothing. Mouse only:
     // on touch the list scrolls and a long press opens the project's menu.
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, { coordinateGetter: slotKeyboardCoordinates }),
   );
   /** The pinned projects in their order; the whole list, so a drag during a search still names every pin. */
   const pinnedIds = useMemo(() => projects.filter((project) => project.id in projectPins).map((project) => project.id), [projects, projectPins]);
@@ -659,7 +696,7 @@ const ProjectsColumn = memo(function ProjectsColumn({
         )}
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={closestSlot}
           modifiers={[alongList]}
           onDragEnd={onDragEnd}
           accessibility={{
