@@ -82,8 +82,17 @@ function update(sessionId, update) {
   send({ method: "session/update", params: { sessionId, update } });
 }
 
+/**
+ * This agent's behaviour from the test's config file: a mode name, or `{ mode, ...knobs }` with
+ * `resume` (what a resume or load answers, see there) and `setModeError` (set_mode is refused).
+ */
+function config() {
+  const entry = JSON.parse(readFileSync(configPath, "utf8"))[agentId];
+  return typeof entry === "string" ? { mode: entry } : entry ?? {};
+}
+
 function mode() {
-  return JSON.parse(readFileSync(configPath, "utf8"))[agentId];
+  return config().mode;
 }
 
 log({ event: "spawn", env: { NODE_ENV: process.env.NODE_ENV ?? null, TURBOPACK: process.env.TURBOPACK ?? null, PORTAL_KEEP: process.env.PORTAL_KEEP ?? null } });
@@ -115,14 +124,22 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return;
     }
     const sessionId = params.sessionId;
-    if (!configs.has(sessionId)) configs.set(sessionId, initialConfigOptions());
+    // The settings a resumed session comes back with, which an agent need not keep with its
+    // transcript: the initial options and the "plan" mode unless the config file's `resume`
+    // says otherwise (`currentModeId`, option `values` by id, options left out by `without`).
+    const answer = config().resume ?? {};
+    if (!configs.has(sessionId)) {
+      configs.set(sessionId, initialConfigOptions()
+        .filter((option) => !(answer.without ?? []).includes(option.id))
+        .map((option) => option.id in (answer.values ?? {}) ? { ...option, currentValue: answer.values[option.id] } : option));
+    }
     if (method === "session/load") {
       // History replay: the client already holds these events and must not log them again.
       update(sessionId, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "replayed prompt" } });
       update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "replayed answer" } });
     }
     respond(id, {
-      modes: { currentModeId: "plan", availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }] },
+      modes: { currentModeId: answer.currentModeId ?? "plan", availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }] },
       configOptions: configs.get(sessionId),
     });
     update(sessionId, { sessionUpdate: "available_commands_update", availableCommands: COMMANDS });
@@ -155,6 +172,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.value });
     }
   } else if (method === "session/set_mode") {
+    if (config().setModeError) {
+      send({ id, error: { code: -32603, message: "Fixture refuses to change the mode" } });
+      return;
+    }
     if (askers.delete(params.sessionId)) {
       // A permission request with no prompt behind it, as a background task of a finished turn may send.
       const permissionId = `permission-${++permissionCount}`;

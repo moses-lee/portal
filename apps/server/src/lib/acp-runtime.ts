@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { MAX_CONFIG_STEPS, nextConfigChange, settingsOf } from "@portal/shared/agent-settings";
 import type { AgentDefinition } from "./agents.ts";
 import { childEnv } from "./child-env.ts";
 import { type BlobStore, externalizeImages } from "./blobs.ts";
@@ -13,7 +14,7 @@ import { createMemorySessionStore, type SessionRecord, type SessionStore } from 
 import { AIR_CLIENT_META, AIR_UPDATE_METHOD, ASYNC_TASK_STOP_METHOD, type AirNotification, parseAirNotification, routeAirUpdates } from "./air-tasks.ts";
 import {
   type BackgroundTask, type BackgroundTaskUpdate, type EventPage, type LivenessState, MAX_QUEUED_PROMPTS, type OpenToolCall, type PermissionAnswerer, type PortalEvent, type QueuedPrompt,
-  type SessionLink, type SessionListPatch, type SessionLiveness, type SessionLoss, type SessionMeta, type SessionState, type StoredEvent, type TitleSource, titleMayReplace,
+  type SessionLink, type SessionListPatch, type SessionListState, type SessionLiveness, type SessionLoss, type SessionMeta, type SessionState, type StoredEvent, type TitleSource, titleMayReplace,
 } from "./types.ts";
 
 /** What the runtime tells list subscribers (`onSessionsChange`): a session appeared, changed, or went away. */
@@ -993,7 +994,8 @@ export function createAcpRuntime(
    * exited) with `session/resume`, falling back to `session/load` with its replay discarded.
    * When the agent no longer knows the session, a never-prompted session gets a fresh upstream
    * session in its place (Claude Code only writes a transcript on the first turn), while one
-   * with history fails with a message the user can act on.
+   * with history fails with a message the user can act on. Either way the session's stored
+   * settings go back to the agent (`replaySettings`) before it is announced live.
    * Resolves immediately for live sessions; concurrent callers share one attempt.
    */
   async function attach(id: string): Promise<void> {
@@ -1053,12 +1055,18 @@ export function createAcpRuntime(
         }
         if (instance.failure) throw instance.failure;
         if (!current(session)) throw new Error("the session was deleted");
+        // The settings the session had (persisted with it): the agent's answer may not keep them.
+        const stored = settingsOf(session.state);
         setState(session, {
           modes: response?.modes ?? session.state.modes,
           configOptions: response?.configOptions ?? session.state.configOptions,
           // The new upstream session announces its own commands.
           ...(replaced ? { commands: [] } : {}),
         });
+        await replaySettings(session, instance, stored);
+        // The agent may have gone, or the session, while the settings went out.
+        if (instance.failure) throw instance.failure;
+        if (!current(session)) throw new Error("the session was deleted");
         setLost(session, null);
         // Nothing in the resume itself says whether the agent is at work, so the session keeps the
         // clock it came back with. Background tasks the agent reports afterwards (AIR
@@ -1398,25 +1406,52 @@ export function createAcpRuntime(
     advisor = next;
   }
 
-  async function setConfigOption(id: string, configId: string, value: string | boolean): Promise<SessionState> {
-    const { session, process: instance, upstreamId } = sessionOwner(id);
+  /**
+   * Ask the agent to change one config option of `session` (attached to `instance` as
+   * `upstreamId`, live or still connecting) and take its answer as the session's options.
+   */
+  async function requestConfigOption(
+    session: Session, instance: AgentProcess, upstreamId: string, configId: string, value: string | boolean,
+  ): Promise<SessionState> {
     const params: acp.SetSessionConfigOptionRequest = typeof value === "boolean"
       ? { sessionId: upstreamId, configId, type: "boolean", value }
       : { sessionId: upstreamId, configId, value };
+    const response = await instance.conn.agent.request(acp.methods.agent.session.setConfigOption, params);
+    if (instance.failure) throw instance.failure;
+    const configOptions = response.configOptions;
+    // Some agents expose the session mode as a `mode` config option without also pushing
+    // `current_mode_update`; keep the modes view in step when the new value names a known mode.
+    const modeOption = configOptions.find((option) => option.category === "mode" && option.type === "select");
+    const modeId = modeOption?.currentValue;
+    const modes = session.state.modes;
+    const syncedModes = modes && typeof modeId === "string"
+      && modeId !== modes.currentModeId && modes.availableModes.some((mode) => mode.id === modeId)
+      ? { ...modes, currentModeId: modeId }
+      : modes;
+    return setState(session, { configOptions, modes: syncedModes });
+  }
+
+  /** Ask the agent to switch `session`'s mode (see `requestConfigOption` for the arguments). */
+  async function requestMode(session: Session, instance: AgentProcess, upstreamId: string, modeId: string): Promise<SessionState> {
+    await instance.conn.agent.request(acp.methods.agent.session.setMode, { sessionId: upstreamId, modeId });
+    if (instance.failure) throw instance.failure;
+    // Agents may also push `current_mode_update`; both paths converge on the same state. A
+    // `mode` config option mirrors the same choice, so keep it in step when it lists this mode.
+    const configOptions = session.state.configOptions.map((option) =>
+      option.category === "mode" && option.type === "select" && selectHasValue(option, modeId)
+        ? { ...option, currentValue: modeId }
+        : option,
+    );
+    return setState(session, {
+      modes: { ...(session.state.modes ?? { availableModes: [] }), currentModeId: modeId },
+      configOptions,
+    });
+  }
+
+  async function setConfigOption(id: string, configId: string, value: string | boolean): Promise<SessionState> {
+    const { session, process: instance, upstreamId } = sessionOwner(id);
     try {
-      const response = await instance.conn.agent.request(acp.methods.agent.session.setConfigOption, params);
-      if (instance.failure) throw instance.failure;
-      const configOptions = response.configOptions;
-      // Some agents expose the session mode as a `mode` config option without also pushing
-      // `current_mode_update`; keep the modes view in step when the new value names a known mode.
-      const modeOption = configOptions.find((option) => option.category === "mode" && option.type === "select");
-      const modeId = modeOption?.currentValue;
-      const modes = session.state.modes;
-      const syncedModes = modes && typeof modeId === "string"
-        && modeId !== modes.currentModeId && modes.availableModes.some((mode) => mode.id === modeId)
-        ? { ...modes, currentModeId: modeId }
-        : modes;
-      return setState(session, { configOptions, modes: syncedModes });
+      return await requestConfigOption(session, instance, upstreamId, configId, value);
     } catch (error) {
       throw instance.failure ?? agentError(instance.agent, "could not change settings", error);
     }
@@ -1425,21 +1460,32 @@ export function createAcpRuntime(
   async function setMode(id: string, modeId: string): Promise<SessionState> {
     const { session, process: instance, upstreamId } = sessionOwner(id);
     try {
-      await instance.conn.agent.request(acp.methods.agent.session.setMode, { sessionId: upstreamId, modeId });
-      if (instance.failure) throw instance.failure;
-      // Agents may also push `current_mode_update`; both paths converge on the same state. A
-      // `mode` config option mirrors the same choice, so keep it in step when it lists this mode.
-      const configOptions = session.state.configOptions.map((option) =>
-        option.category === "mode" && option.type === "select" && selectHasValue(option, modeId)
-          ? { ...option, currentValue: modeId }
-          : option,
-      );
-      return setState(session, {
-        modes: { ...(session.state.modes ?? { availableModes: [] }), currentModeId: modeId },
-        configOptions,
-      });
+      return await requestMode(session, instance, upstreamId, modeId);
     } catch (error) {
       throw instance.failure ?? agentError(instance.agent, "could not change settings", error);
+    }
+  }
+
+  /**
+   * Bring a reattached session back to the settings it had before its agent was lost (mode,
+   * model, effort, …): agents do not all keep those with the transcript, so a resume can answer
+   * with their defaults. The new session's way (`applyLastSettings` in the orchestrator): one
+   * request at a time, re-diffing against each answer, values the agent no longer offers skipped.
+   * A failure is logged, not thrown: the session comes back either way, on the agent's defaults
+   * for what is left. Not recorded as last-used: nothing here is a fresh pick of the user's.
+   */
+  async function replaySettings(session: Session, instance: AgentProcess, desired: SessionListState): Promise<void> {
+    try {
+      for (let step = 0; step < MAX_CONFIG_STEPS; step++) {
+        if (instance.failure || !current(session)) return;
+        const request = nextConfigChange(desired, session.state);
+        if (!request) return;
+        if ("modeId" in request) await requestMode(session, instance, session.upstreamId, request.modeId);
+        else await requestConfigOption(session, instance, session.upstreamId, request.configId, request.value);
+      }
+    } catch (error) {
+      if (instance.failure || !current(session)) return;
+      console.warn(`Session ${session.id}: could not restore its settings on reconnect: ${errorMessage(error)}`);
     }
   }
 

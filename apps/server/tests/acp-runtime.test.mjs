@@ -442,6 +442,12 @@ function restart(t, ctx, modes = {}) {
   return ctx.spawnRuntime();
 }
 
+/** The params of every `method` request the agent's latest process (the one a restart started) received. */
+function latestRequests(ctx, agentId, method) {
+  const { pid } = ctx.starts(agentId).at(-1);
+  return ctx.messages(agentId, method).filter((entry) => entry.pid === pid).map(({ message }) => message.params);
+}
+
 /**
  * Runtimes over one shared database, each with its own Postgres store (a restart builds a new one).
  * `store` is a separate instance for assertions. The database is dropped only after every runtime
@@ -573,6 +579,125 @@ test("persisted sessions come back offline after a restart, resume on demand, an
   const older = await next.readEvents(session.id, { before: after.events[0].seq, limit: 4 });
   assert.equal(older.events.at(-1).seq, before - 1);
   assert.equal(older.events[0].type, "user");
+});
+
+for (const way of ["resume", "load"]) {
+  test(`a reattached session gets its stored settings back when the agent's ${way} answers with its defaults`, async (t) => {
+    const first = await persistentSetup(t);
+    const { runtime, cwd, store } = first;
+    const session = await runtime.createSession(cwd, "claude");
+    await runtime.setConfigOption(session.id, "model", "smart");
+    await runtime.setConfigOption(session.id, "fast", true);
+    await runtime.setConfigOption(session.id, "mode", "plan");
+    await until(() => session.state.modes.currentModeId === "plan", "current_mode_update");
+    await runtime.dispose();
+
+    // The agent keeps none of it with the transcript: it answers with a fresh session's settings.
+    const next = restart(t, first, { claude: { mode: way, resume: { currentModeId: "default" } } });
+    await next.ready;
+    const restored = next.getSession(session.id);
+    assert.equal(restored.state.modes.currentModeId, "plan");
+    await next.attach(session.id);
+    assert.deepEqual(restored.link, { status: "live" });
+    assert.equal(first.messages("claude", `session/${way}`).length, 1);
+    // One request per setting that differed, in display order, on the reattached agent session.
+    assert.deepEqual(latestRequests(first, "claude", "session/set_config_option"), [
+      { sessionId: "session-1", configId: "mode", value: "plan" },
+      { sessionId: "session-1", configId: "model", value: "smart" },
+      { sessionId: "session-1", configId: "fast", type: "boolean", value: true },
+    ]);
+    // The mode is a config option here, so the legacy call is not made as well.
+    assert.deepEqual(latestRequests(first, "claude", "session/set_mode"), []);
+    assert.equal(restored.state.modes.currentModeId, "plan");
+    assert.deepEqual(restored.state.configOptions.map(({ id, currentValue }) => ({ id, currentValue })), [
+      { id: "mode", currentValue: "plan" }, { id: "model", currentValue: "smart" }, { id: "fast", currentValue: true },
+    ]);
+    assert.deepEqual(next.listSessions()[0].state, restored.state);
+    await restored.writes;
+    const saved = (await store.getSession(session.id)).state;
+    assert.equal(saved.modes.currentModeId, "plan");
+    assert.deepEqual(saved.configOptions.map(({ currentValue }) => currentValue), ["plan", "smart", true]);
+  });
+}
+
+test("a reattached session's mode is restored with session/set_mode when the agent offers no mode option", async (t) => {
+  const first = await persistentSetup(t);
+  const { runtime, cwd } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.setMode(session.id, "plan");
+  await runtime.dispose();
+
+  const next = restart(t, first, { claude: { mode: "resume", resume: { currentModeId: "default", without: ["mode"] } } });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  await next.attach(session.id);
+  assert.deepEqual(restored.link, { status: "live" });
+  assert.deepEqual(latestRequests(first, "claude", "session/set_mode"), [{ sessionId: "session-1", modeId: "plan" }]);
+  assert.deepEqual(latestRequests(first, "claude", "session/set_config_option"), []);
+  assert.equal(restored.state.modes.currentModeId, "plan");
+  // The option list is the agent's: a stored option it no longer offers is not brought back.
+  assert.deepEqual(restored.state.configOptions.map(({ id }) => id), ["model", "fast"]);
+});
+
+test("nothing is sent on reattach when the agent's answer already matches the stored settings", async (t) => {
+  const first = await persistentSetup(t);
+  const { runtime, cwd } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.setConfigOption(session.id, "model", "smart");
+  await runtime.dispose();
+
+  const next = restart(t, first, { claude: { mode: "resume", resume: { currentModeId: "default", values: { model: "smart" } } } });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  await next.attach(session.id);
+  assert.deepEqual(restored.link, { status: "live" });
+  assert.deepEqual(latestRequests(first, "claude", "session/set_config_option"), []);
+  assert.deepEqual(latestRequests(first, "claude", "session/set_mode"), []);
+  assert.equal(restored.state.modes.currentModeId, "default");
+  assert.equal(restored.state.configOptions.find(({ id }) => id === "model").currentValue, "smart");
+});
+
+test("a mode the agent refuses on reattach is logged; the session still comes back live, on the agent's default", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  const first = await persistentSetup(t);
+  const { runtime, cwd } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.setMode(session.id, "plan");
+  await runtime.dispose();
+
+  const next = restart(t, first, { claude: { mode: "resume", resume: { currentModeId: "default", without: ["mode"] }, setModeError: true } });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  await next.attach(session.id);
+  assert.deepEqual(restored.link, { status: "live" });
+  assert.equal(restored.lost, null);
+  assert.deepEqual(latestRequests(first, "claude", "session/set_mode"), [{ sessionId: "session-1", modeId: "plan" }]);
+  assert.equal(restored.state.modes.currentModeId, "default");
+  const warned = warn.mock.calls.map((call) => String(call.arguments[0]));
+  assert.ok(warned.some((line) => line.includes(session.id) && line.includes("refuses to change the mode")), `warned: ${warned}`);
+
+  // The session is usable on the agent's defaults.
+  await next.sendPrompt(session.id, "hello");
+  await answerPermission(next, restored, "once");
+  await until(() => !restored.busy, "turn after the refused mode");
+  assert.deepEqual(restored.events.at(-1), { type: "turn_end", stopReason: "end_turn" });
+});
+
+test("a replacement agent session gets the settings the lost one had", async (t) => {
+  const first = await persistentSetup(t);
+  const { runtime, cwd } = first;
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.setConfigOption(session.id, "model", "smart");
+  await runtime.dispose();
+
+  const next = restart(t, first, { claude: "resume-missing" });
+  await next.ready;
+  const restored = next.getSession(session.id);
+  await next.attach(session.id);
+  assert.deepEqual(restored.link, { status: "live" });
+  assert.equal(first.messages("claude", "session/resume").length, 1);
+  assert.deepEqual(latestRequests(first, "claude", "session/set_config_option"), [{ sessionId: "session-1", configId: "model", value: "smart" }]);
+  assert.equal(restored.state.configOptions.find(({ id }) => id === "model").currentValue, "smart");
 });
 
 test("sending a prompt reattaches an offline session first, and load replays are not logged twice", async (t) => {
