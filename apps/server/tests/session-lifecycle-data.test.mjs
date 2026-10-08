@@ -91,7 +91,7 @@ test("migration 0013 adds the lifecycle columns and starts every existing sessio
   assert.deepEqual({ idleSince: s2.idleSince, turnEndedAt: s2.turnEndedAt, titleSource: s2.titleSource }, { idleSince: 2500, turnEndedAt: 2500, titleSource: "prompt" });
   const projects = createPgProjectsStore({ db });
   await projects.ready;
-  assert.deepEqual(projects.get("p1"), { id: "p1", name: "one", path: "/repos/x", createdAt: 5, pinnedAt: null, keptReason: null, revivedAt: null });
+  assert.deepEqual(projects.get("p1"), { id: "p1", name: "one", path: "/repos/x", createdAt: 5, pinnedAt: null, pinOrder: null, keptReason: null, revivedAt: null });
 });
 
 const sessionBackends = [

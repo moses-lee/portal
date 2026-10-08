@@ -48,6 +48,8 @@ export type UseProjects = {
   renameProject: (id: string, name: string) => Promise<Project>;
   /** `PATCH /api/projects/[id]` with `{pinned}`; shown at once, refetched if the server refuses. Rejects with the server's message. */
   setProjectPinned: (id: string, pinned: boolean) => Promise<Project>;
+  /** `PUT /api/projects/pinned-order` with every pinned project's id in the dragged order; shown at once, refetched if the server refuses. */
+  reorderPinned: (ids: readonly string[]) => Promise<void>;
   /**
    * `DELETE /api/projects/[id]`, with `?worktree=delete[&force=1][&script=skip]` per `opts`. Sessions stay.
    * Rejects with a `ProjectRequestError` carrying the server's message (and `dirty` or `scriptFailed` for a 409).
@@ -217,6 +219,28 @@ export function useProjects(): UseProjects {
     }
   }, [merge, refresh]);
 
+  const reorderPinned = useCallback(async (ids: readonly string[]) => {
+    const position = new Map(ids.map((id, index) => [id, index]));
+    setProjects((prev) => prev.map((p) => (position.has(p.id) ? { ...p, pinOrder: position.get(p.id) } : p)));
+    let r: Response;
+    try {
+      r = await fetch("/api/projects/pinned-order", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+    } catch {
+      void refresh();
+      throw new Error(NETWORK_ERROR);
+    }
+    if (!r.ok) {
+      void refresh();
+      throw await readError(r, "Could not reorder the pinned projects. Try again.");
+    }
+    const { projects: ordered } = (await r.json()) as { projects: Project[] };
+    for (const project of ordered) merge(project);
+  }, [merge, refresh]);
+
   const removeProject = useCallback(async (id: string, opts: RemoveProjectOptions = {}) => {
     const params = new URLSearchParams();
     if (opts.deleteWorktree) {
@@ -236,5 +260,5 @@ export function useProjects(): UseProjects {
     await refresh();
   }, [refresh]);
 
-  return { projects, loading, error, addProject, renameProject, setProjectPinned, removeProject, refresh };
+  return { projects, loading, error, addProject, renameProject, setProjectPinned, reorderPinned, removeProject, refresh };
 }

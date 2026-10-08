@@ -78,7 +78,7 @@ rm ~/Library/LaunchAgents/com.portal.plist
 
 ## Projects and terminals
 
-**Add project** in the sidebar or on the start page opens a folder browser (or takes a typed path such as `~/repos/portal`). Each project is exactly one folder, stored as its resolved real path, and the same folder cannot be added twice. Rename or remove a project from its `⋯` menu in the sidebar; removing a project does not touch its sessions, which move to the **Removed** list at the bottom of the Projects section and keep working. If a project's folder disappears from disk, the project stays listed with a *missing* marker until you remove or re-add it, and starting a session or terminal in it fails with a clear error.
+The start page's **project** picker lists your projects (pinned first, then the most recently worked in) and searches the host for folders to add: type a name to find git repositories under your home folder, or a path such as `~/repos/portal` to complete it; picking a folder adds it as a project and selects it. Each project is exactly one folder, stored as its resolved real path, and the same folder cannot be added twice. Rename or remove a project from its `⋯` menu in the sidebar; removing a project does not touch its sessions, which move to the **Removed** list at the bottom of the Projects section and keep working. If a project's folder disappears from disk, the project stays listed with a *missing* marker until you remove or re-add it, and starting a session or terminal in it fails with a clear error.
 
 ### Worktrees
 

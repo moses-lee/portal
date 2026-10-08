@@ -715,7 +715,7 @@ test("each project has a new conversation button, and the start page applies cho
   await expect(page).toHaveURL(tabUrl);
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(
-    page.getByRole("combobox", { name: "Project", exact: true }),
+    page.getByRole("button", { name: /^project /i }),
   ).toContainText("portal");
   // Seeded from Claude Code's latest session: Sonnet in the fixture.
   const settings = page.getByRole("button", {
@@ -917,7 +917,7 @@ test("source control actions draft a prompt on the start page without creating a
   await expect(page).toHaveURL(tabUrl);
   await expect(page.locator("[data-pane][data-session]:visible")).toHaveCount(0);
   await expect(
-    page.getByRole("combobox", { name: "Project", exact: true }),
+    page.getByRole("button", { name: /^project /i }),
   ).toContainText("portal");
   const checksPrompt = buildGitActionPrompt(
     "checks",
@@ -1249,7 +1249,7 @@ test("the collapse toggle is disabled when there are no projects", async ({
   await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   await expect(
-    sidebar.getByText("Add a project to create your first conversation."),
+    sidebar.getByText("Start a conversation to add your first project."),
   ).toBeVisible();
   await expect(
     sidebar.getByRole("button", { name: "Collapse all projects" }),
@@ -1291,4 +1291,96 @@ test("a failed pre-deletion script offers to remove the worktree without it", as
     "?worktree=delete&script=skip",
     "?worktree=delete&force=1&script=skip",
   ]);
+});
+
+test("the Projects column's + opens a start page with no project; picking one brings the worktree control and enables the composer", async ({
+  page,
+}, info) => {
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await expect(sidebar.getByRole("button", { name: "Add project" })).toHaveCount(0);
+  await sidebar.getByRole("button", { name: "New conversation", exact: true }).click();
+  await expect(page).toHaveURL(tabUrl);
+  const projectTrigger = page.getByRole("button", { name: /^project /i });
+  await expect(projectTrigger).toContainText("Choose a project");
+  await expect(page.getByRole("button", { name: /^worktree /i })).toHaveCount(0);
+  const composer = page.getByRole("textbox", { name: "First message" });
+  await expect(composer).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Start an empty conversation" })).toBeDisabled();
+  await page.screenshot({ animations: "disabled", path: info.outputPath("start-empty.png") });
+
+  await projectTrigger.click();
+  const list = page.getByRole("listbox", { name: /project/i });
+  await expect(list.getByRole("option")).toHaveCount(2);
+  await expect(list).toContainText("Recent");
+  await expect(list.getByRole("option", { name: /improve-chat-experience/ })).toContainText("portal · feature/improve-chat-experience");
+  await page.screenshot({ animations: "disabled", path: info.outputPath("project-picker.png") });
+  await list.getByRole("option", { name: /^portal / }).click();
+  await expect(projectTrigger).toContainText("portal");
+  await expect(projectTrigger).toBeFocused();
+  await expect(page.getByRole("button", { name: /^worktree /i })).toContainText("Original");
+  await expect(composer).toBeEnabled();
+});
+
+test("the project picker searches folders and adds the picked one as a project", async ({ page }) => {
+  const fixture = await setupPortal(page);
+  await page.goto("/new");
+  const projectTrigger = page.getByRole("button", { name: /^project /i });
+  await projectTrigger.click();
+  const search = page.getByRole("combobox", { name: "Search projects and folders" });
+  await search.fill("docs");
+  const list = page.getByRole("listbox", { name: /project/i });
+  await expect(list).toContainText("Folders");
+  const hit = list.getByRole("option", { name: /portal-docs/ });
+  await expect(hit).toContainText("~/repos/portal-docs");
+  await expect(list.getByRole("option")).toHaveCount(1);
+  // Keyboard: the only row is highlighted, Enter picks it.
+  await search.press("Enter");
+  await expect(projectTrigger).toContainText("portal-docs");
+  expect(fixture.requests.filter((r) => r.path === "/api/projects" && r.method === "POST").map((r) => r.body)).toEqual([
+    { path: "/workspace/portal-docs" },
+  ]);
+  // The new project is listed, and the picker now offers it as a project rather than a folder.
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await expect(sidebar.getByRole("region", { name: "portal-docs" })).toBeVisible();
+  await projectTrigger.click();
+  await search.fill("docs");
+  await expect(list.getByRole("option")).toHaveCount(1);
+  await expect(list).toContainText("Projects");
+  await expect(list).not.toContainText("Folders");
+});
+
+test("pinned projects sit under a Pinned heading and are reordered by dragging their grip", async ({ page }) => {
+  const fixture = await setupPortal(page, {
+    projects: [
+      { ...project, pinnedAt: 1 },
+      { ...worktree, pinnedAt: 2 },
+    ],
+  });
+  await page.goto("/sessions/s1");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const order = () => sidebar.locator("section[aria-label]").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+  await expect(sidebar.getByText("Pinned", { exact: true })).toBeVisible();
+  // Most recently pinned first until a drag records an order.
+  await expect.poll(order).toEqual([worktree.name, project.name]);
+  const grip = sidebar.getByRole("button", { name: `Move ${worktree.name}` });
+  await grip.focus();
+  await page.keyboard.press("Space");
+  await expect(sidebar.getByRole("region", { name: worktree.name })).toHaveAttribute("data-dragging", "true");
+  // An arrow pressed before the sensor has measured the list is dropped.
+  await expect(async () => {
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("status").filter({ hasText: /^Project .* moved to position 2 of 2\.$/ })).toHaveCount(1, { timeout: 500 });
+  }).toPass();
+  await page.keyboard.press("Space");
+  await expect.poll(order).toEqual([project.name, worktree.name]);
+  await expect(grip).toBeFocused();
+  expect(fixture.requests.filter((r) => r.path === "/api/projects/pinned-order").map((r) => r.body)).toEqual([{ ids: [project.id, worktree.id] }]);
+  // An unpinned project has no grip and sits below the rule.
+  await setupPortal(page, { projects: [{ ...project, pinnedAt: 1 }, worktree] });
+  await page.goto("/sessions/s1");
+  await expect(sidebar.getByRole("button", { name: `Move ${project.name}` })).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: `Move ${worktree.name}` })).toHaveCount(0);
+  await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" }).getByRole("separator")).toHaveCount(1);
 });

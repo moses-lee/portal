@@ -106,6 +106,13 @@
       "when": 1791435770105,
       "tag": "0014_session_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1791486842275,
+      "tag": "0015_pin_order",
+      "breakpoints": true
     }
   ]
 }

@@ -68,7 +68,10 @@ export type SidebarProps = {
   portalView: PortalView | null;
   /** True while a session or the start page is open: the Projects section is the place to be. */
   projectsActive: boolean;
-  onAddProject: () => void;
+  /** The Projects column's `+`: a start page with no project chosen. */
+  onNewConversation: () => void;
+  /** The pinned projects were dragged into `ids` order (every pinned id, first to last). */
+  onReorderPinned: (ids: readonly string[]) => Promise<void>;
   onOpenSettings: () => void;
   /** Open global search (also ⌘K / Ctrl+K); on mobile the sheet closes first. */
   onOpenSearch: () => void;
@@ -291,7 +294,8 @@ function SidebarContent(props: SidebarProps) {
     onPortalView,
     portalView,
     projectsActive,
-    onAddProject,
+    onNewConversation,
+    onReorderPinned,
     onRenameProject,
     onRemoveProject,
     removedProjects,
@@ -395,7 +399,8 @@ function SidebarContent(props: SidebarProps) {
           onToggleTrack={toggleTrack}
           onRenameSession={renameSession}
           onNewSession={onNewSession}
-          onAddProject={onAddProject}
+          onNewConversation={onNewConversation}
+          onReorderPinned={onReorderPinned}
           onRenameProject={onRenameProject}
           onRemoveProject={onRemoveProject}
           removedCount={removedProjects.length}

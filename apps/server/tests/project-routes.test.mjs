@@ -131,7 +131,7 @@ test("project CRUD: add, list, rename, remove", async (t) => {
   assert.equal((await call("PATCH", `/api/projects/${project.id}`, { pinned: true })).json().pinnedAt, pinned.pinnedAt);
   assert.equal((await call("GET", "/api/projects")).json().projects[0].pinnedAt, pinned.pinnedAt);
   const both = (await call("PATCH", `/api/projects/${project.id}`, { name: "Uno", pinned: false })).json();
-  assert.deepEqual(both, { ...project, name: "Uno", pinnedAt: null });
+  assert.deepEqual(both, { ...project, name: "Uno", pinnedAt: null, pinOrder: null });
   assert.equal((await call("PATCH", "/api/projects/nope", { pinned: true })).statusCode, 404);
 
   assert.deepEqual((await call("DELETE", "/api/projects/nope")).json(), { error: "Unknown project." });
@@ -181,6 +181,8 @@ test("every project route refuses cross-origin requests", async (t) => {
   const project = (await call("POST", "/api/projects", { path: path.join(root, "one") })).json();
   const routes = [
     ["GET", "/api/fs/dirs"],
+    ["GET", "/api/fs/search?q=x"],
+    ["PUT", "/api/projects/pinned-order", { ids: [] }],
     ["GET", "/api/projects"],
     ["POST", "/api/projects", { path: path.join(root, "one") }],
     ["PATCH", `/api/projects/${project.id}`, { name: "x" }],
@@ -391,4 +393,55 @@ test("removed projects: kept while conversations point at them, listed, restored
   assert.equal((await call("DELETE", "/api/projects/removed/unassigned")).statusCode, 204);
   assert.deepEqual(deleted, ["s5", "s4"]);
   assert.deepEqual((await call("GET", "/api/projects/removed")).json().removed.map((r) => r.id), ["vanished"]);
+});
+
+test("pinned order: PUT records the dragged order of every pinned project, unpinning forgets it", async (t) => {
+  const { root, call } = await setup(t);
+  const ids = [];
+  for (const name of ["one", "two", "three"]) {
+    mkdirSync(path.join(root, name));
+    ids.push((await call("POST", "/api/projects", { path: path.join(root, name) })).json().id);
+  }
+  const [a, b, c] = ids;
+  for (const id of [a, b]) await call("PATCH", `/api/projects/${id}`, { pinned: true });
+
+  for (const payload of [undefined, { ids: "a" }, { ids: [1] }]) {
+    const res = await call("PUT", "/api/projects/pinned-order", payload);
+    assert.equal(res.statusCode, 400, JSON.stringify(payload));
+    assert.match(res.json().error, /Expected/);
+  }
+  // Every pinned project once: a missing one, an extra unpinned one, or a repeat is refused.
+  for (const bad of [[a], [a, b, c], [a, a], ["nope", a]]) {
+    const res = await call("PUT", "/api/projects/pinned-order", { ids: bad });
+    assert.equal(res.statusCode, 400, JSON.stringify(bad));
+    assert.deepEqual(res.json(), { error: "Expected every pinned project exactly once." });
+  }
+
+  const ordered = await call("PUT", "/api/projects/pinned-order", { ids: [b, a] });
+  assert.equal(ordered.statusCode, 200);
+  assert.deepEqual(ordered.json().projects.map((p) => [p.id, p.pinOrder]), [[b, 0], [a, 1]]);
+  const listed = (await call("GET", "/api/projects")).json().projects;
+  assert.deepEqual(Object.fromEntries(listed.map((p) => [p.id, p.pinOrder])), { [a]: 1, [b]: 0, [c]: null });
+
+  const unpinned = (await call("PATCH", `/api/projects/${b}`, { pinned: false })).json();
+  assert.equal(unpinned.pinnedAt, null);
+  assert.equal(unpinned.pinOrder, null);
+  assert.deepEqual((await call("PUT", "/api/projects/pinned-order", { ids: [a] })).json().projects.map((p) => p.pinOrder), [0]);
+});
+
+test("GET /api/fs/search completes a path and searches repositories by name", async (t) => {
+  const { root, call } = await setup(t);
+  const base = path.join(root, "search");
+  for (const dir of ["Alpha/.git", "alps", "beta/repo/.git", "beta/other", ".hidden"]) mkdirSync(path.join(base, dir), { recursive: true });
+
+  const completed = (await call("GET", `/api/fs/search?q=${encodeURIComponent(path.join(base, "al"))}`)).json();
+  assert.equal(completed.mode, "path");
+  assert.deepEqual(completed.hits.map((h) => [h.name, h.isGitRepo]), [["Alpha", true], ["alps", false]]);
+  assert.equal(completed.hits[0].path, path.join(base, "Alpha"));
+  const listed = (await call("GET", `/api/fs/search?q=${encodeURIComponent(base + "/")}`)).json();
+  assert.deepEqual(listed.hits.map((h) => h.name), ["search", "Alpha", "alps", "beta"]);
+  const dot = (await call("GET", `/api/fs/search?q=${encodeURIComponent(`${base}/.`)}`)).json();
+  assert.deepEqual(dot.hits.map((h) => h.name), [".hidden"]);
+  assert.deepEqual((await call("GET", `/api/fs/search?q=${encodeURIComponent(path.join(base, "nope", "x"))}`)).json(), { mode: "path", hits: [] });
+  // Name search walks the repository index over the real home folder, so it is covered by fs-search.test.mjs with a fake index.
 });

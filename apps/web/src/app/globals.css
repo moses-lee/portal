@@ -712,17 +712,17 @@
   }
 }
 
-.start-worktree > div {
+.start-picker > div {
   margin-top: 0;
 }
-.start-worktree label {
+.start-picker label {
   margin-bottom: 8px;
   font-size: 11px;
   text-transform: none;
   letter-spacing: 0;
   color: var(--muted-foreground);
 }
-.start-worktree button[aria-haspopup="listbox"] {
+.start-picker button[aria-haspopup="listbox"] {
   min-height: 36px;
   border-color: #ffffff0d;
   background: #ffffff06;

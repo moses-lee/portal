@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  EMPTY_PINS, LEGACY_PROJECT_PINS_KEY, migrateProjectPins, parsePins, partitionPinned, pinnedFirst, projectPinsOf, prunePins, togglePin,
+  EMPTY_PINS, LEGACY_PROJECT_PINS_KEY, migrateProjectPins, parsePins, partitionPinned, pinnedFirst, projectPinOrderOf, projectPinsOf, prunePins, togglePin,
 } from "../src/lib/pins.ts";
 
 test("parsePins accepts only an object of finite numbers", () => {
@@ -27,6 +27,21 @@ test("prunePins drops unknown ids and returns the same map when nothing changed"
   assert.equal(prunePins(pins, ["a", "b", "c"]), pins);
   assert.deepEqual(prunePins(pins, ["b"]), { b: 2 });
   assert.deepEqual(pins, { a: 1, b: 2 });
+});
+
+test("pinnedFirst puts undragged pins first (newest on top), then the dragged ones in their order", () => {
+  const items = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }];
+  const pins = { a: 1, b: 2, c: 3, d: 4 };
+  assert.deepEqual(pinnedFirst(items, pins, { a: 1, c: 0 }).map((i) => i.id), ["d", "b", "c", "a", "e"]);
+  assert.deepEqual(pinnedFirst(items, pins, { a: 3, b: 2, c: 1, d: 0 }).map((i) => i.id), ["d", "c", "b", "a", "e"]);
+  // An order for an unpinned item is ignored.
+  assert.deepEqual(pinnedFirst(items, { a: 1 }, { e: 0 }).map((i) => i.id), ["a", "b", "c", "d", "e"]);
+});
+
+test("projectPinOrderOf keeps the drag positions of pinned projects only", () => {
+  assert.deepEqual(projectPinOrderOf([
+    { id: "a", pinnedAt: 1, pinOrder: 2 }, { id: "b", pinnedAt: 1, pinOrder: null }, { id: "c", pinnedAt: null, pinOrder: 0 }, { id: "d", pinnedAt: 1 },
+  ]), { a: 2 });
 });
 
 test("pinnedFirst puts the most recently pinned on top and keeps the rest in order", () => {

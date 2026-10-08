@@ -52,7 +52,7 @@ test("memory store: seeded records are listed in creation order", async () => {
   const store = createMemoryProjectsStore({ projects: [a, b], removed: [gone] });
   await store.ready;
   // Seeds without the lifecycle fields come back with them at null, like a stored row.
-  const lifecycle = { pinnedAt: null, keptReason: null, revivedAt: null };
+  const lifecycle = { pinnedAt: null, pinOrder: null, keptReason: null, revivedAt: null };
   assert.deepEqual(store.list(), [{ ...b, ...lifecycle }, { ...a, ...lifecycle }]);
   assert.deepEqual(store.get("a"), { ...a, ...lifecycle });
   assert.deepEqual(store.listRemoved(), [gone]);
@@ -185,7 +185,7 @@ for (const [name, make] of backends) {
     const record = store.getRemoved(wt.id);
     assert.ok(record && typeof record.removedAt === "number");
     // Pins, the sweep's kept reason, and the revival time belong to listed projects; the record leaves them behind.
-    const { pinnedAt: _pinnedAt, keptReason: _keptReason, revivedAt: _revivedAt, ...listedOnly } = wt;
+    const { pinnedAt: _pinnedAt, pinOrder: _pinOrder, keptReason: _keptReason, revivedAt: _revivedAt, ...listedOnly } = wt;
     assert.deepEqual({ ...record, removedAt: undefined }, { ...listedOnly, parentPath: parent.path, removedAt: undefined });
 
     const target = reopen ? await opened(reopen) : store;

@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { applySettingsPatch, defaultSettings } from "../../src/lib/settings";
 import type {
+  FolderHit,
   GithubSummary,
   ProjectSummary,
   QueuedPrompt,
@@ -62,6 +63,11 @@ export const worktree: ProjectSummary = {
   worktree: { parentId: "p1", branch: "feature/improve-chat-experience" },
   git: { ...project.git!, branch: "feature/improve-chat-experience" },
 };
+/** What `GET /api/fs/search` finds by default: a repository and a plain folder, neither a project yet. */
+export const folders: FolderHit[] = [
+  { name: "portal-docs", path: "/workspace/portal-docs", displayPath: "~/repos/portal-docs", isGitRepo: true },
+  { name: "notes", path: "/workspace/notes", displayPath: "~/notes", isGitRepo: false },
+];
 /** A removed worktree project whose folder is gone but whose branch and parent survive. */
 export const removedProject: RemovedProjectSummary = {
   id: "p9",
@@ -481,6 +487,8 @@ export async function setupPortal(
     queueSaveMissing?: boolean;
     /** Replaces the default two projects. */
     projects?: ProjectSummary[];
+    /** What `GET /api/fs/search` can find (filtered by the query); `folders` by default. */
+    folders?: FolderHit[];
     /**
      * Talk to Portal's state: what `/api/portal`, its messages, items, and stream answer with, and
      * what the phase 2 routes (threads, jobs, runs, intents, activity, memory, world, approvals)
@@ -811,8 +819,47 @@ export async function setupPortal(
         ],
         defaultAgentId: "claude",
       });
+    if (path === "/api/fs/search") {
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const mode = q.startsWith("/") || q.startsWith("~") ? "path" : "name";
+      const hits = q
+        ? (options.folders ?? folders).filter((f) => f.name.toLowerCase().includes(q) || f.displayPath.toLowerCase().startsWith(q) || f.path.toLowerCase().startsWith(q))
+        : [];
+      return json({ mode, hits });
+    }
+    if (path === "/api/projects" && method === "POST") {
+      const input = (body ?? {}) as { path?: string; name?: string };
+      if (!input.path) return json({ error: "Path is required." }, 400);
+      const existing = currentProjects.find((p) => p.path === input.path);
+      if (existing) return json({ error: `Already added as "${existing.name}".`, project: existing }, 409);
+      const folder = (options.folders ?? folders).find((f) => f.path === input.path);
+      const added: ProjectSummary = {
+        id: `added-${currentProjects.length + 1}`,
+        name: input.name ?? folder?.name ?? input.path.split("/").pop()!,
+        path: input.path,
+        displayPath: folder?.displayPath ?? input.path,
+        createdAt: Date.now(),
+        pinnedAt: null,
+        pinOrder: null,
+        keptReason: null,
+        exists: true,
+        git: folder?.isGitRepo ? { root: input.path, displayRoot: folder.displayPath, branch: "main", detached: false } : null,
+      };
+      currentProjects.push(added);
+      return json(added, 201);
+    }
     if (path === "/api/projects")
       return json({ projects: currentProjects });
+    if (path === "/api/projects/pinned-order" && method === "PUT") {
+      const { ids } = (body ?? {}) as { ids?: string[] };
+      if (!Array.isArray(ids)) return json({ error: "Expected {ids: string[]}." }, 400);
+      const ordered = ids.map((id, index) => {
+        const row = currentProjects.find((p) => p.id === id);
+        if (row) row.pinOrder = index;
+        return row;
+      });
+      return json({ projects: ordered.filter(Boolean) });
+    }
     if (path === "/api/projects/removed")
       return json({ removed: currentRemoved });
     // Pin, unpin, or rename: re-pinning keeps the first pin time; answers with the full project.

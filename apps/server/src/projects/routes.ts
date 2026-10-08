@@ -10,6 +10,7 @@ import { errorMessage, errorStatus } from "../http/errors.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 import { query } from "../http/query.ts";
 import { listDirectories, resolveDirectory } from "../lib/fs-paths.ts";
+import { type RepoIndex, createRepoIndex, searchFolders } from "../lib/fs-search.ts";
 import { displayPath, readGitInfo } from "../lib/git-info.ts";
 import { pullFastForward, readCommitPage, readGithubSummary, summaryEtag } from "../lib/github-summary.ts";
 import { type ProjectLookup, type RemovedFacts, parentOf, projectIdOfRow, summarizeOrphans, summarizeRemoved } from "../lib/removed-projects.ts";
@@ -36,7 +37,7 @@ function fail(reply: FastifyReply, err: unknown) {
 
 const isDirectory = (dir: string) => stat(dir).then((info) => info.isDirectory(), () => false);
 
-export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): void {
+export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext, { repoIndex = createRepoIndex() }: { repoIndex?: RepoIndex } = {}): void {
   const worktreesDir = () => path.join(ctx.config.portalHome, "worktrees");
   const lookup: ProjectLookup & { displayPath: typeof displayPath } = {
     project: (id) => ctx.projects.get(id),
@@ -46,7 +47,17 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
   };
   const removalIo = liveProjectRemovalIo(ctx);
 
-  /** Directory browser backend for the add-project dialog; only subdirectories are exposed. */
+  /** Folders for the project picker: a path completes, a name searches the repositories under home. */
+  app.get("/api/fs/search", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    try {
+      return await searchFolders(query(req, "q") ?? "", repoIndex);
+    } catch (err) {
+      return fail(reply, err);
+    }
+  });
+
+  /** Lists one folder's subdirectories; only subdirectories are exposed. */
   app.get("/api/fs/dirs", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     const input = (query(req, "path") ?? "").trim() || "~";
@@ -77,6 +88,20 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext): vo
     } catch (err) {
       const project = err instanceof Error ? (err as Partial<ProjectError>).project : undefined;
       return reply.code(errorStatus(err) ?? 500).send(project ? { error: errorMessage(err), project } : { error: errorMessage(err) });
+    }
+  });
+
+  /** The order the user dragged the pinned projects into; `ids` must name every pinned project once. */
+  app.put("/api/projects/pinned-order", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    await ctx.projects.ready;
+    const body = bodyObject(req);
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) return reply.code(400).send({ error: "Expected {ids: string[]}." });
+    try {
+      return { projects: await ctx.projects.reorderPinned(ids as string[]) };
+    } catch (err) {
+      return fail(reply, err);
     }
   });
 

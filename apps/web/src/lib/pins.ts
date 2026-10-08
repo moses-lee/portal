@@ -41,14 +41,21 @@ export function prunePins(pins: PinMap, existing: Iterable<string>): PinMap {
 }
 
 /**
- * Pinned items first, most recently pinned on top (ties keep the given order), then the rest in
- * the given order.
+ * Pinned items first, then the rest in the given order. Among the pinned, the ones never dragged
+ * come first, most recently pinned on top (ties keep the given order), then the dragged ones in
+ * their dragged order (`order`: id → position, 0 first).
  */
-export function pinnedFirst<T extends { id: string }>(items: readonly T[], pins: PinMap): T[] {
+export function pinnedFirst<T extends { id: string }>(items: readonly T[], pins: PinMap, order: PinMap = EMPTY_PINS): T[] {
   const pinned = items.filter((item) => item.id in pins);
   if (pinned.length === 0) return [...items];
   const rest = items.filter((item) => !(item.id in pins));
-  pinned.sort((a, b) => pins[b.id] - pins[a.id]);
+  pinned.sort((a, b) => {
+    const [pa, pb] = [order[a.id], order[b.id]];
+    if (pa === undefined && pb === undefined) return pins[b.id] - pins[a.id];
+    if (pa === undefined) return -1;
+    if (pb === undefined) return 1;
+    return pa - pb;
+  });
   return [...pinned, ...rest];
 }
 
@@ -56,6 +63,13 @@ export function pinnedFirst<T extends { id: string }>(items: readonly T[], pins:
 export function partitionPinned<T extends { id: string }>(items: readonly T[], pins: PinMap): T[] {
   if (Object.keys(pins).length === 0) return [...items];
   return [...items.filter((item) => item.id in pins), ...items.filter((item) => !(item.id in pins))];
+}
+
+/** Project id → `pinOrder`, for the pinned projects the user has dragged into place. */
+export function projectPinOrderOf(projects: readonly { id: string; pinnedAt?: number | null; pinOrder?: number | null }[]): PinMap {
+  const order: Record<string, number> = {};
+  for (const project of projects) if (typeof project.pinnedAt === "number" && typeof project.pinOrder === "number") order[project.id] = project.pinOrder;
+  return order;
 }
 
 /** Project id → `pinnedAt`, for the projects the server reports as pinned. */

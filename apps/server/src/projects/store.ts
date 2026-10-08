@@ -38,8 +38,13 @@ export interface ProjectsStore {
    */
   add(input: { path: string; name?: string; worktree?: WorktreeMeta }): Promise<Project>;
   rename(id: string, name: string): Promise<Project>;
-  /** Pin (an epoch ms) or unpin (null) a project. Pinned worktrees are never removed for being idle. */
+  /** Pin (an epoch ms) or unpin (null) a project. Pinned worktrees are never removed for being idle. Unpinning forgets its drag order. */
   setPinned(id: string, pinnedAt: number | null): Promise<Project>;
+  /**
+   * Record the order the user dragged the pinned projects into: `ids` must name every pinned
+   * project exactly once (400 otherwise). Answers the projects in that order.
+   */
+  reorderPinned(ids: readonly string[]): Promise<Project[]>;
   /** Record why the lifecycle sweep kept a due worktree, or clear it with null. */
   setKeptReason(id: string, reason: string | null): Promise<Project>;
   /**
@@ -77,11 +82,11 @@ export interface ProjectsBackend {
 }
 
 /** The lifecycle fields of a project that change after it is added. */
-export type ProjectLifecyclePatch = Partial<Pick<Project, "pinnedAt" | "keptReason">>;
+export type ProjectLifecyclePatch = Partial<Pick<Project, "pinnedAt" | "pinOrder" | "keptReason">>;
 
 /** The removed record of a listed project: pins, the kept reason, and the revival time do not outlive the listing. */
 export function removedRecordOf(project: Project, removedAt: number, parentPath?: string): RemovedProject {
-  const { pinnedAt: _pinnedAt, keptReason: _keptReason, revivedAt: _revivedAt, ...rest } = project;
+  const { pinnedAt: _pinnedAt, pinOrder: _pinOrder, keptReason: _keptReason, revivedAt: _revivedAt, ...rest } = project;
   return { ...rest, removedAt, ...(parentPath ? { parentPath } : {}) };
 }
 
@@ -151,6 +156,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
       createdAt: record.createdAt,
       ...cleanWorktree(patch.worktree ?? record.worktree),
       pinnedAt: null,
+      pinOrder: null,
       keptReason: null,
       revivedAt: Date.now(),
     };
@@ -189,6 +195,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
           createdAt: Date.now(),
           ...cleanWorktree(worktree),
           pinnedAt: null,
+          pinOrder: null,
           keptReason: null,
           revivedAt: null,
         };
@@ -209,7 +216,25 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
       });
     },
     setPinned(id, pinnedAt) {
-      return update(id, { pinnedAt });
+      return update(id, pinnedAt === null ? { pinnedAt, pinOrder: null } : { pinnedAt });
+    },
+    reorderPinned(ids) {
+      return mutate(async () => {
+        const pinned = [...projects.values()].filter((project) => project.pinnedAt !== null);
+        const wanted = new Set(ids);
+        const complete = ids.length === pinned.length && wanted.size === ids.length && pinned.every((project) => wanted.has(project.id));
+        if (!complete) throw new ProjectError("Expected every pinned project exactly once.", 400);
+        const ordered: Project[] = [];
+        for (const [index, id] of ids.entries()) {
+          const project = require(id);
+          if (project.pinOrder !== index) {
+            await backend.patch(id, { pinOrder: index });
+            projects.set(id, { ...project, pinOrder: index });
+          }
+          ordered.push(projects.get(id)!);
+        }
+        return ordered;
+      });
     },
     setKeptReason(id, keptReason) {
       return update(id, { keptReason });
@@ -257,7 +282,7 @@ export function createMemoryProjectsStore(
 ): ProjectsStore {
   const noop = async () => {};
   // Seeds written before the lifecycle columns existed read as pinned-less, like a real row.
-  const seeded = projects.map((p) => ({ ...p, pinnedAt: p.pinnedAt ?? null, keptReason: p.keptReason ?? null, revivedAt: p.revivedAt ?? null }));
+  const seeded = projects.map((p) => ({ ...p, pinnedAt: p.pinnedAt ?? null, pinOrder: p.pinOrder ?? null, keptReason: p.keptReason ?? null, revivedAt: p.revivedAt ?? null }));
   return createProjectsStoreOn({
     load: async () => ({ projects: seeded, removed }),
     insert: noop,

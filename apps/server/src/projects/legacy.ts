@@ -16,7 +16,7 @@ function isWorktreeMeta(value: unknown): value is WorktreeMeta {
 }
 
 /** What the file kept per project: everything but the lifecycle fields, which postdate it. */
-type FileProject = Omit<Project, "pinnedAt" | "keptReason" | "revivedAt">;
+type FileProject = Omit<Project, "pinnedAt" | "pinOrder" | "keptReason" | "revivedAt">;
 
 function isProject(value: unknown): value is FileProject {
   const p = value as Record<string, unknown> | null;
@@ -63,7 +63,7 @@ export function parseLegacyProjectsFile(text: string): { projects: Project[]; re
       droppedRemoved++;
     }
   }
-  const projects = (data.projects as FileProject[]).map((p): Project => ({ ...pick(p, () => ({})), pinnedAt: null, keptReason: null, revivedAt: null }));
+  const projects = (data.projects as FileProject[]).map((p): Project => ({ ...pick(p, () => ({})), pinnedAt: null, pinOrder: null, keptReason: null, revivedAt: null }));
   return { projects, removed, droppedRemoved };
 }
 

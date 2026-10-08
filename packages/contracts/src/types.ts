@@ -25,6 +25,11 @@ export type Project = {
   worktree?: WorktreeMeta;
   /** Epoch ms the project was pinned; null when it is not. Pinned worktrees are never removed for being idle. */
   pinnedAt: number | null;
+  /**
+   * Where the user dragged this pinned project to (0 first); null for a pin never dragged, which
+   * sorts above the dragged ones, newest pin first. Cleared on unpin. Absent from older servers.
+   */
+  pinOrder?: number | null;
   /** Why the lifecycle sweep last kept this worktree although it was due ("uncommitted changes"); null once nothing holds it. */
   keptReason: string | null;
   /** Epoch ms the project was last brought back from a removed record; null when it never was. Restarts the idle clock. The server always sets it. */
@@ -121,6 +126,16 @@ export type DirEntry = { name: string; path: string; isGitRepo: boolean };
 
 /** Response of `GET /api/fs/dirs`. */
 export type DirListing = { path: string; parent: string | null; entries: DirEntry[] };
+
+/** One folder found by `GET /api/fs/search`. */
+export type FolderHit = { name: string; path: string; displayPath: string; isGitRepo: boolean };
+
+/**
+ * Response of `GET /api/fs/search?q=`: `path` when the query was read as a path (`/…`, `~`, `~/…`)
+ * and completed against the folder it names; `name` when it was matched against the git repositories
+ * under the home folder.
+ */
+export type FolderSearch = { mode: "path" | "name"; hits: FolderHit[] };
 
 /**
  * Agent-side session state announced over ACP. Replaced wholesale whenever the agent

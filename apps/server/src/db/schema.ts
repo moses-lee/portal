@@ -107,6 +107,8 @@ export const projects = pgTable("projects", {
   worktree: jsonb("worktree").$type<WorktreeMeta>(),
   /** Set means pinned; pinned worktrees are never removed by the lifecycle sweep. */
   pinnedAt: epochMs("pinned_at"),
+  /** Where the user dragged this pinned project to (0 first); null for a pin never dragged. Cleared on unpin. */
+  pinOrder: integer("pin_order"),
   /** Why the last sweep kept an otherwise due worktree; cleared when the guard clears. */
   keptReason: text("kept_reason"),
   /** When the project was last restored from a removed record; restarts the idle clock. */

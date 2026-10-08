@@ -17,6 +17,7 @@ function toProject(row: typeof projects.$inferSelect): Project {
     createdAt: row.createdAt,
     ...(row.worktree ? { worktree: row.worktree } : {}),
     pinnedAt: row.pinnedAt,
+    pinOrder: row.pinOrder,
     keptReason: row.keptReason,
     revivedAt: row.revivedAt,
   };
@@ -35,7 +36,7 @@ function toRemoved(row: typeof removedProjects.$inferSelect): RemovedProject {
 }
 
 function projectRow(project: Project): typeof projects.$inferInsert {
-  return { ...baseRow(project), pinnedAt: project.pinnedAt, keptReason: project.keptReason, revivedAt: project.revivedAt };
+  return { ...baseRow(project), pinnedAt: project.pinnedAt, pinOrder: project.pinOrder ?? null, keptReason: project.keptReason, revivedAt: project.revivedAt };
 }
 
 /** The columns listed and removed projects share. */

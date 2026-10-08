@@ -21,7 +21,6 @@ import { useWorkspaceActions } from "./workspace/useWorkspaceActions";
 import { PortalLiveProvider } from "./portal/PortalLive";
 import { SessionsProvider, useSessions } from "./SessionsProvider";
 import { WorkspaceProvider, useWorkspace } from "./WorkspaceProvider";
-import AddProjectDialog from "./AddProjectDialog";
 import { useSessionPins } from "./usePins";
 import { useProjects } from "./useProjects";
 import { useRemovedProjects } from "./useRemovedProjects";
@@ -33,7 +32,7 @@ import {
 import type { WorktreeChoice } from "./WorktreePicker";
 import { ORIGINAL } from "@/lib/branch-matching";
 import { buildGitActionPrompt } from "@/lib/git-action-prompt";
-import { pinnedFirst, projectPinsOf } from "@/lib/pins";
+import { pinnedFirst, projectPinOrderOf, projectPinsOf } from "@/lib/pins";
 import { byRecentActivity, orderProjectsByActivity } from "@/lib/session-groups";
 import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
@@ -177,6 +176,7 @@ function ChatShell() {
     addProject,
     renameProject,
     setProjectPinned,
+    reorderPinned,
     removeProject,
     refresh: refreshProjects,
   } = useProjects();
@@ -195,6 +195,8 @@ function ChatShell() {
   } = useSessionPins();
   /** Project pins come from the server (`pinnedAt`); pinned worktrees are never removed for being idle. */
   const projectPins = useMemo(() => projectPinsOf(projects), [projects]);
+  /** Where the user dragged each pinned project to; pins never dragged sort first, newest on top. */
+  const projectPinOrder = useMemo(() => projectPinOrderOf(projects), [projects]);
   const toggleProjectPin = useCallback(
     (id: string) => {
       // A refusal is undone by the refetch `setProjectPinned` runs; there is nothing more to show.
@@ -204,17 +206,16 @@ function ChatShell() {
   );
   /** Pinned projects first (most recently pinned on top), then most recently worked in: the sidebar's and the start page's order. */
   const orderedProjects = useMemo(
-    () => pinnedFirst(orderProjectsByActivity(projects, sessions), projectPins),
-    [projects, sessions, projectPins],
+    () => pinnedFirst(orderProjectsByActivity(projects, sessions), projectPins, projectPinOrder),
+    [projects, sessions, projectPins, projectPinOrder],
   );
-  /** The project picked this page load, or null to fall back to the remembered/newest one. */
+  /** The project picked this page load: "" for none (the sidebar's "New conversation"), null to fall back to the remembered/newest one. */
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
   /** The start page's worktree choice, tied to the project it was made for so a project change resets it. */
   const [worktreePick, setWorktreePick] = useState<{
     projectId: string;
     choice: WorktreeChoice;
   } | null>(null);
-  const [showAddProject, setShowAddProject] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   /** The section a `portal:open-settings` event asked for; null when the dialog was opened from its button. */
   const [settingsSection, setSettingsSection] =
@@ -229,7 +230,7 @@ function ChatShell() {
   /**
    * ⌘K (Ctrl+K off Apple platforms) toggles search from anywhere, a focused composer or terminal
    * included: caught at the document in the capture phase, before xterm or a textarea sees it.
-   * Another open dialog (settings, add project, approvals, a sheet) keeps it, and keeps the key.
+   * Another open dialog (settings, approvals, a sheet) keeps it, and keeps the key.
    */
   useEffect(() => {
     const mac = isMacPlatform(navigator.platform);
@@ -280,6 +281,7 @@ function ChatShell() {
   // Projects only arrive after mount, so this stays "" during server rendering and hydration.
   const selectedProjectId = useMemo(() => {
     if (projectsLoading) return chosenProjectId ?? "";
+    if (chosenProjectId === "") return "";
     if (chosenProjectId && projects.some((p) => p.id === chosenProjectId))
       return chosenProjectId;
     const stored = readStoredProjectId();
@@ -470,11 +472,25 @@ function ChatShell() {
     return j.project;
   };
 
-  /** The sidebar's `+`: a start-page tab with `projectId` selected so the worktree picker is available. */
+  /** A project's "New conversation": a start-page tab with `projectId` selected so the worktree picker is available. */
   const startIn = (projectId: string) => {
     selectProject(projectId);
     void actions.openStartTab();
     setShowSidebar(false);
+  };
+
+  /** The Projects column's `+`: a start-page tab with no project chosen, since the button belongs to none. */
+  const startFresh = () => {
+    setChosenProjectId("");
+    setWorktreePick(null);
+    void actions.openStartTab();
+    setShowSidebar(false);
+  };
+
+  /** The start page's folder pick: add it as a project (or take the existing one) and select it. */
+  const addFolder = async (path: string) => {
+    const project = await addProject({ path });
+    selectProject(project.id);
   };
 
   /** The sidebar's Terminal button: open the standalone terminal page. */
@@ -699,7 +715,7 @@ function ChatShell() {
   }, [activeTitle]);
   // The start page's handlers, stable so `start` (and the memoised panes holding it) only changes with its data.
   const startSelectProject = useStableCallback(selectProject);
-  const startAddProject = useStableCallback(() => setShowAddProject(true));
+  const startAddFolder = useStableCallback(addFolder);
   const startWorktreeChange = useStableCallback((choice: WorktreeChoice) => setWorktreePick({ projectId: selectedProjectId, choice }));
   const startSelectAgent = useStableCallback(selectAgent);
   const startSettingsChange = useStableCallback(changeStartSetting);
@@ -711,9 +727,10 @@ function ChatShell() {
   const start = useMemo<StartPaneProps>(
     () => ({
       projects: orderedProjects,
+      projectPins,
       selectedProjectId,
       onSelectProject: startSelectProject,
-      onAddProject: startAddProject,
+      onAddFolder: startAddFolder,
       worktree: worktreeChoice,
       onWorktreeChange: startWorktreeChange,
       agents,
@@ -730,9 +747,10 @@ function ChatShell() {
     }),
     [
       orderedProjects,
+      projectPins,
       selectedProjectId,
       startSelectProject,
-      startAddProject,
+      startAddFolder,
       worktreeChoice,
       startWorktreeChange,
       agents,
@@ -762,7 +780,10 @@ function ChatShell() {
   const sidebarPrefetch = useStableCallback((id: string) => historyCache.prefetch(id));
   const sidebarDelete = useStableCallback(deleteSession);
   const sidebarNewSession = useStableCallback(startIn);
-  const sidebarAddProject = useStableCallback(() => setShowAddProject(true));
+  const sidebarNewConversation = useStableCallback(startFresh);
+  const sidebarReorderPinned = useStableCallback(async (ids: readonly string[]) => {
+    await reorderPinned(ids);
+  });
   const sidebarOpenSettings = useStableCallback(() => setShowSettings(true));
   const sidebarOpenSearch = useStableCallback(() => {
     setShowSidebar(false);
@@ -811,7 +832,8 @@ function ChatShell() {
         onPrefetch={sidebarPrefetch}
         onDeleteSession={sidebarDelete}
         onNewSession={sidebarNewSession}
-        onAddProject={sidebarAddProject}
+        onNewConversation={sidebarNewConversation}
+        onReorderPinned={sidebarReorderPinned}
         onOpenSettings={sidebarOpenSettings}
         onOpenSearch={sidebarOpenSearch}
         onRenameProject={sidebarRename}
@@ -830,14 +852,6 @@ function ChatShell() {
         projectsActive={route !== null}
         desktopOpen={sidebarPreference === "true"}
         onCollapse={sidebarCollapse}
-      />
-      <AddProjectDialog
-        open={showAddProject}
-        onClose={() => setShowAddProject(false)}
-        onAdd={async (input) => {
-          const project = await addProject(input);
-          selectProject(project.id);
-        }}
       />
       <SettingsDialog
         open={showSettings}
