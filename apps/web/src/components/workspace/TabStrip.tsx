@@ -16,7 +16,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
-import { Ellipsis, LayoutGrid, PencilLine, Plus, X } from "lucide-react";
+import { LayoutGrid, PencilLine, Plus, X } from "lucide-react";
 import type { LayoutPreset, Tab } from "@portal/contracts/workspace";
 import { LAYOUT_PRESETS, WORKSPACE_TAB_TITLE_MAX } from "@portal/contracts/workspace";
 import { presetOf } from "@portal/shared/workspace";
@@ -24,7 +24,6 @@ import TabIcon from "./TabIcon";
 import IconButton from "../IconButton";
 import { RenameField } from "../ProjectActions";
 import { ContextActions, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger } from "../ActionMenu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { SessionState } from "@/lib/session-state";
 import { neighbourTab, presetLabels, sameCells, tabCells, type IconCellState } from "@/lib/workspace";
 
@@ -61,10 +60,12 @@ const KEYBOARD_CODES = {
  * re-renders only the items it changed. Closing a tab moves keyboard focus to its neighbour's trigger
  * (right, else left), the tab the view shows next, not the body.
  *
- * Tabs share one width (shrinking together as the strip fills, then scrolling) with a divider
- * between each pair. A tab is dragged along the strip to reorder it (`move_tab`, optimistic like
+ * Tabs are flush blocks of one width (shrinking together as the strip fills, then scrolling), a
+ * full-height divider between each pair. The other tabs and the strip's empty end are shaded, with
+ * a line along the bottom; the selected tab is not, so it opens into the pane below, and a white
+ * line marks its top. A tab is dragged along the strip to reorder it (`move_tab`, optimistic like
  * every op), or picked up with Space on its focused trigger and moved with the arrow keys. A tab's
- * menu opens from its `…` button (on the selected tab) or by right-clicking the tab.
+ * menu opens on right-click (long-press on touch, the menu key on the keyboard); it has no button.
  */
 export default function TabStrip({ tabs, focusedTabId, unread, titleOf, stateOf, onNewTab, onClose, onCloseOthers, onRename, onArrange, onMove }: TabStripProps) {
   const list = useRef<HTMLDivElement>(null);
@@ -121,7 +122,7 @@ export default function TabStrip({ tabs, focusedTabId, unread, titleOf, stateOf,
       }}
     >
       <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
-        <Tabs.List ref={list} aria-label="Workspace tabs" className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-white/5 px-2 py-1.5">
+        <Tabs.List ref={list} aria-label="Workspace tabs" className="flex h-9 shrink-0 items-stretch overflow-x-auto">
           {tabs.map((tab) => (
             <TabItem
               key={tab.id}
@@ -138,9 +139,12 @@ export default function TabStrip({ tabs, focusedTabId, unread, titleOf, stateOf,
               focusTab={focusTab}
             />
           ))}
-          <IconButton label="New tab" size="icon-xs" onClick={onNewTab} className="ml-0.5 shrink-0 text-muted-foreground">
-            <Plus />
-          </IconButton>
+          {/* The rest of the strip, shaded like the tabs behind the selected one. */}
+          <div className="flex min-w-10 flex-1 items-center bg-black/25 pl-1.5 shadow-[inset_0_-1px_0_rgb(255_255_255/0.08)]">
+            <IconButton label="New tab" size="icon-xs" onClick={onNewTab} className="shrink-0 text-muted-foreground">
+              <Plus />
+            </IconButton>
+          </div>
         </Tabs.List>
       </SortableContext>
     </DndContext>
@@ -167,7 +171,7 @@ type TabItemProps = {
 const TabItem = memo(function TabItem({ tab, title, cells, selected, unread, only, onClose, onCloseOthers, onRename, onArrange, focusTab }: TabItemProps) {
   const [renaming, setRenaming] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
-  /** The neighbour that took the focus when the menu's "Close tab" ran; the menu must not hand focus back to a button that is gone. */
+  /** The neighbour that took the focus when the menu's "Close tab" ran; the menu must not hand focus back to a tab that is gone. */
   const closedTo = useRef<string | null>(null);
   useEffect(() => {
     if (renaming) renameInput.current?.focus();
@@ -175,15 +179,15 @@ const TabItem = memo(function TabItem({ tab, title, cells, selected, unread, onl
   // The rename field is a text field while it shows: no dragging it, and the browser's own menu on right-click.
   const { setNodeRef, setActivatorNodeRef, listeners, attributes, transform, transition, isDragging } = useSortable({ id: tab.id, disabled: renaming });
   const current = presetOf(tab.root);
-  /** Where focus goes when either menu closes. */
+  /** Where focus goes when the menu closes. */
   const onMenuCloseAutoFocus = (event: Event) => {
-    // Rename swaps the trigger for its input: focus goes there, not back to the menu button.
+    // Rename swaps the trigger for its input: focus goes there, not back to the tab.
     if (renameInput.current) {
       event.preventDefault();
       renameInput.current.focus();
       return;
     }
-    // "Close tab": the menu button is going away with its tab; the neighbour's trigger has the focus.
+    // "Close tab": the tab is going away; the neighbour's trigger has the focus.
     if (closedTo.current) {
       event.preventDefault();
       focusTab(closedTo.current);
@@ -230,6 +234,13 @@ const TabItem = memo(function TabItem({ tab, title, cells, selected, unread, onl
   const holdArrows = (event: KeyboardEvent) => {
     if (isDragging && (event.key === "ArrowLeft" || event.key === "ArrowRight")) event.preventDefault();
   };
+  /** The menu key or Shift+F10 opens the tab's menu at the tab, on every platform (macOS fires no `contextmenu` for them). */
+  const menuKey = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    const box = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 12, clientY: box.bottom }));
+  };
   return (
     <ContextActions items={items} disabled={renaming} onCloseAutoFocus={onMenuCloseAutoFocus}>
       <div
@@ -238,12 +249,14 @@ const TabItem = memo(function TabItem({ tab, title, cells, selected, unread, onl
         data-tab={tab.id}
         data-selected={selected || undefined}
         data-dragging={isDragging || undefined}
-        className={`group/tab relative flex min-w-[88px] max-w-[200px] flex-1 basis-0 items-center rounded-lg pr-0.5 transition-colors not-first:before:pointer-events-none not-first:before:absolute not-first:before:top-1/2 not-first:before:-left-[2.5px] not-first:before:h-4 not-first:before:w-px not-first:before:-translate-y-1/2 not-first:before:bg-white/15 ${
-          selected ? "bg-white/14 text-foreground" : "text-foreground/70 hover:bg-white/5 hover:text-foreground"
-        } ${isDragging ? "z-10 shadow-lg shadow-black/30" : ""}`}
+        className={`group/tab relative flex min-w-[88px] max-w-[200px] flex-1 basis-0 items-center border-r border-white/8 pr-1 transition-colors ${
+          selected
+            ? "text-foreground before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-white"
+            : "text-foreground/60 shadow-[inset_0_-1px_0_rgb(255_255_255/0.08)] hover:text-foreground"
+        } ${isDragging ? "z-10 bg-background shadow-lg shadow-black/40" : selected ? "" : "bg-black/25 hover:bg-black/10"}`}
       >
         {renaming ? (
-          <div className="min-w-0 flex-1 px-1">
+          <div className="min-w-0 flex-1 px-1.5">
             <RenameField
               inputRef={renameInput}
               initial={tab.title ?? ""}
@@ -265,31 +278,20 @@ const TabItem = memo(function TabItem({ tab, title, cells, selected, unread, onl
             data-tab-trigger={tab.id}
             aria-roledescription="sortable tab"
             aria-describedby={attributes["aria-describedby"]}
-            // The trigger alone starts a drag: a press on the close or menu button (or in the open menu, which
-            // is the tab's child in React) must stay a click.
+            // The trigger alone starts a drag: a press on the close button (or in the open menu, which is the
+            // tab's child in React) must stay a click.
             {...listeners}
             onKeyDown={(event) => {
               holdArrows(event);
+              menuKey(event);
               listeners?.onKeyDown?.(event);
             }}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-w-0 flex-1 items-center gap-2 self-stretch px-3 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <TabIcon cells={cells} unread={unread} />
             <span className="min-w-0 truncate">{title}</span>
             {unread && <span className="sr-only">, unread</span>}
           </Tabs.Trigger>
-        )}
-        {selected && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <IconButton label={`Tab menu for ${title}`} size="icon-xs" className="shrink-0 text-muted-foreground">
-                <Ellipsis />
-              </IconButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" onCloseAutoFocus={onMenuCloseAutoFocus}>
-              {items}
-            </DropdownMenuContent>
-          </DropdownMenu>
         )}
         <IconButton
           label={`Close tab ${title}`}

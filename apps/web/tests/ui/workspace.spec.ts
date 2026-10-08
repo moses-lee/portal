@@ -163,7 +163,7 @@ test("a tab is renamed inline from its menu; Escape cancels; the default name co
   await page.goto("/tabs/t1");
   const combined = `${firstTitle} + ${secondTitle}`;
   await expect(strip(page).getByRole("tab", { name: combined })).toBeVisible();
-  await strip(page).getByRole("button", { name: `Tab menu for ${combined}` }).click();
+  await strip(page).getByRole("tab", { name: combined }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename" }).click();
   const field = page.getByRole("textbox", { name: "Tab name" });
   await expect(field).toBeFocused();
@@ -173,14 +173,14 @@ test("a tab is renamed inline from its menu; Escape cancels; the default name co
   await expect(strip(page).getByRole("tab")).toHaveCount(1);
   expect(ops(fixture)).toEqual([{ op: "rename_tab", tabId: "t1", title: "Review pair", source: "user" }]);
   // Escape leaves the name as it was and sends nothing.
-  await strip(page).getByRole("button", { name: "Tab menu for Review pair" }).click();
+  await strip(page).getByRole("tab", { name: "Review pair" }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename" }).click();
   await page.getByRole("textbox", { name: "Tab name" }).fill("Discarded");
   await page.keyboard.press("Escape");
   await expect(strip(page).getByRole("tab", { name: "Review pair" })).toBeVisible();
   expect(ops(fixture)).toHaveLength(1);
   // Back to the default: the sessions' titles.
-  await strip(page).getByRole("button", { name: "Tab menu for Review pair" }).click();
+  await strip(page).getByRole("tab", { name: "Review pair" }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Use the default name" }).click();
   await expect(strip(page).getByRole("tab", { name: combined })).toBeVisible();
   expect(ops(fixture).at(-1)).toEqual({ op: "rename_tab", tabId: "t1", title: null, source: "user" });
@@ -191,7 +191,7 @@ test("a layout preset from the tab menu rearranges the tab; a smaller preset mov
   await page.goto("/tabs/t1?pane=p2");
   await expect(page.getByRole("separator", { name: "Resize panes side by side" })).toBeVisible();
   const openLayouts = async () => {
-    await strip(page).getByRole("button", { name: /^Tab menu for / }).click();
+    await strip(page).getByRole("tab", { selected: true }).click({ button: "right" });
     const layout = page.getByRole("menuitem", { name: "Layout" });
     await layout.hover();
     await layout.click();
@@ -410,17 +410,21 @@ test("tabs reorder by dragging along the strip, or by Space and the arrow keys; 
   expect(ops(fixture)).toHaveLength(2);
 });
 
-test("right-clicking a tab opens its menu without selecting it; only the selected tab shows the … button", async ({ page }) => {
+test("right-clicking a tab opens its menu without selecting it; Shift+F10 opens it from the keyboard; tabs have no … button", async ({ page }) => {
   const fixture = await setupPortal(page, { workspace: workspaceOf([tab("t1", pane("p1", "s1")), tab("t2", pane("p2", "s2"))]) });
   await page.goto("/tabs/t1");
-  await expect(strip(page).getByRole("button", { name: /^Tab menu for / })).toHaveCount(1);
-  await expect(strip(page).getByRole("button", { name: `Tab menu for ${firstTitle}` })).toBeVisible();
-  // A right-click inside the open … menu stays there: no second menu from the tab behind it.
-  await strip(page).getByRole("button", { name: `Tab menu for ${firstTitle}` }).click();
+  await expect(strip(page).getByRole("tab", { name: firstTitle })).toBeVisible();
+  await expect(strip(page).getByRole("button", { name: /^Tab menu for / })).toHaveCount(0);
+  // The keyboard way in: Shift+F10 on the focused tab, and Escape hands focus back to it.
+  await strip(page).getByRole("tab", { name: firstTitle }).focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+  // A right-click inside the open menu stays there: no second menu from the tab behind it.
   await page.getByRole("menuitem", { name: "Rename" }).click({ button: "right" });
   await expect(page.getByRole("menu")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(strip(page).getByRole("tab", { name: firstTitle })).toBeFocused();
   await strip(page).getByRole("tab", { name: secondTitle }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename" }).click();
   const field = page.getByRole("textbox", { name: "Tab name" });
