@@ -1,6 +1,6 @@
 # Palace: the room behind Portal
 
-Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08; all five phases built on branch `background` by 2026-10-09 (section As built), not merged.** Still owed: the Safari timeline on an M1 and an iPhone 13. Research behind it: `docs/PALACE-RESEARCH.md`.
+Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08; all five phases built on branch `background` by 2026-10-09 (section As built), not merged. Revision 2 (a camera the user cannot move, the sketch before the room) agreed in outline on 2026-10-09, spec below for review, not built.** Still owed: the Safari timeline on an M1 and an iPhone 13. Research behind it: `docs/PALACE-RESEARCH.md`.
 
 ## Why
 
@@ -29,8 +29,8 @@ This spec replaces the photos with a procedurally assembled, subtly animated 3D 
 | 2 | Rendering | Real 3D in the browser: three.js through react-three-fiber on WebGL. No AI images, no splats, no WebGPU. |
 | 3 | Look | Cozy in the Animal Crossing spirit, not a copy: rounded low-poly shapes, matte flat colours sharing one roughness, a warm key light and a cool fill, soft shadows, baked corner darkening, a low-contrast tone mapper (AgX) so pastels stay pastel. No outlines. |
 | 4 | Motion | Subtle only: lighting drifts with the sun, plants sway, the lamp flickers, the hearth burns, robots move, weather falls. Frame rate capped at 24. Paused when the tab is hidden, under reduced motion, and under Low Power Mode. |
-| 5 | Camera | Three-quarter diorama: looking slightly down into the room from the missing fourth wall, long lens, fixed, with a 1.5° drift over 60 s and a tiny pointer parallax. The scene centre shifts into whatever region the UI leaves uncovered. |
-| 6 | Composition | Designed for the desktop margins beside the chat column plus the start page and Portal home, where most of the room shows, and the Palace page (decision 21), where all of it does. Phones get a 72 px room strip above the pane header framing the window and shelf tops; tapping it opens the Palace page. |
+| 5 | Camera | Three-quarter diorama: looking slightly down into the room from the missing fourth wall, long lens, fixed. The scene centre shifts into whatever region the UI leaves uncovered. Revision 2: nothing the user does moves it, no drift, no parallax, no look-around; the pose is fitted by rule to a hero box for the viewport's aspect, the view offset alone follows the layout, and the phone strip aims at the window (section Camera). |
+| 6 | Composition | Designed for the desktop margins beside the chat column plus the start page and Portal home, where most of the room shows, and the Palace page (decision 21), where all of it does. Phones get a 72 px room strip above the pane header framing the window (Revision 2: from its top to the sill); tapping it opens the Palace page. |
 | 7 | Sun | Light angle and colour from the real sun (altitude and azimuth from location and time), not from the clock hour. Moon phase and stars at night. |
 | 8 | Weather | Live conditions at the server's public-IP location, through the window: clear, clouds, overcast, rain, snow, fog, thunder, with day or night. From Open-Meteo, keyless, with its credit link in the window's hover card. |
 | 9 | Location | Resolved on the server from its own public IP (clients on Tailscale arrive from private addresses), overridable by `PORTAL_LOCATION=lat,lon`. Never a browser location prompt. Zero-network fallback: latitude from the IANA time zone. |
@@ -48,7 +48,7 @@ This spec replaces the photos with a procedurally assembled, subtly animated 3D 
 | 21 | Palace page | A new Portal view, `/palace`, with a sidebar entry "Palace" under the Portal heading. It shows nothing but the room: no header text, no status line, no tracked panel, no composer. The whole viewport is the room, with the sidebar still beside it on desktop. It is the place to look at the room and play with it: hover cards, clicks, and a look-around camera (section Palace page). |
 | 22 | Active session | A robot exists for every session in state connecting, working, background, approval or hung. A finished session's robot walks out of the door and is gone; there is no sleeping state. |
 | 23 | Milestones | The table in section Milestones, as written. |
-| 24 | No-WebGL fallback | A CSS gradient sky and the dark veil. The two photos are deleted. |
+| 24 | No-WebGL fallback | A CSS gradient sky and the dark veil. The two photos are deleted. Revision 2: the sketch (section Before the room draws) replaces the gradient, under the same veil as the 3D room. |
 | 25 | Settled | Every point raised during planning is answered above; the build follows this document without further questions. |
 
 ## The room
@@ -61,9 +61,40 @@ Anchors are an authored list, not generated. Furniture declares its own slots: r
 
 ### Camera
 
-Perspective, vertical FOV about 30°, far from the room, yaw about 25°, pitch about 25°. `camera.setViewOffset` shifts the projection so the room's centre of interest lands in the uncovered region: computed from the live layout (sidebar width, GitHub inspector width, the chat column's left and right margins), updated on layout change only. Aspect breakpoints, not width: below an aspect of 0.8 the camera pulls back and rises, and the back wall becomes the hero. One room layout for every screen; phones crop, they do not re-layout.
+Revised on 2026-10-09 (Revision 2); the first version had hand-set poses, a 1.5° drift, a pointer parallax and a look-around on the Palace page.
 
-A 1.5° sinusoidal drift over 60 s and a pointer parallax of at most 0.5°, both off under reduced motion.
+Perspective, vertical FOV 30° (the Canvas's `CAMERA` in `RoomCanvas.tsx`, near 0.5, far 220). Two things set the view, and neither runs per frame: the pose, fitted to the room for the viewport's aspect, and `camera.setViewOffset`, which moves the fitted frame into the region the UI leaves open (computed from the live layout: sidebar width, GitHub inspector width, the chat column's margins, the phone strip) and changes on layout change only. Nothing the user does moves the camera: no drift, no parallax, no look-around, nothing the pointer, the wheel or a touch does. Reduced motion changes nothing here.
+
+**The pose is fitted, not hand-set** (`framePose(aspect)` in `layout.ts`, pure). Two anchor poses, each with an axis-aligned hero box in room metres (floor at y 0, the back wall's face at z −3, the left wall's face at x −4):
+
+| | Landscape, aspect ≥ 1.4 | Portrait, aspect ≤ 0.8 |
+|---|---|---|
+| Yaw, pitch | 25°, 25° | 14°, 30° |
+| x | −4.0 to 3.9: the left wall's face, where the shelving stands, to the door casing's right edge (door 2.875 to 3.825, casing 0.08 each side) | −2.4 to 2.3: the inside sill's left end (the window is −2.25 to −0.15, the sill 0.15 wider each side) to the hearth's opening (the hearth is 1.55 to 3.05, the mantel to 2.4), so the fire is in frame and the mail tray (2.77), the plant stand (2.74) and the key rack sit at the right edge, past the pad |
+| y | 0 to 3.15: the floor to the corkboard's top (2.44 to 3.12 on the left wall), which also clears the window's top (2.45), the bay's roof (about 2.6) and the gallery row of frames (to 2.91) | 0 to 2.6: the floor to just above the window's top and the bay's roof |
+| z | −3 to 1.75: the back wall to the rug's front edge (the rug is centred at z 0.5 and 2.5 deep) | −3 to 1.0: the back wall to just in front of the robots' bench (its front edge at z 0.77) |
+
+Furniture outside the boxes, accepted: in landscape only the reading nook's armchair and side table (z 2.0 to 2.9, in front of the rug), which land at the left edge of the box's outline on screen, the side table reaching up to 15 px into the pad. In portrait everything left of the sill (the shelving and both bookcases, the corkboard or pinboard, the ladder, the wall map, the frames beside the window, the reading nook), right of the key rack (the door, the queue of robots at x 3.8, the crate's way in) and the rug's front part; the sides crop most of it. The bay window and the window box stand behind the back wall (z −3.25 to −3.8) but are seen through the window, inside the box's outline on screen.
+
+Between the two aspects, with t = (aspect − 0.8) / 0.6 clamped to 0..1, the yaw, the pitch and each of the six box edges are `portrait + t × (landscape − portrait)`, and the fit below runs on the blended values. Every step of the fit is continuous in its inputs (the distance is a maximum of continuous functions, the centring is the root of a strictly monotone one), so the pose is continuous in the aspect: a window resized across 0.8 or 1.4 never jumps. It has kinks, where the axis that sets the distance changes (at about 1.59 for the landscape box), but no steps.
+
+**The fit.** Write θ for the yaw and φ for the pitch. With three's conventions as `scene/Camera.tsx` uses them, the camera stands at `target + d·f` and looks at `target` with y up, where:
+
+- f = (sin θ·cos φ, sin φ, cos θ·cos φ) points from the target to the camera;
+- r = (cos θ, 0, −sin θ) is the camera's right;
+- u = (−sin φ·sin θ, cos φ, −sin φ·cos θ) is the camera's up (f × r).
+
+For each of the box's eight corners Cᵢ, relative to the box's centre B: xᵢ = (Cᵢ − B)·r, yᵢ = (Cᵢ − B)·u, wᵢ = (Cᵢ − B)·f. With the target at B + a·r + b·u and the distance d, corner i lies at depth zᵢ = d − wᵢ in front of the camera (moving the target along r and u does not change any depth) and projects to normalised device coordinates Xᵢ = (xᵢ − a) / (zᵢ·tH) and Yᵢ = (yᵢ − b) / (zᵢ·tV), where tV = tan 15° and tH = tV × aspect. The pad is 6 % of the viewport on every side, so a corner is inside it when |Xᵢ| ≤ s and |Yᵢ| ≤ s, with s = 1 − 2 × 0.06 = 0.88.
+
+1. **Distance.** Some a puts every corner inside the pad horizontally exactly when every pair of corners satisfies xᵢ − xⱼ ≤ s·tH·(zᵢ + zⱼ). So the smallest distance horizontally is dH = the largest, over the 64 ordered pairs (i, j), of (wᵢ + wⱼ) / 2 + (xᵢ − xⱼ) / (2·s·tH); dV is the same with y and tV; and d = max(dH, dV).
+2. **Centring.** a is the root of g(a) = maxᵢ Xᵢ(a) + minᵢ Xᵢ(a), the projected box's right edge plus its left edge. g is continuous and strictly decreasing, with g ≥ 0 at a = minᵢ xᵢ and g ≤ 0 at a = maxᵢ xᵢ, so 50 halvings of that interval find it; b is found the same way with Yᵢ, and the target is B + a·r + b·u.
+3. **One pass.** d does not depend on a or b, and the centred a and b always lie inside the range that keeps every corner in the pad, so nothing needs repeating: on the axis that set d the box touches the pad on both sides, on the other it has equal margins. A distance taken per corner with the target at B and centred afterwards is not the smallest, because a box seen obliquely is not symmetric about its centre on screen: at 1440 × 900 it gives 14.8 m where the pair rule gives 12.9 m.
+
+**The view offset.** The fit uses the full window, not the open region: the covers are panels over a room that runs on under them, so the fit sets the scale and the offset only chooses which part sits in the open region. `viewOffset(width, height, point, anchor)` returns the arguments of `setViewOffset(width, height, anchor.x − point.x, anchor.y − point.y, width, height)`, a translation in pixels that draws the fitted frame's screen point `anchor` at the viewport's `point`. `point` is `interestPoint(layout)` as before; `anchor` is the frame's centre, which the fit made the projected box's centre, except under a `focus` cover (the phone strip), where it is the window's centre (`WINDOW_CENTRE`, −1.2, 1.7, −3.12) projected with the pose. The exception is needed because the box's centre lies below the sill: at 390 × 844 the window spans 299 to 369 px and the frame's centre is at 422, so centring the frame in the 72 px strip would show the desk and the wall under the window. Aimed at the window, the strip shows it from its top to the sill with the back wall either side, from the same pose as the phone's Palace page, which has no strip.
+
+The outcome. At 1440 × 900 the distance is 12.9 m against the first version's 15, the room is drawn a little larger (the window 210 px wide against 194) and the frame holds the whole room from the shelving to the door, with the corkboard. From aspect 1.59 up the height sets the distance, so 1440 × 900, 1280 × 720 and 844 × 390 all get this same pose. With a 280 px sidebar the frame moves 140 px right, and the door casing's top right corner lands up to 32 px past the window's right edge and is cropped. At 390 × 844 the distance is 28.2 m and the band from the sill to the key rack fills the width, from 288 to 556 px down the screen, with wall above it and floor below; the bookcases and the door are cropped by the sides. The right edge at 2.3 is a trade: a box to the key rack (2.8) made the phone room smaller than the first version's (the window 106 px wide against 145), one that stops at the stove (1.0) would match it but crop the hearth; the opening keeps the fire and most of the first version's size, and the implementer records the measured window width. The number is Moses's to retune after a look on his phone.
+
+The camera reports into `data-room` as `camera`, after each change of pose or view offset: `{ yaw, pitch, distance, offset, box }`, the angles in degrees to 0.1, the distance in metres to 0.01, `offset` the view offset's `[x, y]` in CSS pixels, and `box` the hero box's bounds on screen `[left, top, right, bottom]` in CSS pixels to 0.1, offset applied. `box` is projected through the live `PerspectiveCamera` (after `updateMatrixWorld`), not through the pure maths, so the UI test that reads it checks that the two agree. `look.ts` and the Palace page's pointer handlers go.
 
 ### Lighting
 
@@ -130,7 +161,7 @@ The canvas sits behind the UI, so pointer events reach it only through see-throu
 
 - Route `/palace`; `PortalView` gains `"palace"`, `viewMeta` gains `{ label: "Palace", title: "Palace", icon: Castle }`, listed after System in the sidebar's Portal nav. No badge.
 - `PortalPage` renders the view with a transparent header holding only the sidebar toggle; no title, no status line, no tracked panel, no toggle for it, no composer. The room's view offset is zero apart from the sidebar, so the full composition shows.
-- Look-around camera, on this page only: drag (or one-finger drag on touch) yaws the camera within ±20° and pitches within 10° to 40° of the default, with inertia; wheel or pinch zooms between 0.85× and 1.3×; double-click or double-tap an object flies the camera to frame it over 600 ms; Escape, or a click on empty floor, flies back to the default. Leaving the page resets the camera. Under reduced motion the flights are cuts.
+- ~~Look-around camera, on this page only: drag yaws and pitches within limits with inertia; wheel or pinch zooms; double-click flies to frame an object; Escape flies back.~~ Removed in Revision 2: the camera cannot be moved on any page. The page is the see-through area over the shared canvas, with the default cursor; a drag does nothing, a wheel scrolls nothing.
 - Robots on this page react to a click with a wave before the card shows; elsewhere the card shows at once.
 - On phones the page is the full-room view; the room strip on panes navigates here on tap.
 - Document title "Palace".
@@ -142,7 +173,7 @@ The canvas sits behind the UI, so pointer events reach it only through see-throu
 - `prefers-reduced-motion`: one still frame, refreshed once a minute with the sun; no drift, no particles, no robot walking.
 - `prefers-reduced-transparency`: solid panels, no frost mask.
 - Low Power Mode (rAF cadence around 30): 12 fps.
-- No WebGL or context lost: a CSS gradient sky (colours from the sun ramp, updated once a minute) and the existing dark veil; panels keep their tint. The photos are deleted.
+- No WebGL, a failed canvas or a lost context: ~~a CSS gradient sky (colours from the sun ramp, updated once a minute)~~ the sketch (Revision 2, section Before the room draws; drawn in once per page load, complete when it comes back after a lost context) under the same veil as the 3D room; panels keep their tint. The photos are deleted.
 - Budget: under 4 ms GPU per frame on an M1 before the frost, measured in Safari's timeline before the CSS blur is replaced app-wide.
 
 ## Model
@@ -230,7 +261,10 @@ apps/web/src/room/
   layout.ts                 // UI layout registry → setViewOffset; passthrough elements
   pointer.ts                // document pointer listener, raycast, hover and click dispatch
   RoomHoverCard.tsx         // the DOM card
-  PalaceView.tsx            // the /palace view: look-around camera controls over the shared canvas
+  PalaceView.tsx            // the /palace view: the see-through area over the shared canvas (Revision 2: no camera controls)
+  sketch.ts                 // Revision 2: the room's edges as 3D polylines, projected with the camera's maths to SVG paths
+  Sketch.tsx                // Revision 2: the inline SVG shown before the room draws, after a lost context, and as the fallback
+  snapshot.ts               // Revision 2: the last drawn frame, kept in IndexedDB when the page is hidden, shown on the next visit until the room draws
   useRoomState.ts           // GET /api/room + stream event, with the client-side sun clock
   scene/
     Shell.tsx Sun.tsx Sky.tsx Window.tsx Weather.tsx Lamp.tsx Hearth.tsx Kettle.tsx MailTray.tsx
@@ -266,7 +300,7 @@ public/room/kit.glb, public/room/LICENSES.md
 
 - Shared: weather mapping, sun ramp monotonicity, hash and PRNG determinism, slot assignment stability (adding or removing an item never moves another; snapshot over 200 seeds), buckets, milestone evaluation, timezone latitude table.
 - Server: environment service with a fake fetch (config override, IP path, provider failure keeps last, cache windows, offline flag); census high-water marks and `since` (a purge never lowers them); milestone detection logs once; routes; stream event.
-- Web unit: layout registry maths (view offset from a layout), frost rect conversion, the robot state mapping from session states, bucket labels for hover cards, the Palace camera limits.
+- Web unit: layout registry maths (view offset from a layout), frost rect conversion, the robot state mapping from session states, bucket labels for hover cards, ~~the Palace camera limits~~ Revision 2: the fitted pose at six viewports, the sketch's projection and draw-in order, the snapshot's eligibility and placement.
 - Playwright (`tests/ui/room.spec.ts`): the canvas mounts and the scene attribute reports day or night from a fixed environment fixture; the panels have no `backdrop-filter` while dialogs still do; reduced motion renders a still; a session in approval state puts a robot at the door (via a `data-room` summary attribute the scene writes for tests); hover card content and click-through on a robot; the Palace page shows no header text and its drag moves the camera within limits; the mobile strip navigates to `/palace`. The existing room assertions in `portal.spec.ts` and `portal-mobile.spec.ts` are rewritten.
 - Live check on a scratch instance with a cloned DB: real location and weather resolve, the census matches the pages, a milestone crossing logs to Activity and animates in.
 
@@ -291,6 +325,121 @@ Merge to main waits for Moses. No migration: the `room` settings row is created 
 - A character for Portal.
 - Keyboard navigation of room objects.
 - Real-time clock sync with the server; the client clock is trusted.
+
+## Revision 2: a camera the user cannot move, and the sketch before the room
+
+Agreed in outline with Moses on 2026-10-09 after he tried the dev instance: "I don't want the camera to move" (the user must not be able to move it; a shift with the layout is fine) and "it takes a while to load and the background is really ugly while it loads", with both placeholders wanted. Where this section differs from the sections above, this holds; the sections above were edited where the change is one line.
+
+### What was measured
+
+On the dev instance (`next dev`, so unminified JS; each page loaded twice so on-demand compiling is out of the numbers; headless Chromium on SwiftShader, which inflates shader work), from navigation start:
+
+| Page | Canvas in the DOM | First frame drawn |
+|---|---|---|
+| `/palace`, 1280 × 800, cold | 1.8 s | 3.4 s |
+| `/`, 1280 × 800, cold | 1.1 s | 2.5 s |
+| `/palace`, 390 × 844, cold | 0.7 s | 2.0 s |
+
+The room's chunk (three.js and the scene, about 4.4 MB unminified, 0.6 MB over the wire) downloads in under 60 ms but is requested only at the idle moment, which waits for hydration (up to 1.3 s on the desktop Palace page) plus 30 to 630 ms of idle wait. The first frame then compiles every shader on the main thread: 1.2 to 1.6 s on SwiftShader. `GET /api/room` is never on the path. All that time the page shows the gradient fallback, a flat blue sky over a flat brown band. The canvas's 600 ms `room-in` fade starts when it mounts and the canvas is transparent until it draws, so when the compile outlasts the fade the room appears with a cut. Script: `/tmp/palace-load/measure.mjs` (not in the repo; it takes `camera` appearing in `data-room` as the first frame, which Revision 2 reports before drawing, so the script must read `data-drawn` from now on); screenshots in `/tmp/palace-load/`.
+
+### Camera
+
+Section Camera above has the rule and the maths. In code:
+
+- `layout.ts`: `cameraPose(aspect, strip)` becomes `framePose(aspect)`, returning a `CameraPose` (`yaw`, `pitch`, `distance`, `fov`, `target`) as now; `LANDSCAPE_ASPECT` (1.4) joins `PORTRAIT_ASPECT` (0.8), and the two anchor poses with their boxes are one table. New, pure and shared with the sketch: `projectPoint(pose, point, size, offset)`, the projection in section Camera, and `viewOffset(width, height, point, anchor)`, whose `anchor` defaults to the frame's centre. `driftYaw` and `parallax` go; `cameraPosition` stays without its offsets.
+- `scene/Camera.tsx`: in a layout effect, sets the position and `lookAt` when the aspect changes and the view offset when the layout changes (under a `focus` cover the anchor is `projectPoint(pose, WINDOW_CENTRE, size)`); no `useFrame`. It reports `camera` after each change.
+- Deleted: `look.ts`, the `look` state, `setPalaceHandlers`, the double-click and Escape handling in `pointer.ts`, and the drag, wheel and pinch handlers in `PalaceView.tsx`. `PalaceView` keeps `data-palace`, `data-room-passthrough` and its size; `cursor-grab` goes, so its cursor is the default, and the pointer over an object as on every page. The robot's wave on the Palace page stays (it is the object moving, not the camera).
+- Tests that go: in `room-layout.test.mjs`, "the camera is a three-quarter view; portrait screens pull back, rise and face the back wall" and "the drift spans 1.5° over a minute and the parallax at most 0.5°"; in `room-live.test.mjs`, the four look tests ("the Palace camera yaws within 20° either way …", "dragging turns the camera …", "a released drag coasts …", "flights ease in and out …"); in `room-pointer.test.mjs`, "on the Palace page a drag released over empty floor does not fly the camera back" and "on the Palace page a double click frames the object …"; in `room.spec.ts`, "the Palace page's drag turns the camera within its limits …". "A press that moved past the click slop is a drag" stays: a drag is still not a click.
+- Unit tests in `room-layout.test.mjs`, at six viewports (1440 × 900, the same with a 320 px right panel, 1280 × 720, 820 × 1180, 390 × 844, 844 × 390): every corner of the blended box projects inside the pad (to 1e-6 px), the projected box's centre is the frame's centre within 0.01 px, and on the axis that set the distance the box touches the pad on both sides within 0.01 px, so no smaller distance fits. The right panel changes the view offset (x 160) and not the pose; with a strip cover at 390 × 844 the pose is the plain one and `WINDOW_CENTRE` projects to the strip's centre (195, 36) within 0.01 px.
+- More unit tests: the angles are the anchors' at and beyond 0.8 and 1.4; from aspect 0.45 to 2.5 in steps of 0.001 the distance and each target coordinate move less than 0.1 m per step (the pose is continuous); `projectPoint` agrees within 0.01 px with a three.js `PerspectiveCamera` placed as `Camera.tsx` places it (position, `lookAt`, `setViewOffset`) at the six viewports.
+- Playwright (`room.spec.ts`): "a drag and a wheel on the Palace page leave the camera where it is" (`data-room.camera` unchanged). At 1440 × 900 and 390 × 844 on the Palace page, `camera.box`'s centre is the viewport's centre minus `camera.offset` within 2 px, its width and height are at most 88 % of the viewport's plus 2 px, and one of the two is within 2 px of that. The phone strip test adds that the window hotspot's point (`points["window:window"]`) is within 2 px of the strip's centre.
+- Verification before the As built entry: screenshots at the six viewports on the dev instance, both pages, day and night; a look on a real phone by Moses.
+
+### Before the room draws
+
+Two placeholders, in order of preference: the snapshot, then the sketch. Both sit inside `.room-scene` under the canvas and under the same veil as the 3D room, so the handover changes the picture and nothing else (The veil, below).
+
+**The snapshot.** The last frame this browser drew, shown at once on the next visit. `snapshot.ts`:
+
+- When: when the document turns hidden (`visibilitychange`), and once 10 s after the first drawn frame, so a visit whose tab is killed still leaves one. `pagehide` also tries, best effort: mobile Safari fires it unreliably and may freeze the page before the asynchronous steps finish. At most once a minute, only while the canvas has drawn and its context is not lost.
+- How: without `preserveDrawingBuffer` the drawing buffer is readable only until the task that rendered it ends, so the canvas registers a `captureRoom()` that does it all in one task: it tells the frost registry to report no panels, calls `advance` once, copies the canvas with `drawImage` onto a 2D canvas at most 1600 px on its long side, then lifts the flag and calls `advance` again so the screen never shows the unfrosted frame. Then, asynchronously, `toBlob` as JPEG at quality 0.72 (about 150 to 300 KB) and one IndexedDB `put`.
+- Why without the frost: a baked blur belongs to the layout it was taken under. The panels' tint is 79 % (`.frost-subtle`) to 87 % (`.frost`) opaque, so an old blur would show faintly through panels that have moved, and fully where a panel no longer is (a snapshot taken in a conversation, shown on the Palace page). The veil is CSS and never in the canvas. While the snapshot shows, the panels are their tint over a sharp picture, as over the sketch; the blur arrives with the canvas.
+- Storage: database `portal-room` (version 1), object store `snapshot`, one record under the key `"last"`: `{ layoutVersion, blob, width, height, aspect, interest, scene, at }`. `width` and `height` are the viewport in CSS pixels, `interest` is `interestPoint(readLayout())` at the capture, `scene` is day or night, `at` is epoch ms. Each capture overwrites it.
+- Eligible when `layoutVersion` is the current `LAYOUT_VERSION` (`@portal/shared/room`), it is under 6 hours old, its `scene` is the current one, and its aspect is within 5 % of the viewport's. Aspect, not an aspect class: the fitted pose depends on the aspect throughout (the fit's distance changes with it even where the angles do not), and at the same aspect the same pose gives the same picture at another scale. A record from another layout version is deleted; a stale, other-scene or other-aspect one is ignored until the next capture replaces it. Nothing is captured or shown without WebGL or under reduced transparency.
+- Chosen once per page load: the read starts when `snapshot.ts` evaluates on the client (a module-level promise), so it has usually answered by hydration. `RoomBackground` chooses when the layout registry has its first measure (`readLayout().width > 0`) and the read has answered; if the read has not answered 150 ms after hydration, the sketch. A later answer is not used, so the sketch never swaps for a snapshot.
+- Placed as an `<img data-room-snapshot>` from an object URL, shown only after `img.decode()`, absolutely positioned at the stored size times the current viewport height over the stored height (the vertical field of view is fixed, so at one aspect the room scales with the height), translated by the difference between the current view offset (`viewOffset`, with the strip's anchor) and the stored one, scaled, so what the snapshot shows lands where the camera will draw it, under the strip too. It follows layout changes as the camera's view offset does; edges that fall short show the ground. The object URL is revoked when the image unmounts.
+- A start-of-visit picture only: a lost context brings back the sketch, never the snapshot.
+
+**The sketch.** The room drawn in pencil, lined up with the 3D room: while the room loads when no snapshot is eligible, after a lost context, and for the visit without WebGL, after a canvas failure, or under reduced transparency. `sketch.ts` (pure) and `Sketch.tsx`:
+
+- An authored list of 3D polylines in room metres (`SKETCH` in `sketch.ts`), each the edges a viewer sees from the fitted poses: the camera is always above the room and to the right of its axis (yaw 14° to 25°, pitch 25° to 30°), so tops, fronts and right-hand sides, with no hidden-line removal at run time. The 3D room's own geometry is not read: the list is written once against `ROOM`, `ANCHORS`, `FURNITURE` and the constants the scene exports (`CHAIR`, `STOVE`, `WINDOW_CENTRE`), and the few sizes that are local to a scene file today (the desk, the rug, the hearth's parts, the bench, the small shelf) move to `layout.ts` so both read the same numbers. About fifty strokes for the room as it starts:
+  - The shell: the back wall's foot (y 0, z −3) from x −4 to 14, broken by the door's casing; the left wall's foot (x −4) from z −3 to 10; the corner between them from y 0 to 10. The walls run past the frame and so do these strokes; the SVG clips them.
+  - The window: the frame's outline (x −2.25 to −0.15, y 0.95 to 2.45), the mullion (x −1.2), the transom (y 1.88), and the inside sill's front edge (x −2.4 to 0, y 0.96, z −2.75).
+  - The door: the casing (x 2.795 to 3.905, up to 2.28), the opening (x 2.875 to 3.825, up to 2.2), and through it the foot of the hallway's back wall (z −4.45).
+  - The desk: the top's outline (x −2.12 to −0.28, y 0.725 to 0.795, z −2.89 to −2.21), the four legs and the drawer block. The chair in front of it (`CHAIR`: seat, back and legs, turned −1.2 rad) and the desk lamp at its left end (base, stem and shade, x −1.82).
+  - The stove (`STOVE`, x 0.32, z −2.7): the body, the top plate, the kettle's outline, and the pipe from the plate (y 0.51) up to its elbow (y 1.46) and back into the wall.
+  - The hearth: the chimney breast's two front corners (x 0.8 and 2.3, z −2.55, y 0 to 10), the brick surround (x 0.93 to 2.17, up to 1.08), the firebox's opening (x 1.15 to 1.95, up to 0.78), the mantel shelf (x 0.7 to 2.4, y 1.10 to 1.18, z −2.62 to −2.32) and the hearthstone's front edge (z −2.0).
+  - The furniture with slots, empty: the small shelf's two boards and brackets (z −2.05 to −0.55, y 1.65 and 2.15, 0.3 deep), the corkboard's frame (y 2.44 to 3.12, z −1.98 to −0.62), the plant stand (x 2.16 to 2.74, tiers at 0.46 and 0.86), the mail tray's shelf (x 2.33 to 2.77, y 1.0) and the key rack's board (x 2.30 to 2.80, y 1.45).
+  - The floor: the rug's border and inner outline (centred at x 0.3, z 0.5; 3.7 by 2.5 and 3.3 by 2.1) and the robots' bench on it (x −1.15 to 1.75, z 0.43 to 0.77, top at 0.25, with its legs).
+  - Milestones change the list only where they change the room's lines, and only when the room's state is known as the sketch mounts (`RoomBackground` holds it outside the chunk): the tall bookcase in place of the small shelf (z −2.10 to −0.59, 2.45 high, front at x −3.62, five shelf lines), the second bookcase (z −0.30 to 1.21), the wide pinboard in place of the corkboard (z −2.03 to 0.13) and the bay's outline beyond the window. The rest of the milestones, every live object (robots, envelopes, the fire) and every accumulated one (books, notes, plants, frames, keys, the tree) are left out.
+  - `projectSketch(pose, offset, size)` maps each point P with `projectPoint` from `layout.ts`, the camera's own maths without three.js: v = P − `target`; x = v·r, y = v·u, z = d − v·f (f, r and u as in section Camera); then, in CSS pixels, sx = W/2 × (1 + x / (z·tH)) − offset.x and sy = H/2 × (1 − y / (z·tV)) − offset.y, with tV = tan 15° and tH = tV × W/H. `pose` is `framePose(W/H)` and `offset` the same `viewOffset` the camera gets (the strip's anchor included), so each stroke lands where its edge will. Every authored point lies beyond the near plane (z > 0.5) at every pose of the blend, so nothing needs clipping in 3D.
+  - Checked twice: a unit test projects every point with `projectSketch` and with a three.js `PerspectiveCamera` set up as `Camera.tsx` sets it, and they agree within 0.01 px at the six viewports, all in front of the near plane. In the UI suite with WebGL, the sketch's projection of `WINDOW_CENTRE` is within 2 px of the window hotspot's reported point (`points["window:window"]`, the same point).
+- Looks: a flat warm dark ground (`#241f1a`, also `.room-scene`'s own `background-color`, so the page's first paint before hydration is the ground), the wall region above the floor line a shade lighter (`#2c2621`), strokes in a pale pencil (`#e8dcc8` at 55 %, 1.25 px, round caps and joins), the window's panes filled with the sky's gradient (the `--room-sky-top` and `--room-sky-horizon` colours `RoomBackground` already sets from the sun, at 70 %), a soft radial glow at the lamp (`#ffb86b`) and in the hearth (`#ff7a3a`). No text, no spinner.
+- Draw-in: each path has `pathLength="1"`, so `stroke-dasharray: 1` and a `stroke-dashoffset` animated from 1 to 0 draw it in at any size without measuring it; 900 ms, ease-out, with an `animation-delay` from the stroke's depth (back wall first, rug last, spread over 500 ms). It plays the first time the sketch shows in a page load (a module-level flag) and never again: not after a lost context, not when the Palace page opens later, not on a resize. Under reduced motion the paths have `animation: none`; the global reduced-motion rule shortens durations but keeps delays, which would still stagger the strokes.
+- Projected again when the layout registry's measure changes (`useSyncExternalStore(subscribeLayout, readLayout)`, as `Camera.tsx` reads it), never per frame; nothing is drawn before the first measure.
+
+**The handover.**
+
+- The canvas sits above the placeholder at `opacity: 0` with `transition: opacity 600ms ease-out`; `.room-scene[data-drawn] canvas` is `opacity: 1`. The `room-in` keyframes and the canvas's animation go.
+- The first drawn frame: the `Loop` in `RoomCanvas.tsx` calls `reportRoom("drawn", true)` after the first `advance` that ran with the context not lost (repeats are no-ops in `reportRoom`). The `webglcontextlost` listener in `onCreated` reports `drawn: false`, and `clearRoomReport` on unmount forgets it. `data-room` carries `drawn` with the rest of the report; `RoomBackground`'s report writer also keeps a `drawn` state, set only when the value flips, and renders `data-drawn` from it.
+- The placeholder does not fade: it stays opaque under the canvas while the canvas, opaque once drawn, fades in over it, and unmounts 600 ms after `data-drawn` appears. Fading both at once would dip towards the ground halfway. Under reduced motion the global rule makes the transition instant.
+- A lost context hides the canvas (`data-renderer="fallback"` keeps its `visibility: hidden`) and mounts the sketch, complete, fading in from the ground over 600 ms; on `webglcontextrestored` the canvas remounts under a new key and hands over again. A canvas failure (the `CanvasBoundary`) leaves the sketch for the visit.
+- The gradient on `.room-scene` goes; `--room-sky-top` and `--room-sky-horizon` stay for the sketch's panes.
+
+**The veil.** The veil rules stop reading `data-renderer`. `.room-scene::after` takes today's WebGL values (`#1517138a`, night `#110f0c4d`), `[data-view="palace"]` has none, and the phone block keeps its gradients and the strip's 72 px, all without `[data-renderer="webgl"]`. The fallback values (`#151713a3`, night `#110f0c70`; on phones `#151713ad`, `#110f0c8a`) are deleted: the sketch's dark ground is no brighter than the room, so the lighter veil keeps text at least as readable. Today the veil also changes at hydration, because `data-renderer` is `fallback` until the WebGL probe runs on the client; that goes with it. `data-renderer` keeps its meaning (`webgl` while the canvas is up or coming, `fallback` otherwise), and a new `data-placeholder` says what is under the canvas:
+
+| State | `data-renderer` | `data-placeholder` | `data-drawn` |
+|---|---|---|---|
+| Before hydration | `fallback` (the probe's server value) | none: the ground | no |
+| Loading, a snapshot eligible | `webgl` | `snapshot` | no |
+| Loading, none eligible | `webgl` | `sketch` | no |
+| Drawn | `webgl` | the placeholder for 600 ms, then none | yes |
+| Context lost | `fallback` | `sketch` | no |
+| No WebGL, canvas failed, reduced transparency | `fallback` | `sketch` | no |
+
+The veil is the same in every row: only `data-scene` (`pending` before hydration, which takes the day values) and `data-view` change it. The Palace page shows its placeholder unveiled, as it shows the room.
+
+**Less waiting.** Measured before and after with the same script, which also records when the placeholder first shows (`data-placeholder`) and takes `data-drawn` as the first frame:
+
+- The chunk is requested when `RoomBackground` mounts, not at the idle moment. `RoomBackground.tsx` names the loader once, `const loadRoomCanvas = () => import("./RoomCanvas")`, passes it to `dynamic(loadRoomCanvas, { ssr: false })`, and calls it in an effect when the canvas will mount (WebGL, no reduced transparency). The app router's `next/dynamic` (Next 16.3.5, `next/dist/shared/lib/lazy-dynamic/loadable.js`) is `React.lazy` over the loader with no `preload()` of its own; the bundler's module cache makes the second `import()` the same request and the same module, evaluated once. The mount still waits for the idle moment, its timeout lowered from 1.5 s to 800 ms.
+- Before its first `advance` the `Loop` awaits `gl.compileAsync(scene, camera)`. In three r186 it builds every program synchronously, then resolves when each program's `isReady()` holds, polled every 10 ms without blocking where `KHR_parallel_shader_compile` exists (Chromium has it; Safari is to be checked on the M1). Without the extension it resolves after 10 ms and the first frame waits on the driver, as now. A canvas unmounted during the wait starts no loop.
+- The compile runs with the frost pass's scene target bound (`setRenderTarget`, put back to null once the synchronous part returns). A program differs between the screen (AgX, sRGB) and a target (no tone mapping, linear), and every frame renders the scene into the target, so a compile against the screen would build programs no frame uses. `FrostPass` makes its pipeline on demand for whichever comes first and exports `compileRoom(gl, scene, camera)`.
+- What that compiles: every mesh, points, line and sprite material in the scene graph at the call, hidden ones included (the stars), so the sky's, moon's, rain's and snow's `ShaderMaterial`s too, against the lights mounted at start. What it does not: the shadow pass's depth material (made at the first shadow render), the frost pipeline's five passes (their own scenes; small fragment shaders), and whatever mounts later (the kit's chair, a robot walking in, a milestone's furniture). These compile on first use, as now.
+- `scene/kit.tsx` calls `useGLTF.preload(KIT_URL, false, true)` at module level (drei 10.7.9 has it). The arguments must match `useKit`'s: R3F caches by loader and URL only, so the first call decides the meshopt decoder. The 7.7 KB kit is then fetched when the chunk evaluates, and the first frame usually has the kit's chair rather than its stand-in.
+- The fade starts at the first drawn frame (The handover), so the room never appears with a cut.
+
+### Tests
+
+- Web unit (`apps/web/tests/`): `room-layout.test.mjs` (the fit at six viewports, the strip's offset); `room-sketch.test.mjs` (a projected point matches the camera maths, the stroke count, the draw-in order); `room-snapshot.test.mjs` (eligibility by layout version, age, scene and aspect, each at its edge; the size and translation for another viewport and view offset). IndexedDB and the capture are left to the UI suite.
+- Playwright, `tests/ui/room.spec.ts`. Headless Chromium has a WebGL canvas only with `setupPortal(page, { webgl: true })`; without it the fixtures' `disableWebGL` refuses the context, which is the no-WebGL case. The suite runs a production build, whose chunks are named by content hash, so a test holds the room's chunk with `page.route("**/_next/static/chunks/*.js")`: `route.fetch()`, and if the body contains `"WebGLRenderer: "` (a three.js message string the minifier keeps; the implementer confirms it in the build) wait for the test's release before `route.fulfill({ response })`; every other chunk passes at once.
+  - "a drag and a wheel on the Palace page leave the camera where it is": `data-room.camera` unchanged after both (replaces "the Palace page's drag turns the camera").
+  - "the sketch shows while the room loads, and the canvas fades in over it": `webgl: true`, the chunk held. Then `data-renderer="webgl"`, `data-placeholder="sketch"`, more than 30 `svg[data-room-sketch] path`, no `.room-scene canvas`. Released: `data-drawn`, `data-room.drawn` true, no `[data-placeholder]` within a second, and the veil's `getComputedStyle(room, "::after").backgroundColor` the same as while held.
+  - "a lost context brings the sketch back until it is restored": `webgl: true`, drawn; `WEBGL_lose_context.loseContext()` on the canvas's context through `page.evaluate`; `data-placeholder="sketch"`, no `data-drawn`; `restoreContext()`; `data-drawn` again.
+  - "at night the scene says so, and without WebGL the sketch stands in" replaces the gradient test: night clock, no `webgl`, `data-renderer="fallback"`, `data-placeholder="sketch"`, the paths there, no canvas, `.room-scene`'s computed `backgroundImage` is `none`.
+  - "without WebGL the frost panels keep their tint over the sketch": the frost tint test with its name and comment changed; the assertions stand.
+  - "under reduced motion the sketch is drawn at once": `page.emulateMedia({ reducedMotion: "reduce" })`, no `webgl` (so the sketch stays); every path's computed `animationName` is `none` and `strokeDashoffset` is `0`.
+  - "a second visit shows the last frame before the room draws": `webgl: true` and no `page.clock` (the record's age reads `Date.now()`). Once `data-drawn`, `page.evaluate` redefines `document.visibilityState` as `"hidden"` and `document.hidden` as `true` (`Object.defineProperty`) and dispatches `visibilitychange`; poll IndexedDB in the page until `portal-room`'s `"last"` record exists. Then hold the chunk and `page.reload()` (the context's IndexedDB and init scripts survive it): `img[data-room-snapshot]` visible, `data-placeholder="snapshot"`, no canvas. Released: `data-drawn`, the image gone.
+  - "the phone strip shows the window band": the window hotspot's point inside the strip's rect.
+- Elsewhere: "under reduced transparency the panels are solid and the room draws no frost" also expects `data-placeholder="sketch"`, its comment no longer saying gradient; `portal.spec.ts`'s "the room renders a still under reduced motion and sidebar search finds session titles" swaps its `linear-gradient` assertion for `[data-placeholder="sketch"]`. No assertion in `portal-mobile.spec.ts` reads the gradient.
+
+### Order
+
+Each agent ends with `pnpm test`, `pnpm lint`, `pnpm build` and `pnpm test:ui` green (the build with the dev-server variables unset), its screenshots in `/tmp/palace-shots/revision-2/`, and a commit.
+
+1. **Camera** (one agent): the fit, the removals, the unit tests and the Palace drag test, screenshots at the six viewports on both pages, day and night.
+2. **Placeholders** (one agent, after 1, since the sketch projects with the fitted pose): the sketch, the veil rules, the handover and `data-drawn`, the three loading changes, and the UI tests above but the snapshot's. Screenshots of the sketch alone (no WebGL) and of a held chunk at 1440 × 900 and 390 × 844, both pages, day and night. The timings before its first change and after its last, with `/tmp/palace-load/measure.mjs` taught `data-drawn` and `data-placeholder`; if the script is gone, an equivalent (Playwright's Chromium on SwiftShader, the same three pages cold, the same columns plus the placeholder's time). Both tables go in the As built entry.
+3. **Snapshot** (one agent, after 2): capture with the frost off, storage, eligibility, placement, the unit test and the second-visit UI test. Screenshots of a second visit before and after the handover at both sizes, and the second visit's time to its first picture with the same script.
+4. A fresh reviewer over the three; fixes; the As built entries; the dev instance restarted on the result.
 
 ## As built
 
