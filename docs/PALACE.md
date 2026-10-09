@@ -399,3 +399,11 @@ The scratch server was stopped and the clone dropped afterwards.
 - **Settings.** A failed `GET /api/room` left the Room section on "Loading…" for good; it says "Unavailable", a failed request is forgotten so the next subscriber asks again, and Refresh still fills it in.
 - **Phone veil.** At 390 × 844 the chat's first lines sat over the bright hearth and stove under the desktop's veil (the phone rules lost to the WebGL ones on specificity). On phones outside the Palace page the veil is now a gradient from `#151713d9` at the top to `#151713b3` (night `#110f0cb3` to `#110f0c8a`), and the room strip's 72 px keep the desktop's veil (`:has([data-room-strip])`). Re-taken as in Polish: `/tmp/palace-shots/chat-day-clear-phone.png`.
 - **Cleanup.** The unused `.glass-subtle` is gone.
+
+Server side, from a third review (`58df4d3`):
+
+- **Sessions counted once.** A new session reaches the census twice, in the list and as its "created" event, in either order; a recount landing between the two added it twice to the high-water `sessionsEver`. The census keeps the ids it has counted; only the first count after boot takes the list's size as a minimum.
+- **Weather every 20 minutes.** The refresh timer saw the weather as still fresh at each tick (the stamp was taken when the fetch finished) and fetched only every other tick; the timer treats it as stale half an interval early.
+- **Forced refresh.** A "Refresh" from Settings arriving during a background lookup was answered by that lookup; a forced one is now queued after it.
+- **Stream.** A census failure no longer fails the portal stream's opening: the `room` opening event is left out and logged at warn.
+- **Shutdown** waits for a running recount before the pool closes, so a milestone saved to the row always gets its Activity entry.
