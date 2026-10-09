@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { AgXToneMapping, PCFShadowMap } from "three";
 import type { RoomWeather } from "@portal/contracts/room";
+import FrostPass from "./frost/FrostPass";
 import { startRoomLoop, type RoomLoop } from "./loop";
 import type { SunClock } from "./sun";
 import CameraRig from "./scene/Camera";
@@ -53,6 +54,7 @@ export type RoomCanvasProps = {
 /**
  * The room's WebGL canvas (docs/PALACE.md, Web): react-three-fiber with a capped hand-driven loop,
  * DPR at most 1.5, no antialiasing, a low-power context, AgX tone mapping, and one sun shadow map.
+ * Every frame goes through `FrostPass`, which blurs the room under the `.frost` panels.
  * Loaded with `next/dynamic` (no SSR) by `RoomBackground`, which owns the fallbacks.
  */
 export default function RoomCanvas({ clock, weather, reducedMotion, onContextLost }: RoomCanvasProps) {
@@ -86,6 +88,7 @@ export default function RoomCanvas({ clock, weather, reducedMotion, onContextLos
       <Weather weather={weather} clock={clock} reducedMotion={reducedMotion} />
       <Shell />
       <Window />
+      <FrostPass />
     </Canvas>
   );
 }

@@ -422,7 +422,7 @@ export default function PortalThread({
             >
               {!isMain && thread && <ThreadIntro thread={thread} onOpenWatches={onOpenWatches} />}
               {isMain && status && !ready && (
-                <div className="glass flex flex-col items-start gap-3 rounded-2xl p-5">
+                <div className="frost flex flex-col items-start gap-3 rounded-2xl p-5">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <KeyRound className="size-4 text-amber-300" />
                     Talk to Portal needs an API key for {providerNames[status.provider]}.
@@ -449,7 +449,7 @@ export default function PortalThread({
               )}
               {isMain && !historyLoading && messages.length === 0 && ready && (
                 <div className="flex flex-col items-center gap-3 py-16 text-center">
-                  <span className="glass rounded-2xl p-4">
+                  <span className="frost rounded-2xl p-4">
                     <Sparkles className="size-7 text-foreground/80" />
                   </span>
                   <h2 className="mt-2 text-lg font-medium tracking-tight">Ask Portal what needs you.</h2>

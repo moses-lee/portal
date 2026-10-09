@@ -583,7 +583,7 @@ export default function Conversation({
             )}
             {!loading && !history.turns.length && (
               <div className="flex flex-col items-center gap-3 py-16 text-center">
-                <span className="glass rounded-2xl p-4">
+                <span className="frost rounded-2xl p-4">
                   <AgentLogo agentId={agentId} className="!size-7" />
                 </span>
                 <h2 className="mt-2 text-lg font-medium tracking-tight">
@@ -621,7 +621,7 @@ export default function Conversation({
         </MessageScrollerViewport>
         <MessageScrollerButton
           size="sm"
-          className="glass !rounded-full !px-3 !text-xs"
+          className="frost !rounded-full !px-3 !text-xs"
           aria-label="Jump to latest message"
         >
           <ArrowDown className="size-3.5" />

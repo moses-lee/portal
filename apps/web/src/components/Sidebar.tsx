@@ -477,7 +477,7 @@ export default function Sidebar(props: SidebarProps) {
     <aside
       ref={roomCover("left")}
       aria-label="Workspace sidebar"
-      className="sidebar-shell glass-subtle relative"
+      className="sidebar-shell frost-subtle relative"
       style={{ width }}
     >
       <SidebarContent {...props} />

@@ -83,7 +83,7 @@ function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now
     });
   const fires = intent.fireBudget === null ? `${intent.fires} fired` : `${intent.fires} of ${intent.fireBudget} fired`;
   return (
-    <article aria-label={intent.text} className="glass rounded-2xl p-4 text-[13px]">
+    <article aria-label={intent.text} className="frost rounded-2xl p-4 text-[13px]">
       <div className="flex items-start gap-3">
         <Target className="mt-0.5 size-4 shrink-0 text-sky-300" />
         <div className="min-w-0 flex-1">

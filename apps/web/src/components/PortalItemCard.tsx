@@ -268,7 +268,7 @@ export default function PortalItemCard({
     <article
       aria-label={item.title}
       data-status={item.status}
-      className={`glass rounded-2xl p-4 text-[13px] ${settled ? "opacity-60" : ""}`}
+      className={`frost rounded-2xl p-4 text-[13px] ${settled ? "opacity-60" : ""}`}
     >
       {/* The header takes the right-click; the body stays selectable text with the browser's own menu. */}
       <ContextActions items={items} disabled={pending === "menu"}>

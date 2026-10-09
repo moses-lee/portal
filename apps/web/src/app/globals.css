@@ -119,13 +119,30 @@
   box-shadow:
     inset 0 1px 0 #ffffff0a,
     0 12px 40px #0000001f;
-  backdrop-filter: blur(28px) saturate(135%);
+  /* Prefixed first: Lightning CSS keeps only the last of the pair, and Chromium reads only the unprefixed one. */
   -webkit-backdrop-filter: blur(28px) saturate(135%);
+  backdrop-filter: blur(28px) saturate(135%);
 }
 .glass-subtle {
   background: #25231fc9;
-  backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+/*
+ * Panels that sit over the room (docs/PALACE.md, Frost): the same tint, border and shadow as the
+ * glass, but the blur is drawn by the room's WebGL canvas under each `.frost` element, so the
+ * browser does not re-blur the page every frame. Without WebGL they keep the tint over the gradient.
+ * Small transient surfaces (dialogs, sheets, menus, popovers) keep `.glass` and its CSS blur.
+ */
+.frost {
+  background: #292722dd;
+  border: 1px solid #eee1ca20;
+  box-shadow:
+    inset 0 1px 0 #ffffff0a,
+    0 12px 40px #0000001f;
+}
+.frost-subtle {
+  background: #25231fc9;
 }
 .agent-logo {
   display: inline-block;
@@ -700,10 +717,12 @@
 }
 @media (prefers-reduced-transparency: reduce) {
   .glass,
-  .glass-subtle {
+  .glass-subtle,
+  .frost,
+  .frost-subtle {
     background: var(--card);
-    backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 

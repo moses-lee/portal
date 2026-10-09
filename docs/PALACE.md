@@ -291,3 +291,27 @@ Merge to main waits for Moses. No migration: the `room` settings row is created 
 - A character for Portal.
 - Keyboard navigation of room objects.
 - Real-time clock sync with the server; the client clock is trusted.
+
+## As built
+
+### Frost
+
+Phase 2, 2026-10-09. `apps/web/src/room/frost/`: `FrostPass.tsx` takes over the canvas's render (a `useFrame` at priority 1) and runs the scene into a full-size half-float target, a 4 × 4 box downsample to a quarter, three dual-Kawase passes (down to an eighth, down to a sixteenth, up to an eighth), the panel mask, and a composite to the screen that folds in the last Kawase upsample, applies AgX and the sRGB transfer to both copies, saturates the blurred one by 1.35 in display space (CSS `saturate()`'s Rec. 709 luma lerp), and mixes them by the mask. The mask is one instanced quad per panel, a rounded-rectangle SDF antialiased over one mask texel, MAX-blended into a half-size R8 target. `registry.ts` queries `.frost, .frost-subtle` on every rendered frame, skips invisible ones (`checkVisibility`), cuts each quad to its overflow-clipping ancestors (so a card scrolled under the header has a straight cut edge, not frost on empty room), and caches each panel's radius and clipping ancestors until a `ResizeObserver` or a class/style `MutationObserver` marks them stale. Frames with no frosted panel render the scene straight to the screen. Targets are resized only when the canvas's size changes. The canvas writes the last frame's panel count to `data-frost` for tests.
+
+- **Blur size**: the taps' spread is 2.5 texels at a pixel ratio of 1.5, scaled with the ratio; side by side over the room with CSS `blur(28px) saturate(135%)` at ratios 1 and 2 the two are indistinguishable in width. `.frost-subtle` (the sidebar, the tracked panel, the GitHub inspector) gets the same blur and saturation as `.frost`; the old `.glass-subtle` was `blur(24px)` without saturation. One mask channel cannot tell them apart and the difference does not show under the tint.
+- **Migrated to `.frost`**: the sidebar, the composer, item cards, watch cards, the empty-state icon tiles and the API-key card in conversations and Talk to Portal, the "Jump to latest" pill, the GitHub inspector, and the tracked panel (all three of its states). `.glass` remains on the search dialog and sheet; the shadcn dialog and sheet overlays keep their own `backdrop-blur`. The phone pane bar keeps its `backdrop-blur-sm` (not a panel over the room in the spec's list).
+- **CSS blur was off in Chromium**: Lightning CSS collapsed `backdrop-filter` followed by `-webkit-backdrop-filter` into the prefixed declaration only, which Chromium ignores, so `.glass` never blurred in Chrome (Safari was fine). The prefixed declaration now comes first and both are emitted.
+- **Not per-element opacity**: a panel's own `opacity` (a settled item card at 60 %) does not fade its frost; the tint fades, the blur under it stays.
+- **Scroll**: the loop's existing capture-phase `scroll` listener on the document already catches the chat scroller and the sidebar (element scrolls do not bubble, but they do pass the capture phase), so both get 60 fps for 300 ms. The registry reads the panels' boxes in the same requestAnimationFrame as the render, so frost follows a scroll without a frame of lag.
+- **Reduced transparency**: the panels are `var(--card)`, opaque; the room is the gradient fallback, so no canvas and no mask; the registry also returns no panels under the media query.
+
+#### Measurement (headless Chromium on this Mac, not Safari)
+
+**Owed: the Safari timeline on an M1 and on an iPhone 13.** What follows is Playwright's Chromium (headless, `--use-angle=metal --enable-gpu --ignore-gpu-blocklist`) on this development Mac, whose GPU reports as an **Apple M4**, not an M1. The Portal chat page (sidebar, tracked panel and composer frosted), noon, clear sky, 1440 × 960 CSS px. 200 rendered frames each way, the same page with the frost classes stripped for the baseline. GPU time from `EXT_disjoint_timer_query_webgl2` around the whole rAF callback; CPU time is `performance.now()` around the same callback (the loop's `advance()`).
+
+| Drawing buffer | GPU with frost (mean / p50 / p95 ms) | GPU without | Frost cost (GPU, mean) | CPU with / without (mean ms) |
+|---|---|---|---|---|
+| 1440 × 960 (DPR 1) | 2.10 / 2.13 / 2.26 | 1.22 / 1.23 / 1.33 | +0.88 ms | 1.61 / 1.32 |
+| 2160 × 1440 (DPR 2, canvas capped at 1.5) | 3.68 / 3.93 / 4.41 | 2.55 / 2.60 / 2.69 | +1.14 ms | 1.63 / 1.20 |
+
+The frost adds six draw calls (69 against 63). Forcing the GPU to finish with a 1-pixel `readPixels` after each frame gave wall times of 5.7 against 4.6 ms (DPR 1) and 7.3 against 5.7 ms (DPR 2), consistent with the timer queries plus the readback stall. Default headless Chromium (SwiftShader, CPU rasteriser) took 54 against 32 ms and 114 against 68 ms per frame; that is software rendering and says nothing about a real GPU, but it is why the UI suite only enables WebGL where a test asks. An M1's GPU is roughly half an M4's, so expect about 2 ms for the frost and about 5 ms for the whole frame at DPR 1.5; the scene alone is already over the spec's 4 ms M1 budget at that size by this estimate, which is the scene's budget to meet, not the frost's.

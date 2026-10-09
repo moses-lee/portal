@@ -186,7 +186,7 @@ export default function ChatComposer({
             send();
           }}
         >
-          <InputGroup className="composer glass !ring-0">
+          <InputGroup className="composer frost !ring-0">
             {editing && (
               <InputGroupAddon
                 align="block-start"

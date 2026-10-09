@@ -57,6 +57,64 @@ test("the Palace page is the room alone: a sidebar entry, no header text, no tra
   await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
 });
 
+/** A CSS colour's alpha (0..1), resolved by the browser through a 2D canvas so any syntax (oklch, hex, rgb) works. */
+const alphaOf = (locator: Locator) =>
+  locator.evaluate((node) => {
+    const context = document.createElement("canvas").getContext("2d")!;
+    context.fillStyle = getComputedStyle(node).backgroundColor;
+    context.fillRect(0, 0, 1, 1);
+    return context.getImageData(0, 0, 1, 1).data[3] / 255;
+  });
+const backdropOf = (locator: Locator) => locator.evaluate((node) => getComputedStyle(node).backdropFilter);
+
+test("panels over the room are frosted by the canvas, not CSS, while an open dialog keeps its CSS blur", async ({ page }, info) => {
+  await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 16, 0, 0)) });
+  await setupPortal(page, { webgl: true });
+  await page.goto("/");
+  const sidebar = page.locator(".sidebar-shell");
+  const composer = page.locator(".composer");
+  await expect(sidebar).toHaveClass(/\bfrost-subtle\b/);
+  await expect(composer).toHaveClass(/\bfrost\b/);
+  expect(await backdropOf(sidebar)).toBe("none");
+  expect(await backdropOf(composer)).toBe("none");
+  // The canvas draws the frost under them: its last frame counted the panels (the sidebar, the composer, the item card).
+  const canvas = page.locator(".room-scene canvas");
+  await expect.poll(async () => Number(await canvas.getAttribute("data-frost"))).toBeGreaterThanOrEqual(2);
+  await page.screenshot({ path: info.outputPath("frost.png") });
+
+  await page.keyboard.press("ControlOrMeta+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveClass(/\bglass\b/);
+  expect(await backdropOf(dialog)).toContain("blur");
+});
+
+test("under reduced transparency the panels are solid and the room draws no frost", async ({ page }) => {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: "reduce" }] });
+  await setupPortal(page, { webgl: true });
+  await page.goto("/");
+  const sidebar = page.locator(".sidebar-shell");
+  const composer = page.locator(".composer");
+  await expect(composer).toBeVisible();
+  expect(await alphaOf(sidebar)).toBe(1);
+  expect(await alphaOf(composer)).toBe(1);
+  // The room is the still gradient, so nothing is frosted behind the panels.
+  await expect(page.locator(".room-scene")).toHaveAttribute("data-renderer", "fallback");
+  await expect(page.locator(".room-scene canvas")).toHaveCount(0);
+});
+
+test("without WebGL the frost panels keep their tint over the gradient", async ({ page }) => {
+  await setupPortal(page);
+  await page.goto("/");
+  const composer = page.locator(".composer");
+  await expect(composer).toBeVisible();
+  const alpha = await alphaOf(composer);
+  expect(alpha).toBeGreaterThan(0.8);
+  expect(alpha).toBeLessThan(1);
+  expect(await backdropOf(composer)).toBe("none");
+});
+
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 

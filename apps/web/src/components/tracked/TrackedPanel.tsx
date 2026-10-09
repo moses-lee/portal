@@ -177,7 +177,7 @@ export default function TrackedPanel({
           ref={roomCover("right")}
           id="tracked-panel"
           aria-label="Tracked sessions"
-          className="glass-subtle flex min-h-0 shrink-0 flex-col border-l border-white/5 max-xl:hidden"
+          className="frost-subtle flex min-h-0 shrink-0 flex-col border-l border-white/5 max-xl:hidden"
           style={{ width: TRACKED_LIST_WIDTH }}
         >
           {body(() => setOpenPreference("false"), "Collapse tracked sessions", PanelRightClose, "tracked-list")}
@@ -187,7 +187,7 @@ export default function TrackedPanel({
           ref={roomCover("right")}
           id="tracked-panel"
           aria-label="Tracked sessions"
-          className="glass-subtle flex w-12 shrink-0 flex-col items-center border-l border-white/5 py-3 max-xl:hidden"
+          className="frost-subtle flex w-12 shrink-0 flex-col items-center border-l border-white/5 py-3 max-xl:hidden"
         >
           <TrackedToggle expanded={false} controls="tracked-panel" onClick={() => setOpenPreference("true")} />
         </aside>
@@ -234,7 +234,7 @@ function SessionAside({ children }: { children: ReactNode }) {
       ref={aside}
       id="tracked-panel"
       aria-label="Tracked sessions"
-      className="glass-subtle relative flex min-h-0 shrink-0 flex-col border-l border-white/5 max-xl:hidden"
+      className="frost-subtle relative flex min-h-0 shrink-0 flex-col border-l border-white/5 max-xl:hidden"
       // Until measured: half the space beside the sidebar, less whatever would leave the thread under 480 px.
       style={{
         width:
