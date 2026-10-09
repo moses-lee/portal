@@ -155,3 +155,35 @@ test("the portal stream opens with the room's state and pushes it when the envir
     controller.abort();
   });
 });
+
+test("the portal stream opens without the room when the room's state cannot be read", async (t) => {
+  await withApp(t, { orchestrator: true }, async ({ app }) => {
+    const ctx = appContext(app);
+    await ctx.orchestrator.ready;
+    const warnings = [];
+    const warn = ctx.log.warn.bind(ctx.log);
+    ctx.log.warn = (...args) => {
+      warnings.push(args.join(" "));
+      return warn(...args);
+    };
+    ctx.room.state = () => Promise.reject(new Error("the census could not count"));
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address();
+    const controller = new AbortController();
+    t.after(() => controller.abort());
+    const response = await fetch(`http://127.0.0.1:${port}/api/portal/stream`, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    while (buffer.split("\n\n").filter((frame) => frame.includes("data: ")).length < 7) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("stream ended");
+      buffer += value;
+    }
+    const types = buffer.split("\n\n").flatMap((frame) => frame.split("\n").filter((line) => line.startsWith("data: "))).map((line) => JSON.parse(line.slice(6)).type);
+    assert.deepEqual(types.slice(0, 7), ["status", "items", "threads", "approvals", "intents", "tracked", "workspace"]);
+    assert.ok(!types.slice(0, 8).includes("room"), "no room in the opening events");
+    assert.ok(warnings.some((message) => message.includes("the census could not count")), "the failure is logged");
+    controller.abort();
+  });
+});

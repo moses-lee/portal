@@ -143,7 +143,8 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     await ctx.lifecycle.dispose().catch(failed("the lifecycle sweep"));
     await ctx.searchBackfill.dispose().catch(failed("the search backfill"));
     unsubscribeRoom();
-    ctx.room.dispose();
+    // A running census count may still write the room row and log a milestone through the orchestrator.
+    await ctx.room.dispose().catch(failed("the room"));
     // Stop the scheduler and any running turn before the sessions it may be driving go away.
     if (orchestrator) await ctx.orchestrator.dispose().catch(failed("the orchestrator"));
     closeEventStreams(app.server);

@@ -8,10 +8,10 @@ import { MockLanguageModelV3 } from "ai/test";
 import { MILESTONES } from "@portal/shared/room";
 import { appContext, buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
-import { ROOM_KEY, parseStoredRoom } from "../src/room/census.ts";
+import { ROOM_KEY, createRoomCensus, parseStoredRoom } from "../src/room/census.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { fakeDeps, fakeSettings, fakeTimers } from "./fixtures/orchestrator-fakes.mjs";
-import { fakeClock, until } from "./fixtures/room-fakes.mjs";
+import { deferred, fakeClock, until } from "./fixtures/room-fakes.mjs";
 import { temporaryDatabase } from "./helpers/db.mjs";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/fake-acp-agent.mjs", import.meta.url));
@@ -154,6 +154,80 @@ test("a session created and purged before the next count still counts", async (t
     assert.equal(ctx.sessions.listSessions().length, 1);
     assert.equal((await refresh(app)).census.sessionsEver, 2);
   });
+});
+
+/**
+ * The census alone over a fake sessions service (`list`, and `emit` for its list events) and an
+ * in-memory room row (`row()`); `save`, when set, is awaited inside each save.
+ */
+function bareCensus(t, database, clock) {
+  const list = [];
+  const listeners = new Set();
+  const sessions = {
+    ready: Promise.resolve(), listSessions: () => [...list],
+    onSessionsChange: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+  };
+  let saved = null;
+  const hold = { save: null };
+  const backend = {
+    load: async () => saved,
+    save: async (room) => {
+      if (hold.save) await hold.save;
+      saved = structuredClone(room);
+    },
+  };
+  const census = createRoomCensus({ db: database.db, log: { warn() {} }, presence: { count: () => 0 }, sessions }, { now: clock.now, backend, settleMs: 60_000, censusEveryMs: 0 });
+  t.after(() => census.dispose());
+  const emit = (change) => { for (const listener of listeners) listener(change); };
+  return { census, list, emit, hold, row: () => saved };
+}
+
+test("a new session counted from the list before its created event counts once", async (t) => {
+  const database = await temporaryDatabase(t);
+  const clock = fakeClock();
+  const { census, list, emit } = bareCensus(t, database, clock);
+  list.push({ id: "s1", createdAt: clock.now() });
+  assert.equal((await census.current({ force: true })).census.sessionsEver, 1);
+  // createSession puts the session in the list, saves its row, then announces it; a count lands in between.
+  list.push({ id: "s2", createdAt: clock.now() });
+  assert.equal((await census.current({ force: true })).census.sessionsEver, 2);
+  emit({ type: "created", session: { id: "s2" } });
+  assert.equal((await census.current({ force: true })).census.sessionsEver, 2, "the created event does not count it again");
+  // The other order, and a session created and gone before a count, still count once each.
+  emit({ type: "created", session: { id: "s3" } });
+  list.push({ id: "s3", createdAt: clock.now() });
+  emit({ type: "created", session: { id: "s4" } });
+  assert.equal((await census.current({ force: true })).census.sessionsEver, 4);
+});
+
+test("the first count after boot takes the stored mark and the list's length as a floor, then counts new sessions on top", async (t) => {
+  const database = await temporaryDatabase(t);
+  const clock = fakeClock();
+  const { census, list, row } = bareCensus(t, database, clock);
+  list.push({ id: "s1", createdAt: clock.now() }, { id: "s2", createdAt: clock.now() });
+  assert.equal((await census.current({ force: true })).census.sessionsEver, 2);
+  assert.equal(row().sessionsEver, 2);
+  list.splice(0, 2);
+  list.push({ id: "s3", createdAt: clock.now() });
+  assert.equal((await census.current({ force: true })).census.sessionsEver, 3, "a purge lowers nothing; the new one is one more");
+});
+
+test("dispose waits for a count in flight to store its row", async (t) => {
+  const database = await temporaryDatabase(t);
+  const clock = fakeClock();
+  const { census, list, hold, row } = bareCensus(t, database, clock);
+  list.push({ id: "s1", createdAt: clock.now() });
+  const gate = deferred();
+  hold.save = gate.promise;
+  const counting = census.current({ force: true });
+  let disposed = false;
+  const disposing = census.dispose().then(() => { disposed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(disposed, false, "still counting");
+  gate.resolve();
+  await disposing;
+  assert.equal(row().sessionsEver, 1, "the count finished before dispose resolved");
+  assert.equal((await counting).census.sessionsEver, 1);
 });
 
 test("a milestone is stored and logged as room.expanded once, not again on the next count or after a rebuild", async (t) => {

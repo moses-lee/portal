@@ -152,6 +152,49 @@ test("concurrent refreshes share one in-flight resolution", async () => {
   assert.equal(fake.count("weather"), 1);
 });
 
+test("a forced refresh arriving while a normal one runs looks up again once that one is done", async () => {
+  const { environment, fake, clock } = setup({ location: { latitude: 1, longitude: 2 } });
+  await environment.refresh();
+  assert.equal(fake.count("weather"), 1);
+  clock.advance(WEATHER_TTL_MS);
+  const gate = deferred();
+  fake.state.gate = gate.promise;
+  const normal = environment.refresh();
+  await until(() => fake.count("weather") === 2);
+  // The third lookup (the forced one) sees clear sky; the one in flight answers rain.
+  fake.state.handlers.weather = () => (fake.count("weather") >= 3 ? answers.weather({ weather_code: 0 }) : answers.weather());
+  const forced = environment.refresh({ force: true });
+  assert.notEqual(forced, normal);
+  assert.equal(environment.refresh({ force: true }), forced, "a second forced one shares the queued one");
+  assert.equal(environment.refresh(), forced, "and so does a normal one");
+  gate.resolve();
+  assert.equal((await normal).weather.condition, "rain");
+  assert.equal((await forced).weather.condition, "clear", "the forced one asked again, past the fresh report");
+  assert.equal(fake.count("weather"), 3);
+});
+
+test("the background timer fetches the weather every 20 minutes, though each lookup lands after its tick", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const fake = fakeFetch();
+  const clock = fakeClock();
+  // A lookup takes five seconds, so the report is stamped five seconds after the tick that asked.
+  fake.state.handlers.weather = () => {
+    clock.advance(5_000);
+    return answers.weather();
+  };
+  const environment = createRoomEnvironment(
+    { config: { location: { latitude: 1, longitude: 2 }, roomOffline: false }, log: fakeLog() },
+    { fetch: fake.fetch, now: clock.now, timeZone: () => "Europe/London", refreshEveryMs: WEATHER_TTL_MS },
+  );
+  t.after(() => environment.dispose());
+  await environment.refresh();
+  for (let tick = 1; tick <= 3; tick++) {
+    clock.advance(WEATHER_TTL_MS - 5_000);
+    t.mock.timers.tick(WEATHER_TTL_MS);
+    await until(() => fake.count("weather") === tick + 1 && environment.current().weather.fetchedAt === clock.now());
+  }
+});
+
 test("a failed lookup is retried by reads only after the retry window", async () => {
   const { environment, fake, clock } = setup({ handlers: { ipify: new Error("down"), geojs: new Error("down"), ipwhois: new Error("down") } });
   await environment.refresh();

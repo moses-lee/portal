@@ -97,6 +97,8 @@ export function createRoomEnvironment(
   /** When the last resolution started; null before the first. */
   let attemptedAt: number | null = null;
   let inflight: Promise<RoomEnvironment> | null = null;
+  /** Whether the resolution in flight skips the caches, so a forced refresh is never answered by one that did not. */
+  let inflightForced = false;
   let timer: ReturnType<typeof setInterval> | null = null;
   let disposed = false;
   // One warning per failure streak; a success ends the streak.
@@ -169,7 +171,8 @@ export function createRoomEnvironment(
     };
   }
 
-  async function resolve(force: boolean): Promise<RoomEnvironment> {
+  /** `early` treats the weather as stale that much before its 20 minutes are up (the timer's ticks). */
+  async function resolve(force: boolean, early = 0): Promise<RoomEnvironment> {
     attemptedAt = now();
     const before = fingerprint(snapshot());
     if (!configured && (force || !location || now() - location.at >= LOCATION_TTL_MS)) {
@@ -183,7 +186,7 @@ export function createRoomEnvironment(
     }
     // Weather only for a real location: a time zone's rough centre is too far off to show its sky.
     const at = configured ?? location;
-    if (at && (force || !weather || now() - weather.fetchedAt >= WEATHER_TTL_MS)) {
+    if (at && (force || !weather || now() - weather.fetchedAt >= WEATHER_TTL_MS - early)) {
       try {
         const answer = await lookUpWeather(at.latitude, at.longitude);
         weather = answer.weather;
@@ -208,21 +211,33 @@ export function createRoomEnvironment(
     return environment;
   }
 
-  function refresh({ force = false }: { force?: boolean } = {}): Promise<RoomEnvironment> {
+  function start(force: boolean, early: number): Promise<RoomEnvironment> {
     if (config.roomOffline || disposed) return Promise.resolve(snapshot());
     startTimer();
-    // One resolution at a time: a caller arriving mid-flight gets that one's answer.
-    if (!inflight) {
-      inflight = resolve(force).finally(() => {
-        inflight = null;
-      });
-    }
-    return inflight;
+    // One resolution at a time: a caller arriving mid-flight gets that one's answer, unless it
+    // forces and the one in flight does not; then a forced one runs once that one is done.
+    if (inflight && (inflightForced || !force)) return inflight;
+    const run = inflight ? inflight.catch(() => {}).then(() => resolve(force, early)) : resolve(force, early);
+    inflight = run;
+    inflightForced = force;
+    const clear = () => {
+      if (inflight !== run) return;
+      inflight = null;
+      inflightForced = false;
+    };
+    run.then(clear, clear);
+    return run;
+  }
+
+  function refresh({ force = false }: { force?: boolean } = {}): Promise<RoomEnvironment> {
+    return start(force, 0);
   }
 
   function startTimer() {
     if (timer || refreshEveryMs <= 0) return;
-    timer = setInterval(() => void refresh().catch(() => {}), refreshEveryMs);
+    // The weather's age is stamped when a lookup lands, after the tick that started it, so the next
+    // tick finds it a little under 20 minutes old; half a tick early keeps it from waiting a whole extra one.
+    timer = setInterval(() => void start(false, refreshEveryMs / 2).catch(() => {}), refreshEveryMs);
     timer.unref();
   }
 

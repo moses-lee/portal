@@ -256,7 +256,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `threads`, `approvals`, `intents`, `tracked`, `workspace`, and `room`, then forwards every runtime event as
+   * `items`, `threads`, `approvals`, `intents`, `tracked`, `workspace`, and `room` (left out when the room cannot be read), then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter cadence of jobs that have an idle one.
    */
@@ -267,12 +267,17 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     // The browser shows open and snoozed items only; resolved ones stay in the store for the agent.
     const [status, items, threads, approvals, intents, tracked, workspace, room] = await Promise.all([
       runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.listThreads(), runtime.hub.approvals.pending(),
-      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.tracked.list(), runtime.hub.workspace.read(), ctx.room.state(),
+      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.tracked.list(), runtime.hub.workspace.read(),
+      // The room is decoration: a census that cannot count opens the stream without it (the next push brings it).
+      ctx.room.state().catch((err: unknown) => {
+        ctx.log.warn(`Room: could not build the state for the portal stream (${err instanceof Error ? err.message : String(err)}).`);
+        return null;
+      }),
     ]);
     const opening: OrchestratorEvent[] = [
       { type: "status", status }, { type: "items", items }, { type: "threads", threads },
       { type: "approvals", approvals }, { type: "intents", intents }, { type: "tracked", sessions: tracked }, { type: "workspace", workspace },
-      { type: "room", state: room },
+      ...(room ? [{ type: "room" as const, state: room }] : []),
     ];
     const stream = openEventStream(req, reply);
     if (stream.closed) return reply;

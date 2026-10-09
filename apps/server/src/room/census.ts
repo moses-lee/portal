@@ -73,7 +73,8 @@ export interface RoomCensusService {
   schedule(): void;
   /** Called with the new snapshot whenever the counts or milestones change; answers the unsubscribe function. */
   subscribe(listener: (snapshot: RoomCensusSnapshot) => void): () => void;
-  dispose(): void;
+  /** Stops the timers and waits for a running count, so it never meets a closed pool. */
+  dispose(): Promise<void>;
 }
 
 const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
@@ -132,8 +133,16 @@ export function createRoomCensus(
   let inflight: Promise<RoomCensusSnapshot> | null = null;
   let scheduled: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
-  /** Sessions created since the last computation, so one created and purged in between still counts. */
+  /**
+   * Every session this process has counted into `sessionsEver`, by id. A new session reaches the
+   * census twice, in the list (as soon as it exists) and as a "created" event (once its row is
+   * saved), in either order around a count; the ids make it count once.
+   */
+  const counted = new Set<string>();
+  /** Sessions created (and counted) since the last computation, so one created and purged in between still counts. */
   let created = 0;
+  /** Whether a count has stored this process's sessions yet; until then the list is the stored mark's floor. */
+  let baselined = false;
 
   /** Through the orchestrator when it runs, so the entry is pushed to the page too. */
   async function record(input: ActivityInput): Promise<void> {
@@ -153,8 +162,16 @@ export function createRoomCensus(
     const t = now();
     // Read with the counter in one step, so a session created meanwhile is counted by one or the other.
     const sessions = ctx.sessions.listSessions();
-    const createdHere = created;
+    const baseline = !baselined;
+    let createdHere = created;
     created = 0;
+    // The first count after boot takes the list as a floor (the stored mark covers the sessions an
+    // earlier process saw); afterwards a session new to the list is one more.
+    for (const session of sessions) {
+      if (counted.has(session.id)) continue;
+      counted.add(session.id);
+      if (!baseline) createdHere += 1;
+    }
     try {
       const [memoryActive, memoryInbox, intents, grants, activityLastHour, stored] = await Promise.all([
         memory.countRecords({ status: ["active"] }),
@@ -168,7 +185,7 @@ export function createRoomCensus(
       const fires = intents.reduce((sum, intent) => sum + intent.fires, 0);
       const oldest = sessions.reduce<number | null>((min, session) => (min === null || session.createdAt < min ? session.createdAt : min), null);
       const next: StoredRoom = {
-        sessionsEver: Math.max(stored.sessionsEver + createdHere, sessions.length),
+        sessionsEver: baseline ? Math.max(stored.sessionsEver + createdHere, sessions.length) : stored.sessionsEver + createdHere,
         memoryActive: Math.max(stored.memoryActive, memoryActive),
         watchesEver: Math.max(stored.watchesEver, intents.length),
         fires: Math.max(stored.fires, fires),
@@ -189,6 +206,7 @@ export function createRoomCensus(
       const fresh = milestonesReached({ ...census, memoryActive: next.memoryActive }, t).filter((milestone) => !reached.has(milestone.id));
       next.milestones = [...next.milestones, ...fresh.map(({ id, summary }) => ({ id, at: t, summary }))];
       if (JSON.stringify(next) !== JSON.stringify(stored)) await backend.save(next);
+      baselined = true;
       // Logged once stored: a failure between the two loses the entry rather than logging it twice.
       for (const milestone of fresh) {
         await record({ actor: "system", kind: "room.expanded", summary: milestone.summary, at: t, detail: { milestone: milestone.id, value: milestone.value } });
@@ -242,7 +260,8 @@ export function createRoomCensus(
   }
 
   const unsubscribeSessions = ctx.sessions.onSessionsChange((change) => {
-    if (change.type !== "created") return;
+    if (change.type !== "created" || counted.has(change.session.id)) return;
+    counted.add(change.session.id);
     created += 1;
     schedule();
   });
@@ -268,7 +287,7 @@ export function createRoomCensus(
         listeners.delete(listener);
       };
     },
-    dispose() {
+    async dispose() {
       disposed = true;
       unsubscribeSessions();
       unsubscribeOrchestrator();
@@ -276,6 +295,8 @@ export function createRoomCensus(
       scheduled = null;
       if (timer) clearInterval(timer);
       listeners.clear();
+      // A count already running finishes (its milestones logged) while the pool is still open.
+      while (inflight) await inflight.catch(() => {});
     },
   };
 }

@@ -21,7 +21,8 @@ export interface RoomService {
   refresh(): Promise<RoomState>;
   /** Called with the whole state whenever the environment or the census changes; answers the unsubscribe function. */
   subscribe(listener: (state: RoomState) => void): () => void;
-  dispose(): void;
+  /** Stops both; resolves once a running census count has finished. */
+  dispose(): Promise<void>;
 }
 
 export function createRoomService(
@@ -55,9 +56,9 @@ export function createRoomService(
         offCensus();
       };
     },
-    dispose: () => {
+    dispose: async () => {
       environment.dispose();
-      census.dispose();
+      await census.dispose();
     },
   };
 }
