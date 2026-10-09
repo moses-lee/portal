@@ -240,7 +240,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false, pa
   const activeError = activeView?.error && !activeView.closed ? activeView.error : null;
 
   return (
-    <section id={panelId ?? `${baseId}-panel`} aria-label="Terminal" className="flex h-full min-h-0 flex-col bg-zinc-950">
+    <section id={panelId ?? `${baseId}-panel`} aria-label="Terminal" data-room-block className="flex h-full min-h-0 flex-col bg-zinc-950">
       <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-xs text-zinc-400">
         <span className="shrink-0 font-medium text-zinc-200">Terminal</span>
         <div role="tablist" aria-label="Terminals" onKeyDown={onTabKeyDown} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">

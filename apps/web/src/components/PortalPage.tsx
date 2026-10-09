@@ -197,7 +197,7 @@ export default function PortalPage({
 
   return (
     <>
-      <main data-room-passthrough className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col">
         <RoomBackground activity={portalActivity(status, approvals)} palace={palace} />
         {palace ? (
           <header data-palace-header className="workspace-header !border-transparent">

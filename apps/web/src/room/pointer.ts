@@ -9,8 +9,8 @@
  *
  * No three.js here: the canvas (loaded on its own) registers the picker that raycasts its scene.
  */
-import { DEFAULT_FPS } from "./loop";
-import type { RoomTarget } from "./live";
+import { DEFAULT_FPS } from "./loop.ts";
+import type { RoomTarget } from "./live.ts";
 
 /** An object under the pointer: what it is, and where it sits in the room (for framing it). */
 export type RoomHit = RoomTarget & { centre: [number, number, number]; radius: number };
@@ -91,7 +91,10 @@ export function waveStartedAt(id: string, now: number): number | null {
 
 export const PASSTHROUGH = "[data-room-passthrough]";
 
-/** Elements that are UI, not room: panels, controls, text, media, the message column, the card. */
+/**
+ * Elements that are UI, not room: panels, controls, text, media, the message column, the card, and
+ * any section, tab panel or separator (a terminal, a pane, a resize handle) or `data-room-block`.
+ */
 const BLOCKING = [
   "a",
   "button",
@@ -118,6 +121,7 @@ const BLOCKING = [
   "pre",
   "code",
   "table",
+  "section",
   "[role=button]",
   "[role=link]",
   "[role=dialog]",
@@ -126,12 +130,15 @@ const BLOCKING = [
   "[role=tab]",
   "[role=tablist]",
   "[role=log]",
+  "[role=tabpanel]",
+  "[role=separator]",
   "[contenteditable=true]",
   ".conversation-content",
   ".frost",
   ".frost-subtle",
   ".glass",
   "[data-room-card]",
+  "[data-room-block]",
 ].join(",");
 
 /** True when the element shows text of its own (not only through children). */
@@ -285,8 +292,9 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
 
   const onUp = (event: PointerEvent) => {
     const start = down;
-    down = null;
+    // A mouse or pen press stays recorded for the click that follows, which measures the drag against it.
     if (!start?.touch || event.pointerType !== "touch") return;
+    down = null;
     lastTouchAt = performance.now();
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP || event.timeStamp - start.at > TAP_MS) return;
     if ((event.target as Element | null)?.closest?.("[data-room-card]")) return;
@@ -299,6 +307,8 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
     // Taps were handled on pointerup; the click a tap synthesises is not a second press.
     if ((event as PointerEvent).pointerType === "touch" || performance.now() - lastTouchAt < 800) return;
     const start = down;
+    down = null;
+    // A press that moved is a drag (the Palace page's look-around), not a click.
     if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP) return;
     if ((event.target as Element | null)?.closest?.("[data-room-card]")) return;
     const x = event.clientX;

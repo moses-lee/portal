@@ -1,6 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { firstTitle, makeSession, milestone, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
-import { pane, tab, workspaceOf } from "./workspace-fixtures";
+import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
 
 /** The scene's summary for tests (docs/PALACE.md, Tests): `{ scene, weather, renderer, source, still }`. */
 const summary = async (room: Locator) => JSON.parse((await room.getAttribute("data-room")) ?? "{}") as Record<string, unknown>;
@@ -46,6 +46,7 @@ test("the Palace page is the room alone: a sidebar entry, no header text, no tra
   await nav.getByRole("button", { name: "Palace", exact: true }).click();
   await expect(page).toHaveURL(/\/palace$/);
   await expect(page).toHaveTitle("Palace");
+  await expect(nav.getByRole("button", { name: "Palace", exact: true })).toHaveAttribute("aria-current", "page");
   const main = page.getByRole("main");
   await expect(main.locator("header")).toHaveText("");
   await expect(main.getByRole("heading")).toHaveCount(0);
@@ -263,6 +264,9 @@ test("the Palace page's drag turns the camera within its limits, the wheel zooms
   await page.mouse.move(start.x - 60, start.y, { steps: 4 });
   await page.mouse.up();
   await expect.poll(async () => (await camera())!.yaw).toBeGreaterThan(5);
+  // The release is not a click on the empty room: the camera keeps the look rather than flying back.
+  await page.waitForTimeout(700);
+  expect((await camera())!.yaw).toBeGreaterThan(5);
   // A long drag stops at 20° of yaw and 40° of pitch.
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
@@ -286,6 +290,42 @@ test("the Palace page's drag turns the camera within its limits, the wheel zooms
   await page.mouse.up();
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Activity", exact: true }).click();
   await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
+});
+
+test("a click on a terminal or a resize handle over a room object stays in the UI: no card, no navigation", async ({ page }) => {
+  await setupPortal(page, {
+    webgl: true,
+    sessions: [approvalSession, workingSession, finishedSession],
+    // Stacked panes: the top one's terminal and the separator under it run across the middle of the room.
+    workspace: workspaceOf([tab("t1", split("x1", "column", [pane("p1", "s1"), pane("p2", "s2")]))]),
+  });
+  await page.goto("/tabs/t1?pane=p1");
+  const p1 = page.locator('[data-pane="p1"]');
+  await p1.getByRole("button", { name: "Show terminal" }).click();
+  await expect(p1.getByRole("region", { name: "Terminal" })).toBeVisible();
+  const scene = page.locator(".room-scene");
+  await pointOf(scene, "robot:s1");
+  const url = page.url();
+  // Every reported object whose screen point lies under the terminal or a pane separator.
+  const covered = await page.evaluate((points) => {
+    // Over the empty part of either, not one of the terminal's own controls (a click there would change the layout).
+    const under = (x: number, y: number) => {
+      const hit = document.elementFromPoint(x, y);
+      return hit && !hit.closest("button, a, input, [role=tab]") ? hit.closest('section[aria-label="Terminal"], [role=separator]') : null;
+    };
+    return Object.entries(points)
+      .filter(([, [x, y]]) => under(x, y) !== null)
+      .map(([key, point]) => ({ key, point }));
+  }, (await live(scene)).points ?? {});
+  expect(covered.length, "an object lies under the terminal or a separator").toBeGreaterThan(0);
+  for (const { point } of covered) {
+    await page.mouse.move(point[0], point[1]);
+    await page.mouse.click(point[0], point[1]);
+  }
+  await page.waitForTimeout(400);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect(page.locator("[data-room-card]")).toHaveCount(0);
+  expect(page.url()).toBe(url);
 });
 
 /** The accumulated objects and milestone furniture, as `data-room` reports them. */

@@ -111,10 +111,10 @@ export function JsonBlock({ value, label, className = "" }: { value: unknown; la
   );
 }
 
-/** The scrolling column every non-chat view sits in. */
+/** The scrolling column every non-chat view sits in; the room shows through its empty margins (docs/PALACE.md, Hover and click). */
 export function ViewBody({ children, label, wide = false }: { children: ReactNode; label: string; wide?: boolean }) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" role="region" aria-label={label}>
+    <div data-room-passthrough className="min-h-0 flex-1 overflow-y-auto" role="region" aria-label={label}>
       <div className={`mx-auto w-full ${wide ? "max-w-[1100px]" : "max-w-[880px]"} space-y-8 px-5 py-6 pb-16 max-sm:px-3`}>
         {children}
       </div>
