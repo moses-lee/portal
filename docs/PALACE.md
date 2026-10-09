@@ -1,6 +1,6 @@
 # Palace: the room behind Portal
 
-Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08; all five phases built on branch `background` by 2026-10-09 (section As built), not merged. Revision 2 (a camera the user cannot move, the sketch before the room) agreed in outline on 2026-10-09, spec below for review, not built.** Still owed: the Safari timeline on an M1 and an iPhone 13. Research behind it: `docs/PALACE-RESEARCH.md`.
+Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08; all five phases built on branch `background` by 2026-10-09 (section As built), not merged. Revision 2 (a camera the user cannot move, the sketch before the room) agreed in outline on 2026-10-09; its step 1, the camera, built on 2026-10-09 (As built, Revision 2, step 1), the placeholders and the snapshot not yet.** Still owed: the Safari timeline on an M1 and an iPhone 13. Research behind it: `docs/PALACE-RESEARCH.md`.
 
 ## Why
 
@@ -258,16 +258,16 @@ apps/web/src/room/
   RoomBackground.tsx        // replaces components/RoomBackground.tsx; mounts the canvas lazily, owns the fallbacks
   RoomCanvas.tsx            // 'use client', next/dynamic with ssr: false; the R3F Canvas, loop, resize, DPR
   loop.ts                   // capped rAF loop, hidden/reduced-motion/low-power handling
-  layout.ts                 // UI layout registry → setViewOffset; passthrough elements
+  layout.ts                 // the fitted pose (framePose), projectPoint, the view offset; UI layout registry → setViewOffset
   pointer.ts                // document pointer listener, raycast, hover and click dispatch
   RoomHoverCard.tsx         // the DOM card
-  PalaceView.tsx            // the /palace view: the see-through area over the shared canvas (Revision 2: no camera controls)
+  PalaceView.tsx            // the /palace view: the see-through area over the shared canvas (Revision 2: no camera controls; look.ts is gone)
   sketch.ts                 // Revision 2: the room's edges as 3D polylines, projected with the camera's maths to SVG paths
   Sketch.tsx                // Revision 2: the inline SVG shown before the room draws, after a lost context, and as the fallback
   snapshot.ts               // Revision 2: the last drawn frame, kept in IndexedDB when the page is hidden, shown on the next visit until the room draws
   useRoomState.ts           // GET /api/room + stream event, with the client-side sun clock
   scene/
-    Shell.tsx Sun.tsx Sky.tsx Window.tsx Weather.tsx Lamp.tsx Hearth.tsx Kettle.tsx MailTray.tsx
+    Camera.tsx (the fitted pose and view offset, no per-frame work) Shell.tsx Sun.tsx Sky.tsx Window.tsx Weather.tsx Lamp.tsx Hearth.tsx Kettle.tsx MailTray.tsx
     Robots.tsx Books.tsx Corkboard.tsx Plants.tsx Frames.tsx Keys.tsx Tree.tsx Milestones.tsx
     materials.ts (palette, shared materials) kit.ts (GLB loader, node map)
   frost/
@@ -556,3 +556,18 @@ Server side, from a third review (`5ec383b`):
 - **Forced refresh.** A "Refresh" from Settings arriving during a background lookup was answered by that lookup; a forced one is now queued after it.
 - **Stream.** A census failure no longer fails the portal stream's opening: the `room` opening event is left out and logged at warn.
 - **Shutdown** waits for a running recount before the pool closes, so a milestone saved to the row always gets its Activity entry.
+
+### Revision 2, step 1: camera
+
+2026-10-09 (`e0f59fd`). Built as written in sections Camera and Revision 2, with these differences and calls:
+
+- **The phone's numbers differ from the spec's prose, which was worked out on the box to the key rack.** The spec's 28.2 m at 390 × 844, the window at 299 to 369 px and the band at 288 to 556 px are what a portrait box to x 2.8 gives (the fit reproduces 28.24 m and a 106 px window for it). The table's box, to the hearth's opening at 2.3, is what was built: 26.02 m, the window 115 px wide (x 111 to 226, y 290 to 366), the box's band 278 to 566 px down the screen, the frame's centre at 422. The window is above the frame's centre, as the spec says, so the strip's anchor is needed all the same.
+- **Measured window width** (the window frame's outer edges, x −2.25 and −0.15 on the glass, projected with the pose; the screenshots agree to within a few pixels read by eye): **210 px at 1440 × 900** (209.5; the first version's 194) and **115 px at 390 × 844** (114.9; the first version's 145). Moses's to retune after a look on his phone.
+- **The other viewports**: 1280 × 720 and 844 × 390 take the 1440 × 900 pose (12.9 m, aspect past 1.59); 820 × 1180 is in the blend at 17.52 m, yaw 14°, pitch 30° (its aspect 0.69 is portrait). Seen in the screenshots: at 820 × 1180 the desktop layout's 280 px sidebar covers a third of the window, so with the frame moved 140 px right the bookcases sit under the sidebar and the hearth is cut by the right edge. That is the rule (the fit uses the full window, not the open region) and is left for Moses's look.
+- **Shared maths in `layout.ts`**: `ANCHOR_POSES` holds the two anchors with their boxes, `frameSpec(aspect)` the blended angles and box (Camera.tsx reports the box from it), `boxCorners`, `FRAME_PAD` (0.06), `FOV` (30) and `LANDSCAPE_ASPECT`. `layoutOffset(layout, pose)` picks the anchor (the window's centre under a `focus` cover, the frame's centre otherwise) and returns `viewOffset(...)`, so the sketch and the snapshot will take the camera's offset from the same function. `projectPoint` returns the depth `z` with `x` and `y`, for the sketch's near-plane check.
+- **`WINDOW_CENTRE` moved to `layout.ts`** as a plain `[x, y, z]` (pure, for the fit and its tests); `scene/Window.tsx` builds its `Vector3` from it. `WindowView` still follows the camera in a `useFrame`: cheap, and correct for any pose.
+- **The report**: `offset` is rounded to 0.1 px like `box`. Camera.tsx also sets `camera.aspect` itself before `setViewOffset`, rather than relying on R3F's resize having run first.
+- **What went with the look-around beyond the spec's list**: `RoomHit` loses its `centre` and `radius` (only the framing flight used them), so `pickRoom` no longer computes a bounding sphere per pick; `CameraRig` loses its `reducedMotion` prop. Escape still puts a card away, and a click on the empty room still hides one, on every page. `PalaceView` keeps `select-none`; `touch-none` went with the gestures.
+- **Tests.** Gone, as listed: two in `room-layout.test.mjs`, the four look tests in `room-live.test.mjs`, two in `room-pointer.test.mjs`, and the drag test in `room.spec.ts`. Added to `room-layout.test.mjs`: the fit at the six viewports (inside the pad to 1e-6 px, centred within 0.01 px, touching the pad on both sides of one axis within 0.01 px), the right panel's offset of 160 px with the pose unchanged and the strip's window at (195, 36) within 0.01 px, the anchors' angles at and beyond 0.8 and 1.4 with the blend's midpoint, the continuity sweep from 0.45 to 2.5, and the agreement with a three.js `PerspectiveCamera` within 0.01 px at the six viewports (box corners and the window's centre, all in front of the near plane); the view offset test gained an anchor case. Added to `room.spec.ts`: "a drag and a wheel on the Palace page leave the camera where it is" (also: the page's cursor is `auto`), the fitted frame on the Palace page at 1440 × 900 and 390 × 844 (two tests sharing one check), and the phone strip test now also checks that `points["window:window"]` is within 2 px of the strip's centre. Web unit tests 207, UI suite 172, all passing.
+- **Screenshots** on the dev instance (3200 against 3201, the server's real location, New York, and weather, clear), taken 2026-10-09 around 13:10 EDT with headless Chromium on SwiftShader: day is the real clock, night the page's clock set to 23:00 EDT the same day. `/tmp/palace-shots/rev2-camera-<viewport>-<page>-<day|night>.png` for 1440x900, 1280x720, 820x1180, 390x844 and 844x390 on `palace` and `home`; `1440x900-right` is Portal home with the 320 px tracked panel open (the plain 1440x900 home shot has it collapsed; the Palace page has no right panel). The phone strip is from the UI fixtures (no pane is open on the dev instance at that size): `rev2-camera-390x844-strip-fixture-day.png`. Script: `/tmp/palace-shots/rev2-shots.mjs`.
+
