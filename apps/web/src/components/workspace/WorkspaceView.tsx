@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { Tabs } from "radix-ui";
 import type { PaneNode, Tab } from "@portal/contracts/workspace";
 import { tabPanes } from "@portal/shared/workspace";
-import RoomBackground from "@/room/RoomBackground";
 import SessionPane, { MissingConversation, type InitialSend, type StartPaneProps } from "../SessionPane";
 import { useSessions } from "../SessionsProvider";
 import { useMediaQuery } from "../useMediaQuery";
@@ -34,6 +33,8 @@ export type WorkspaceViewProps = {
   initialSend: InitialSend;
   onInitialSendHandled: (sessionId: string) => void;
   onSessionDeleted: (sessionId: string) => void;
+  /** The focused pane's agent, for the room the shell mounts behind the view. */
+  onRoomActivity?: (activity: AgentActivity) => void;
 };
 
 /**
@@ -58,6 +59,7 @@ export default function WorkspaceView({
   initialSend,
   onInitialSendHandled,
   onSessionDeleted,
+  onRoomActivity,
 }: WorkspaceViewProps) {
   const searchParams = useSearchParams();
   const paneParam = searchParams.get("pane");
@@ -114,6 +116,7 @@ export default function WorkspaceView({
     setActivities((prev) => (prev.get(key) === activity ? prev : new Map(prev).set(key, activity)));
   }, []);
   const roomActivity = activities.get(focusedPaneId ?? "start") ?? "idle";
+  useEffect(() => onRoomActivity?.(roomActivity), [onRoomActivity, roomActivity]);
 
   const titleOf = useCallback((t: Tab) => tabTitle(t, sessions), [sessions]);
   const paneTitleOf = useCallback((p: PaneNode) => paneTitle(p, sessions), [sessions]);
@@ -207,7 +210,6 @@ export default function WorkspaceView({
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <RoomBackground activity={roomActivity} />
       {error && (
         <p role="alert" className="flex items-center gap-3 border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
           <span className="min-w-0 flex-1">{error}</span>

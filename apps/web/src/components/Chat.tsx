@@ -6,6 +6,9 @@ import dynamic from "next/dynamic";
 import { useMediaQuery } from "./useMediaQuery";
 import { useStableCallback } from "@/hooks/use-stable-callback";
 import { RoomHostProvider } from "@/room/host";
+import RoomBackground from "@/room/RoomBackground";
+import type { AgentActivity } from "@/lib/agent-activity";
+import { portalActivity } from "@/lib/orchestrator/format";
 import { usePreference } from "./usePreference";
 import { clearSubmittedDraft, startKey, writeDraft } from "@/lib/drafts";
 import {
@@ -19,7 +22,7 @@ import TerminalPage from "./TerminalPage";
 import PortalPage from "./PortalPage";
 import WorkspaceView from "./workspace/WorkspaceView";
 import { useWorkspaceActions } from "./workspace/useWorkspaceActions";
-import { PortalLiveProvider } from "./portal/PortalLive";
+import { PortalLiveProvider, usePortalLive } from "./portal/PortalLive";
 import { SessionsProvider, useSessions } from "./SessionsProvider";
 import { WorkspaceProvider, useWorkspace } from "./WorkspaceProvider";
 import { useSessionPins } from "./usePins";
@@ -120,6 +123,16 @@ export default function Chat() {
 }
 
 /** The app shell: sidebar, project selection, and the workspace (or Portal, or the terminal) named by the URL. */
+/**
+ * The room behind Portal and the workspace (docs/PALACE.md), mounted once by the shell so moving
+ * between a Portal page and a session keeps the canvas: Portal's activity on its pages, the focused
+ * pane's agent in the workspace, and the Palace page's flag (its look-around camera and no veil).
+ */
+function ShellRoom({ portal, palace, workspaceActivity }: { portal: boolean; palace: boolean; workspaceActivity: AgentActivity }) {
+  const { status, approvals } = usePortalLive();
+  return <RoomBackground activity={portal ? portalActivity(status, approvals) : workspaceActivity} palace={palace} />;
+}
+
 function ChatShell() {
   const pathname = usePathname();
   /**
@@ -138,6 +151,8 @@ function ChatShell() {
   /** Portal, the orchestrator: the home (`/`) and its views, outside every project and session. */
   const portalOpen = isPortalPath(pathname ?? "/");
   const portalView: PortalView | null = portalOpen ? portalLocation(pathname ?? "/").view : null;
+  /** The focused pane's agent, as the workspace reports it, for the room. */
+  const [workspaceActivity, setWorkspaceActivity] = useState<AgentActivity>("idle");
   const {
     agents,
     defaultAgentId,
@@ -875,6 +890,7 @@ function ChatShell() {
           onOpenSession={searchOpenSession}
           onOpenProject={searchOpenProject}
         />
+        {(portalOpen || route) && <ShellRoom portal={portalOpen} palace={portalView === "palace"} workspaceActivity={workspaceActivity} />}
         {portalOpen ? (
           <PortalPage
             pathname={pathname ?? "/"}
@@ -896,6 +912,7 @@ function ChatShell() {
               initialSend={initialSend}
               onInitialSendHandled={initialSendHandled}
               onSessionDeleted={sessionDeleted}
+              onRoomActivity={setWorkspaceActivity}
             />
           </Suspense>
         ) : null}

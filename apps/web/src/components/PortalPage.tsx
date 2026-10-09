@@ -14,9 +14,7 @@ import { TrackedToggle, trackedTitle } from "./tracked/parts";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
 import PalaceView from "@/room/PalaceView";
-import RoomBackground from "@/room/RoomBackground";
 import { readDraft, writeDraft } from "@/lib/drafts";
-import { portalActivity } from "@/lib/orchestrator/format";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import { portalLocation, portalPathKeepingPanel, type PortalLocation, type PortalView } from "@/lib/session-routes";
 import type { SessionSummary } from "@/lib/types";
@@ -56,7 +54,7 @@ const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewL
  * Needs you the items waiting on the user, Watches the intents (watches), upcoming jobs, and recent runs, Activity the audit log, Memory the curated
  * records, System what the model is shown (CORE.md, the world) plus approval grants, and Palace
  * the room alone (docs/PALACE.md). The sidebar switches between them and the URL says which, so
- * reloads and links land in place. The room sits behind every view and follows the real sun.
+ * reloads and links land in place. The room (mounted by the shell, `Chat`) sits behind every view and follows the real sun.
  */
 export default function PortalPage({
   pathname,
@@ -73,7 +71,7 @@ export default function PortalPage({
   onOpenSession: (sessionId: string) => void;
 }) {
   const live = usePortalLive();
-  const { status, threads, putItem, requestApproval, items, approvals } = live;
+  const { status, threads, putItem, requestApproval, items } = live;
   const location = useMemo(() => portalLocation(pathname), [pathname]);
   const view = location.view;
   /** Switch views; the tracked panel's `?session=` comes along unless `to` sets its own. */
@@ -198,7 +196,6 @@ export default function PortalPage({
   return (
     <>
       <main className="flex min-w-0 flex-1 flex-col">
-        <RoomBackground activity={portalActivity(status, approvals)} palace={palace} />
         {palace ? (
           <header data-palace-header className="workspace-header !border-transparent">
             <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
