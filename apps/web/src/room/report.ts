@@ -1,6 +1,6 @@
 /**
  * What the canvas reports about itself for tests and measurement, merged into the `.room-scene`
- * element's `data-room` summary by `RoomBackground`: the camera's look (`camera`) and the screen
+ * element's `data-room` summary by `RoomBackground`: the camera's pose and frame (`camera`) and the screen
  * points of the interactive objects (`points`). A key is written only when its value changed, and
  * the merge goes straight to the DOM, so a report never re-renders React.
  */

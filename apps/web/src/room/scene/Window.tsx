@@ -3,18 +3,18 @@
 import { useRef, type ReactNode } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Vector3, type Group } from "three";
-import { ROOM } from "../layout";
+import { ROOM, WINDOW_CENTRE } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { matteMaterial, palette } from "./materials";
 
-/** The window opening's centre, on the glass. */
-export const WINDOW_CENTRE = new Vector3(ROOM.window.x, (ROOM.window.sill + ROOM.window.top) / 2, ROOM.back - 0.12);
+/** The window opening's centre, on the glass (`WINDOW_CENTRE`). */
+const GLASS_CENTRE = new Vector3(...WINDOW_CENTRE);
 
 const toWindow = new Vector3();
 
 /**
  * A group that sits `distance` behind the window along the camera's line of sight through it, facing
- * the camera, so its children (clouds, the moon) stay framed by the window from any camera pose.
+ * the camera, so its children (clouds, the moon) stay framed by the window from every fitted pose.
  * Children are laid out in the group's plane: +x right and +y up as seen through the glass.
  */
 export function WindowView({ distance, children }: { distance: number; children: ReactNode }) {
@@ -22,8 +22,8 @@ export function WindowView({ distance, children }: { distance: number; children:
   useFrame(({ camera }) => {
     const node = group.current;
     if (!node) return;
-    toWindow.copy(WINDOW_CENTRE).sub(camera.position).normalize();
-    node.position.copy(WINDOW_CENTRE).addScaledVector(toWindow, distance);
+    toWindow.copy(GLASS_CENTRE).sub(camera.position).normalize();
+    node.position.copy(GLASS_CENTRE).addScaledVector(toWindow, distance);
     node.quaternion.copy(camera.quaternion);
   });
   return <group ref={group}>{children}</group>;

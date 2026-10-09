@@ -134,7 +134,7 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
       <Loop reducedMotion={reducedMotion} revision={`${clock.at}:${condition}:${liveKey}:${growthKey}`} onLoop={onLoop} />
       <color attach="background" args={["#1d1916"]} />
       <fogExp2 attach="fog" args={["#8b8f94", 0]} />
-      <CameraRig reducedMotion={reducedMotion} onChange={requestFrame} />
+      <CameraRig onChange={requestFrame} />
       <Sky clock={clock} condition={condition} />
       <Sun clock={clock} condition={condition} />
       <Weather weather={weather} clock={clock} reducedMotion={reducedMotion} bay={shown.has("bay-window")} />

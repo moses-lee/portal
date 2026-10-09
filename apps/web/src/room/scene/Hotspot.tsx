@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import { Box3, BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, Object3D, Raycaster, Sphere, Vector2, Vector3, type Camera, type Intersection, type Mesh } from "three";
+import { BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, Object3D, Raycaster, Vector2, Vector3, type Camera, type Intersection, type Mesh } from "three";
 import type { RoomObjectKind, RoomTarget } from "../live";
 import { setRoomPicker, type RoomHit } from "../pointer";
 import { setDrawCount } from "./materials";
@@ -101,13 +101,9 @@ const raycaster = new Raycaster();
 const instance = new Matrix4();
 const ndc = new Vector2();
 const hits: Intersection[] = [];
-const box = new Box3();
-const sphere = new Sphere();
 const projected = new Vector3();
-const ORIGIN = new Vector3(0, 0, 0);
-const UNIT = new Vector3(1, 1, 1);
 
-/** The nearest hotspot under the client point, with its world-space bounding sphere (for framing it). */
+/** The nearest hotspot under the client point (by priority, then distance). */
 export function pickRoom(camera: Camera, canvas: HTMLCanvasElement, clientX: number, clientY: number): RoomHit | null {
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
@@ -122,13 +118,7 @@ export function pickRoom(camera: Camera, canvas: HTMLCanvasElement, clientX: num
   hits.length = 0;
   const data = hit.object.userData as HotspotData;
   const target = hit.instanceId !== undefined ? data.roomTargets?.[hit.instanceId] : data.room;
-  if (!target) return null;
-  if (hit.instanceId !== undefined && hit.object instanceof InstancedMesh) {
-    hit.object.getMatrixAt(hit.instanceId, instance);
-    box.setFromCenterAndSize(ORIGIN, UNIT).applyMatrix4(instance).applyMatrix4(hit.object.matrixWorld);
-    box.getBoundingSphere(sphere);
-  } else box.setFromObject(hit.object).getBoundingSphere(sphere);
-  return { kind: target.kind, id: target.id, centre: [sphere.center.x, sphere.center.y, sphere.center.z], radius: sphere.radius };
+  return target ? { kind: target.kind, id: target.id } : null;
 }
 
 const POINTS_MS = 400;

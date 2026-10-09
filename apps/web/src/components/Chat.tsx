@@ -126,7 +126,7 @@ export default function Chat() {
 /**
  * The room behind Portal and the workspace (docs/PALACE.md), mounted once by the shell so moving
  * between a Portal page and a session keeps the canvas: Portal's activity on its pages, the focused
- * pane's agent in the workspace, and the Palace page's flag (its look-around camera and no veil).
+ * pane's agent in the workspace, and the Palace page's flag (no veil, and a clicked robot waves).
  */
 function ShellRoom({ portal, palace, workspaceActivity }: { portal: boolean; palace: boolean; workspaceActivity: AgentActivity }) {
   const { status, approvals } = usePortalLive();

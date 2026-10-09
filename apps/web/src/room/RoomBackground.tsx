@@ -156,7 +156,7 @@ function openView(view: PortalView) {
  * clicks through. `palace` is the Palace page, where a clicked robot waves first.
  * The fixed `.room-scene` element carries what tests and CSS read: `data-scene` (day or night,
  * from the sun's altitude), `data-activity`, `data-renderer`, and a `data-room` JSON summary (the
- * live and accumulated objects, and what the canvas reports: the camera's look, the objects' screen
+ * live and accumulated objects, and what the canvas reports: the camera's pose and frame, the objects' screen
  * points, and the milestone in the crate).
  */
 export default function RoomBackground({ activity, palace = false }: { activity: AgentActivity; palace?: boolean }) {

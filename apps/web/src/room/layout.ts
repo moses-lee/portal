@@ -1,8 +1,10 @@
 /**
- * Where the room shows (docs/PALACE.md, Camera): UI parts report the rectangle they cover, and the
- * camera's `setViewOffset` moves the room's centre of interest into the region they leave open.
+ * Where the room shows (docs/PALACE.md, Camera): the camera's pose is fitted to the room for the
+ * viewport's aspect (`framePose`), UI parts report the rectangle they cover, and the camera's
+ * `setViewOffset` moves the fitted frame into the region they leave open. Nothing the user does
+ * moves the camera.
  *
- * The maths (`interestPoint`, `viewOffset`, `cameraPose`) is pure and unit-tested; the registry
+ * The maths (`interestPoint`, `viewOffset`, `framePose`, `projectPoint`) is pure and unit-tested; the registry
  * below it measures the reported elements only when one of them resizes or the window does, never
  * per frame. Parts report through `roomCover(kind)` as a callback ref on their own element, or
  * `useRoomCover(kind)` (`useRoomCover.ts`) where the ref passes through another component's ref
@@ -12,7 +14,7 @@
  * - `right`: covers it from the right (the GitHub inspector, the tracked-sessions panel).
  * - `column`: a reading column in the open region (a conversation); the room aims for the wider
  *   margin beside it when that margin is wide enough to show something.
- * - `focus`: a see-through window onto the room (the phone strip); the room centres on it.
+ * - `focus`: a see-through window onto the room (the phone strip); the room's window centres in it.
  */
 
 export type Rect = { left: number; top: number; width: number; height: number };
@@ -27,7 +29,7 @@ export type RoomLayout = {
 /** A margin beside a column narrower than this is not worth aiming at; the room centres on the open region instead. */
 export const MIN_MARGIN = 220;
 
-/** Below this aspect (width / height) the camera pulls back and rises, with the back wall as the hero. */
+/** At and below this aspect (width / height) the portrait pose: higher, squarer to the back wall, framing the window to the hearth. */
 export const PORTRAIT_ASPECT = 0.8;
 
 const visible = (rect: Rect) => rect.width > 0 && rect.height > 0;
@@ -67,11 +69,17 @@ export function interestPoint(layout: RoomLayout): { x: number; y: number } {
 export type ViewOffset = { fullWidth: number; fullHeight: number; x: number; y: number; width: number; height: number };
 
 /**
- * The arguments for `camera.setViewOffset` that put the projection's centre at `point`: the view
- * is the full frame, shifted so the frame's centre lands on the point.
+ * The arguments for `camera.setViewOffset` that draw the fitted frame's screen point `anchor` (CSS
+ * pixels, by default the frame's centre) at the viewport's `point`: a translation of the full
+ * frame, nothing cropped or scaled.
  */
-export function viewOffset(width: number, height: number, point: { x: number; y: number }): ViewOffset {
-  return { fullWidth: width, fullHeight: height, x: width / 2 - point.x, y: height / 2 - point.y, width, height };
+export function viewOffset(
+  width: number,
+  height: number,
+  point: { x: number; y: number },
+  anchor: { x: number; y: number } = { x: width / 2, y: height / 2 },
+): ViewOffset {
+  return { fullWidth: width, fullHeight: height, x: anchor.x - point.x, y: anchor.y - point.y, width, height };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -90,6 +98,11 @@ export const ROOM = {
   hearth: { x: 1.55, width: 1.5, depth: 0.45 },
 } as const;
 
+export type Point3 = readonly [number, number, number];
+
+/** The window opening's centre, on the glass: where the phone strip aims. */
+export const WINDOW_CENTRE: Point3 = [ROOM.window.x, (ROOM.window.sill + ROOM.window.top) / 2, ROOM.back - 0.12];
+
 export type CameraPose = {
   /** Radians: yaw turns the camera to the right of the room's axis, pitch looks down. */
   yaw: number;
@@ -100,40 +113,160 @@ export type CameraPose = {
   target: [number, number, number];
 };
 
+/** An axis-aligned box in room metres. */
+export type HeroBox = { min: Point3; max: Point3 };
+
 const DEGREE = Math.PI / 180;
 
+/** The vertical field of view (degrees) every pose uses: the Canvas's `CAMERA` in `RoomCanvas.tsx`. */
+export const FOV = 30;
+
+/** At and above this aspect (width / height) the landscape pose; at and below `PORTRAIT_ASPECT` the portrait one; blended between. */
+export const LANDSCAPE_ASPECT = 1.4;
+
+/** The share of the viewport left free on every side of the fitted hero box. */
+export const FRAME_PAD = 0.06;
+
 /**
- * The camera for a viewport aspect: a three-quarter view from the missing fourth wall (yaw ~25°,
- * pitch ~25°, a long lens from far off). Below `PORTRAIT_ASPECT` it pulls back, rises, turns more
- * square to the back wall and aims at it, so a phone crops the same room instead of re-laying it.
- * With `strip` (a `focus` cover: the phone's room strip) it aims at the window instead.
+ * The two anchor poses (docs/PALACE.md, Camera): the angles and the hero box the fit frames. The
+ * landscape box runs from the shelving's wall to the door casing and from the back wall to the
+ * rug's front edge; the portrait one from the inside sill to the hearth's opening, back wall to
+ * just before the robots' bench.
  */
-export function cameraPose(aspect: number, strip = false): CameraPose {
-  if (aspect < PORTRAIT_ASPECT) {
-    // The phone strip is 72 px tall: it frames the window (sky, weather, the tree) over the desk.
-    if (strip) return { yaw: 14 * DEGREE, pitch: 31 * DEGREE, distance: 21, fov: 30, target: [-0.6, 1.85, -2.8] };
-    return { yaw: 14 * DEGREE, pitch: 35 * DEGREE, distance: 21, fov: 30, target: [-0.2, 1.05, -1.6] };
+export const ANCHOR_POSES = {
+  landscape: { yaw: 25 * DEGREE, pitch: 25 * DEGREE, box: { min: [-4, 0, -3], max: [3.9, 3.15, 1.75] } },
+  portrait: { yaw: 14 * DEGREE, pitch: 30 * DEGREE, box: { min: [-2.4, 0, -3], max: [2.3, 2.6, 1.0] } },
+} as const satisfies Record<string, { yaw: number; pitch: number; box: HeroBox }>;
+
+/** How far `aspect` lies from the portrait anchor (0) to the landscape one (1). */
+function blendOf(aspect: number): number {
+  return Math.min(1, Math.max(0, (aspect - PORTRAIT_ASPECT) / (LANDSCAPE_ASPECT - PORTRAIT_ASPECT)));
+}
+
+const mix = (portrait: number, landscape: number, t: number) => portrait + t * (landscape - portrait);
+
+/** The yaw, pitch and hero box for a viewport aspect: the anchors', blended between 0.8 and 1.4. */
+export function frameSpec(aspect: number): { yaw: number; pitch: number; box: HeroBox } {
+  const t = blendOf(aspect);
+  const { landscape: l, portrait: p } = ANCHOR_POSES;
+  const edge = (side: "min" | "max") => [0, 1, 2].map((axis) => mix(p.box[side][axis], l.box[side][axis], t)) as unknown as Point3;
+  return { yaw: mix(p.yaw, l.yaw, t), pitch: mix(p.pitch, l.pitch, t), box: { min: edge("min"), max: edge("max") } };
+}
+
+type Basis = { f: Point3; r: Point3; u: Point3 };
+
+/** The camera's axes for a yaw and pitch: `f` from the target to the camera, `r` its right, `u` its up. */
+function basis(yaw: number, pitch: number): Basis {
+  const [sy, cy, sp, cp] = [Math.sin(yaw), Math.cos(yaw), Math.sin(pitch), Math.cos(pitch)];
+  return { f: [sy * cp, sp, cy * cp], r: [cy, 0, -sy], u: [-sp * sy, cp, -sp * cy] };
+}
+
+const dot = (a: Point3, b: Point3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** The box's eight corners. */
+export function boxCorners(box: HeroBox): Point3[] {
+  const corners: Point3[] = [];
+  for (const x of [box.min[0], box.max[0]]) for (const y of [box.min[1], box.max[1]]) for (const z of [box.min[2], box.max[2]]) corners.push([x, y, z]);
+  return corners;
+}
+
+/** The root of `g`, continuous and decreasing on [lo, hi] with g(lo) ≥ 0 ≥ g(hi), by 50 halvings. */
+function decreasingRoot(g: (value: number) => number, lo: number, hi: number): number {
+  for (let step = 0; step < 50; step++) {
+    const mid = (lo + hi) / 2;
+    if (g(mid) > 0) lo = mid;
+    else hi = mid;
   }
-  return { yaw: 25 * DEGREE, pitch: 25 * DEGREE, distance: 15, fov: 30, target: [-0.6, 1.15, -1.1] };
+  return (lo + hi) / 2;
 }
 
-/** The camera's position for a pose, after the drift and parallax offsets (radians). */
-export function cameraPosition(pose: CameraPose, yawOffset = 0, pitchOffset = 0): [number, number, number] {
-  const yaw = pose.yaw + yawOffset;
-  const pitch = pose.pitch + pitchOffset;
-  const flat = Math.cos(pitch) * pose.distance;
-  return [pose.target[0] + Math.sin(yaw) * flat, pose.target[1] + Math.sin(pitch) * pose.distance, pose.target[2] + Math.cos(yaw) * flat];
+/**
+ * The camera for a viewport aspect (docs/PALACE.md, Camera): the blended angles, and the smallest
+ * distance and the target that put the blended hero box inside the frame with `FRAME_PAD` free on
+ * every side, centred. On the axis that sets the distance the box touches the pad on both sides;
+ * on the other it has equal margins. Pure; one pass, no iteration beyond the centring's bisection.
+ */
+export function framePose(aspect: number): CameraPose {
+  const { yaw, pitch, box } = frameSpec(aspect);
+  const { f, r, u } = basis(yaw, pitch);
+  const centre: Point3 = [0, 1, 2].map((axis) => (box.min[axis] + box.max[axis]) / 2) as unknown as Point3;
+  const corners = boxCorners(box).map((corner) => {
+    const v: Point3 = [corner[0] - centre[0], corner[1] - centre[1], corner[2] - centre[2]];
+    return { x: dot(v, r), y: dot(v, u), w: dot(v, f) };
+  });
+  const tV = Math.tan((FOV / 2) * DEGREE);
+  const tH = tV * aspect;
+  const s = 1 - 2 * FRAME_PAD;
+
+  // 1. The distance: the smallest that lets some shift fit every pair of corners, on each axis.
+  let d = 0;
+  for (const i of corners) {
+    for (const j of corners) {
+      const w = (i.w + j.w) / 2;
+      d = Math.max(d, w + (i.x - j.x) / (2 * s * tH), w + (i.y - j.y) / (2 * s * tV));
+    }
+  }
+
+  // 2. The centring: the shift along r (and u) that gives the projected box equal margins.
+  const centred = (axis: "x" | "y", t: number) => {
+    const g = (shift: number) => {
+      let max = -Infinity;
+      let min = Infinity;
+      for (const corner of corners) {
+        const projected = (corner[axis] - shift) / ((d - corner.w) * t);
+        if (projected > max) max = projected;
+        if (projected < min) min = projected;
+      }
+      return max + min;
+    };
+    const values = corners.map((corner) => corner[axis]);
+    return decreasingRoot(g, Math.min(...values), Math.max(...values));
+  };
+  const a = centred("x", tH);
+  const b = centred("y", tV);
+  const target = [0, 1, 2].map((axis) => centre[axis] + a * r[axis] + b * u[axis]) as [number, number, number];
+  return { yaw, pitch, distance: d, fov: FOV, target };
 }
 
-/** The slow drift: 1.5° of yaw end to end over a 60 s sine. */
-export function driftYaw(seconds: number): number {
-  return 0.75 * DEGREE * Math.sin((seconds / 60) * Math.PI * 2);
+/** The camera's position for a pose: `distance` from the target, back along the pose's yaw and pitch. */
+export function cameraPosition(pose: CameraPose): [number, number, number] {
+  const { f } = basis(pose.yaw, pose.pitch);
+  return [pose.target[0] + f[0] * pose.distance, pose.target[1] + f[1] * pose.distance, pose.target[2] + f[2] * pose.distance];
 }
 
-/** The pointer parallax for a pointer at (`nx`, `ny`) in -1..1 from the viewport centre: at most 0.5° each way. */
-export function parallax(nx: number, ny: number): { yaw: number; pitch: number } {
-  const clamp = (value: number) => Math.max(-1, Math.min(1, value));
-  return { yaw: -0.5 * DEGREE * clamp(nx), pitch: 0.5 * DEGREE * clamp(ny) };
+/**
+ * Where `point` (room metres) lands on a `size` viewport (CSS pixels) seen from `pose`, with the
+ * view offset `offset` applied (none by default); `z` is its depth in front of the camera. The
+ * camera's own maths without three.js, shared with the sketch.
+ */
+export function projectPoint(
+  pose: CameraPose,
+  point: Point3,
+  size: { width: number; height: number },
+  offset: { x: number; y: number } = { x: 0, y: 0 },
+): { x: number; y: number; z: number } {
+  const { f, r, u } = basis(pose.yaw, pose.pitch);
+  const v: Point3 = [point[0] - pose.target[0], point[1] - pose.target[1], point[2] - pose.target[2]];
+  const z = pose.distance - dot(v, f);
+  const tV = Math.tan((pose.fov / 2) * DEGREE);
+  const tH = tV * (size.width / size.height);
+  return {
+    x: (size.width / 2) * (1 + dot(v, r) / (z * tH)) - offset.x,
+    y: (size.height / 2) * (1 - dot(v, u) / (z * tV)) - offset.y,
+    z,
+  };
+}
+
+/**
+ * The view offset for a layout seen from `pose`: the fitted frame's centre drawn at the open
+ * region's point of interest, except under a `focus` cover (the phone strip), where the window's
+ * centre is drawn at the strip's centre.
+ */
+export function layoutOffset(layout: RoomLayout, pose: CameraPose): ViewOffset {
+  const size = { width: layout.width, height: layout.height };
+  const point = interestPoint(layout);
+  const focus = layout.covers.some((cover) => cover.kind === "focus" && visible(cover.rect));
+  return viewOffset(layout.width, layout.height, point, focus ? projectPoint(pose, WINDOW_CENTRE, size) : undefined);
 }
 
 // ---------------------------------------------------------------------------------------------

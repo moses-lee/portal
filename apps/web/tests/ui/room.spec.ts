@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { firstTitle, makeSession, milestone, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
 
@@ -141,7 +141,7 @@ test("without WebGL the frost panels keep their tint over the gradient", async (
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("the room strip above the pane opens the Palace page", async ({ page }, info) => {
+  test("the room strip above the pane shows the window and opens the Palace page", async ({ page }, info) => {
     await setupPortal(page, { webgl: true, workspace: workspaceOf([tab("t1", pane("p1", "s1"))]) });
     await page.goto("/tabs/t1");
     const strip = page.getByRole("link", { name: "Open the Palace" });
@@ -149,11 +149,20 @@ test.describe("on a phone", () => {
     const box = (await strip.boundingBox())!;
     expect(box.height).toBe(72);
     expect(box.y).toBe(0);
+    // The view offset draws the window's centre at the strip's centre.
+    const [wx, wy] = await pointOf(page.locator(".room-scene"), "window:window");
+    expect(Math.abs(wx - (box.x + box.width / 2))).toBeLessThanOrEqual(2);
+    expect(Math.abs(wy - (box.y + box.height / 2))).toBeLessThanOrEqual(2);
     await page.screenshot({ path: info.outputPath("phone-strip.png") });
     await strip.click();
     await expect(page).toHaveURL(/\/palace$/);
     await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Open the Palace" })).toHaveCount(0);
+  });
+
+  test("the Palace page frames the room's hero box, centred and filling the pad", async ({ page }, info) => {
+    await expectFittedFrame(page);
+    await page.screenshot({ path: info.outputPath("palace-fitted-phone.png") });
   });
 });
 
@@ -169,7 +178,7 @@ type LiveSummary = {
   hearth: string;
   kettle: boolean;
   points?: Record<string, [number, number]>;
-  camera?: { yaw: number; pitch: number; zoom: number; focus: number };
+  camera?: { yaw: number; pitch: number; distance: number; offset: [number, number]; box: [number, number, number, number] };
 };
 const live = async (room: Locator) => (await summary(room)) as unknown as LiveSummary;
 
@@ -214,7 +223,7 @@ test("live objects: a session waiting on approval puts its robot by the door, an
     .toEqual(["hearth:hearth", "kettle:kettle", "lamp:lamp", "mail:mail", "robot:s1", "robot:s2", "window:window"]);
   await page.screenshot({ path: info.outputPath("live-objects.png") });
 
-  // The tray's card says what is in it; a click opens Needs you (on the Palace page, once a double click is ruled out).
+  // The tray's card says what is in it; a click opens Needs you.
   const [mx, my] = await pointOf(scene, "mail:mail");
   await page.mouse.move(mx, my);
   const tooltip = page.getByRole("tooltip");
@@ -250,46 +259,49 @@ test("a robot's hover card names its session; on the Palace page a click makes i
   await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
 });
 
-test("the Palace page's drag turns the camera within its limits, the wheel zooms, and Escape flies back", async ({ page }) => {
+test("a drag and a wheel on the Palace page leave the camera where it is", async ({ page }) => {
   await setupPortal(page, { webgl: true });
   await page.goto("/palace");
   const scene = page.locator(".room-scene");
   const camera = async () => (await live(scene)).camera ?? null;
-  await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
+  await expect.poll(camera).not.toBeNull();
+  const before = await camera();
+  // The default cursor: nothing to grab.
+  await expect(page.locator("[data-palace]")).toHaveCSS("cursor", "auto");
   const box = (await page.locator("[data-palace]").boundingBox())!;
-  // Start in the open sky above the room, away from every object.
   const start = { x: box.x + box.width * 0.5, y: box.y + 40 };
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
-  await page.mouse.move(start.x - 60, start.y, { steps: 4 });
+  await page.mouse.move(start.x - 300, start.y + 200, { steps: 8 });
   await page.mouse.up();
-  await expect.poll(async () => (await camera())!.yaw).toBeGreaterThan(5);
-  // The release is not a click on the empty room: the camera keeps the look rather than flying back.
-  await page.waitForTimeout(700);
-  expect((await camera())!.yaw).toBeGreaterThan(5);
-  // A long drag stops at 20° of yaw and 40° of pitch.
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x - 900, start.y + 900, { steps: 10 });
-  await page.mouse.up();
-  await expect.poll(camera).toMatchObject({ yaw: 20, pitch: 40 });
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x + 900, start.y - 900, { steps: 10 });
-  await page.mouse.up();
-  await expect.poll(camera).toMatchObject({ yaw: -20, pitch: 10 });
-  await page.mouse.move(start.x, start.y + 100);
   await page.mouse.wheel(0, -2000);
-  await expect.poll(async () => (await camera())!.zoom).toBe(1.3);
-  await page.keyboard.press("Escape");
-  await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
-  // Elsewhere the look is gone: leaving the page put the camera back.
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x - 300, start.y, { steps: 4 });
-  await page.mouse.up();
-  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Activity", exact: true }).click();
-  await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
+  await page.waitForTimeout(600);
+  expect(await camera()).toEqual(before);
+});
+
+/** The hero box on the Palace page: centred where the view offset puts the frame's centre, filling the pad on one axis. */
+async function expectFittedFrame(page: Page) {
+  await setupPortal(page, { webgl: true });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  await expect.poll(async () => (await live(scene)).camera ?? null).not.toBeNull();
+  const { box, offset } = (await live(scene)).camera!;
+  const { width, height } = page.viewportSize()!;
+  const [left, top, right, bottom] = box;
+  expect(Math.abs((left + right) / 2 - (width / 2 - offset[0]))).toBeLessThanOrEqual(2);
+  expect(Math.abs((top + bottom) / 2 - (height / 2 - offset[1]))).toBeLessThanOrEqual(2);
+  const [limitX, limitY] = [0.88 * width, 0.88 * height];
+  expect(right - left).toBeLessThanOrEqual(limitX + 2);
+  expect(bottom - top).toBeLessThanOrEqual(limitY + 2);
+  expect(Math.min(Math.abs(right - left - limitX), Math.abs(bottom - top - limitY))).toBeLessThanOrEqual(2);
+}
+
+test.describe("at 1440 × 900", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  test("the Palace page frames the room's hero box, centred in the open region and filling the pad", async ({ page }, info) => {
+    await expectFittedFrame(page);
+    await page.screenshot({ path: info.outputPath("palace-fitted.png") });
+  });
 });
 
 test("a click on a terminal or a resize handle over a room object stays in the UI: no card, no navigation", async ({ page }) => {

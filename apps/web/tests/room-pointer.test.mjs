@@ -66,7 +66,7 @@ globalThis.document = {
 globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 0);
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 
-const { DOUBLE_MS, passthroughAt, readCard, hideCard, setPalaceHandlers, setRoomPicker, startRoomPointer } = await import("../src/room/pointer.ts");
+const { passthroughAt, readCard, hideCard, setRoomPicker, startRoomPointer } = await import("../src/room/pointer.ts");
 
 const fire = (type, event) => listeners.get(type)?.({ timeStamp: performance.now(), relatedTarget: null, target: null, ...event });
 const mouse = (type, x, y) => fire(type, { clientX: x, clientY: y, pointerType: "mouse" });
@@ -81,7 +81,7 @@ const click = (from, to = from) => {
 /** A see-through viewport with an empty spacer in it: the room shows anywhere over it. */
 const viewport = el("div", { "data-room-passthrough": "" }, [el("div")]);
 const spacer = viewport.firstChild;
-const MAIL = { kind: "mail", id: "mail", centre: [0, 0, 0], radius: 0.2 };
+const MAIL = { kind: "mail", id: "mail" };
 
 let activated;
 let stop;
@@ -93,7 +93,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   stop();
-  setPalaceHandlers(null);
   setRoomPicker(null);
   hideCard();
 });
@@ -146,33 +145,6 @@ test("a press that moved past the click slop is a drag: no click, even released 
   assert.deepEqual(activated, ["mail"]);
   click([100, 100], [140, 100]);
   assert.deepEqual(activated, ["mail"]);
-});
-
-test("on the Palace page a drag released over empty floor does not fly the camera back", () => {
-  const calls = [];
-  setPalaceHandlers({ onDouble: () => calls.push("double"), onEmpty: () => calls.push("empty"), onEscape: () => calls.push("escape") });
-  setRoomPicker(() => null);
-  click([100, 100], [300, 120]);
-  assert.deepEqual(calls, []);
-  // A real click there does.
-  click([300, 120]);
-  assert.deepEqual(calls, ["empty"]);
-});
-
-test("on the Palace page a double click frames the object and a single click acts once the double-click window passes", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const calls = [];
-  setPalaceHandlers({ onDouble: (hit) => calls.push(`double:${hit.kind}`), onEmpty: () => calls.push("empty"), onEscape: () => calls.push("escape") });
-  click([100, 100]);
-  click([101, 100]);
-  t.mock.timers.tick(DOUBLE_MS + 1);
-  assert.deepEqual(calls, ["double:mail"]);
-  assert.deepEqual(activated, []);
-  click([100, 100]);
-  assert.deepEqual(activated, []);
-  t.mock.timers.tick(DOUBLE_MS + 1);
-  assert.deepEqual(activated, ["mail"]);
-  assert.deepEqual(calls, ["double:mail"]);
 });
 
 test("a tap pins the object's card instead of opening it; a moved or long touch is not a tap", () => {

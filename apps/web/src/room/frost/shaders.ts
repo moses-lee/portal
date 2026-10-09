@@ -4,7 +4,7 @@
  *
  * - `fullscreen`: one oversized triangle in clip space, shared by every pass but the mask.
  * - `downsample`: the sharp scene to a quarter of its size, four bilinear taps that average each
- *   4 × 4 block exactly (no skipped texels, so no shimmer as the camera drifts).
+ *   4 × 4 block exactly (no skipped texels, so no shimmer as things move).
  * - `kawaseDown` / `kawaseUp`: the dual-Kawase filter (Bjørge, SIGGRAPH 2015); halving and doubling
  *   the size with five and eight taps.
  * - `mask`: rounded rectangles as a signed distance field, one instanced quad per frosted panel,

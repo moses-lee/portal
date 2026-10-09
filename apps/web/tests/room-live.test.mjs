@@ -16,18 +16,7 @@ import {
   robotStateFor,
   robotsLabel,
 } from "../src/room/live.ts";
-import {
-  LIMITS,
-  blendLook,
-  clampLook,
-  coast,
-  dragLook,
-  easeInOut,
-  framingDistance,
-  zoomLook,
-} from "../src/room/look.ts";
 
-const DEGREE = Math.PI / 180;
 const idle = { busy: false, awaitingPermission: false, link: { status: "live" }, liveness: "idle" };
 
 /** A session's list entry in each of the shared session states. */
@@ -166,56 +155,4 @@ test("the window's card is the weather and its source, with nowhere to go", () =
   assert.equal(card.hint, null);
   assert.equal(card.action, null);
   assert.equal(card.credit, true);
-});
-
-test("the Palace camera yaws within 20° either way and pitches between 10° and 40°", () => {
-  const base = 25 * DEGREE;
-  const far = clampLook({ yaw: 90 * DEGREE, pitch: 60 * DEGREE, zoom: 5 }, base);
-  assert.equal(far.yaw, LIMITS.yaw);
-  assert.ok(Math.abs(base + far.pitch - 40 * DEGREE) < 1e-9);
-  assert.equal(far.zoom, 1.3);
-  const near = clampLook({ yaw: -90 * DEGREE, pitch: -60 * DEGREE, zoom: 0.1 }, base);
-  assert.equal(near.yaw, -LIMITS.yaw);
-  assert.ok(Math.abs(base + near.pitch - 10 * DEGREE) < 1e-9);
-  assert.equal(near.zoom, 0.85);
-  // A portrait pose is pitched more steeply by default; the absolute limits hold all the same.
-  const portrait = clampLook({ yaw: 0, pitch: 30 * DEGREE, zoom: 1 }, 31 * DEGREE);
-  assert.ok(Math.abs(31 * DEGREE + portrait.pitch - 40 * DEGREE) < 1e-9);
-});
-
-test("dragging turns the camera, the wheel zooms, and both stop at the limits", () => {
-  const base = 25 * DEGREE;
-  const start = { yaw: 0, pitch: 0, zoom: 1 };
-  const right = dragLook(start, 50, 0, base);
-  assert.ok(right.yaw < 0, "dragging right swings the room left");
-  assert.equal(right.pitch, 0);
-  assert.equal(dragLook(start, -100_000, 0, base).yaw, LIMITS.yaw);
-  assert.ok(Math.abs(base + dragLook(start, 0, 100_000, base).pitch - LIMITS.pitchMax) < 1e-9);
-  assert.equal(zoomLook(start, 1.1, base).zoom, 1.1);
-  assert.equal(zoomLook(start, 10, base).zoom, LIMITS.zoomMax);
-  assert.equal(zoomLook(start, 0.1, base).zoom, LIMITS.zoomMin);
-});
-
-test("a released drag coasts, slows, and stops at a limit", () => {
-  const base = 25 * DEGREE;
-  let state = { look: { yaw: 0, pitch: 0, zoom: 1 }, velocity: { yaw: 10 * DEGREE, pitch: 0 } };
-  state = coast(state.look, state.velocity, 0.1, base);
-  assert.ok(state.look.yaw > 0);
-  assert.ok(state.velocity.yaw < 10 * DEGREE && state.velocity.yaw > 0);
-  for (let step = 0; step < 200; step++) state = coast(state.look, state.velocity, 0.05, base);
-  assert.equal(state.velocity.yaw, 0, "friction brings it to rest");
-  assert.ok(state.look.yaw < LIMITS.yaw);
-  const blocked = coast({ yaw: LIMITS.yaw - 0.001, pitch: 0, zoom: 1 }, { yaw: 1, pitch: 0 }, 0.1, base);
-  assert.equal(blocked.look.yaw, LIMITS.yaw);
-  assert.equal(blocked.velocity.yaw, 0, "an axis that meets its limit stops");
-});
-
-test("flights ease in and out, and framing stands back from what it frames", () => {
-  assert.equal(easeInOut(0), 0);
-  assert.equal(easeInOut(0.5), 0.5);
-  assert.equal(easeInOut(1), 1);
-  assert.ok(easeInOut(0.1) < 0.1 && easeInOut(0.9) > 0.9);
-  assert.deepEqual(blendLook({ yaw: 0, pitch: 0, zoom: 1 }, { yaw: 1, pitch: 2, zoom: 1.2 }, 0.5), { yaw: 0.5, pitch: 1, zoom: 1.1 });
-  assert.ok(framingDistance(0.5, 30) > framingDistance(0.2, 30));
-  assert.equal(framingDistance(0.01, 30), 2.4);
 });

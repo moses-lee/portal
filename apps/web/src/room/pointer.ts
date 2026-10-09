@@ -4,16 +4,16 @@
  * of the page (an element marked `data-room-passthrough`, with no panel, control or text between it
  * and the pointer) it asks the canvas's picker which object is under the pointer, at most once per
  * frame of the room's loop, and drives the hover card's store and the cursor. A click activates the
- * object (the caller navigates); a tap on a touch screen pins the card with a button instead. On the
- * Palace page clicks wait out a double-click first, and a double click or tap flies the camera.
+ * object (the caller navigates); a tap on a touch screen pins the card with a button instead. Nothing
+ * here moves the camera (docs/PALACE.md, Revision 2): a drag is neither a click nor a look-around.
  *
  * No three.js here: the canvas (loaded on its own) registers the picker that raycasts its scene.
  */
 import { DEFAULT_FPS } from "./loop.ts";
 import type { RoomTarget } from "./live.ts";
 
-/** An object under the pointer: what it is, and where it sits in the room (for framing it). */
-export type RoomHit = RoomTarget & { centre: [number, number, number]; radius: number };
+/** An object under the pointer. */
+export type RoomHit = RoomTarget;
 
 type Picker = (clientX: number, clientY: number) => RoomHit | null;
 
@@ -167,21 +167,6 @@ export function passthroughAt(x: number, y: number): HTMLElement | null {
 // The listener
 // ---------------------------------------------------------------------------------------------
 
-/** What the Palace page adds: double click or tap to frame an object, and flying back. */
-export type PalaceHandlers = {
-  onDouble: (hit: RoomHit) => void;
-  /** A click or tap on the room with no object under it. */
-  onEmpty: () => void;
-  onEscape: () => void;
-};
-
-let palace: PalaceHandlers | null = null;
-
-/** The Palace page's handlers while it is open; clicks there wait out a double click before they act. */
-export function setPalaceHandlers(handlers: PalaceHandlers | null) {
-  palace = handlers;
-}
-
 export type RoomPointerHandlers = {
   /** A click on an object (a mouse or pen; taps pin the card instead). */
   onActivate: (hit: RoomHit, at: { x: number; y: number }) => void;
@@ -191,8 +176,6 @@ export type RoomPointerHandlers = {
 const CLICK_SLOP = 6;
 const TAP_SLOP = 10;
 const TAP_MS = 500;
-/** Two clicks or taps on one object within this make a double. */
-export const DOUBLE_MS = 300;
 
 /**
  * Starts listening on the document; returns the stop. One listener for the page: the mounted room
@@ -206,8 +189,6 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
   let cursorOn: HTMLElement | null = null;
   let down: { x: number; y: number; at: number; touch: boolean } | null = null;
   let lastTouchAt = -Infinity;
-  /** The first click or tap of a possible double, on the Palace page. */
-  let first: { hit: RoomHit; at: number; timer: ReturnType<typeof setTimeout> | null } | null = null;
 
   const setCursor = (element: HTMLElement | null) => {
     if (cursorOn === element) return;
@@ -264,30 +245,8 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
   const press = (x: number, y: number, act: (hit: RoomHit) => void) => {
     const { through, hit } = pick(x, y);
     if (!through) return;
-    if (!hit) {
-      if (first?.timer) clearTimeout(first.timer);
-      first = null;
-      hideCard();
-      palace?.onEmpty();
-      return;
-    }
-    if (!palace) return act(hit);
-    // The Palace page: a second press on the same object soon after is a double (frame it); the first acts once the window passes.
-    const now = performance.now();
-    if (first && first.hit.kind === hit.kind && first.hit.id === hit.id && now - first.at <= DOUBLE_MS) {
-      if (first.timer) clearTimeout(first.timer);
-      first = null;
-      hideCard();
-      palace.onDouble(hit);
-      return;
-    }
-    if (first?.timer) clearTimeout(first.timer);
-    const entry: { hit: RoomHit; at: number; timer: ReturnType<typeof setTimeout> | null } = { hit, at: now, timer: null };
-    entry.timer = setTimeout(() => {
-      entry.timer = null;
-      if (first === entry) act(hit);
-    }, DOUBLE_MS);
-    first = entry;
+    if (!hit) return hideCard();
+    act(hit);
   };
 
   const onUp = (event: PointerEvent) => {
@@ -308,7 +267,7 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
     if ((event as PointerEvent).pointerType === "touch" || performance.now() - lastTouchAt < 800) return;
     const start = down;
     down = null;
-    // A press that moved is a drag (the Palace page's look-around), not a click.
+    // A press that moved is a drag, not a click.
     if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP) return;
     if ((event.target as Element | null)?.closest?.("[data-room-card]")) return;
     const x = event.clientX;
@@ -322,9 +281,8 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
   };
 
   const onKey = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return;
-    if (card) hideCard();
-    palace?.onEscape();
+    // Escape puts the card away.
+    if (event.key === "Escape" && card) hideCard();
   };
 
   const onScroll = () => {
@@ -340,7 +298,6 @@ export function startRoomPointer(handlers: RoomPointerHandlers): () => void {
   document.addEventListener("scroll", onScroll, { capture: true, passive: true });
   return () => {
     if (raf) cancelAnimationFrame(raf);
-    if (first?.timer) clearTimeout(first.timer);
     setCursor(null);
     setCard(null);
     document.removeEventListener("pointermove", onMove);
