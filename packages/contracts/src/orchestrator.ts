@@ -25,12 +25,13 @@
  *   GET    /api/portal/tracked         { sessions: TrackedSession[] }
  *   PUT    /api/portal/tracked/:sessionId -> { session: TrackedSession }; 404 when the session does not exist
  *   DELETE /api/portal/tracked/:sessionId -> 204
- *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `tracked`, `workspace`
+ *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `tracked`, `workspace`, `room`
  */
 import type { UIMessage } from "ai";
 import type { ActivityEntry } from "./activity.ts";
 import type { Approval } from "./approvals.ts";
 import type { Intent, JobRun } from "./jobs.ts";
+import type { RoomState } from "./room.ts";
 import type { Workspace } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -427,4 +428,6 @@ export type OrchestratorEvent =
   /** The tracked sessions changed (tracked, untracked, or deleted); the full list. */
   | TrackedSessionsEvent
   /** The workspace (tabs and panes) changed on any device or by the orchestrator; the whole thing. */
-  | { type: "workspace"; workspace: Workspace };
+  | { type: "workspace"; workspace: Workspace }
+  /** The room's state (docs/PALACE.md): sent on connect, then whenever the environment or census changes. */
+  | { type: "room"; state: RoomState };

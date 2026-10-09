@@ -9,6 +9,7 @@
     "./branch-matching": "./src/branch-matching.ts",
     "./git-info": "./src/git-info.ts",
     "./items": "./src/items.ts",
+    "./room": "./src/room.ts",
     "./scripts": "./src/scripts.ts",
     "./session-state": "./src/session-state.ts",
     "./settings": "./src/settings.ts",

@@ -15,3 +15,6 @@ if (!process.env.PORTAL_HOME || process.env.PORTAL_HOME === process.env.PORTAL_S
   process.env.PORTAL_SCRATCH_HOME = dir;
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
 }
+
+// No test reaches the room's location and weather providers; the room tests inject a fake fetch.
+process.env.PORTAL_ROOM_OFFLINE ??= "1";

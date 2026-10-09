@@ -15,7 +15,8 @@
     "./memory": "./src/memory.ts",
     "./approvals": "./src/approvals.ts",
     "./workspace": "./src/workspace.ts",
-    "./search": "./src/search.ts"
+    "./search": "./src/search.ts",
+    "./room": "./src/room.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.0",

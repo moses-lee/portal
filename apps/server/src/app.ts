@@ -20,6 +20,8 @@ import { type OrchestratorOptions, createOrchestratorService } from "./orchestra
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
 import { createProjectsService } from "./projects/service.ts";
 import { registerProjectRoutes } from "./projects/routes.ts";
+import { type RoomOptions, createRoomService } from "./room/service.ts";
+import { registerRoomRoutes } from "./room/routes.ts";
 import { registerSearchRoutes } from "./search/routes.ts";
 import { createMessageBackfill } from "./sessions/search-backfill.ts";
 import { type SessionsOptions, createSessionsService } from "./sessions/service.ts";
@@ -52,6 +54,8 @@ export interface AppOptions {
   lifecycle?: { start?: boolean; deps?: Partial<LifecycleSweepDeps> };
   /** The search index backfill after boot: `start: false` skips it (tests run it by hand), `afterMs` delays it. */
   searchBackfill?: { start?: boolean; afterMs?: number };
+  /** The room's environment lookups: tests pass a fake `fetch` and clock. */
+  room?: RoomOptions;
 }
 
 /** Each app's context, for tests that reach past the routes (swap a service, spy on a dispose). */
@@ -63,7 +67,7 @@ export function appContext(app: FastifyInstance): AppContext {
   return ctx;
 }
 
-export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true, lifecycle = {}, searchBackfill = {} }: AppOptions = {}): Promise<FastifyInstance> {
+export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true, lifecycle = {}, searchBackfill = {}, room = {} }: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger });
   await app.register(compress, { global: true, threshold: 1024, encodings: ["gzip"] });
 
@@ -106,6 +110,9 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   ctx.lifecycle = createLifecycleSweeper({ ...liveLifecycleSweepDeps(ctx), ...lifecycle.deps }, { start: lifecycle.start ?? true });
   // Indexes logs from before `session_messages` existed; in the background, so boot never waits on it.
   ctx.searchBackfill = createMessageBackfill({ db: ctx.db, log: app.log }, searchBackfill);
+  ctx.room = createRoomService(ctx, room);
+  // The portal stream lives on the orchestrator's hub; without it the room routes still answer and nothing is pushed.
+  const unsubscribeRoom = orchestrator ? ctx.room.subscribe((state) => ctx.orchestrator.hub.emit({ type: "room", state })) : () => {};
 
   app.setErrorHandler((err, _req, reply) => {
     const status = errorStatus(err) ?? (err as { statusCode?: number }).statusCode ?? 500;
@@ -119,6 +126,7 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   registerSettingsRoutes(app, ctx);
   registerTerminalRoutes(app, ctx);
   registerSearchRoutes(app, ctx);
+  registerRoomRoutes(app, ctx);
   if (orchestrator) {
     registerOrchestratorRoutes(app, ctx);
     // The workspace lives on the orchestrator's hub (it pushes over the portal stream and the agent edits it).
@@ -134,6 +142,8 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     // A running sweep finishes before the services it reads and writes go away.
     await ctx.lifecycle.dispose().catch(failed("the lifecycle sweep"));
     await ctx.searchBackfill.dispose().catch(failed("the search backfill"));
+    unsubscribeRoom();
+    ctx.room.dispose();
     // Stop the scheduler and any running turn before the sessions it may be driving go away.
     if (orchestrator) await ctx.orchestrator.dispose().catch(failed("the orchestrator"));
     closeEventStreams(app.server);

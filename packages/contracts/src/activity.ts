@@ -24,7 +24,7 @@ export type ActivityActor = "user" | "agent" | "system";
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
  * approval.requested · approval.decided · approval.executed · world.refreshed · session.tracked ·
  * session.untracked · session.renamed · worktree.kept · worktree.removed_idle · workspace.opened ·
- * workspace.closed · workspace.arranged · workspace.renamed
+ * workspace.closed · workspace.arranged · workspace.renamed · room.expanded
  *
  * `session.tracked` and `session.untracked` carry `refs.sessionId` and `detail.trackedBy` (who:
  * "user" or "portal"), plus `detail.reason` when one was given. `session.renamed` (the
@@ -41,6 +41,10 @@ export type ActivityActor = "user" | "agent" | "system";
  * `detail.sessionIds`), `workspace.renamed` (`detail.from`, `detail.to`). `detail.actor` says who asked:
  * "user" (the workspace routes) or "portal" (the orchestrator's tools). `resize` and `move_tab` are
  * not logged.
+ *
+ * `room.expanded` (actor "system") is logged once per room milestone reached (docs/PALACE.md):
+ * `detail.milestone` is the milestone's id and `detail.value` the census value that crossed its
+ * threshold. Environment changes are not logged.
  *
  * `item.resolved` and `item.dismissed` from the bulk route (`POST /api/portal/items/bulk`) are one
  * entry per batch: `detail.itemIds` lists the items, and `refs.itemId` is set only when there was one.
