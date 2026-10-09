@@ -18,7 +18,7 @@ import { looksLowPower, targetFps, CADENCE_SAMPLES } from "../src/room/loop.ts";
 
 const DEGREE = Math.PI / 180;
 
-/** The six viewports the fit is checked at (docs/PALACE.md, Revision 2, Camera). */
+/** The six viewports the fit is checked at (docs/PALACE.md, Revision 4: 1920 × 1080 took the strip's place). */
 const VIEWPORTS = [
   { name: "1440 × 900", width: 1440, height: 900 },
   { name: "1920 × 1080", width: 1920, height: 1080 },
@@ -165,7 +165,7 @@ test("the registry's viewport is the room's fixed element, the size the canvas t
   try {
     const stage = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1425, height: 812 }) };
     const unstage = registerStage(stage);
-    // Before the stage's first measure: nothing; after it, the stage's box.
+    // The stage's box once measured; the root's client size again after the stage goes.
     flush();
     assert.deepEqual([readLayout().width, readLayout().height], [1425, 812]);
     unstage();

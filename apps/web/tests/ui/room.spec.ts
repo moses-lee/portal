@@ -467,7 +467,7 @@ test.describe("at 1440 × 900 on the session page", () => {
     await expect(page.locator(".sidebar-shell")).toBeVisible();
     const before = await live(scene);
     expect(before.camera).toBeTruthy();
-    // The registry measures in the next animation frame; two frames cover the measure and the commit after it.
+    // Two frames let any re-render after the toggle settle before the report is read.
     const settle = () => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
     await expect(page.locator(".sidebar-shell")).toHaveCount(0);

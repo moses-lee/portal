@@ -5,7 +5,7 @@ import { cameraPosition, framePose, projectPoint, ROOM, WINDOW_CENTRE } from "..
 import { drawDelays, NEAR, pathOf, projectSketch, SKETCH, sketchFigure, sketchStrokes, SPREAD_MS } from "../src/room/sketch.ts";
 
 
-/** The six viewports the fit is checked at (docs/PALACE.md, Revision 2, Camera). */
+/** The six viewports the fit is checked at (docs/PALACE.md, Revision 4: 1920 × 1080 took the strip's place). */
 const VIEWPORTS = [
   { name: "1440 × 900", width: 1440, height: 900 },
   { name: "1920 × 1080", width: 1920, height: 1080 },
@@ -123,8 +123,11 @@ test("a stroke that crosses the near plane is cut where it does, and one behind 
 test("the sketch's window lands where the camera draws it, on a phone too, and its paths are plain SVG", () => {
   const phone = framePose(390 / 844);
   const figure = sketchFigure(phone, { width: 390, height: 844 });
-  const phoneWindow = projectPoint(phone, WINDOW_CENTRE, { width: 390, height: 844 });
-  assert.ok(Math.abs(figure.window.x - phoneWindow.x) < 0.01 && Math.abs(figure.window.y - phoneWindow.y) < 0.01, `${figure.window.x}, ${figure.window.y}`);
+  // Against a three.js camera, and against the spec's numbers (the window's centre at 390 × 844: x about 168, y about 328).
+  const theirs = new Vector3(...WINDOW_CENTRE).project(threeCamera(phone, 390, 844));
+  const [tx, ty] = [((theirs.x + 1) / 2) * 390, ((1 - theirs.y) / 2) * 844];
+  assert.ok(Math.abs(figure.window.x - tx) < 0.01 && Math.abs(figure.window.y - ty) < 0.01, `${figure.window.x}, ${figure.window.y} against ${tx}, ${ty}`);
+  assert.ok(Math.abs(figure.window.x - 168) < 2 && Math.abs(figure.window.y - 328) < 2, `${figure.window.x}, ${figure.window.y}`);
   assert.equal(figure.strokes.length, SKETCH.length);
   for (const stroke of figure.strokes) assert.match(stroke.d, /^(M-?\d+(\.\d)? -?\d+(\.\d)?(L-?\d+(\.\d)? -?\d+(\.\d)?)+)+$/);
   assert.match(figure.wall, /Z$/);

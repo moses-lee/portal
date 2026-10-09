@@ -10,10 +10,10 @@
  *   one, all in one task, since without `preserveDrawingBuffer` the drawing buffer is readable only
  *   until that task ends; then, asynchronously, a JPEG and one IndexedDB `put`.
  * - The read: started as this module evaluates on the client (`snapshotRead`), so it has usually
- *   answered by hydration. A record from another `LAYOUT_VERSION` is deleted.
+ *   answered by hydration. A record from another `LAYOUT_VERSION` or `CAMERA_VERSION` is deleted.
  * - The pure parts, unit-tested: `snapshotEligibility` (layout version, age, scene, aspect; the
  *   scene now worked out over the coordinates the record was taken at),
- *   `snapshotPlacement` (where the stored frame lands for another viewport and view offset) and
+ *   `snapshotPlacement` (where the stored frame lands for another viewport) and
  *   `captureSize`.
  */
 import { LAYOUT_VERSION } from "@portal/shared/room";

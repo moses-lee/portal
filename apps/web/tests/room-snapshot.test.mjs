@@ -113,13 +113,13 @@ test("placement: a frame stored at 1440 × 900 lands on the room at 1280 × 800,
   }
 });
 
-test("placement: a phone frame at the same height but a little wider is centred, the window where the pose draws it", () => {
+test("placement: a phone frame shown a little taller and wider is scaled with the height and centred, the window where the pose draws it", () => {
   const stored = view({ width: 390, height: 844 });
-  const current = view({ width: 402, height: 844 });
+  const current = view({ width: 402, height: 870 });
   const box = snapshotPlacement(stored.view, current.view);
-  assert.equal(box.width, 390);
-  assert.equal(box.height, 844);
-  assert.ok(Math.abs(box.x - 6) < 1e-9 && Math.abs(box.y) < 1e-9, `${box.x},${box.y}`);
+  const scale = 870 / 844;
+  assert.ok(Math.abs(box.width - 390 * scale) < 1e-9 && Math.abs(box.height - 870) < 1e-9, `${box.width} × ${box.height}`);
+  assert.ok(Math.abs(box.x - (402 - 390 * scale) / 2) < 1e-9 && Math.abs(box.y) < 1e-9, `${box.x},${box.y}`);
   // The poses differ a little with the aspect (both portrait, so the same angles and box, a slightly different distance).
   const window = placed(box, stored, WINDOW_CENTRE);
   const drawn = projectPoint(current.pose, WINDOW_CENTRE, current.size);

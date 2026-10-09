@@ -9,8 +9,9 @@ import { snapshotPlacement, type SnapshotRecord } from "./snapshot.ts";
  * frame from an object URL, put on the page only once `img.decode()` has finished with it, then
  * drawn at its stored size times the viewport's height over the stored height, centred
  * (`snapshotPlacement`), so what it shows lands where the camera will draw it. It follows the
- * layout registry's measure; edges that fall short show the ground. The object URL is revoked when it unmounts. `onFail`: the image
- * could not be decoded (the background shows the sketch instead).
+ * layout registry's measure; edges that fall short show the ground. The object URL is revoked
+ * when it unmounts. `onFail`: the image could not be decoded (the background shows the sketch
+ * instead).
  */
 export default function SnapshotImage({ record, onFail }: { record: SnapshotRecord; onFail: () => void }) {
   const layout = useSyncExternalStore(subscribeLayout, readLayout, readLayout);
