@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useMediaQuery } from "./useMediaQuery";
 import { useStableCallback } from "@/hooks/use-stable-callback";
+import { RoomHostProvider } from "@/room/host";
 import { usePreference } from "./usePreference";
 import { clearSubmittedDraft, startKey, writeDraft } from "@/lib/drafts";
 import {
@@ -813,109 +814,114 @@ function ChatShell() {
   const sidebarTerminal = useStableCallback(openTerminal);
   const sidebarPortalView = useStableCallback(openPortalView);
   const sidebarCollapse = useStableCallback(() => setSidebarPreference("false"));
+  /** The room's frames open their project the way the sidebar's project entries do: a start page with it picked. */
+  const roomOpenProject = useStableCallback(startIn);
+  const roomHost = useMemo(() => ({ projects, openProject: roomOpenProject }), [projects, roomOpenProject]);
 
   return (
-    <div className="portal-shell">
-      <Sidebar
-        projects={orderedProjects}
-        projectPins={projectPins}
-        sessionPins={sessionPins}
-        onTogglePinProject={toggleProjectPin}
-        onTogglePinSession={toggleSessionPin}
-        active={active}
-        openSessionIds={openSessionIds}
-        onSelect={sidebarSelect}
-        onOpenInNewTab={sidebarOpenInTab}
-        onOpenBeside={sidebarOpenBeside}
-        canOpenBeside={focus.tab !== null && focus.pane !== null && canSplitPane(workspace, focus.tab.id, focus.pane.id, "right")}
-        returnFocus={sidebarOpener}
-        onPrefetch={sidebarPrefetch}
-        onDeleteSession={sidebarDelete}
-        onNewSession={sidebarNewSession}
-        onNewConversation={sidebarNewConversation}
-        onReorderPinned={sidebarReorderPinned}
-        onOpenSettings={sidebarOpenSettings}
-        onOpenSearch={sidebarOpenSearch}
-        onRenameProject={sidebarRename}
-        onRemoveProject={sidebarRemove}
-        removedProjects={removedProjects}
-        removedError={removedError}
-        onRefreshRemoved={sidebarRefreshRemoved}
-        onRestoreProject={sidebarRestore}
-        onDiscardRemoved={sidebarDiscard}
-        open={showSidebar}
-        onClose={sidebarClose}
-        onTerminal={sidebarTerminal}
-        terminalActive={terminalOpen}
-        onPortalView={sidebarPortalView}
-        portalView={portalView}
-        projectsActive={route !== null}
-        desktopOpen={sidebarPreference === "true"}
-        onCollapse={sidebarCollapse}
-      />
-      <SettingsDialog
-        open={showSettings}
-        section={settingsSection}
-        onRemovedDeleted={() => void refreshRemoved()}
-        onClose={() => {
-          setShowSettings(false);
-          setSettingsSection(null);
-        }}
-      />
-      <SearchDialog
-        open={showSearch}
-        onOpenChange={setShowSearch}
-        sessions={sessions}
-        projects={orderedProjects}
-        onOpenSession={searchOpenSession}
-        onOpenProject={searchOpenProject}
-      />
-      {portalOpen ? (
-        <PortalPage
-          pathname={pathname ?? "/"}
-          onNavigate={pushPath}
-          onOpenSidebar={toggleSidebar}
-          onOpenSession={sidebarSelect}
+    <RoomHostProvider value={roomHost}>
+      <div className="portal-shell">
+        <Sidebar
+          projects={orderedProjects}
+          projectPins={projectPins}
+          sessionPins={sessionPins}
+          onTogglePinProject={toggleProjectPin}
+          onTogglePinSession={toggleSessionPin}
+          active={active}
+          openSessionIds={openSessionIds}
+          onSelect={sidebarSelect}
+          onOpenInNewTab={sidebarOpenInTab}
+          onOpenBeside={sidebarOpenBeside}
+          canOpenBeside={focus.tab !== null && focus.pane !== null && canSplitPane(workspace, focus.tab.id, focus.pane.id, "right")}
+          returnFocus={sidebarOpener}
+          onPrefetch={sidebarPrefetch}
+          onDeleteSession={sidebarDelete}
+          onNewSession={sidebarNewSession}
+          onNewConversation={sidebarNewConversation}
+          onReorderPinned={sidebarReorderPinned}
+          onOpenSettings={sidebarOpenSettings}
+          onOpenSearch={sidebarOpenSearch}
+          onRenameProject={sidebarRename}
+          onRemoveProject={sidebarRemove}
+          removedProjects={removedProjects}
+          removedError={removedError}
+          onRefreshRemoved={sidebarRefreshRemoved}
+          onRestoreProject={sidebarRestore}
+          onDiscardRemoved={sidebarDiscard}
+          open={showSidebar}
+          onClose={sidebarClose}
+          onTerminal={sidebarTerminal}
+          terminalActive={terminalOpen}
+          onPortalView={sidebarPortalView}
+          portalView={portalView}
+          projectsActive={route !== null}
+          desktopOpen={sidebarPreference === "true"}
+          onCollapse={sidebarCollapse}
         />
-      ) : terminalOpen ? (
-        <TerminalPage onOpenSidebar={toggleSidebar} />
-      ) : route ? (
-        /* The view reads `?pane=` with useSearchParams, which needs a boundary on the prerendered `/new`; the data is client-side anyway. */
-        <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
-          <WorkspaceView
-            route={route}
-            start={start}
+        <SettingsDialog
+          open={showSettings}
+          section={settingsSection}
+          onRemovedDeleted={() => void refreshRemoved()}
+          onClose={() => {
+            setShowSettings(false);
+            setSettingsSection(null);
+          }}
+        />
+        <SearchDialog
+          open={showSearch}
+          onOpenChange={setShowSearch}
+          sessions={sessions}
+          projects={orderedProjects}
+          onOpenSession={searchOpenSession}
+          onOpenProject={searchOpenProject}
+        />
+        {portalOpen ? (
+          <PortalPage
+            pathname={pathname ?? "/"}
+            onNavigate={pushPath}
             onOpenSidebar={toggleSidebar}
-            showGithub={showGithub}
-            onToggleGithub={toggleGithub}
-            initialSend={initialSend}
-            onInitialSendHandled={initialSendHandled}
-            onSessionDeleted={sessionDeleted}
+            onOpenSession={sidebarSelect}
           />
-        </Suspense>
-      ) : null}
-      {showGithub && !terminalOpen && !portalOpen && (
-        <GithubInspector
-          open={showGithub}
-          onClose={() => setGithubPreference("false")}
-          projectId={githubProjectId}
-          projectRemoved={githubProjectRemoved}
-          session={activeSession}
-          onGitAction={startGitAction}
-          returnFocus={githubOpener}
+        ) : terminalOpen ? (
+          <TerminalPage onOpenSidebar={toggleSidebar} />
+        ) : route ? (
+          /* The view reads `?pane=` with useSearchParams, which needs a boundary on the prerendered `/new`; the data is client-side anyway. */
+          <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
+            <WorkspaceView
+              route={route}
+              start={start}
+              onOpenSidebar={toggleSidebar}
+              showGithub={showGithub}
+              onToggleGithub={toggleGithub}
+              initialSend={initialSend}
+              onInitialSendHandled={initialSendHandled}
+              onSessionDeleted={sessionDeleted}
+            />
+          </Suspense>
+        ) : null}
+        {showGithub && !terminalOpen && !portalOpen && (
+          <GithubInspector
+            open={showGithub}
+            onClose={() => setGithubPreference("false")}
+            projectId={githubProjectId}
+            projectRemoved={githubProjectRemoved}
+            session={activeSession}
+            onGitAction={startGitAction}
+            returnFocus={githubOpener}
+          />
+        )}
+        <ApprovalsDialog
+          onNavigate={(path) => {
+            // Its links are Portal paths; the tracked panel's session stays open across them.
+            pushPath(
+              isPortalPath(path)
+                ? portalPathKeepingPanel(portalLocation(path), window.location.search)
+                : path,
+            );
+            setShowSidebar(false);
+          }}
         />
-      )}
-      <ApprovalsDialog
-        onNavigate={(path) => {
-          // Its links are Portal paths; the tracked panel's session stays open across them.
-          pushPath(
-            isPortalPath(path)
-              ? portalPathKeepingPanel(portalLocation(path), window.location.search)
-              : path,
-          );
-          setShowSidebar(false);
-        }}
-      />
-    </div>
+      </div>
+    </RoomHostProvider>
   );
 }

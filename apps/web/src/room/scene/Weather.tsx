@@ -172,6 +172,10 @@ function createWeatherRig() {
     tick(time: number) {
       uniforms.uTime.value = time;
     },
+    /** Keep the fall outside the glass: the bay window stands `outward` metres further out. */
+    setOutward(outward: number) {
+      uniforms.uBoxSize.value.z = 6.6 - outward;
+    },
     dispose() {
       geometry.dispose();
       fallMaterial.dispose();
@@ -191,10 +195,13 @@ export default function Weather({
   weather,
   clock,
   reducedMotion,
+  bay = false,
 }: {
   weather: RoomWeather | null;
   clock: SunClock;
   reducedMotion: boolean;
+  /** The bay window stands out beyond the wall: rain and snow keep outside it. */
+  bay?: boolean;
 }) {
   const condition: RoomCondition = weather?.condition ?? "clear";
   const dpr = useThree((state) => state.viewport.dpr);
@@ -204,6 +211,7 @@ export default function Weather({
 
   const fall = FALLS[condition] ?? NONE;
   useEffect(() => rig.setFall(fall, dpr), [rig, fall, dpr]);
+  useEffect(() => rig.setOutward(bay ? 0.5 : 0), [rig, bay]);
 
   const colours = skyColours(clock.sun.altitude, condition);
   const reported = weather ? weather.cloudCover / 100 : null;

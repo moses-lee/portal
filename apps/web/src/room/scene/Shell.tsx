@@ -145,17 +145,11 @@ function Desk() {
   );
 }
 
-/** A small shelf on the left wall: where the books start (a later phase fills it). */
-function Shelf() {
-  return (
-    <group position={[ROOM.left + 0.17, 0, -1.3]}>
-      <Soft size={[0.3, 0.05, 1.5]} position={[0, 1.65, 0]} color={palette.woodLight} radius={0.012} />
-      <Soft size={[0.3, 0.05, 1.5]} position={[0, 2.15, 0]} color={palette.woodLight} radius={0.012} />
-    </group>
-  );
-}
-
-/** The fixed parts of the room (docs/PALACE.md, Shell and anchors), all primitives for now. */
+/**
+ * The fixed parts of the room (docs/PALACE.md, Shell and anchors), all primitives for now. The
+ * shelving, the board and the rest of the furniture with slots belong to their objects (`Books`,
+ * `Corkboard`, `Plants`, `Frames`, `Keys`) and the milestones (`Milestones`).
+ */
 export default function Shell() {
   return (
     <group>
@@ -166,7 +160,6 @@ export default function Shell() {
       <Door />
       <Alcove />
       <Desk />
-      <Shelf />
     </group>
   );
 }

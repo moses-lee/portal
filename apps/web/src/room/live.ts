@@ -230,7 +230,8 @@ const RUN_KINDS: Record<string, string> = {
 // Hover cards
 // ---------------------------------------------------------------------------------------------
 
-export type RoomObjectKind = "robot" | "mail" | "hearth" | "kettle" | "lamp" | "window";
+/** The live objects, then the accumulated ones (`growth.ts`: books, the board, plants, frames, keys, the tree). */
+export type RoomObjectKind = "robot" | "mail" | "hearth" | "kettle" | "lamp" | "window" | "book" | "notes" | "plant" | "frame" | "key" | "tree";
 export type RoomTarget = { kind: RoomObjectKind; id: string };
 
 /** What the room knows right now, for the cards. */
@@ -318,6 +319,9 @@ export function describeObject(target: RoomTarget, data: RoomLiveData): RoomCard
         : ["The weather is not known yet"];
       return { title: "Window", about: "The sun and the weather where the room is", lines, hint: null, action: null, credit: true };
     }
+    default:
+      // The accumulated objects' cards are `describeGrowth`'s.
+      return null;
   }
 }
 

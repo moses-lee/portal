@@ -43,9 +43,28 @@ const now = Date.now();
 /**
  * The room's state (docs/PALACE.md) as `GET /api/room` and the stream's `room` event answer it: a
  * configured location in New York with clear weather, so the sun (and so day or night) follows the
- * clock a test installs.
+ * clock a test installs. `room` replaces parts of it: a census (merged over the default counts), the
+ * milestones reached, the environment.
  */
-export function roomState(weather: Partial<NonNullable<RoomState["environment"]["weather"]>> = {}): RoomState {
+export function roomState(
+  weather: Partial<NonNullable<RoomState["environment"]["weather"]>> = {},
+  room: { census?: Partial<RoomState["census"]>; milestones?: RoomState["milestones"]; environment?: Partial<RoomState["environment"]> } = {},
+): RoomState {
+  const base = defaultRoomState(weather);
+  return {
+    ...base,
+    environment: { ...base.environment, ...room.environment },
+    census: { ...base.census, ...room.census },
+    milestones: room.milestones ?? base.milestones,
+  };
+}
+
+/** A reached milestone as the server stores it: `at` an hour ago by default, so the room shows it without a delivery. */
+export function milestone(id: string, at = Date.now() - 3_600_000): RoomState["milestones"][number] {
+  return { id, at, summary: `The room gained ${id}.` };
+}
+
+function defaultRoomState(weather: Partial<NonNullable<RoomState["environment"]["weather"]>>): RoomState {
   return {
     environment: {
       latitude: 40.71,
@@ -564,6 +583,8 @@ export async function setupPortal(
     search?: (q: string) => Omit<SearchResponse, "q">;
     /** What `GET /api/room` and the stream's `room` event answer; `roomState()` by default. */
     room?: RoomState;
+    /** What `POST /api/room/refresh` answers (and the room becomes); the current room by default. */
+    roomRefresh?: RoomState;
     /**
      * Let the room draw in WebGL. Off by default: headless Chromium rasterises WebGL in software,
      * and a room redrawn 24 times a second in every test would slow the whole suite and skew its
@@ -755,6 +776,11 @@ export async function setupPortal(
     }
     if (path === "/api/portal") return json({ status: live.status });
     if (path === "/api/room" && method === "GET") return json(live.room);
+    if (path === "/api/room/refresh" && method === "POST") {
+      // Like the server: look the environment up again and answer the whole state (the test's `roomRefresh`, when given).
+      if (options.roomRefresh) live.room = structuredClone(options.roomRefresh);
+      return json(live.room);
+    }
     if (path === "/api/search" && method === "GET") {
       const q = url.searchParams.get("q") ?? "";
       return json({ q, ...(options.search?.(q) ?? { messages: [], pulls: [] }) });
@@ -1175,6 +1201,11 @@ export async function setupPortal(
      * provider ignores it, as it would a stale copy.
      */
     pushWorkspace: publishWorkspace,
+    /** The room's state changed on the server (a census recount, a milestone reached): `GET /api/room` answers it and the stream pushes it. */
+    pushRoom: async (next: RoomState) => {
+      live.room = structuredClone(next);
+      await page.evaluate((room) => window.__portalEmit("/api/portal/stream", { type: "room", state: room }, "message"), next);
+    },
     /** The mocked server's orchestrator data, for asserting what a request changed. */
     orchestrator: orch,
     /** What the stream opened with (status, items, threads, intents, approvals); the mocked routes read it too. */

@@ -91,3 +91,8 @@ export function markForUpload(attribute: { needsUpdate: boolean } | null | undef
 export function setGlow(material: MeshStandardMaterial, intensity: number) {
   material.emissiveIntensity = intensity;
 }
+
+/** Sets how many instances an instanced mesh draws, for the same reason as `markForUpload`. */
+export function setDrawCount(mesh: { count: number }, count: number) {
+  mesh.count = count;
+}

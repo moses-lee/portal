@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Bot, Database, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
+import { Bot, Castle, Database, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -76,6 +76,10 @@ import {
   type SettingsPatch,
 } from "@/lib/settings";
 import type { RemovedProjectSummary } from "@/lib/types";
+import { portalSend } from "@/lib/orchestrator/api";
+import type { RoomEnvironment, RoomState, RoomWeather } from "@portal/contracts/room";
+import { LAYOUT_VERSION } from "@portal/shared/room";
+import { publishRoomState, useRoomState } from "@/room/useRoomState";
 import { useMediaQuery } from "./useMediaQuery";
 import { usePreference } from "./usePreference";
 import {
@@ -118,6 +122,12 @@ const sectionMeta: Record<
     label: "Data",
     description: "Conversations Portal keeps after their project is gone.",
     icon: Database,
+  },
+  room: {
+    label: "Room",
+    description:
+      "The room behind Portal: where it is, the weather through its window, and how its furniture is laid out. Portal looks the location up from the server's own address unless PORTAL_LOCATION sets it.",
+    icon: Castle,
   },
 };
 
@@ -953,6 +963,13 @@ export default function SettingsDialog({
         </section>
       )}
 
+      {active === "room" && (
+        <section aria-labelledby="settings-room" className="space-y-4">
+          <SectionHeading id="settings-room" section="room" />
+          <RoomSettings />
+        </section>
+      )}
+
       {active === "scripts" && (
         <section aria-labelledby="settings-scripts" className="space-y-6">
           <SectionHeading id="settings-scripts" section="scripts" />
@@ -1275,6 +1292,106 @@ function DeleteRemovedSessions({ onDeleted }: { onDeleted?: () => void }) {
       {result && (
         <p role="status" className="text-[11px] text-muted-foreground">
           {result}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const roomSources: Record<RoomEnvironment["source"], string> = {
+  config: "set by PORTAL_LOCATION",
+  ip: "from the server's public IP address",
+  none: "not resolved yet; the browser's time zone stands in",
+};
+
+const roomConditions: Record<RoomWeather["condition"], string> = {
+  clear: "Clear",
+  "partly-cloudy": "Partly cloudy",
+  overcast: "Overcast",
+  fog: "Fog",
+  drizzle: "Drizzle",
+  rain: "Rain",
+  "heavy-rain": "Heavy rain",
+  snow: "Snow",
+  thunderstorm: "Thunderstorm",
+};
+
+/**
+ * The Room section (docs/PALACE.md, Settings): the room's location to two decimals with where it
+ * came from, the weather with the provider's credit, a Refresh that looks both up again
+ * (`POST /api/room/refresh`) and shows the answer, and the layout version.
+ */
+function RoomSettings() {
+  const room = useRoomState();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshed, setRefreshed] = useState(false);
+  const environment = room?.environment ?? null;
+  const weather = environment?.weather ?? null;
+
+  const refresh = async () => {
+    setBusy(true);
+    setError(null);
+    setRefreshed(false);
+    try {
+      publishRoomState(await portalSend<RoomState>("/api/room/refresh", "POST", undefined, "Could not refresh the room. Try again."));
+      setRefreshed(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not refresh the room. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const located = environment && environment.latitude !== null && environment.longitude !== null;
+  return (
+    <div className="space-y-3 rounded-xl border border-border/60 p-4 text-xs">
+      <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2">
+        <dt className="text-muted-foreground">Location</dt>
+        <dd data-room-location>
+          {!room
+            ? "Loading…"
+            : located
+              ? `${environment.latitude!.toFixed(2)}, ${environment.longitude!.toFixed(2)}`
+              : "Unknown"}
+          {environment && <span className="text-muted-foreground"> · {roomSources[environment.source]}</span>}
+          {environment?.timezone && <span className="block text-muted-foreground">{environment.timezone}</span>}
+        </dd>
+        <dt className="text-muted-foreground">Weather</dt>
+        <dd data-room-weather>
+          {weather
+            ? `${roomConditions[weather.condition]}, ${Math.round(weather.temperature)}°C, ${weather.isDay ? "day" : "night"}`
+            : room
+              ? "Not known yet; the window shows a clear sky"
+              : "Loading…"}
+          {weather && (
+            <span className="block text-muted-foreground">
+              Updated {new Date(weather.fetchedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+            </span>
+          )}
+          <a
+            href="https://open-meteo.com/"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 block text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Weather data by Open-Meteo.com
+          </a>
+        </dd>
+        <dt className="text-muted-foreground">Layout version</dt>
+        <dd data-room-layout>{room?.layoutVersion ?? LAYOUT_VERSION}</dd>
+      </dl>
+      <div className="flex items-center gap-3">
+        <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void refresh()}>
+          {busy ? "Refreshing…" : "Refresh"}
+        </Button>
+        <p role="status" className="text-[11px] text-muted-foreground">
+          {refreshed ? "Location and weather looked up again." : "Looks the location and weather up again."}
+        </p>
+      </div>
+      {error && (
+        <p role="alert" className="text-[11px] text-destructive">
+          {error}
         </p>
       )}
     </div>

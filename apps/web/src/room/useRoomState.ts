@@ -19,6 +19,11 @@ function publish(state: RoomState) {
   for (const listener of [...listeners]) listener();
 }
 
+/** Adopt a state the page got some other way (the Settings dialog's Refresh answers one). */
+export function publishRoomState(state: RoomState) {
+  publish(state);
+}
+
 function loadOnce() {
   loading ??= fetch("/api/room")
     .then(async (response) => {

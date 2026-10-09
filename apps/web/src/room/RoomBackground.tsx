@@ -9,6 +9,28 @@ import { useMediaQuery } from "@/components/useMediaQuery";
 import { useWorkspaceActions } from "@/components/workspace/useWorkspaceActions";
 import { pushPath } from "@/lib/navigation";
 import { isPortalPath, portalPath, portalPathKeepingPanel, type PortalView } from "@/lib/session-routes";
+import type { RoomCensus } from "@portal/contracts/room";
+import { latitudeForTimeZone } from "@portal/shared/room";
+import {
+  bookList,
+  describeGrowth,
+  FRAME_CAP,
+  frameList,
+  GALLERY_CAP,
+  growthSummary,
+  isGrowthKind,
+  KEY_CAP,
+  noteCount,
+  plantList,
+  reachedSet,
+  shelfCount,
+  SILL_CAP,
+  STAND_CAP,
+  treeSpec,
+  type GrowthData,
+  type GrowthScene,
+} from "./growth";
+import { useRoomHost } from "./host";
 import {
   backgroundRuns,
   describeObject,
@@ -85,6 +107,18 @@ function useSettledValue<T>(value: T): T {
   return settledValue;
 }
 
+/** The census before the room's state arrives: nothing counted yet. */
+const NO_CENSUS: RoomCensus = { sessionsEver: 0, memoryActive: 0, memoryInbox: 0, watches: { active: 0, finished: 0, fires: 0, ever: 0 }, grants: 0, activityLastHour: 0, since: null };
+
+/** The browser's time zone's latitude: the hemisphere for the tree's seasons when the room has no location. */
+function zoneLatitude(): number {
+  try {
+    return latitudeForTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone)?.latitude ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** The Portal view a room object opens: the tracked panel's session comes along on Portal pages. */
 function openView(view: PortalView) {
   pushPath(isPortalPath(window.location.pathname) ? portalPathKeepingPanel(view, window.location.search) : portalPath(view));
@@ -95,11 +129,14 @@ function openView(view: PortalView) {
  * browser can draw it, else a CSS gradient sky with the same colours under the dark veil (no
  * WebGL, a lost context, or `prefers-reduced-transparency`). It follows the real sun at the room's
  * location, never a setting. The live objects follow the session list, the portal stream's status
- * and the census; with the canvas up, a document-level pointer listener (`pointer.ts`) shows their
- * hover cards and clicks through. `palace` is the Palace page, where a clicked robot waves first.
+ * and the census; the accumulated ones (books, notes, plants, frames, keys, the tree) the census,
+ * the session and project lists and the active watches, and the milestones mount their furniture;
+ * with the canvas up, a document-level pointer listener (`pointer.ts`) shows their hover cards and
+ * clicks through. `palace` is the Palace page, where a clicked robot waves first.
  * The fixed `.room-scene` element carries what tests and CSS read: `data-scene` (day or night,
  * from the sun's altitude), `data-activity`, `data-renderer`, and a `data-room` JSON summary (the
- * live objects, and what the canvas reports: the camera's look and the objects' screen points).
+ * live and accumulated objects, and what the canvas reports: the camera's look, the objects' screen
+ * points, and the milestone in the crate).
  */
 export default function RoomBackground({ activity, palace = false }: { activity: AgentActivity; palace?: boolean }) {
   const room = useRoomState();
@@ -119,7 +156,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
 
   // The live objects (docs/PALACE.md, Objects).
   const { sessions, tracked } = useSessions();
-  const { status, approvals } = usePortalLive();
+  const { status, approvals, intents, requestApproval } = usePortalLive();
   const trackedIds = useMemo(() => new Set(tracked.map((entry) => entry.sessionId)), [tracked]);
   const crowd = useMemo(() => placeRobots(sessions, trackedIds), [sessions, trackedIds]);
   const busy = status?.busy ?? false;
@@ -152,18 +189,76 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   useLayoutEffect(() => {
     dataRef.current = data;
   });
-  const describe = useCallback((target: RoomTarget) => describeObject(target, dataRef.current), []);
+
+  // The accumulated objects (docs/PALACE.md, Objects) and the milestones' furniture.
+  const host = useRoomHost();
+  const census = room?.census ?? NO_CENSUS;
+  const milestones = room?.milestones ?? null;
+  const reached = useMemo(() => reachedSet(milestones), [milestones]);
+  const sessionsEver = room ? census.sessionsEver : sessions.length;
+  const books = useMemo(() => bookList(sessions, host.projects, sessionsEver), [sessions, host.projects, sessionsEver]);
+  const shelves = shelfCount(books.length, Math.max(0, sessionsEver - sessions.length), reached);
+  const plants = useMemo(() => plantList(intents.filter((intent) => intent.status === "active")), [intents]);
+  const frames = useMemo(() => frameList(host.projects), [host.projects]);
+  const latitude = environment?.latitude ?? (clock ? zoneLatitude() : 0);
+  const growth = useSettledValue<GrowthScene>({
+    milestones,
+    books: books.slice(0, shelves.drawn),
+    notes: noteCount(census.memoryActive, census.memoryInbox),
+    plants: { sill: plants.slice(0, SILL_CAP), stand: Math.min(census.watches.finished, STAND_CAP) },
+    frames: frames.slice(0, FRAME_CAP + GALLERY_CAP),
+    keys: Math.min(census.grants, KEY_CAP),
+    tree: treeSpec(census.since, now, latitude),
+  });
+  const growthData: GrowthData = { scene: growth, census, shelves, books, plants, frames, approvals: approvals.length };
+  const growthRef = useRef(growthData);
+  useLayoutEffect(() => {
+    growthRef.current = growthData;
+  });
+  const describe = useCallback(
+    (target: RoomTarget) => (isGrowthKind(target.kind) ? describeGrowth({ kind: target.kind, id: target.id }, growthRef.current) : describeObject(target, dataRef.current)),
+    [],
+  );
 
   const { openSession } = useWorkspaceActions();
+  const { openProject } = host;
+  const approvalsRef = useRef(approvals);
+  useLayoutEffect(() => {
+    approvalsRef.current = approvals;
+  });
   const open = useCallback(
     (target: RoomTarget) => {
-      if (target.kind === "robot") void openSession(target.id);
-      else if (target.kind === "mail") openView("attention");
-      else if (target.kind === "hearth") openView("activity");
-      else if (target.kind === "kettle") openView("watches");
-      else if (target.kind === "lamp") openView("chat");
+      switch (target.kind) {
+        case "robot":
+          return void openSession(target.id);
+        case "book":
+          // A purged session's book goes nowhere: its card says so.
+          if (!target.id.startsWith("purged:")) void openSession(target.id);
+          return;
+        case "mail":
+          return openView("attention");
+        case "hearth":
+          return openView("activity");
+        case "kettle":
+          return openView("watches");
+        case "lamp":
+          return openView("chat");
+        case "notes":
+          return openView("memory");
+        case "plant":
+          return openView("watches");
+        case "frame":
+          return openProject(target.id);
+        case "key": {
+          // The approvals dialog shows pending requests only; with none waiting, the grants are listed in System.
+          const pending = approvalsRef.current.find((approval) => approval.status === "pending");
+          return pending ? requestApproval(pending.id) : openView("system");
+        }
+        default:
+          return;
+      }
     },
-    [openSession],
+    [openSession, openProject, requestApproval],
   );
   const palaceRef = useRef(palace);
   useLayoutEffect(() => {
@@ -175,8 +270,8 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     const waves = new Set<ReturnType<typeof setTimeout>>();
     const stop = startRoomPointer({
       onActivate: (hit, at) => {
-        // The window has no page of its own: its card, pinned, is all it shows.
-        if (hit.kind === "window") return pinCard(hit, at.x, at.y);
+        // The window, the tree and a purged book have no page of their own: the card, pinned, is all they show.
+        if (hit.kind === "window" || describe(hit)?.hint === null) return pinCard(hit, at.x, at.y);
         if (hit.kind === "robot" && palaceRef.current) {
           // On the Palace page a robot waves before its card shows (pinned, with the button to its session).
           hideCard();
@@ -197,13 +292,13 @@ export default function RoomBackground({ activity, palace = false }: { activity:
       stop();
       for (const timer of waves) clearTimeout(timer);
     };
-  }, [drawing, open]);
+  }, [drawing, open, describe]);
 
   // The attribute React renders holds only what the server renders the same (hydration must match);
   // the live objects (from data the page loads after it) and what the canvas reports are merged in after.
   const base = { scene, weather: condition, renderer, source: environment?.source ?? "none", still: reducedMotion };
   const baseJson = JSON.stringify(base);
-  const liveJson = JSON.stringify(liveSummary(data));
+  const liveJson = JSON.stringify({ ...liveSummary(data), ...growthSummary(growthData) });
   const element = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const merged = { ...(JSON.parse(baseJson) as object), ...(JSON.parse(liveJson) as object) };
@@ -226,7 +321,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
       style={style}
       aria-hidden="true"
     >
-      {drawing && <RoomCanvas clock={clock} live={live} weather={weather} reducedMotion={reducedMotion} onContextLost={contextLost} />}
+      {drawing && <RoomCanvas clock={clock} live={live} growth={growth} weather={weather} reducedMotion={reducedMotion} onContextLost={contextLost} />}
       {/* Portalled to the body, so outside this hidden element. */}
       {drawing && <RoomHoverCard describe={describe} open={open} />}
     </div>

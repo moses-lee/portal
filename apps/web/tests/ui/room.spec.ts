@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { firstTitle, makeSession, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
+import { firstTitle, makeSession, milestone, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 import { pane, tab, workspaceOf } from "./workspace-fixtures";
 
 /** The scene's summary for tests (docs/PALACE.md, Tests): `{ scene, weather, renderer, source, still }`. */
@@ -180,9 +180,14 @@ test("live objects: a session waiting on approval puts its robot by the door, an
   expect(summaryNow.mail).toEqual({ sealed: 1, open: 11, pile: 3 });
   expect(summaryNow.hearth).toBe("fire");
   expect(summaryNow.kettle).toBe(true);
-  // Every live object has a hotspot the pointer can find.
+  // Every live object has a hotspot the pointer can find (the accumulated ones' are another test's).
+  const accumulated = /^(book|notes|plant|frame|key|tree):/;
   await expect
-    .poll(async () => Object.keys((await live(scene)).points ?? {}).sort())
+    .poll(async () =>
+      Object.keys((await live(scene)).points ?? {})
+        .filter((key) => !accumulated.test(key))
+        .sort(),
+    )
     .toEqual(["hearth:hearth", "kettle:kettle", "lamp:lamp", "mail:mail", "robot:s1", "robot:s2", "window:window"]);
   await page.screenshot({ path: info.outputPath("live-objects.png") });
 
@@ -259,4 +264,94 @@ test("the Palace page's drag turns the camera within its limits, the wheel zooms
   await page.mouse.up();
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Activity", exact: true }).click();
   await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
+});
+
+/** The accumulated objects and milestone furniture, as `data-room` reports them. */
+type GrowthSummary = {
+  layout: number;
+  furniture: string[];
+  books: { total: number; drawn: number; rows: number; boxed: number; purged: number };
+  notes: { pinned: number; layered: number; loose: number; looseExtra: number };
+  plants: { sill: number; stand: number; blooms: number };
+  keys: number;
+  tree: { stage: string; season: string };
+  delivery?: string | null;
+  points?: Record<string, [number, number]>;
+};
+const growth = async (room: Locator) => (await summary(room)) as unknown as GrowthSummary;
+
+test("accumulated objects: thirty sessions fill two shelf rows on the tall bookcase two milestones brought", async ({ page }, info) => {
+  // Noon in New York in October, a year and a half after the first session.
+  await page.clock.install({ time: new Date(Date.UTC(2026, 9, 9, 16, 0, 0)) });
+  const room = roomState(
+    {},
+    {
+      census: {
+        sessionsEver: 30,
+        memoryActive: 75,
+        memoryInbox: 3,
+        watches: { active: 0, finished: 3, fires: 4, ever: 3 },
+        grants: 2,
+        since: Date.UTC(2025, 3, 1),
+      },
+      milestones: [milestone("tall-bookcase"), milestone("wide-pinboard")],
+    },
+  );
+  await setupPortal(page, { webgl: true, room });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  await expect.poll(async () => (await growth(scene)).books).toEqual({ total: 30, drawn: 30, rows: 2, boxed: 0, purged: 27 });
+  const now = await growth(scene);
+  expect(now.furniture).toEqual(["tall-bookcase", "wide-pinboard"]);
+  expect(now.notes).toEqual({ pinned: 60, layered: 15, loose: 3, looseExtra: 0 });
+  expect(now.plants).toMatchObject({ stand: 3 });
+  expect(now.keys).toBe(2);
+  expect(now.tree).toEqual({ stage: "full", season: "autumn" });
+  // Neither milestone is fresh: the furniture is simply there, no crate.
+  expect(now.delivery ?? null).toBeNull();
+  // The first books on the shelf are purged sessions': their card says so and a click goes nowhere.
+  const [bx, by] = await pointOf(scene, "book:purged:0");
+  await page.mouse.move(bx, by);
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText("A purged session");
+  await expect(tooltip).toContainText("30 books on 2 shelf rows");
+  await page.screenshot({ path: info.outputPath("growth.png") });
+});
+
+test("a milestone that arrives over the stream is delivered in a crate, then its furniture stays", async ({ page }, info) => {
+  const base = roomState({}, { census: { sessionsEver: 24 } });
+  const fixture = await setupPortal(page, { webgl: true, room: base });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  await expect.poll(async () => (await growth(scene)).books?.rows).toBe(1);
+  await fixture.pushRoom({ ...base, census: { ...base.census, sessionsEver: 25 }, milestones: [milestone("tall-bookcase", Date.now())] });
+  await expect.poll(async () => (await growth(scene)).delivery ?? null).toBe("tall-bookcase");
+  await page.screenshot({ path: info.outputPath("delivery.png") });
+  await expect.poll(async () => (await growth(scene)).delivery ?? null, { timeout: 15_000 }).toBeNull();
+  expect((await growth(scene)).furniture).toEqual(["tall-bookcase"]);
+});
+
+test("the Settings dialog's Room section shows the location and weather, and Refresh looks them up again", async ({ page }, info) => {
+  const refreshed = roomState({ code: 61, condition: "rain", temperature: 12 }, { environment: { latitude: 51.5072, longitude: -0.1276, source: "ip", timezone: "Europe/London" } });
+  const fixture = await setupPortal(page, { roomRefresh: refreshed });
+  await page.goto("/");
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "room" } })));
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog.getByRole("heading", { name: "Room" })).toBeVisible();
+  const location = dialog.locator("[data-room-location]");
+  const weather = dialog.locator("[data-room-weather]");
+  await expect(location).toContainText("40.71, -74.01");
+  await expect(location).toContainText("set by PORTAL_LOCATION");
+  await expect(weather).toContainText("Clear, 18°C, day");
+  await expect(dialog.getByRole("link", { name: "Weather data by Open-Meteo.com" })).toHaveAttribute("href", "https://open-meteo.com/");
+  await expect(dialog.locator("[data-room-layout]")).toHaveText("1");
+  await dialog.screenshot({ animations: "disabled", path: info.outputPath("settings-room.png") });
+
+  await dialog.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(location).toContainText("51.51, -0.13");
+  await expect(location).toContainText("from the server's public IP address");
+  await expect(weather).toContainText("Rain, 12°C, day");
+  expect(fixture.requests.filter((request) => request.path === "/api/room/refresh" && request.method === "POST")).toHaveLength(1);
+  // The room itself took the new state too.
+  await expect.poll(async () => (await summary(page.locator(".room-scene"))).weather).toBe("rain");
 });
