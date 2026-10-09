@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { firstTitle, makeSession, milestone, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
+import { boxCorners, framePose, frameSpec, projectPoint } from "../../src/room/layout";
 
 /** The scene's summary for tests (docs/PALACE.md, Tests): `{ scene, weather, renderer, source, still }`. */
 const summary = async (room: Locator) => JSON.parse((await room.getAttribute("data-room")) ?? "{}") as Record<string, unknown>;
@@ -452,7 +453,11 @@ test("a drag and a wheel on the Palace page leave the camera where it is", async
   expect(await camera()).toEqual(before);
 });
 
-/** The hero box on the Palace page: centred where the view offset puts the frame's centre, filling the pad on one axis. */
+/**
+ * The hero box on the Palace page: where the pure fit (`layout.ts`) puts it, with no view offset
+ * (no panel moves the room, Revision 3); down the screen it is centred and inside the pad (the
+ * landscape aim moves the frame across only).
+ */
 async function expectFittedFrame(page: Page) {
   await setupPortal(page, { webgl: true });
   await page.goto("/palace");
@@ -461,14 +466,33 @@ async function expectFittedFrame(page: Page) {
   await expect.poll(async () => (await live(scene)).camera ?? null).not.toBeNull();
   const { box, offset } = (await live(scene)).camera!;
   const { width, height } = page.viewportSize()!;
-  const [left, top, right, bottom] = box;
-  expect(Math.abs((left + right) / 2 - (width / 2 - offset[0]))).toBeLessThanOrEqual(2);
-  expect(Math.abs((top + bottom) / 2 - (height / 2 - offset[1]))).toBeLessThanOrEqual(2);
-  const [limitX, limitY] = [0.88 * width, 0.88 * height];
-  expect(right - left).toBeLessThanOrEqual(limitX + 2);
-  expect(bottom - top).toBeLessThanOrEqual(limitY + 2);
-  expect(Math.min(Math.abs(right - left - limitX), Math.abs(bottom - top - limitY))).toBeLessThanOrEqual(2);
+  expect(offset).toEqual([0, 0]);
+  const pose = framePose(width / height);
+  const points = boxCorners(frameSpec(width / height).box).map((corner) => projectPoint(pose, corner, { width, height }));
+  const expected = [Math.min(...points.map((p) => p.x)), Math.min(...points.map((p) => p.y)), Math.max(...points.map((p) => p.x)), Math.max(...points.map((p) => p.y))];
+  for (const [index, edge] of box.entries()) expect(Math.abs(edge - expected[index])).toBeLessThanOrEqual(2);
+  const [, top, , bottom] = box;
+  expect(Math.abs((top + bottom) / 2 - height / 2)).toBeLessThanOrEqual(2);
+  expect(top).toBeGreaterThanOrEqual(0.06 * height - 2);
+  expect(bottom).toBeLessThanOrEqual(0.94 * height + 2);
 }
+
+test.describe("at 1440 × 900 on the session page", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+  test("the sidebar coming and going leaves the room where it is", async ({ page }) => {
+    await setupPortal(page, { webgl: true, sessions: [finishedSession] });
+    await page.goto("/sessions/s3");
+    const scene = page.locator(".room-scene");
+    await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
+    await expect(page.locator(".sidebar-shell")).toBeVisible();
+    const before = await live(scene);
+    expect(before.camera?.offset).toEqual([0, 0]);
+    await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
+    await expect(page.locator(".sidebar-shell")).toHaveCount(0);
+    await page.waitForTimeout(300);
+    expect((await live(scene)).camera).toEqual(before.camera);
+  });
+});
 
 test.describe("at 1440 × 900", () => {
   test.use({ viewport: { width: 1440, height: 900 } });

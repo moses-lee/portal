@@ -17,7 +17,7 @@
  *   `captureSize`.
  */
 import { LAYOUT_VERSION } from "@portal/shared/room";
-import { framePose, layoutOffset, readLayout } from "./layout.ts";
+import { CAMERA_VERSION, framePose, layoutOffset, readLayout } from "./layout.ts";
 import { sceneAt } from "./sun.ts";
 
 /** A snapshot older than this is not shown. */
@@ -47,6 +47,8 @@ export type Pixels = { x: number; y: number };
 /** The record under `"last"`, without its image. */
 export type SnapshotMeta = {
   layoutVersion: number;
+  /** The camera rule the frame was drawn under (`CAMERA_VERSION`): another rule's frame does not line up with the room. */
+  cameraVersion: number;
   /** The viewport in CSS pixels at the capture. */
   width: number;
   height: number;
@@ -71,7 +73,7 @@ export type SnapshotRecord = SnapshotMeta & { blob: Blob };
 export type SnapshotEligibility = "eligible" | "layout" | "stale" | "scene" | "aspect";
 
 /**
- * Whether a stored snapshot may stand in for the room now: the same `LAYOUT_VERSION`, under
+ * Whether a stored snapshot may stand in for the room now: the same `LAYOUT_VERSION` and `CAMERA_VERSION`, under
  * `SNAPSHOT_MAX_AGE_MS` old (a record from the future, after the clock moved back, is not), the
  * scene it was taken in still the scene now at the place it was taken (`sceneAt` over the record's
  * coordinates, so the answer does not hang on where the page first guesses the room is), and an
@@ -79,10 +81,10 @@ export type SnapshotEligibility = "eligible" | "layout" | "stale" | "scene" | "a
  * Otherwise the first rule it fails.
  */
 export function snapshotEligibility(
-  record: Pick<SnapshotMeta, "layoutVersion" | "at" | "scene" | "aspect" | "latitude" | "longitude">,
-  now: { layoutVersion: number; at: number; aspect: number },
+  record: Pick<SnapshotMeta, "layoutVersion" | "cameraVersion" | "at" | "scene" | "aspect" | "latitude" | "longitude">,
+  now: { layoutVersion: number; cameraVersion: number; at: number; aspect: number },
 ): SnapshotEligibility {
-  if (record.layoutVersion !== now.layoutVersion) return "layout";
+  if (record.layoutVersion !== now.layoutVersion || record.cameraVersion !== now.cameraVersion) return "layout";
   const age = now.at - record.at;
   if (!(age >= 0 && age < SNAPSHOT_MAX_AGE_MS)) return "stale";
   if (record.scene !== sceneAt(now.at, record)) return "scene";
@@ -164,7 +166,7 @@ const isPixels = (value: unknown): value is Pixels =>
 function asRecord(value: unknown): SnapshotRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as SnapshotRecord;
-  const numbers = [record.layoutVersion, record.width, record.height, record.aspect, record.latitude, record.longitude, record.at];
+  const numbers = [record.layoutVersion, record.cameraVersion, record.width, record.height, record.aspect, record.latitude, record.longitude, record.at];
   if (!numbers.every((each) => typeof each === "number" && Number.isFinite(each))) return null;
   if (record.width <= 0 || record.height <= 0 || !isPixels(record.offset)) return null;
   if (record.scene !== "day" && record.scene !== "night") return null;
@@ -172,12 +174,12 @@ function asRecord(value: unknown): SnapshotRecord | null {
   return record;
 }
 
-/** The stored record, if any; one from another layout version is deleted and not returned. */
+/** The stored record, if any; one from another layout or camera version is deleted and not returned. */
 async function readLast(): Promise<SnapshotRecord | null> {
   const stored = await withStore("readonly", (store) => store.get(SNAPSHOT_KEY));
   if (stored === undefined) return null;
-  const version = (stored as { layoutVersion?: unknown } | null)?.layoutVersion;
-  if (version !== LAYOUT_VERSION) {
+  const versions = stored as { layoutVersion?: unknown; cameraVersion?: unknown } | null;
+  if (versions?.layoutVersion !== LAYOUT_VERSION || versions?.cameraVersion !== CAMERA_VERSION) {
     await withStore("readwrite", (store) => store.delete(SNAPSHOT_KEY));
     return null;
   }
@@ -258,6 +260,7 @@ export function armSnapshots(options: {
     const { scene, latitude, longitude } = options.place();
     const meta: SnapshotMeta = {
       layoutVersion: LAYOUT_VERSION,
+      cameraVersion: CAMERA_VERSION,
       width: layout.width,
       height: layout.height,
       aspect: layout.width / layout.height,

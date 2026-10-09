@@ -1,24 +1,20 @@
 /**
- * Where the room shows (docs/PALACE.md, Camera): the camera's pose is fitted to the room for the
- * viewport's aspect (`framePose`), UI parts report the rectangle they cover, and the camera's
- * `setViewOffset` moves the fitted frame into the region they leave open. Nothing the user does
- * moves the camera.
+ * Where the room shows (docs/PALACE.md, Camera, and Revision 3): the camera's pose is fitted to
+ * the room for the viewport's aspect (`framePose`) and aimed a little right of the fit in
+ * landscape, so the room sits where it looks right beside a sidebar and stays put when the
+ * sidebar, the right panels or the chat column come and go: none of them moves it. The one part
+ * that does is the phone strip, which reports the rectangle it covers, and the camera's
+ * `setViewOffset` draws the room's window in it. Nothing the user does moves the camera.
  *
  * The maths (`interestPoint`, `viewOffset`, `framePose`, `projectPoint`) is pure and unit-tested; the registry
  * below it measures the reported elements only when one of them resizes or the window does, never
- * per frame. Parts report through `roomCover(kind)` as a callback ref on their own element, or
- * `useRoomCover(kind)` (`useRoomCover.ts`) where the ref passes through another component's ref
- * merger, which may drop a callback ref's cleanup:
+ * per frame. Parts report through `roomCover(kind)` as a callback ref on their own element:
  *
- * - `left`: covers the viewport from its left edge (the sidebar).
- * - `right`: covers it from the right (the GitHub inspector, the tracked-sessions panel).
- * - `column`: a reading column in the open region (a conversation); the room aims for the wider
- *   margin beside it when that margin is wide enough to show something.
  * - `focus`: a see-through window onto the room (the phone strip); the room's window centres in it.
  */
 
 export type Rect = { left: number; top: number; width: number; height: number };
-export type CoverKind = "left" | "right" | "column" | "focus";
+export type CoverKind = "focus";
 export type RoomLayout = {
   /**
    * The viewport, in CSS pixels: the room's fixed element's box (`registerStage`), which the canvas
@@ -30,44 +26,21 @@ export type RoomLayout = {
   covers: readonly { kind: CoverKind; rect: Rect }[];
 };
 
-/** A margin beside a column narrower than this is not worth aiming at; the room centres on the open region instead. */
-export const MIN_MARGIN = 220;
-
 /** At and below this aspect (width / height) the portrait pose: higher, squarer to the back wall, framing the window to the hearth. */
 export const PORTRAIT_ASPECT = 0.8;
 
 const visible = (rect: Rect) => rect.width > 0 && rect.height > 0;
 
-/** The point of the viewport (CSS pixels) where the room's centre of interest should land. */
+/**
+ * The point of the viewport (CSS pixels) where the room's centre of interest should land: the
+ * centre of a visible `focus` cover (the phone strip), else the viewport's centre. Panels do not
+ * move it (Revision 3).
+ */
 export function interestPoint(layout: RoomLayout): { x: number; y: number } {
   const { width, height } = layout;
-  const covers = layout.covers.filter((cover) => visible(cover.rect));
-  const focus = covers.find((cover) => cover.kind === "focus");
+  const focus = layout.covers.find((cover) => cover.kind === "focus" && visible(cover.rect));
   if (focus) return { x: focus.rect.left + focus.rect.width / 2, y: focus.rect.top + focus.rect.height / 2 };
-
-  let left = 0;
-  let right = width;
-  for (const cover of covers) {
-    if (cover.kind === "left") left = Math.max(left, Math.min(width, cover.rect.left + cover.rect.width));
-    if (cover.kind === "right") right = Math.min(right, Math.max(0, cover.rect.left));
-  }
-  if (right - left < 1) {
-    left = 0;
-    right = width;
-  }
-  const y = height / 2;
-  const columns = covers.filter((cover) => cover.kind === "column");
-  if (columns.length > 0) {
-    const start = Math.max(left, Math.min(...columns.map((cover) => cover.rect.left)));
-    const end = Math.min(right, Math.max(...columns.map((cover) => cover.rect.left + cover.rect.width)));
-    const before = start - left;
-    const after = right - end;
-    // The wider margin, when it can show the room; the left one on a tie (the window is centre-left).
-    if (Math.max(before, after) >= MIN_MARGIN) {
-      return before >= after ? { x: left + before / 2, y } : { x: end + after / 2, y };
-    }
-  }
-  return { x: (left + right) / 2, y };
+  return { x: width / 2, y: height / 2 };
 }
 
 export type ViewOffset = { fullWidth: number; fullHeight: number; x: number; y: number; width: number; height: number };
@@ -186,15 +159,29 @@ export const LANDSCAPE_ASPECT = 1.4;
 export const FRAME_PAD = 0.06;
 
 /**
- * The two anchor poses (docs/PALACE.md, Camera): the angles and the hero box the fit frames. The
- * landscape box runs from the shelving's wall to the door casing and from the back wall to the
- * rug's front edge; the portrait one from the inside sill to the hearth's opening, back wall to
- * just before the robots' bench.
+ * Bumped when the camera's rule changes so that a stored snapshot (`snapshot.ts`), drawn from the
+ * old pose, is not shown under the new one. 2: Revision 3, the landscape aim and no panel offsets.
+ */
+export const CAMERA_VERSION = 2;
+
+/**
+ * The two anchor poses (docs/PALACE.md, Camera): the angles, the hero box the fit frames, and the
+ * aim. The landscape box runs from the shelving's wall to the door casing and from the back wall
+ * to the rug's front edge; the portrait one from the inside sill to the hearth's opening, back
+ * wall to just before the robots' bench.
+ *
+ * `aim` (Revision 3) moves the fitted target along the camera's right axis, in metres; a negative
+ * value draws the room to the right of the centred fit. The landscape aim is the composition
+ * Moses chose on the session page beside a 280 px sidebar, which at 1440 × 900 drew the frame
+ * 140 px right of the viewport's centre: the window and desk near the middle of the open region,
+ * the shelving under the sidebar's glass, the door casing's top right corner cropped. It is fixed
+ * now, with or without the sidebar. The portrait aim is zero: the phone's Palace page is centred
+ * and the strip has its own anchor.
  */
 export const ANCHOR_POSES = {
-  landscape: { yaw: 25 * DEGREE, pitch: 25 * DEGREE, box: { min: [-4, 0, -3], max: [3.9, 3.15, 1.75] } },
-  portrait: { yaw: 14 * DEGREE, pitch: 30 * DEGREE, box: { min: [-2.4, 0, -3], max: [2.3, 2.6, 1.0] } },
-} as const satisfies Record<string, { yaw: number; pitch: number; box: HeroBox }>;
+  landscape: { yaw: 25 * DEGREE, pitch: 25 * DEGREE, box: { min: [-4, 0, -3], max: [3.9, 3.15, 1.75] }, aim: -1.08 },
+  portrait: { yaw: 14 * DEGREE, pitch: 30 * DEGREE, box: { min: [-2.4, 0, -3], max: [2.3, 2.6, 1.0] }, aim: 0 },
+} as const satisfies Record<string, { yaw: number; pitch: number; box: HeroBox; aim: number }>;
 
 /** How far `aspect` lies from the portrait anchor (0) to the landscape one (1). */
 function blendOf(aspect: number): number {
@@ -203,12 +190,12 @@ function blendOf(aspect: number): number {
 
 const mix = (portrait: number, landscape: number, t: number) => portrait + t * (landscape - portrait);
 
-/** The yaw, pitch and hero box for a viewport aspect: the anchors', blended between 0.8 and 1.4. */
-export function frameSpec(aspect: number): { yaw: number; pitch: number; box: HeroBox } {
+/** The yaw, pitch, hero box and aim for a viewport aspect: the anchors', blended between 0.8 and 1.4. */
+export function frameSpec(aspect: number): { yaw: number; pitch: number; box: HeroBox; aim: number } {
   const t = blendOf(aspect);
   const { landscape: l, portrait: p } = ANCHOR_POSES;
   const edge = (side: "min" | "max") => [0, 1, 2].map((axis) => mix(p.box[side][axis], l.box[side][axis], t)) as unknown as Point3;
-  return { yaw: mix(p.yaw, l.yaw, t), pitch: mix(p.pitch, l.pitch, t), box: { min: edge("min"), max: edge("max") } };
+  return { yaw: mix(p.yaw, l.yaw, t), pitch: mix(p.pitch, l.pitch, t), box: { min: edge("min"), max: edge("max") }, aim: mix(p.aim, l.aim, t) };
 }
 
 type Basis = { f: Point3; r: Point3; u: Point3 };
@@ -241,11 +228,13 @@ function decreasingRoot(g: (value: number) => number, lo: number, hi: number): n
 /**
  * The camera for a viewport aspect (docs/PALACE.md, Camera): the blended angles, and the smallest
  * distance and the target that put the blended hero box inside the frame with `FRAME_PAD` free on
- * every side, centred. On the axis that sets the distance the box touches the pad on both sides;
- * on the other it has equal margins. Pure; one pass, no iteration beyond the centring's bisection.
+ * every side, centred, then the target moved by the blended aim along the camera's right axis
+ * (Revision 3). On the axis that sets the distance the box touches the pad on both sides before
+ * the aim; on the other it has equal margins. Pure; one pass, no iteration beyond the centring's
+ * bisection.
  */
 export function framePose(aspect: number): CameraPose {
-  const { yaw, pitch, box } = frameSpec(aspect);
+  const { yaw, pitch, box, aim } = frameSpec(aspect);
   const { f, r, u } = basis(yaw, pitch);
   const centre: Point3 = [0, 1, 2].map((axis) => (box.min[axis] + box.max[axis]) / 2) as unknown as Point3;
   const corners = boxCorners(box).map((corner) => {
@@ -280,7 +269,7 @@ export function framePose(aspect: number): CameraPose {
     const values = corners.map((corner) => corner[axis]);
     return decreasingRoot(g, Math.min(...values), Math.max(...values));
   };
-  const a = centred("x", tH);
+  const a = centred("x", tH) + aim;
   const b = centred("y", tV);
   const target = [0, 1, 2].map((axis) => centre[axis] + a * r[axis] + b * u[axis]) as [number, number, number];
   return { yaw, pitch, distance: d, fov: FOV, target };
@@ -316,9 +305,9 @@ export function projectPoint(
 }
 
 /**
- * The view offset for a layout seen from `pose`: the fitted frame's centre drawn at the open
- * region's point of interest, except under a `focus` cover (the phone strip), where the window's
- * centre is drawn at the strip's centre.
+ * The view offset for a layout seen from `pose`: none, the fitted frame's centre drawn at the
+ * viewport's centre, except under a `focus` cover (the phone strip), where the window's centre is
+ * drawn at the strip's centre.
  */
 export function layoutOffset(layout: RoomLayout, pose: CameraPose): ViewOffset {
   const size = { width: layout.width, height: layout.height };

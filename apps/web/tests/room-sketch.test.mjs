@@ -9,7 +9,7 @@ const rect = (left, width, top = 0, height = 900) => ({ left, top, width, height
 /** The six viewports the fit is checked at (docs/PALACE.md, Revision 2, Camera). */
 const VIEWPORTS = [
   { name: "1440 × 900", width: 1440, height: 900, covers: [] },
-  { name: "1440 × 900 with a 320 px right panel", width: 1440, height: 900, covers: [{ kind: "right", rect: rect(1120, 320) }] },
+  { name: "390 × 844 under the phone strip", width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] },
   { name: "1280 × 720", width: 1280, height: 720, covers: [] },
   { name: "820 × 1180", width: 820, height: 1180, covers: [] },
   { name: "390 × 844", width: 390, height: 844, covers: [] },
@@ -125,7 +125,7 @@ test("a stroke that crosses the near plane is cut where it does, and one behind 
 
 test("the sketch's window lands where the camera draws it, under the phone strip too, and its paths are plain SVG", () => {
   const phone = framePose(390 / 844);
-  const strip = { width: 390, height: 844, covers: [{ kind: "column", rect: rect(0, 390, 72, 772) }, { kind: "focus", rect: rect(0, 390, 0, 72) }] };
+  const strip = { width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] };
   const figure = sketchFigure(phone, layoutOffset(strip, phone), { width: 390, height: 844 });
   assert.ok(Math.abs(figure.window.x - 195) < 0.01 && Math.abs(figure.window.y - 36) < 0.01, `${figure.window.x}, ${figure.window.y}`);
   assert.equal(figure.strokes.length, SKETCH.length);

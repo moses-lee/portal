@@ -30,7 +30,6 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import type { PortalView } from "@/lib/session-routes";
-import { roomCover } from "@/room/layout";
 import { isMacPlatform, newestSessions } from "@/lib/search";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import type { PinMap } from "@/lib/pins";
@@ -475,7 +474,6 @@ export default function Sidebar(props: SidebarProps) {
   if (!props.desktopOpen) return null;
   return (
     <aside
-      ref={roomCover("left")}
       aria-label="Workspace sidebar"
       className="sidebar-shell frost-subtle relative"
       style={{ width }}

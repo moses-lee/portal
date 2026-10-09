@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LAYOUT_VERSION } from "@portal/shared/room";
-import { framePose, layoutOffset, projectPoint, ROOM, WINDOW_CENTRE } from "../src/room/layout.ts";
+import { CAMERA_VERSION, framePose, layoutOffset, projectPoint, ROOM, WINDOW_CENTRE } from "../src/room/layout.ts";
 import {
   captureSize,
   SNAPSHOT_ASPECT_TOLERANCE,
@@ -18,17 +18,19 @@ const rect = (left, width, top = 0, height = 900) => ({ left, top, width, height
 const AT = Date.UTC(2026, 9, 9, 15, 0, 0);
 const newYork = { latitude: 40.71, longitude: -74.01 };
 const berlin = { latitude: 52.52, longitude: 13.4 };
-const record = { layoutVersion: LAYOUT_VERSION, at: AT, scene: "day", aspect: 1.6, ...newYork };
-const now = { layoutVersion: LAYOUT_VERSION, at: AT + 60_000, aspect: 1.6 };
+const record = { layoutVersion: LAYOUT_VERSION, cameraVersion: CAMERA_VERSION, at: AT, scene: "day", aspect: 1.6, ...newYork };
+const now = { layoutVersion: LAYOUT_VERSION, cameraVersion: CAMERA_VERSION, at: AT + 60_000, aspect: 1.6 };
 
 test("a snapshot is eligible from this layout version, under six hours old, in this scene, at an aspect within 5 %", () => {
   assert.equal(snapshotEligibility(record, now), "eligible");
   assert.equal(snapshotEligibility(record, { ...now, at: AT }), "eligible");
 });
 
-test("eligibility: the layout version must be the current one", () => {
+test("eligibility: the layout version and the camera version must be the current ones", () => {
   assert.equal(snapshotEligibility({ ...record, layoutVersion: LAYOUT_VERSION - 1 }, now), "layout");
   assert.equal(snapshotEligibility({ ...record, layoutVersion: LAYOUT_VERSION + 1 }, now), "layout");
+  // A frame drawn under another camera rule (Revision 2's, before the aim) does not line up with the room.
+  assert.equal(snapshotEligibility({ ...record, cameraVersion: CAMERA_VERSION - 1 }, now), "layout");
 });
 
 test("eligibility: six hours old is too old, a millisecond less is not, and a record from the future is not shown", () => {
@@ -98,13 +100,13 @@ function placed(box, stored, point) {
   return { x: q.x * scale + box.x, y: q.y * scale + box.y };
 }
 
-test("placement: a frame stored at 1440 × 900 with the tracked panel lands on the room at 1280 × 800 with the sidebar", () => {
-  const stored = view({ width: 1440, height: 900, covers: [{ kind: "right", rect: rect(1120, 320) }] });
-  const current = view({ width: 1280, height: 800, covers: [{ kind: "left", rect: rect(0, 280, 0, 800) }] });
+test("placement: a frame stored at 1440 × 900 lands on the room at 1280 × 800, scaled with the height; no panel moves either", () => {
+  const stored = view({ width: 1440, height: 900, covers: [] });
+  const current = view({ width: 1280, height: 800, covers: [] });
   const box = snapshotPlacement(stored.view, current.view);
   assert.ok(Math.abs(box.width - 1280) < 1e-9 && Math.abs(box.height - 800) < 1e-9);
-  // The stored frame's centre was drawn 160 px left of the screen's centre, the current one 140 px right: 160 × 8/9 + 140.
-  assert.ok(Math.abs(box.x - (160 * (800 / 900) + 140)) < 1e-9, `x ${box.x}`);
+  // Both frames are drawn centred (the aim is in the pose, not the offset), so the scaled frame fills the viewport.
+  assert.ok(Math.abs(box.x) < 1e-9, `x ${box.x}`);
   assert.ok(Math.abs(box.y) < 1e-9);
   for (const point of POINTS) {
     const at = placed(box, stored, point);
@@ -115,7 +117,7 @@ test("placement: a frame stored at 1440 × 900 with the tracked panel lands on t
 
 test("placement: a phone frame stored on the Palace page lands on the room under the strip, window to the strip's centre", () => {
   const stored = view({ width: 390, height: 844, covers: [] });
-  const strip = { width: 390, height: 844, covers: [{ kind: "column", rect: rect(0, 390, 72, 772) }, { kind: "focus", rect: rect(0, 390, 0, 72) }] };
+  const strip = { width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] };
   const current = view(strip);
   const box = snapshotPlacement(stored.view, current.view);
   assert.equal(box.width, 390);

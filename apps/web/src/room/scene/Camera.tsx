@@ -12,11 +12,11 @@ const corner = new Vector3();
 
 /**
  * The diorama camera (docs/PALACE.md, Camera): the pose fitted to the room for the viewport's
- * aspect (`framePose`), set when the aspect changes, and the view offset that moves the fitted
- * frame into the region the UI leaves open (the window's centre into the phone strip), set when
- * the layout changes. Nothing runs per frame and nothing the user does moves it. After each change
- * it reports `camera` into `data-room`: the angles in degrees, the distance, the view offset, and
- * the hero box's bounds on screen as the live camera projects them.
+ * aspect (`framePose`, aimed a little right in landscape), set when the aspect changes, and the
+ * view offset that draws the window's centre in the phone strip when one is shown, set when the
+ * layout changes; no panel moves it (Revision 3). Nothing runs per frame and nothing the user does
+ * moves it. After each change it reports `camera` into `data-room`: the angles in degrees, the
+ * distance, the view offset, and the hero box's bounds on screen as the live camera projects them.
  */
 export default function CameraRig({ onChange }: { onChange: () => void }) {
   const get = useThree((state) => state.get);

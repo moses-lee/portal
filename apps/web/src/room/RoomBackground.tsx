@@ -31,7 +31,7 @@ import {
   type GrowthScene,
 } from "./growth";
 import { useRoomHost } from "./host";
-import { readLayout, registerStage, subscribeLayout } from "./layout";
+import { CAMERA_VERSION, readLayout, registerStage, subscribeLayout } from "./layout";
 import {
   backgroundRuns,
   describeObject,
@@ -196,7 +196,7 @@ function useSnapshotChoice(hydrated: boolean): SnapshotRecord | null | undefined
   }, [waiting]);
   if (choosing && hydrated && answer !== undefined && aspect > 0) {
     const { record, at } = answer;
-    const eligible = record !== null && snapshotEligibility(record, { layoutVersion: LAYOUT_VERSION, at, aspect }) === "eligible";
+    const eligible = record !== null && snapshotEligibility(record, { layoutVersion: LAYOUT_VERSION, cameraVersion: CAMERA_VERSION, at, aspect }) === "eligible";
     setChoice(eligible ? record : null);
   }
   useEffect(() => {
