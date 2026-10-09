@@ -1,20 +1,12 @@
 /**
- * Where the room shows (docs/PALACE.md, Camera, and Revision 3): the camera's pose is fitted to
+ * Where the room shows (docs/PALACE.md, Camera, Revisions 3 and 4): the camera's pose is fitted to
  * the room for the viewport's aspect (`framePose`) and aimed a little right of the fit in
- * landscape, so the room sits where it looks right beside a sidebar and stays put when the
- * sidebar, the right panels or the chat column come and go: none of them moves it. The one part
- * that does is the phone strip, which reports the rectangle it covers, and the camera's
- * `setViewOffset` draws the room's window in it. Nothing the user does moves the camera.
- *
- * The maths (`interestPoint`, `viewOffset`, `framePose`, `projectPoint`) is pure and unit-tested; the registry
- * below it measures the reported elements only when one of them resizes or the window does, never
- * per frame. Parts report through `roomCover(kind)` as a callback ref on their own element:
- *
- * - `focus`: a see-through window onto the room (the phone strip); the room's window centres in it.
+ * landscape, and nothing else sets the view: no panel, no page and nothing the user does moves it.
+ * The registry below measures the viewport the canvas fills (`registerStage`) only when it resizes
+ * or the window does, never per frame; the sketch and the snapshot read the same size, so the
+ * three agree on one pose.
  */
 
-export type Rect = { left: number; top: number; width: number; height: number };
-export type CoverKind = "focus";
 export type RoomLayout = {
   /**
    * The viewport, in CSS pixels: the room's fixed element's box (`registerStage`), which the canvas
@@ -23,41 +15,10 @@ export type RoomLayout = {
    */
   width: number;
   height: number;
-  covers: readonly { kind: CoverKind; rect: Rect }[];
 };
 
 /** At and below this aspect (width / height) the portrait pose: higher, squarer to the back wall, framing the window to the hearth. */
 export const PORTRAIT_ASPECT = 0.8;
-
-const visible = (rect: Rect) => rect.width > 0 && rect.height > 0;
-
-/**
- * The point of the viewport (CSS pixels) where the room's centre of interest should land: the
- * centre of a visible `focus` cover (the phone strip), else the viewport's centre. Panels do not
- * move it (Revision 3).
- */
-export function interestPoint(layout: RoomLayout): { x: number; y: number } {
-  const { width, height } = layout;
-  const focus = layout.covers.find((cover) => cover.kind === "focus" && visible(cover.rect));
-  if (focus) return { x: focus.rect.left + focus.rect.width / 2, y: focus.rect.top + focus.rect.height / 2 };
-  return { x: width / 2, y: height / 2 };
-}
-
-export type ViewOffset = { fullWidth: number; fullHeight: number; x: number; y: number; width: number; height: number };
-
-/**
- * The arguments for `camera.setViewOffset` that draw the fitted frame's screen point `anchor` (CSS
- * pixels, by default the frame's centre) at the viewport's `point`: a translation of the full
- * frame, nothing cropped or scaled.
- */
-export function viewOffset(
-  width: number,
-  height: number,
-  point: { x: number; y: number },
-  anchor: { x: number; y: number } = { x: width / 2, y: height / 2 },
-): ViewOffset {
-  return { fullWidth: width, fullHeight: height, x: anchor.x - point.x, y: anchor.y - point.y, width, height };
-}
 
 // ---------------------------------------------------------------------------------------------
 // The room and the camera
@@ -77,7 +38,7 @@ export const ROOM = {
 
 export type Point3 = readonly [number, number, number];
 
-/** The window opening's centre, on the glass: where the phone strip aims. */
+/** The window opening's centre, on the glass. */
 export const WINDOW_CENTRE: Point3 = [ROOM.window.x, (ROOM.window.sill + ROOM.window.top) / 2, ROOM.back - 0.12];
 
 /**
@@ -161,8 +122,9 @@ export const FRAME_PAD = 0.06;
 /**
  * Bumped when the camera's rule changes so that a stored snapshot (`snapshot.ts`), drawn from the
  * old pose, is not shown under the new one. 2: Revision 3, the landscape aim and no panel offsets.
+ * 3: Revision 4, no view offset at all (the phone strip is gone).
  */
-export const CAMERA_VERSION = 2;
+export const CAMERA_VERSION = 3;
 
 /**
  * The two anchor poses (docs/PALACE.md, Camera): the angles, the hero box the fit frames, and the
@@ -175,8 +137,7 @@ export const CAMERA_VERSION = 2;
  * Moses chose on the session page beside a 280 px sidebar, which at 1440 × 900 drew the frame
  * 140 px right of the viewport's centre: the window and desk near the middle of the open region,
  * the shelving under the sidebar's glass, the door casing's top right corner cropped. It is fixed
- * now, with or without the sidebar. The portrait aim is zero: the phone's Palace page is centred
- * and the strip has its own anchor.
+ * now, with or without the sidebar. The portrait aim is zero: the phone is centred.
  */
 export const ANCHOR_POSES = {
   landscape: { yaw: 25 * DEGREE, pitch: 25 * DEGREE, box: { min: [-4, 0, -3], max: [3.9, 3.15, 1.75] }, aim: -1.08 },
@@ -282,75 +243,37 @@ export function cameraPosition(pose: CameraPose): [number, number, number] {
 }
 
 /**
- * Where `point` (room metres) lands on a `size` viewport (CSS pixels) seen from `pose`, with the
- * view offset `offset` applied (none by default); `z` is its depth in front of the camera. The
- * camera's own maths without three.js, shared with the sketch.
+ * Where `point` (room metres) lands on a `size` viewport (CSS pixels) seen from `pose`; `z` is its
+ * depth in front of the camera. The camera's own maths without three.js, shared with the sketch.
  */
-export function projectPoint(
-  pose: CameraPose,
-  point: Point3,
-  size: { width: number; height: number },
-  offset: { x: number; y: number } = { x: 0, y: 0 },
-): { x: number; y: number; z: number } {
+export function projectPoint(pose: CameraPose, point: Point3, size: { width: number; height: number }): { x: number; y: number; z: number } {
   const { f, r, u } = basis(pose.yaw, pose.pitch);
   const v: Point3 = [point[0] - pose.target[0], point[1] - pose.target[1], point[2] - pose.target[2]];
   const z = pose.distance - dot(v, f);
   const tV = Math.tan((pose.fov / 2) * DEGREE);
   const tH = tV * (size.width / size.height);
   return {
-    x: (size.width / 2) * (1 + dot(v, r) / (z * tH)) - offset.x,
-    y: (size.height / 2) * (1 - dot(v, u) / (z * tV)) - offset.y,
+    x: (size.width / 2) * (1 + dot(v, r) / (z * tH)),
+    y: (size.height / 2) * (1 - dot(v, u) / (z * tV)),
     z,
   };
-}
-
-/**
- * The view offset for a layout seen from `pose`: none, the fitted frame's centre drawn at the
- * viewport's centre, except under a `focus` cover (the phone strip), where the window's centre is
- * drawn at the strip's centre.
- */
-export function layoutOffset(layout: RoomLayout, pose: CameraPose): ViewOffset {
-  const size = { width: layout.width, height: layout.height };
-  const point = interestPoint(layout);
-  const focus = layout.covers.some((cover) => cover.kind === "focus" && visible(cover.rect));
-  return viewOffset(layout.width, layout.height, point, focus ? projectPoint(pose, WINDOW_CENTRE, size) : undefined);
 }
 
 // ---------------------------------------------------------------------------------------------
 // The registry (browser only)
 // ---------------------------------------------------------------------------------------------
 
-const entries = new Map<Element, CoverKind>();
 const listeners = new Set<() => void>();
-let snapshot: RoomLayout = { width: 0, height: 0, covers: [] };
+let snapshot: RoomLayout = { width: 0, height: 0 };
 let observer: ResizeObserver | null = null;
 let frame = 0;
 /** The room's fixed element (`.room-scene`), whose box is the viewport the canvas fills. */
 let stage: Element | null = null;
 
-function sameLayout(a: RoomLayout, b: RoomLayout): boolean {
-  if (a.width !== b.width || a.height !== b.height || a.covers.length !== b.covers.length) return false;
-  return a.covers.every((cover, index) => {
-    const other = b.covers[index];
-    return (
-      cover.kind === other.kind &&
-      Math.round(cover.rect.left) === Math.round(other.rect.left) &&
-      Math.round(cover.rect.top) === Math.round(other.rect.top) &&
-      Math.round(cover.rect.width) === Math.round(other.rect.width) &&
-      Math.round(cover.rect.height) === Math.round(other.rect.height)
-    );
-  });
-}
-
 function measure() {
   frame = 0;
-  const covers: { kind: CoverKind; rect: Rect }[] = [];
-  for (const [element, kind] of entries) {
-    const box = element.getBoundingClientRect();
-    if (box.width > 0 && box.height > 0) covers.push({ kind, rect: { left: box.left, top: box.top, width: box.width, height: box.height } });
-  }
-  const next = { ...viewportSize(), covers };
-  if (sameLayout(snapshot, next)) return;
+  const next = viewportSize();
+  if (next.width === snapshot.width && next.height === snapshot.height) return;
   snapshot = next;
   for (const listener of [...listeners]) listener();
 }
@@ -371,19 +294,6 @@ function schedule() {
   frame = requestAnimationFrame(measure);
 }
 
-/** Reports `element` as covering the room until the returned function is called. */
-export function registerCover(element: Element, kind: CoverKind): () => void {
-  entries.set(element, kind);
-  observer ??= new ResizeObserver(schedule);
-  observer.observe(element);
-  schedule();
-  return () => {
-    entries.delete(element);
-    observer?.unobserve(element);
-    schedule();
-  };
-}
-
 /**
  * Reports `element` (the room's fixed `.room-scene`) as the viewport the canvas fills, measured
  * whenever it resizes, until the returned function is called.
@@ -398,21 +308,6 @@ export function registerStage(element: Element): () => void {
     observer?.unobserve(element);
     schedule();
   };
-}
-
-const coverRefs = new Map<CoverKind, (element: Element | null) => (() => void) | undefined>();
-
-/**
- * A stable callback ref that reports its element as covering the room: `<Link ref={roomCover("focus")}>` (the phone strip).
- * React 19 runs the returned cleanup when the element detaches.
- */
-export function roomCover(kind: CoverKind): (element: Element | null) => (() => void) | undefined {
-  let ref = coverRefs.get(kind);
-  if (!ref) {
-    ref = (element) => (element ? registerCover(element, kind) : undefined);
-    coverRefs.set(kind, ref);
-  }
-  return ref;
 }
 
 /** Hear layout changes (a `useSyncExternalStore` subscriber); the window's resizes count too. */

@@ -754,19 +754,13 @@
   /*
    * On a phone the text runs over the bright middle of the room (the hearth, the stove): a stronger
    * veil than the desktop's over the 3D room, strongest at the top where the header and the first
-   * lines sit. Where the workspace shows the room strip, its 72 px keep the desktop's veil.
+   * lines sit.
    */
   .room-scene:not([data-view="palace"])::after {
     background: linear-gradient(180deg, #15171378 0, #15171370 50%, #15171363 100%);
   }
   .room-scene[data-scene="night"]:not([data-view="palace"])::after {
     background: linear-gradient(180deg, #110f0c63 0, #110f0c5c 50%, #110f0c4d 100%);
-  }
-  .portal-shell:has([data-room-strip]) .room-scene:not([data-view="palace"])::after {
-    background: linear-gradient(180deg, #1517134d 0, #1517134d 72px, #15171378 72px, #15171370 50%, #15171363 100%);
-  }
-  .portal-shell:has([data-room-strip]) .room-scene[data-scene="night"]:not([data-view="palace"])::after {
-    background: linear-gradient(180deg, #110f0c2b 0, #110f0c2b 72px, #110f0c63 72px, #110f0c5c 50%, #110f0c4d 100%);
   }
   button[data-size="icon"] {
     min-width: 40px;

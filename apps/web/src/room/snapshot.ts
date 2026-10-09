@@ -17,7 +17,7 @@
  *   `captureSize`.
  */
 import { LAYOUT_VERSION } from "@portal/shared/room";
-import { CAMERA_VERSION, framePose, layoutOffset, readLayout } from "./layout.ts";
+import { CAMERA_VERSION, readLayout } from "./layout.ts";
 import { sceneAt } from "./sun.ts";
 
 /** A snapshot older than this is not shown. */
@@ -41,9 +41,6 @@ export const SNAPSHOT_KEY = "last";
 
 export type SnapshotScene = "day" | "night";
 
-/** A point or a translation in CSS pixels. */
-export type Pixels = { x: number; y: number };
-
 /** The record under `"last"`, without its image. */
 export type SnapshotMeta = {
   layoutVersion: number;
@@ -53,8 +50,6 @@ export type SnapshotMeta = {
   width: number;
   height: number;
   aspect: number;
-  /** The camera's view offset at the capture (`layoutOffset`'s `x` and `y`, the strip's anchor included). */
-  offset: Pixels;
   /** The room's scene at the capture. */
   scene: SnapshotScene;
   /**
@@ -92,29 +87,24 @@ export function snapshotEligibility(
   return "eligible";
 }
 
-/** A viewport and the camera's view offset in it, in CSS pixels. */
-export type SnapshotView = { width: number; height: number; offset: Pixels };
+/** A viewport in CSS pixels. */
+export type SnapshotView = { width: number; height: number };
 
 /** The stored frame's box on screen: its size, and the translation of its top left corner. */
 export type SnapshotBox = { width: number; height: number; x: number; y: number };
 
 /**
  * Where the stored frame goes so what it shows lands where the camera will draw it. The vertical
- * field of view is fixed, so the room scales with the viewport's height: the frame is drawn at its
- * stored size times `s` = current height / stored height. A screen pixel p shows the fitted frame's
- * point p + offset − centre (centre-relative, so it holds when the aspects differ a little), and
- * the same frame point is s times as far from the centre now; so the frame's top left goes to
- * s × (stored offset − stored centre) − (current offset − current centre): the difference of the
- * view offsets, the stored one scaled. At one aspect the centre terms cancel.
+ * field of view is fixed and the frame is always centred (no view offset since Revision 4), so the
+ * room scales with the viewport's height: the frame is drawn at its stored size times
+ * `s` = current height / stored height, its centre on the viewport's centre. At one aspect it
+ * fills the viewport exactly.
  */
 export function snapshotPlacement(stored: SnapshotView, current: SnapshotView): SnapshotBox {
   const scale = current.height / stored.height;
-  return {
-    width: stored.width * scale,
-    height: stored.height * scale,
-    x: scale * (stored.offset.x - stored.width / 2) - (current.offset.x - current.width / 2),
-    y: scale * (stored.offset.y - stored.height / 2) - (current.offset.y - current.height / 2),
-  };
+  const width = stored.width * scale;
+  const height = stored.height * scale;
+  return { width, height, x: (current.width - width) / 2, y: (current.height - height) / 2 };
 }
 
 /** The stored frame's size for a drawing buffer of `width` × `height`: at most `SNAPSHOT_LONG_SIDE` on its long side, never enlarged. */
@@ -159,16 +149,13 @@ async function withStore<T>(mode: IDBTransactionMode, operation: (store: IDBObje
   }
 }
 
-const isPixels = (value: unknown): value is Pixels =>
-  typeof value === "object" && value !== null && Number.isFinite((value as Pixels).x) && Number.isFinite((value as Pixels).y);
-
 /** A stored value as a record, or null when it is not one (an older shape, a damaged entry). */
 function asRecord(value: unknown): SnapshotRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as SnapshotRecord;
   const numbers = [record.layoutVersion, record.cameraVersion, record.width, record.height, record.aspect, record.latitude, record.longitude, record.at];
   if (!numbers.every((each) => typeof each === "number" && Number.isFinite(each))) return null;
-  if (record.width <= 0 || record.height <= 0 || !isPixels(record.offset)) return null;
+  if (record.width <= 0 || record.height <= 0) return null;
   if (record.scene !== "day" && record.scene !== "night") return null;
   if (typeof Blob === "undefined" || !(record.blob instanceof Blob)) return null;
   return record;
@@ -252,8 +239,6 @@ export function armSnapshots(options: {
     if (now - lastCapture < SNAPSHOT_EVERY_MS) return;
     const layout = readLayout();
     if (layout.width <= 0 || layout.height <= 0) return;
-    const pose = framePose(layout.width / layout.height);
-    const offset = layoutOffset(layout, pose);
     const frame = options.capture();
     if (!frame) return;
     lastCapture = now;
@@ -264,7 +249,6 @@ export function armSnapshots(options: {
       width: layout.width,
       height: layout.height,
       aspect: layout.width / layout.height,
-      offset: { x: offset.x, y: offset.y },
       scene,
       latitude,
       longitude,

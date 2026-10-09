@@ -10,44 +10,22 @@ import {
   cameraPosition,
   framePose,
   frameSpec,
-  interestPoint,
-  layoutOffset,
   projectPoint,
   readLayout,
-  registerCover,
   registerStage,
-  viewOffset,
 } from "../src/room/layout.ts";
 import { looksLowPower, targetFps, CADENCE_SAMPLES } from "../src/room/loop.ts";
 
 const DEGREE = Math.PI / 180;
-const rect = (left, width, top = 0, height = 900) => ({ left, top, width, height });
-
-test("with nothing covering it the room centres in the viewport", () => {
-  assert.deepEqual(interestPoint({ width: 1440, height: 900, covers: [] }), { x: 720, y: 450 });
-});
-
-test("the phone strip (a focus cover) centres the room in itself; a hidden strip (zero size) does not", () => {
-  const strip = { kind: "focus", rect: rect(0, 390, 0, 72) };
-  assert.deepEqual(interestPoint({ width: 390, height: 844, covers: [strip] }), { x: 195, y: 36 });
-  assert.deepEqual(interestPoint({ width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 0) }] }), { x: 195, y: 422 });
-});
-
-test("the view offset shifts the full frame so its anchor (by default its centre) lands on the point", () => {
-  assert.deepEqual(viewOffset(1440, 900, { x: 720, y: 450 }), { fullWidth: 1440, fullHeight: 900, x: 0, y: 0, width: 1440, height: 900 });
-  assert.deepEqual(viewOffset(1440, 900, { x: 860, y: 450 }), { fullWidth: 1440, fullHeight: 900, x: -140, y: 0, width: 1440, height: 900 });
-  assert.deepEqual(viewOffset(390, 844, { x: 195, y: 36 }), { fullWidth: 390, fullHeight: 844, x: 0, y: 386, width: 390, height: 844 });
-  assert.deepEqual(viewOffset(390, 844, { x: 195, y: 36 }, { x: 170, y: 330 }), { fullWidth: 390, fullHeight: 844, x: -25, y: 294, width: 390, height: 844 });
-});
 
 /** The six viewports the fit is checked at (docs/PALACE.md, Revision 2, Camera). */
 const VIEWPORTS = [
-  { name: "1440 × 900", width: 1440, height: 900, covers: [] },
-  { name: "390 × 844 under the phone strip", width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] },
-  { name: "1280 × 720", width: 1280, height: 720, covers: [] },
-  { name: "820 × 1180", width: 820, height: 1180, covers: [] },
-  { name: "390 × 844", width: 390, height: 844, covers: [] },
-  { name: "844 × 390", width: 844, height: 390, covers: [] },
+  { name: "1440 × 900", width: 1440, height: 900 },
+  { name: "1920 × 1080", width: 1920, height: 1080 },
+  { name: "1280 × 720", width: 1280, height: 720 },
+  { name: "820 × 1180", width: 820, height: 1180 },
+  { name: "390 × 844", width: 390, height: 844 },
+  { name: "844 × 390", width: 844, height: 390 },
 ];
 
 /** The camera's right axis for a pose, as `basis` in layout.ts has it. */
@@ -87,7 +65,7 @@ test("the fitted pose, before its aim, holds the hero box inside the pad, centre
   }
 });
 
-test("the landscape aim draws the frame 140 px right of the centre at 1440 × 900, the portrait aim nothing; the pose never moves with the layout", () => {
+test("the landscape aim draws the frame 140 px right of the centre at 1440 × 900, the portrait aim nothing", () => {
   // The frame's centre is the unaimed target; the aimed pose draws it right of the viewport's centre.
   const desktop = framePose(1440 / 900);
   const centre = projectPoint(desktop, unaimed(1440 / 900).target, { width: 1440, height: 900 });
@@ -103,16 +81,6 @@ test("the landscape aim draws the frame 140 px right of the centre at 1440 × 90
   for (const [axis, expected] of [-0.159, 1.179, -0.901].entries()) assert.ok(Math.abs(phone.target[axis] - expected) < 0.001, `phone target ${axis}: ${phone.target[axis]}`);
   assert.equal(frameSpec(0.8).aim, 0);
   assert.ok(Math.abs(frameSpec(1.1).aim - frameSpec(1.4).aim / 2) < 1e-9, "the aim blends with the angles");
-
-  // No view offset without a strip.
-  const plain = layoutOffset({ width: 1440, height: 900, covers: [] }, desktop);
-  assert.deepEqual([plain.x, plain.y], [0, 0]);
-  const strip = { width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] };
-  const offset = layoutOffset(strip, phone);
-  const window = projectPoint(phone, WINDOW_CENTRE, { width: 390, height: 844 }, offset);
-  assert.ok(Math.abs(window.x - 195) < 0.01 && Math.abs(window.y - 36) < 0.01, `the window lands at ${window.x}, ${window.y}`);
-  // The view offset is a translation of the full frame.
-  assert.deepEqual([offset.fullWidth, offset.fullHeight, offset.width, offset.height], [390, 844, 390, 844]);
 });
 
 test("the angles are the anchors' at and beyond 0.8 and 1.4, and the pose never jumps as the aspect changes", () => {
@@ -145,18 +113,16 @@ test("the angles are the anchors' at and beyond 0.8 and 1.4, and the pose never 
 });
 
 test("projectPoint agrees with a three.js camera placed as Camera.tsx places it", () => {
-  for (const { name, width, height, covers } of VIEWPORTS) {
+  for (const { name, width, height } of VIEWPORTS) {
     const pose = framePose(width / height);
-    const offset = layoutOffset({ width, height, covers }, pose);
     const camera = new PerspectiveCamera(pose.fov, width / height, 0.5, 220);
     camera.position.set(...cameraPosition(pose));
     camera.lookAt(...pose.target);
-    camera.setViewOffset(offset.fullWidth, offset.fullHeight, offset.x, offset.y, offset.width, offset.height);
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
     const points = [...boxCorners(frameSpec(width / height).box), WINDOW_CENTRE];
     for (const point of points) {
-      const ours = projectPoint(pose, point, { width, height }, offset);
+      const ours = projectPoint(pose, point, { width, height });
       const theirs = new Vector3(...point).project(camera);
       const x = ((theirs.x + 1) / 2) * width;
       const y = ((1 - theirs.y) / 2) * height;
@@ -185,33 +151,6 @@ test("Low Power Mode is a ~30 Hz animation-frame cadence over a full window", ()
   assert.equal(looksLowPower([...fill(16.7).slice(10), ...Array(10).fill(34)]), false);
 });
 
-test("a cover's element leaves the registry when its registration is undone, and the room stops making room for it", () => {
-  // Just enough browser for the registry: a window, a ResizeObserver, frames run on demand.
-  const frames = [];
-  globalThis.window = { innerWidth: 1440, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
-  globalThis.document = { documentElement: { clientWidth: 1440, clientHeight: 900 } };
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-  };
-  globalThis.requestAnimationFrame = (callback) => frames.push(callback);
-  const flush = () => frames.splice(0).forEach((callback) => callback(0));
-  try {
-    const strip = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 390, height: 72 }) };
-    const unregister = registerCover(strip, "focus");
-    flush();
-    assert.deepEqual(readLayout().covers, [{ kind: "focus", rect: { left: 0, top: 0, width: 390, height: 72 } }]);
-    unregister();
-    flush();
-    assert.deepEqual(readLayout().covers, []);
-  } finally {
-    delete globalThis.window;
-    delete globalThis.document;
-    delete globalThis.ResizeObserver;
-    delete globalThis.requestAnimationFrame;
-  }
-});
-
 test("the registry's viewport is the room's fixed element, the size the canvas takes, not the window's inner size", () => {
   const frames = [];
   // A classic scrollbar: the window is 1440 wide, the root and the fixed element 1425.
@@ -224,17 +163,12 @@ test("the registry's viewport is the room's fixed element, the size the canvas t
   globalThis.requestAnimationFrame = (callback) => frames.push(callback);
   const flush = () => frames.splice(0).forEach((callback) => callback(0));
   try {
-    const strip = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 390, height: 72 }) };
-    const unregister = registerCover(strip, "focus");
-    flush();
-    // Before the stage registers: the root's client size.
-    assert.equal(readLayout().width, 1425);
     const stage = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1425, height: 812 }) };
     const unstage = registerStage(stage);
+    // Before the stage's first measure: nothing; after it, the stage's box.
     flush();
     assert.deepEqual([readLayout().width, readLayout().height], [1425, 812]);
     unstage();
-    unregister();
     flush();
     assert.deepEqual([readLayout().width, readLayout().height], [1425, 900]);
   } finally {

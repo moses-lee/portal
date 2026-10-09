@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LAYOUT_VERSION } from "@portal/shared/room";
-import { CAMERA_VERSION, framePose, layoutOffset, projectPoint, ROOM, WINDOW_CENTRE } from "../src/room/layout.ts";
+import { CAMERA_VERSION, framePose, projectPoint, ROOM, WINDOW_CENTRE } from "../src/room/layout.ts";
 import {
   captureSize,
   SNAPSHOT_ASPECT_TOLERANCE,
@@ -12,7 +12,6 @@ import {
 } from "../src/room/snapshot.ts";
 import { sceneAt } from "../src/room/sun.ts";
 
-const rect = (left, width, top = 0, height = 900) => ({ left, top, width, height });
 
 /** 11:00 EDT in New York, where the record was taken. */
 const AT = Date.UTC(2026, 9, 9, 15, 0, 0);
@@ -76,11 +75,10 @@ test("eligibility: the aspect within 5 % of the viewport's either way, at the ed
   assert.equal(snapshotEligibility({ ...record, aspect: 390 / 844 }, { ...now, aspect: viewport }), "aspect");
 });
 
-/** A layout's view offset as the canvas sets it, and its viewport, as a `SnapshotView`. */
+/** A viewport's pose and its `SnapshotView`. */
 function view(layout) {
   const pose = framePose(layout.width / layout.height);
-  const offset = layoutOffset(layout, pose);
-  return { pose, size: { width: layout.width, height: layout.height }, view: { width: layout.width, height: layout.height, offset: { x: offset.x, y: offset.y } }, offset };
+  return { pose, size: { width: layout.width, height: layout.height }, view: { width: layout.width, height: layout.height } };
 }
 
 /** Points across the room, so a placement that is off by a scale or a shift shows. */
@@ -96,63 +94,57 @@ const POINTS = [
 /** Where a room point drawn in the stored frame shows once the frame is placed: its stored pixel, scaled, then translated. */
 function placed(box, stored, point) {
   const scale = box.width / stored.view.width;
-  const q = projectPoint(stored.pose, point, stored.size, stored.offset);
+  const q = projectPoint(stored.pose, point, stored.size);
   return { x: q.x * scale + box.x, y: q.y * scale + box.y };
 }
 
-test("placement: a frame stored at 1440 × 900 lands on the room at 1280 × 800, scaled with the height; no panel moves either", () => {
-  const stored = view({ width: 1440, height: 900, covers: [] });
-  const current = view({ width: 1280, height: 800, covers: [] });
+test("placement: a frame stored at 1440 × 900 lands on the room at 1280 × 800, scaled with the height", () => {
+  const stored = view({ width: 1440, height: 900 });
+  const current = view({ width: 1280, height: 800 });
   const box = snapshotPlacement(stored.view, current.view);
   assert.ok(Math.abs(box.width - 1280) < 1e-9 && Math.abs(box.height - 800) < 1e-9);
-  // Both frames are drawn centred (the aim is in the pose, not the offset), so the scaled frame fills the viewport.
+  // Both frames are centred (the aim is in the pose; there is no view offset), so the scaled frame fills the viewport.
   assert.ok(Math.abs(box.x) < 1e-9, `x ${box.x}`);
   assert.ok(Math.abs(box.y) < 1e-9);
   for (const point of POINTS) {
     const at = placed(box, stored, point);
-    const drawn = projectPoint(current.pose, point, current.size, current.offset);
+    const drawn = projectPoint(current.pose, point, current.size);
     assert.ok(Math.abs(at.x - drawn.x) < 0.01 && Math.abs(at.y - drawn.y) < 0.01, `${point}: ${at.x},${at.y} against ${drawn.x},${drawn.y}`);
   }
 });
 
-test("placement: a phone frame stored on the Palace page lands on the room under the strip, window to the strip's centre", () => {
-  const stored = view({ width: 390, height: 844, covers: [] });
-  const strip = { width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] };
-  const current = view(strip);
+test("placement: a phone frame at the same height but a little wider is centred, the window where the pose draws it", () => {
+  const stored = view({ width: 390, height: 844 });
+  const current = view({ width: 402, height: 844 });
   const box = snapshotPlacement(stored.view, current.view);
   assert.equal(box.width, 390);
   assert.equal(box.height, 844);
-  assert.ok(box.y < -100, `the frame moves up to put the window in the strip: ${box.y}`);
+  assert.ok(Math.abs(box.x - 6) < 1e-9 && Math.abs(box.y) < 1e-9, `${box.x},${box.y}`);
+  // The poses differ a little with the aspect (both portrait, so the same angles and box, a slightly different distance).
   const window = placed(box, stored, WINDOW_CENTRE);
-  assert.ok(Math.abs(window.x - 195) < 0.01 && Math.abs(window.y - 36) < 0.01, `${window.x},${window.y}`);
-  // And back: a frame stored under the strip shown on the Palace page.
-  const back = snapshotPlacement(current.view, stored.view);
-  for (const point of POINTS) {
-    const at = placed(back, current, point);
-    const drawn = projectPoint(stored.pose, point, stored.size, stored.offset);
-    assert.ok(Math.abs(at.x - drawn.x) < 0.01 && Math.abs(at.y - drawn.y) < 0.01, `${point}`);
-  }
+  const drawn = projectPoint(current.pose, WINDOW_CENTRE, current.size);
+  assert.ok(Math.hypot(window.x - drawn.x, window.y - drawn.y) < 3, `${window.x},${window.y} against ${drawn.x},${drawn.y}`);
 });
 
 test("placement: at an aspect a little off, the frame scales with the height and keeps the centres lined up", () => {
   // 1440 × 900 (1.6) shown at 1500 × 900 (1.667, 4 % wider): both past 1.59, so the same pose; the room is the same size and centred.
-  const stored = view({ width: 1440, height: 900, covers: [] });
-  const current = view({ width: 1500, height: 900, covers: [] });
+  const stored = view({ width: 1440, height: 900 });
+  const current = view({ width: 1500, height: 900 });
   const box = snapshotPlacement(stored.view, current.view);
   assert.equal(box.width, 1440);
   assert.equal(box.height, 900);
   assert.ok(Math.abs(box.x - 30) < 1e-9 && Math.abs(box.y) < 1e-9, `${box.x},${box.y}`);
   for (const point of POINTS) {
     const at = placed(box, stored, point);
-    const drawn = projectPoint(current.pose, point, current.size, current.offset);
+    const drawn = projectPoint(current.pose, point, current.size);
     assert.ok(Math.abs(at.x - drawn.x) < 0.01 && Math.abs(at.y - drawn.y) < 0.01, `${point}`);
   }
   // In the blend (portrait to landscape) the pose differs a little within 5 %: the window lands within a few pixels.
-  const tablet = view({ width: 820, height: 1180, covers: [] });
-  const wider = view({ width: 860, height: 1180, covers: [] });
+  const tablet = view({ width: 820, height: 1180 });
+  const wider = view({ width: 860, height: 1180 });
   const shifted = snapshotPlacement(tablet.view, wider.view);
   const at = placed(shifted, tablet, WINDOW_CENTRE);
-  const drawn = projectPoint(wider.pose, WINDOW_CENTRE, wider.size, wider.offset);
+  const drawn = projectPoint(wider.pose, WINDOW_CENTRE, wider.size);
   assert.ok(Math.hypot(at.x - drawn.x, at.y - drawn.y) < 12, `${Math.hypot(at.x - drawn.x, at.y - drawn.y)} px`);
 });
 

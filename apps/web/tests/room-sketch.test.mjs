@@ -1,29 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PerspectiveCamera, Vector3 } from "three";
-import { cameraPosition, framePose, layoutOffset, projectPoint, ROOM, WINDOW_CENTRE } from "../src/room/layout.ts";
+import { cameraPosition, framePose, projectPoint, ROOM, WINDOW_CENTRE } from "../src/room/layout.ts";
 import { drawDelays, NEAR, pathOf, projectSketch, SKETCH, sketchFigure, sketchStrokes, SPREAD_MS } from "../src/room/sketch.ts";
 
-const rect = (left, width, top = 0, height = 900) => ({ left, top, width, height });
 
 /** The six viewports the fit is checked at (docs/PALACE.md, Revision 2, Camera). */
 const VIEWPORTS = [
-  { name: "1440 × 900", width: 1440, height: 900, covers: [] },
-  { name: "390 × 844 under the phone strip", width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] },
-  { name: "1280 × 720", width: 1280, height: 720, covers: [] },
-  { name: "820 × 1180", width: 820, height: 1180, covers: [] },
-  { name: "390 × 844", width: 390, height: 844, covers: [] },
-  { name: "844 × 390", width: 844, height: 390, covers: [] },
+  { name: "1440 × 900", width: 1440, height: 900 },
+  { name: "1920 × 1080", width: 1920, height: 1080 },
+  { name: "1280 × 720", width: 1280, height: 720 },
+  { name: "820 × 1180", width: 820, height: 1180 },
+  { name: "390 × 844", width: 390, height: 844 },
+  { name: "844 × 390", width: 844, height: 390 },
 ];
 
 const EVERY_MILESTONE = new Set(["tall-bookcase", "second-bookcase", "wide-pinboard", "bay-window"]);
 
 /** A three.js camera placed as `Camera.tsx` places it. */
-function threeCamera(pose, offset, width, height) {
+function threeCamera(pose, width, height) {
   const camera = new PerspectiveCamera(pose.fov, width / height, 0.5, 220);
   camera.position.set(...cameraPosition(pose));
   camera.lookAt(...pose.target);
-  camera.setViewOffset(offset.fullWidth, offset.fullHeight, offset.x, offset.y, offset.width, offset.height);
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
   return camera;
@@ -31,11 +29,10 @@ function threeCamera(pose, offset, width, height) {
 
 test("every sketch point projects where a three.js camera set up as Camera.tsx draws it, in front of the near plane", () => {
   for (const strokes of [SKETCH, sketchStrokes(EVERY_MILESTONE)]) {
-    for (const { name, width, height, covers } of VIEWPORTS) {
+    for (const { name, width, height } of VIEWPORTS) {
       const pose = framePose(width / height);
-      const offset = layoutOffset({ width, height, covers }, pose);
-      const camera = threeCamera(pose, offset, width, height);
-      const projected = projectSketch(pose, offset, { width, height }, strokes);
+      const camera = threeCamera(pose, width, height);
+      const projected = projectSketch(pose, { width, height }, strokes);
       strokes.forEach((stroke, index) => {
         // Every authored point is in front of the near plane, so each stroke is one run, unclipped.
         const { runs } = projected[index];
@@ -86,7 +83,7 @@ test("the sketch has about fifty strokes for the room as it starts, and the mile
 
 test("the strokes draw in from the back wall to the front over half a second", () => {
   const pose = framePose(1.6);
-  const projected = projectSketch(pose, { x: 0, y: 0 }, { width: 1440, height: 900 });
+  const projected = projectSketch(pose, { width: 1440, height: 900 });
   const delays = drawDelays(projected);
   const delayOf = (id) => delays[projected.findIndex((stroke) => stroke.id === id)];
   // The walls' lines and what stands against the back wall first.
@@ -115,7 +112,7 @@ test("a stroke that crosses the near plane is cut where it does, and one behind 
     { id: "through", points: [at(0), at(2)] },
     { id: "behind", points: [at(1.5), at(2)] },
   ];
-  const [through, behind] = projectSketch(pose, { x: 0, y: 0 }, size, strokes);
+  const [through, behind] = projectSketch(pose, size, strokes);
   assert.equal(through.runs.length, 1);
   assert.equal(through.runs[0].length, 2);
   // The cut lies on the near plane: the line through the camera is the screen's centre, end to end.
@@ -123,11 +120,11 @@ test("a stroke that crosses the near plane is cut where it does, and one behind 
   assert.deepEqual(behind.runs, []);
 });
 
-test("the sketch's window lands where the camera draws it, under the phone strip too, and its paths are plain SVG", () => {
+test("the sketch's window lands where the camera draws it, on a phone too, and its paths are plain SVG", () => {
   const phone = framePose(390 / 844);
-  const strip = { width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] };
-  const figure = sketchFigure(phone, layoutOffset(strip, phone), { width: 390, height: 844 });
-  assert.ok(Math.abs(figure.window.x - 195) < 0.01 && Math.abs(figure.window.y - 36) < 0.01, `${figure.window.x}, ${figure.window.y}`);
+  const figure = sketchFigure(phone, { width: 390, height: 844 });
+  const phoneWindow = projectPoint(phone, WINDOW_CENTRE, { width: 390, height: 844 });
+  assert.ok(Math.abs(figure.window.x - phoneWindow.x) < 0.01 && Math.abs(figure.window.y - phoneWindow.y) < 0.01, `${figure.window.x}, ${figure.window.y}`);
   assert.equal(figure.strokes.length, SKETCH.length);
   for (const stroke of figure.strokes) assert.match(stroke.d, /^(M-?\d+(\.\d)? -?\d+(\.\d)?(L-?\d+(\.\d)? -?\d+(\.\d)?)+)+$/);
   assert.match(figure.wall, /Z$/);
@@ -135,7 +132,7 @@ test("the sketch's window lands where the camera draws it, under the phone strip
   assert.ok(figure.lamp && figure.hearth && figure.lamp.r > 0 && figure.hearth.r > 0);
 
   const desktop = framePose(1.6);
-  const plain = sketchFigure(desktop, { x: 0, y: 0 }, { width: 1440, height: 900 });
+  const plain = sketchFigure(desktop, { width: 1440, height: 900 });
   const centre = projectPoint(desktop, WINDOW_CENTRE, { width: 1440, height: 900 });
   assert.deepEqual(plain.window, { x: centre.x, y: centre.y });
   // The panes lie inside the window's opening on screen.

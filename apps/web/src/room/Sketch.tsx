@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import { reachedSet } from "./growth";
-import { framePose, layoutOffset, readLayout, subscribeLayout } from "./layout";
+import { framePose, readLayout, subscribeLayout } from "./layout";
 // The extension is explicit: on a case-insensitive disk "./sketch" could resolve to this file.
 import { sketchFigure, sketchStrokes } from "./sketch.ts";
 import type { RoomMilestone } from "@portal/contracts/room";
@@ -26,8 +26,8 @@ const round = (value: number) => Math.round(value * 10) / 10;
  * under reduced transparency. An inline SVG lined up with the 3D room: the walls a shade lighter
  * than the warm dark ground, the window's panes filled with the sky's colours (`--room-sky-*`,
  * set by `RoomBackground`), soft glows at the lamp and the hearth, and the room's edges in pale
- * pencil (`sketch.ts`), projected with the camera's pose and view offset whenever the layout
- * registry's measure changes; nothing is drawn before the first measure. The strokes draw in, back
+ * pencil (`sketch.ts`), projected with the camera's pose whenever the layout registry's measure
+ * changes; nothing is drawn before the first measure. The strokes draw in, back
  * wall first, the first time a sketch shows in the page load; later it comes back complete, fading
  * in from the ground. `milestones` are the room's, when its state is known as the sketch mounts:
  * they change only the lines they change, and later changes are not followed.
@@ -42,8 +42,8 @@ export default function Sketch({ milestones }: { milestones: readonly RoomMilest
   const figure = useMemo(() => {
     if (!width || !height) return null;
     const pose = framePose(width / height);
-    return sketchFigure(pose, layoutOffset(layout, pose), { width, height }, strokes, reached.has("bay-window"));
-  }, [layout, width, height, strokes, reached]);
+    return sketchFigure(pose, { width, height }, strokes, reached.has("bay-window"));
+  }, [width, height, strokes, reached]);
   const shown = figure !== null;
   useEffect(() => {
     if (shown) drawnIn = true;

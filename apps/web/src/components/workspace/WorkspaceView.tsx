@@ -250,7 +250,6 @@ export default function WorkspaceView({
           onFocus={showPane}
           onClosePane={closePane}
           onNewSession={openStartTab}
-          roomStrip
         />
       ) : (
         <Tabs.Root

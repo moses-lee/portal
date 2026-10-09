@@ -539,7 +539,6 @@ export const SKETCH: readonly Stroke[] = sketchStrokes();
 // ---------------------------------------------------------------------------------------------
 
 export type Size = { width: number; height: number };
-export type Offset = { x: number; y: number };
 export type ScreenPoint = { x: number; y: number };
 
 /** A point in front of the near plane, projected; the depth `z` kept for clipping. */
@@ -552,8 +551,8 @@ const lerp3 = (a: Point3, b: Point3, t: number): Point3 => [a[0] + (b[0] - a[0])
  * crosses it is cut where it does (depth is affine along a segment in room space, so the cut is
  * exact), and a run behind it is dropped.
  */
-function clipToNear(pose: CameraPose, points: readonly Point3[], size: Size, offset: Offset): ScreenPoint[][] {
-  const project = (point: Point3): Projected => ({ ...projectPoint(pose, point, size, offset), point });
+function clipToNear(pose: CameraPose, points: readonly Point3[], size: Size): ScreenPoint[][] {
+  const project = (point: Point3): Projected => ({ ...projectPoint(pose, point, size), point });
   const runs: ScreenPoint[][] = [];
   let run: ScreenPoint[] = [];
   let previous: Projected | null = null;
@@ -587,17 +586,17 @@ export type ProjectedStroke = {
 };
 
 /**
- * Each stroke's points mapped with `projectPoint` (the camera's maths) for `pose` and the view
- * `offset` the camera gets, on a `size` viewport: CSS pixels, where the 3D room draws the same
- * edge. Strokes behind the near plane are cut at it.
+ * Each stroke's points mapped with `projectPoint` (the camera's maths) for `pose` on a `size`
+ * viewport: CSS pixels, where the 3D room draws the same edge. Strokes behind the near plane are
+ * cut at it.
  */
-export function projectSketch(pose: CameraPose, offset: Offset, size: Size, strokes: readonly Stroke[] = SKETCH): ProjectedStroke[] {
+export function projectSketch(pose: CameraPose, size: Size, strokes: readonly Stroke[] = SKETCH): ProjectedStroke[] {
   return strokes.map((stroke) => {
     const points = stroke.closed ? [...stroke.points, stroke.points[0]] : stroke.points;
     const mean = stroke.points.reduce((sum, point) => sum + point[2], 0) / stroke.points.length;
     return {
       id: stroke.id,
-      runs: clipToNear(pose, points, size, offset),
+      runs: clipToNear(pose, points, size),
       closed: !!stroke.closed,
       depth: stroke.shell ? ROOM.back : Math.max(ROOM.back, mean),
     };
@@ -622,11 +621,11 @@ export function pathOf(runs: readonly (readonly ScreenPoint[])[]): string {
  * Clips a polygon to the near plane (Sutherland-Hodgman against the one plane) and projects it;
  * empty when it lies wholly behind.
  */
-function projectPolygon(pose: CameraPose, points: readonly Point3[], size: Size, offset: Offset): ScreenPoint[] {
+function projectPolygon(pose: CameraPose, points: readonly Point3[], size: Size): ScreenPoint[] {
   const out: ScreenPoint[] = [];
-  const depth = (point: Point3) => projectPoint(pose, point, size, offset).z;
+  const depth = (point: Point3) => projectPoint(pose, point, size).z;
   const push = (point: Point3) => {
-    const { x, y } = projectPoint(pose, point, size, offset);
+    const { x, y } = projectPoint(pose, point, size);
     out.push({ x, y });
   };
   for (let index = 0; index < points.length; index++) {
@@ -656,16 +655,16 @@ export type SketchFigure = {
 };
 
 /** A glow of `radius` metres around `centre`, as a circle on screen; none when behind the near plane. */
-function glowAt(pose: CameraPose, centre: Point3, radius: number, size: Size, offset: Offset): Glow | null {
-  const { x, y, z } = projectPoint(pose, centre, size, offset);
+function glowAt(pose: CameraPose, centre: Point3, radius: number, size: Size): Glow | null {
+  const { x, y, z } = projectPoint(pose, centre, size);
   if (z <= NEAR) return null;
   const tV = Math.tan((pose.fov / 2) * DEGREE);
   return { x, y, r: (radius * size.height) / (2 * z * tV) };
 }
 
-/** Everything `Sketch.tsx` draws, for `pose` and `offset` on a `size` viewport, with `strokes`. */
-export function sketchFigure(pose: CameraPose, offset: Offset, size: Size, strokes: readonly Stroke[] = SKETCH, bay = false): SketchFigure {
-  const projected = projectSketch(pose, offset, size, strokes);
+/** Everything `Sketch.tsx` draws, for `pose` on a `size` viewport, with `strokes`. */
+export function sketchFigure(pose: CameraPose, size: Size, strokes: readonly Stroke[] = SKETCH, bay = false): SketchFigure {
+  const projected = projectSketch(pose, size, strokes);
   const delays = drawDelays(projected);
   const { window: w, back, left } = ROOM;
   const wall: Point3[] = [
@@ -679,13 +678,13 @@ export function sketchFigure(pose: CameraPose, offset: Offset, size: Size, strok
   const panes = bay
     ? facing(w.x - w.width / 2, w.x + w.width / 2, w.sill, w.top, back)
     : facing(w.x - w.width / 2 + BAR, w.x + w.width / 2 - BAR, w.sill + BAR, w.top - BAR, FRAME_Z);
-  const centre = projectPoint(pose, WINDOW_CENTRE, size, offset);
+  const centre = projectPoint(pose, WINDOW_CENTRE, size);
   return {
     strokes: projected.map((stroke, index) => ({ id: stroke.id, d: pathOf(stroke.runs), delay: delays[index] })).filter((stroke) => stroke.d !== ""),
-    wall: polygonPath(projectPolygon(pose, wall, size, offset)),
-    panes: polygonPath(projectPolygon(pose, panes, size, offset)),
-    lamp: glowAt(pose, [DESK_LAMP.x, DESK.top + DESK_LAMP.shade.y - 0.05, DESK_LAMP.z], 0.9, size, offset),
-    hearth: glowAt(pose, [ROOM.hearth.x, 0.35, back + ROOM.hearth.depth + 0.1], 1.0, size, offset),
+    wall: polygonPath(projectPolygon(pose, wall, size)),
+    panes: polygonPath(projectPolygon(pose, panes, size)),
+    lamp: glowAt(pose, [DESK_LAMP.x, DESK.top + DESK_LAMP.shade.y - 0.05, DESK_LAMP.z], 0.9, size),
+    hearth: glowAt(pose, [ROOM.hearth.x, 0.35, back + ROOM.hearth.depth + 0.1], 1.0, size),
     window: { x: centre.x, y: centre.y },
   };
 }

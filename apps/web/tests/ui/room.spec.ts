@@ -180,7 +180,7 @@ test("a second visit shows the last frame before the room draws", async ({ page 
   await expect(room).toHaveAttribute("data-renderer", "webgl");
   await expect(room.locator("canvas")).toHaveCount(0);
   await expect(room.locator("svg[data-room-sketch]")).toHaveCount(0);
-  // Placed over the whole viewport at the same size and view offset.
+  // Placed over the whole viewport at the same size.
   const box = (await image.boundingBox())!;
   expect(Math.abs(box.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(box.y)).toBeLessThanOrEqual(1);
@@ -313,25 +313,6 @@ test("without WebGL the frost panels keep their tint over the sketch", async ({ 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("the room strip above the pane shows the window and opens the Palace page", async ({ page }, info) => {
-    await setupPortal(page, { webgl: true, workspace: workspaceOf([tab("t1", pane("p1", "s1"))]) });
-    await page.goto("/tabs/t1");
-    const strip = page.getByRole("link", { name: "Open the Palace" });
-    await expect(strip).toBeVisible();
-    const box = (await strip.boundingBox())!;
-    expect(box.height).toBe(72);
-    expect(box.y).toBe(0);
-    // The view offset draws the window's centre at the strip's centre.
-    const [wx, wy] = await pointOf(page.locator(".room-scene"), "window:window");
-    expect(Math.abs(wx - (box.x + box.width / 2))).toBeLessThanOrEqual(2);
-    expect(Math.abs(wy - (box.y + box.height / 2))).toBeLessThanOrEqual(2);
-    await page.screenshot({ path: info.outputPath("phone-strip.png") });
-    await strip.click();
-    await expect(page).toHaveURL(/\/palace$/);
-    await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Open the Palace" })).toHaveCount(0);
-  });
-
   test("the Palace page frames the room's hero box, centred and filling the pad", async ({ page }, info) => {
     await expectFittedFrame(page);
     await page.screenshot({ path: info.outputPath("palace-fitted-phone.png") });
@@ -350,7 +331,7 @@ type LiveSummary = {
   hearth: string;
   kettle: boolean;
   points?: Record<string, [number, number]>;
-  camera?: { yaw: number; pitch: number; distance: number; offset: [number, number]; box: [number, number, number, number] };
+  camera?: { yaw: number; pitch: number; distance: number; box: [number, number, number, number] };
 };
 const live = async (room: Locator) => (await summary(room)) as unknown as LiveSummary;
 
@@ -436,7 +417,7 @@ test("a drag and a wheel on the Palace page leave the camera where it is", async
   await page.goto("/palace");
   const scene = page.locator(".room-scene");
   const camera = async () => (await live(scene)).camera ?? null;
-  // Read once the layout has settled (the first frame is drawn after the covers registered), so a late cover cannot move it under the test.
+  // Read once the canvas has drawn, so the report is the settled one.
   await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   await expect.poll(camera).not.toBeNull();
   const before = await camera();
@@ -454,9 +435,9 @@ test("a drag and a wheel on the Palace page leave the camera where it is", async
 });
 
 /**
- * The hero box on the Palace page: where the pure fit (`layout.ts`) puts it, with no view offset
- * (no panel moves the room, Revision 3); down the screen it is centred and inside the pad (the
- * landscape aim moves the frame across only).
+ * The hero box on the Palace page: where the pure fit (`layout.ts`) puts it (nothing else moves
+ * the room, Revisions 3 and 4); down the screen it is centred and inside the pad (the landscape
+ * aim moves the frame across only).
  */
 async function expectFittedFrame(page: Page) {
   await setupPortal(page, { webgl: true });
@@ -464,9 +445,8 @@ async function expectFittedFrame(page: Page) {
   const scene = page.locator(".room-scene");
   await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   await expect.poll(async () => (await live(scene)).camera ?? null).not.toBeNull();
-  const { box, offset } = (await live(scene)).camera!;
+  const { box } = (await live(scene)).camera!;
   const { width, height } = page.viewportSize()!;
-  expect(offset).toEqual([0, 0]);
   const pose = framePose(width / height);
   const points = boxCorners(frameSpec(width / height).box).map((corner) => projectPoint(pose, corner, { width, height }));
   const expected = [Math.min(...points.map((p) => p.x)), Math.min(...points.map((p) => p.y)), Math.max(...points.map((p) => p.x)), Math.max(...points.map((p) => p.y))];
@@ -486,7 +466,7 @@ test.describe("at 1440 × 900 on the session page", () => {
     await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
     await expect(page.locator(".sidebar-shell")).toBeVisible();
     const before = await live(scene);
-    expect(before.camera?.offset).toEqual([0, 0]);
+    expect(before.camera).toBeTruthy();
     // The registry measures in the next animation frame; two frames cover the measure and the commit after it.
     const settle = () => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
@@ -502,7 +482,7 @@ test.describe("at 1440 × 900 on the session page", () => {
 
 test.describe("at 1440 × 900", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
-  test("the Palace page frames the room's hero box where the fitted, aimed pose puts it, with no view offset", async ({ page }, info) => {
+  test("the Palace page frames the room's hero box where the fitted, aimed pose puts it", async ({ page }, info) => {
     await expectFittedFrame(page);
     await page.screenshot({ path: info.outputPath("palace-fitted.png") });
   });
