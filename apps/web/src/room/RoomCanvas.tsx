@@ -5,11 +5,13 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { AgXToneMapping, PCFShadowMap, type WebGLRenderer } from "three";
 import type { RoomWeather } from "@portal/contracts/room";
 import FrostPass, { compileRoom } from "./frost/FrostPass";
+import { suspendFrost } from "./frost/registry";
 import type { GrowthScene } from "./growth";
 import type { HearthLevel, LampState, RobotCrowd } from "./live";
 import { setCurrentLoop, startRoomLoop, type RoomLoop } from "./loop";
 import { clearRoomReport, reportRoom } from "./report";
-import type { SunClock } from "./sun";
+import { armSnapshots, copyFrame, type SnapshotScene } from "./snapshot.ts";
+import { sceneForAltitude, type SunClock } from "./sun";
 import Books from "./scene/Books";
 import CameraRig from "./scene/Camera";
 import Corkboard from "./scene/Corkboard";
@@ -46,19 +48,60 @@ const compiled = new WeakMap<WebGLRenderer, Promise<unknown>>();
  * frame. Before the first frame it compiles the scene's shaders (`compileRoom`), off the main
  * thread where the browser can, and starts the loop when they are ready (or at once if the compile
  * fails: the first frame then compiles them, as it would have). After the first frame it reports
- * `drawn`, which fades the canvas in over the placeholder.
+ * `drawn`, which fades the canvas in over the placeholder, and arms the snapshot (`snapshot.ts`).
  */
-function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; revision: string; onLoop: (loop: RoomLoop | null) => void }) {
+function Loop({
+  reducedMotion,
+  revision,
+  scene,
+  onLoop,
+}: {
+  reducedMotion: boolean;
+  revision: string;
+  /** The room's scene now, for the snapshot's record. */
+  scene: SnapshotScene;
+  onLoop: (loop: RoomLoop | null) => void;
+}) {
   const advance = useThree((state) => state.advance);
   const gl = useThree((state) => state.gl);
   const get = useThree((state) => state.get);
   const size = useThree((state) => state.size);
   const own = useRef<RoomLoop | null>(null);
+  const sceneRef = useRef(scene);
+  useEffect(() => {
+    sceneRef.current = scene;
+  }, [scene]);
   useEffect(() => {
     const context = gl.getContext();
     let started: RoomLoop | null = null;
     let cancelled = false;
     let drawn = false;
+    let disarm: (() => void) | null = null;
+    /**
+     * The snapshot's frame (docs/PALACE.md, The snapshot), in one task: a frame with no frost, its
+     * copy while the drawing buffer still holds it, then a frosted frame, so the screen never shows
+     * the unfrosted one.
+     */
+    const capture = (): HTMLCanvasElement | null => {
+      if (cancelled || context.isContextLost()) return null;
+      let copy: HTMLCanvasElement | null = null;
+      suspendFrost(true);
+      try {
+        advance(performance.now() / 1000);
+        copy = copyFrame(gl.domElement);
+      } catch (error) {
+        console.warn("The room's snapshot could not be taken.", error);
+        copy = null;
+      } finally {
+        suspendFrost(false);
+      }
+      try {
+        advance(performance.now() / 1000);
+      } catch {
+        // The loop's next frame draws it.
+      }
+      return copy;
+    };
     const start = () => {
       // A canvas unmounted during the compile starts no loop.
       if (cancelled) return;
@@ -71,6 +114,7 @@ function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; rev
           if (!drawn) {
             drawn = true;
             reportRoom("drawn", true);
+            disarm = armSnapshots({ capture, scene: () => sceneRef.current });
           }
         },
         { reducedMotion },
@@ -91,6 +135,7 @@ function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; rev
     void compile.then(start);
     return () => {
       cancelled = true;
+      disarm?.();
       if (!started) return;
       started.stop();
       own.current = null;
@@ -181,7 +226,12 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
         });
       }}
     >
-      <Loop reducedMotion={reducedMotion} revision={`${clock.at}:${condition}:${liveKey}:${growthKey}`} onLoop={onLoop} />
+      <Loop
+        reducedMotion={reducedMotion}
+        revision={`${clock.at}:${condition}:${liveKey}:${growthKey}`}
+        scene={sceneForAltitude(clock.sun.altitude)}
+        onLoop={onLoop}
+      />
       <color attach="background" args={["#1d1916"]} />
       <fogExp2 attach="fog" args={["#8b8f94", 0]} />
       <CameraRig onChange={requestFrame} />

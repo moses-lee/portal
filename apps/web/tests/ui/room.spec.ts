@@ -113,6 +113,64 @@ test("a lost context brings the sketch back until it is restored", async ({ page
   await expect(room).not.toHaveAttribute("data-placeholder", { timeout: 2_000 });
 });
 
+/** Whether the page's IndexedDB holds the room's snapshot (docs/PALACE.md, The snapshot): the record's size, or null. */
+const storedSnapshot = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<number | null>((resolve) => {
+        const open = indexedDB.open("portal-room", 1);
+        open.onupgradeneeded = () => open.result.createObjectStore("snapshot");
+        open.onerror = () => resolve(null);
+        open.onsuccess = () => {
+          const db = open.result;
+          const get = db.transaction("snapshot", "readonly").objectStore("snapshot").get("last");
+          get.onsuccess = () => {
+            db.close();
+            resolve(get.result ? (get.result as { blob: Blob }).blob.size : null);
+          };
+          get.onerror = () => {
+            db.close();
+            resolve(null);
+          };
+        };
+      }),
+  );
+
+test("a second visit shows the last frame before the room draws", async ({ page }, info) => {
+  // No page clock: the record's age reads Date.now().
+  await setupPortal(page, { webgl: true });
+  await page.goto("/");
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
+  // The document turns hidden, as when the tab is switched away.
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => storedSnapshot(page), { timeout: 10_000 }).toBeGreaterThan(0);
+
+  const release = await holdRoomChunk(page);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const image = room.locator("img[data-room-snapshot]");
+  await expect(image).toBeVisible();
+  await expect(room).toHaveAttribute("data-placeholder", "snapshot");
+  await expect(room).toHaveAttribute("data-renderer", "webgl");
+  await expect(room.locator("canvas")).toHaveCount(0);
+  await expect(room.locator("svg[data-room-sketch]")).toHaveCount(0);
+  // Placed over the whole viewport at the same size and view offset.
+  const box = (await image.boundingBox())!;
+  expect(Math.abs(box.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.width - page.viewportSize()!.width)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: info.outputPath("room-snapshot-held.png") });
+
+  release();
+  await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
+  await expect(image).toHaveCount(0, { timeout: 2_000 });
+  await expect(room).not.toHaveAttribute("data-placeholder");
+});
+
 test("the Palace page is the room alone: a sidebar entry, no header text, no tracked panel, no composer", async ({ page }, info) => {
   await setupPortal(page, { webgl: true });
   await page.goto("/");

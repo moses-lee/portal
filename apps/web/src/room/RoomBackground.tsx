@@ -10,7 +10,7 @@ import { useWorkspaceActions } from "@/components/workspace/useWorkspaceActions"
 import { pushPath } from "@/lib/navigation";
 import { isPortalPath, portalPath, portalPathKeepingPanel, type PortalView } from "@/lib/session-routes";
 import type { RoomCensus } from "@portal/contracts/room";
-import { latitudeForTimeZone } from "@portal/shared/room";
+import { LAYOUT_VERSION, latitudeForTimeZone } from "@portal/shared/room";
 import {
   bookList,
   describeGrowth,
@@ -31,6 +31,7 @@ import {
   type GrowthScene,
 } from "./growth";
 import { useRoomHost } from "./host";
+import { readLayout, subscribeLayout } from "./layout";
 import {
   backgroundRuns,
   describeObject,
@@ -48,6 +49,8 @@ import { onRoomReport, readRoomReport } from "./report";
 import type { RoomLiveScene } from "./RoomCanvas";
 // The extension is explicit: on a case-insensitive disk "./Sketch" could resolve to sketch.ts.
 import Sketch from "./Sketch.tsx";
+import { peekSnapshot, snapshotEligibility, snapshotRead, SNAPSHOT_READ_WAIT_MS, type SnapshotRecord } from "./snapshot.ts";
+import SnapshotImage from "./SnapshotImage";
 import { sceneForAltitude, skyColours } from "./sun";
 import { useRoomState, useSunClock } from "./useRoomState";
 
@@ -142,6 +145,55 @@ function useSettledValue<T>(value: T): T {
   return settledValue;
 }
 
+/**
+ * The page load's choice of placeholder (docs/PALACE.md, The snapshot): undefined until made, then
+ * the eligible snapshot or null for the sketch. Made once per page load, so a background mounted
+ * later keeps it.
+ */
+let pageChoice: SnapshotRecord | null | undefined;
+/** The snapshot has stood in once (the canvas drew and faded in over it) or cannot (a lost context, a failure): only the sketch from now on. */
+let snapshotSpent = false;
+
+/**
+ * The snapshot to show before the room draws, or null for the sketch; undefined while it is still
+ * being chosen. Chosen once the page has hydrated, the scene is known, the layout registry has its
+ * first measure and the read has answered; a read that has not answered `SNAPSHOT_READ_WAIT_MS`
+ * after hydration means the sketch, and its later answer is not used.
+ */
+function useSnapshotChoice(hydrated: boolean, scene: string): SnapshotRecord | null | undefined {
+  const layout = useSyncExternalStore(subscribeLayout, readLayout, readLayout);
+  /** The read's answer and when it came (the record's age is taken then). */
+  const [answer, setAnswer] = useState<{ record: SnapshotRecord | null; at: number } | undefined>(() => {
+    const record = pageChoice === undefined ? peekSnapshot() : null;
+    return record === undefined ? undefined : { record, at: Date.now() };
+  });
+  const [choice, setChoice] = useState<SnapshotRecord | null | undefined>(() => (snapshotSpent ? null : pageChoice));
+  const waiting = hydrated && answer === undefined;
+  useEffect(() => {
+    if (!waiting) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      if (live) setAnswer((current) => current ?? { record: null, at: Date.now() });
+    }, SNAPSHOT_READ_WAIT_MS);
+    void snapshotRead().then((record) => {
+      if (live) setAnswer((current) => current ?? { record, at: Date.now() });
+    });
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [waiting]);
+  if (choice === undefined && hydrated && answer !== undefined && scene !== "pending" && layout.width > 0 && layout.height > 0) {
+    const { record, at } = answer;
+    const eligible = record !== null && snapshotEligibility(record, { layoutVersion: LAYOUT_VERSION, at, scene, aspect: layout.width / layout.height }) === "eligible";
+    setChoice(eligible ? record : null);
+  }
+  useEffect(() => {
+    if (choice !== undefined && pageChoice === undefined) pageChoice = choice;
+  }, [choice]);
+  return choice;
+}
+
 /** The census before the room's state arrives: nothing counted yet. */
 const NO_CENSUS: RoomCensus = { sessionsEver: 0, memoryActive: 0, memoryInbox: 0, watches: { active: 0, finished: 0, fires: 0, ever: 0 }, grants: 0, activityLastHour: 0, since: null };
 
@@ -161,9 +213,10 @@ function openView(view: PortalView) {
 
 /**
  * The room behind every Portal view and the workspace (docs/PALACE.md): the 3D canvas when the
- * browser can draw it, over a placeholder until its first frame is drawn (the pencil sketch,
- * `Sketch.tsx`); the sketch alone without WebGL, after a lost context or a canvas failure, and
- * under `prefers-reduced-transparency`; one veil over either. It follows the real sun at the room's
+ * browser can draw it, over a placeholder until its first frame is drawn (the last frame drawn on
+ * the previous visit, `snapshot.ts`, or the pencil sketch, `Sketch.tsx`); the sketch alone without
+ * WebGL, after a lost context or a canvas failure, and under `prefers-reduced-transparency`; one
+ * veil over either. It follows the real sun at the room's
  * location, never a setting. The live objects follow the session list, the portal stream's status
  * and the census; the accumulated ones (books, notes, plants, frames, keys, the tree) the census,
  * the session and project lists and the active watches, and the milestones mount their furniture;
@@ -171,10 +224,11 @@ function openView(view: PortalView) {
  * clicks through. `palace` is the Palace page, where a clicked robot waves first.
  * The fixed `.room-scene` element carries what tests and CSS read: `data-scene` (day or night,
  * from the sun's altitude), `data-activity`, `data-renderer` (`webgl` while the canvas is up or
- * coming), `data-placeholder` (what is under the canvas: `sketch`, or nothing once the canvas has
- * drawn and faded in), `data-drawn` (the canvas has drawn a frame), and a `data-room` JSON summary
- * (the live and accumulated objects, and what the canvas reports: `drawn`, the camera's pose and
- * frame, the objects' screen points, and the milestone in the crate).
+ * coming), `data-placeholder` (what is under the canvas: `snapshot` at the start of a visit when
+ * one is eligible, else `sketch`; nothing before hydration, while that is chosen, and once the
+ * canvas has drawn and faded in), `data-drawn` (the canvas has drawn a frame), and a `data-room`
+ * JSON summary (the live and accumulated objects, and what the canvas reports: `drawn`, the
+ * camera's pose and frame, the objects' screen points, and the milestone in the crate).
  */
 export default function RoomBackground({ activity, palace = false }: { activity: AgentActivity; palace?: boolean }) {
   const room = useRoomState();
@@ -369,15 +423,36 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     setWasDrawn(drawn);
     if (!drawn) setFaded(false);
   }
+  /** The snapshot can no longer stand in (it has, or a lost context or a failure came first): the sketch from now on. */
+  const [spent, setSpent] = useState(snapshotSpent);
+  const spend = useCallback(() => {
+    snapshotSpent = true;
+    setSpent(true);
+  }, []);
   useEffect(() => {
     if (!drawn) return;
-    const timer = setTimeout(() => setFaded(true), FADE_MS);
+    const timer = setTimeout(() => {
+      setFaded(true);
+      spend();
+    }, FADE_MS);
     return () => clearTimeout(timer);
-  }, [drawn]);
-  /** What is under the canvas (docs/PALACE.md, The veil): nothing before hydration (the ground), the sketch until the canvas has drawn and faded in. */
-  const placeholder = hydrated && !(drawn && faded) ? "sketch" : null;
-  const failed = useCallback(() => setLost(true), []);
-  const onContextLost = useCallback(() => setContextLost(true), []);
+  }, [drawn, spend]);
+  const choice = useSnapshotChoice(hydrated, scene);
+  const snapshot = renderer === "webgl" && !spent && choice ? choice : null;
+  /**
+   * What is under the canvas (docs/PALACE.md, The veil): nothing before hydration (the ground), then
+   * until the canvas has drawn and faded in the snapshot when one is eligible, else the sketch;
+   * nothing while that is chosen. Without the canvas, always the sketch.
+   */
+  const placeholder = !hydrated || (drawn && faded) ? null : renderer !== "webgl" ? "sketch" : choice === undefined ? null : snapshot ? "snapshot" : "sketch";
+  const failed = useCallback(() => {
+    setLost(true);
+    spend();
+  }, [spend]);
+  const onContextLost = useCallback(() => {
+    setContextLost(true);
+    spend();
+  }, [spend]);
   const onContextRestored = useCallback(() => {
     setContextLost(false);
     setCanvasKey((key) => key + 1);
@@ -397,6 +472,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
       style={style}
       aria-hidden="true"
     >
+      {placeholder === "snapshot" && snapshot && <SnapshotImage record={snapshot} onFail={spend} />}
       {placeholder === "sketch" && <Sketch milestones={milestones} />}
       {mounted && (
         <CanvasBoundary key={canvasKey} onError={failed}>

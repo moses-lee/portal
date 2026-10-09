@@ -183,6 +183,15 @@
 .room-scene[data-renderer="fallback"] canvas {
   visibility: hidden;
 }
+/* The last frame drawn on the previous visit, placed in pixels by SnapshotImage.tsx; it does not fade (the canvas fades in over it). */
+.room-snapshot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  transform-origin: 0 0;
+  user-select: none;
+}
 .room-sketch {
   position: absolute;
   inset: 0;

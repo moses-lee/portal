@@ -130,6 +130,16 @@ const quadScratch = {} as FrostQuad;
 let resizeObserver: ResizeObserver | null = null;
 let mutationObserver: MutationObserver | null = null;
 let reducedTransparency: MediaQueryList | null = null;
+/** Set for the snapshot's frame (`snapshot.ts`): the registry reports no panels, so the frame has no blur. */
+let suspended = false;
+
+/**
+ * While set, `collectFrost` reports no panels and leaves its bookkeeping alone: the snapshot's
+ * capture renders one frame without the frost and lifts it in the same task.
+ */
+export function suspendFrost(on: boolean) {
+  suspended = on;
+}
 
 /** Forget what was read about a panel; the next frame reads it again. */
 function stale(element: Element) {
@@ -183,9 +193,10 @@ export type FrostBuffer = { data: Float32Array };
 /**
  * Writes every visible frosted panel into `buffer` (growing it when needed) and returns how many
  * there are; 0 means the frame needs no frost at all. Under `prefers-reduced-transparency` the
- * panels are solid and nothing is drawn.
+ * panels are solid and nothing is drawn; while `suspendFrost` holds, nothing either.
  */
 export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
+  if (suspended) return 0;
   reducedTransparency ??= window.matchMedia("(prefers-reduced-transparency: reduce)");
   const elements = reducedTransparency.matches ? [] : document.querySelectorAll(FROST_SELECTOR);
   seen.clear();
