@@ -171,7 +171,8 @@ export default function PortalThread({
   /** Null until the thread list arrives, or for a thread the server does not know. */
   thread: Thread | null;
   visible: boolean;
-  handlers: Omit<ItemCardHandlers, "onAsk">;
+  /** What the rows link to; only a curation run's digest line uses it. */
+  handlers: Pick<ItemCardHandlers, "onOpenCurationRun">;
   onOpenWatches: () => void;
 }) {
   const live = usePortalLive();

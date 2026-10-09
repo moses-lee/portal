@@ -63,6 +63,31 @@ Contract: `packages/contracts/src/search.ts`.
 - `SearchDialog`: its chunk is split out like the settings dialog; the panel mounts only while open. Empty query shows Recent and Recent sessions; with a query, Projects (4), Sessions (8), Messages (8). Selection is tracked by row identity, so late server results do not move it. Desktop is its own Radix Dialog (the shared `ResponsiveDialog` forces a visible title); under 640 px a bottom Sheet.
 - `Chat.tsx` holds the open state and the capture-phase ⌘K/Ctrl+K listener (physical `KeyK` also counts, held keys are ignored, any other open dialog or popover disables it); a session result opens through the workspace's open-session action, a project result through the start tab. Recents drop entries whose session or project is gone.
 
+## Portal tab
+
+Date: 2026-10-09. Built on branch `orchestrator-on-search`.
+
+The dialog has two tabs, Search and Portal. Portal is the orchestrator's main thread (history, composer, drafts), the same conversation as the Portal page's Chat, available over any page.
+
+| # | Topic | Decision |
+|---|---|---|
+| 11 | Shortcuts | ⌘J (Ctrl+J off Apple platforms) opens the dialog on Portal; ⌘K keeps opening Search. The open tab's own key closes the dialog, the other key switches tabs. Both follow decision 1: caught before a composer or terminal, held keys ignored, nothing while another dialog is open. Ctrl+J is therefore taken from the terminal (line feed) off Mac. |
+| 12 | Threads | Main thread only. Portal can open side threads (`open_thread`), but the live instance had none on 2026-10-09; they stay on the Portal page. |
+| 13 | On the Portal page | ⌘J still opens the dialog there; the two views of the main thread share the draft and both pick up the other's messages through the stream. |
+| 14 | Size | One size for both tabs. The dialog grew by the tab strip's 40 px (640 × 520 px, at most 76 vh + 40 px) so the search panel keeps its 480 px; the bottom sheet on phones. |
+| 15 | Tab switching | The two shortcuts, a click on a tab, or Left/Right on the tab strip. |
+| 16 | Search scope | Portal's own conversation is not searchable from the Search tab. |
+
+How it works:
+
+- `paletteShortcut` (`lib/search.ts`) maps a key press to `"search"`, `"portal"` or null. A Latin layout goes by the letter typed (Dvorak's own J key); a non-Latin one by the physical key.
+- `Chat.tsx` holds the open tab (`null | "search" | "portal"`). `SearchDialog` keeps the last tab through the closing animation, mounts the Portal panel the first time its tab shows, and keeps both panels mounted (hidden) until it closes, so the query and a streaming reply survive a switch. The Portal panel's chunk (`PortalThread`, the chat SDK, markdown) loads on first use.
+- Each panel focuses its own field when shown (the search box, the composer with the caret at the end); the element the dialog was opened from is noted in a layout effect before that, and gets focus back on close.
+- What the user is looking at goes with each message as on the Portal page, so a question asked over a session is about that session.
+- An in-app link in a reply (a session, a tab) and a curation run's digest line close the dialog and navigate. Closing mid-reply loses nothing: the server keeps consuming the stream, and on reopen the thread shows Portal answering and loads the stored reply.
+
+Tests: web `tests/search.test.mjs` (the shortcut mapping, layouts); Playwright `tests/ui/search-portal.spec.ts` (⌘J over a session with the view sent along and focus returned, switching with state kept and the shared draft, a reply's link closing the dialog) and the settings suppression in `tests/ui/search.spec.ts` covering ⌘J.
+
 ## Rollout
 
 The live instance needs a restart for migration 0014; the backfill runs on its own after boot and logs when it is done.

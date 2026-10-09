@@ -217,14 +217,22 @@ export function isMacPlatform(platform: string): boolean {
   return /mac|iphone|ipad|ipod/i.test(platform);
 }
 
+/** The tabs of the search dialog: Search, and Portal (the orchestrator's main thread). */
+export type PaletteTab = "search" | "portal";
+
 /**
- * ⌘K on a Mac, Ctrl+K elsewhere, with no other modifier. The physical K key counts too, so a
- * non-Latin layout (where `key` is another letter) still opens search.
+ * Which tab a key press asks for: ⌘K (search) or ⌘J (Portal) on a Mac, Ctrl+K or Ctrl+J
+ * elsewhere, with no other modifier; null for anything else. On a non-Latin layout (where `key`
+ * is another script's letter) the physical key decides; a Latin one (Dvorak, AZERTY) goes by the
+ * letter typed, so its own K and J keys are the shortcuts.
  */
-export function isSearchShortcut(
+export function paletteShortcut(
   event: { key: string; code?: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean },
   platformIsMac: boolean,
-): boolean {
-  if ((event.key.toLowerCase() !== "k" && event.code !== "KeyK") || event.altKey || event.shiftKey) return false;
-  return platformIsMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+): PaletteTab | null {
+  if (event.altKey || event.shiftKey) return null;
+  if (!(platformIsMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return null;
+  const typed = event.key.toLowerCase();
+  const letter = /^[a-z]$/.test(typed) ? typed : event.code === "KeyK" ? "k" : event.code === "KeyJ" ? "j" : null;
+  return letter === "k" ? "search" : letter === "j" ? "portal" : null;
 }

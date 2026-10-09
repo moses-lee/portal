@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  highlightRanges, isMacPlatform, isSearchShortcut, matchProjects, matchSessions, mergePullHits, newestSessions,
+  highlightRanges, isMacPlatform, matchProjects, matchSessions, mergePullHits, newestSessions, paletteShortcut,
   parseRecents, pruneRecents, pullLabel, rankScore, recentsAfterOpen, resolveRecents,
 } from "../src/lib/search.ts";
 
@@ -134,18 +134,27 @@ test("recents: parse defensively, move to front, dedupe, cap, resolve what still
   );
 });
 
-test("isSearchShortcut: ⌘K on a Mac, Ctrl+K elsewhere, nothing else", () => {
+test("paletteShortcut: ⌘K and ⌘J on a Mac, Ctrl+K and Ctrl+J elsewhere, nothing else", () => {
   const key = (k, mods = {}) => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
-  assert.equal(isSearchShortcut(key("k", { metaKey: true }), true), true);
-  assert.equal(isSearchShortcut(key("K", { metaKey: true }), true), true);
-  assert.equal(isSearchShortcut(key("k", { ctrlKey: true }), true), false);
-  assert.equal(isSearchShortcut(key("k", { ctrlKey: true }), false), true);
-  assert.equal(isSearchShortcut(key("k", { metaKey: true }), false), false);
-  assert.equal(isSearchShortcut(key("k", { ctrlKey: true, shiftKey: true }), false), false);
-  assert.equal(isSearchShortcut(key("j", { ctrlKey: true }), false), false);
-  // A non-Latin layout: the K key types another letter.
-  assert.equal(isSearchShortcut(key("л", { code: "KeyK", metaKey: true }), true), true);
-  assert.equal(isSearchShortcut(key("л", { code: "KeyL", metaKey: true }), true), false);
+  assert.equal(paletteShortcut(key("k", { metaKey: true }), true), "search");
+  assert.equal(paletteShortcut(key("K", { metaKey: true }), true), "search");
+  assert.equal(paletteShortcut(key("j", { metaKey: true }), true), "portal");
+  assert.equal(paletteShortcut(key("k", { ctrlKey: true }), true), null);
+  assert.equal(paletteShortcut(key("j", { ctrlKey: true }), true), null);
+  assert.equal(paletteShortcut(key("k", { ctrlKey: true }), false), "search");
+  assert.equal(paletteShortcut(key("j", { ctrlKey: true }), false), "portal");
+  assert.equal(paletteShortcut(key("k", { metaKey: true }), false), null);
+  assert.equal(paletteShortcut(key("k", { ctrlKey: true, shiftKey: true }), false), null);
+  assert.equal(paletteShortcut(key("j", { metaKey: true, altKey: true }), true), null);
+  assert.equal(paletteShortcut(key("l", { ctrlKey: true }), false), null);
+  assert.equal(paletteShortcut(key("k"), true), null);
+  // A non-Latin layout: the K and J keys type other letters.
+  assert.equal(paletteShortcut(key("л", { code: "KeyK", metaKey: true }), true), "search");
+  assert.equal(paletteShortcut(key("о", { code: "KeyJ", metaKey: true }), true), "portal");
+  assert.equal(paletteShortcut(key("л", { code: "KeyL", metaKey: true }), true), null);
+  // A Latin layout goes by the letter: Dvorak's physical J key types "h".
+  assert.equal(paletteShortcut(key("h", { code: "KeyJ", metaKey: true }), true), null);
+  assert.equal(paletteShortcut(key("j", { code: "KeyC", metaKey: true }), true), "portal");
   assert.equal(isMacPlatform("MacIntel"), true);
   assert.equal(isMacPlatform("iPhone"), true);
   assert.equal(isMacPlatform("Win32"), false);

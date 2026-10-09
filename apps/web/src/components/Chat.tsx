@@ -53,11 +53,12 @@ import { navigateTo, pushPath } from "@/lib/navigation";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import {
   isMacPlatform,
-  isSearchShortcut,
+  paletteShortcut,
   parseRecents,
   pruneRecents,
   RECENTS_KEY,
   recentsAfterOpen,
+  type PaletteTab,
   type RecentItem,
 } from "@/lib/search";
 import {
@@ -240,31 +241,34 @@ function ChatShell() {
     setSettingsSection(section);
     setShowSettings(true);
   });
-  const [showSearch, setShowSearch] = useState(false);
+  /** The search dialog's open tab (Search or Portal), null while it is closed. */
+  const [palette, setPalette] = useState<PaletteTab | null>(null);
   /** What search opened, newest first, per device; the dialog's Recent section. */
   const [searchRecents, setSearchRecents] = usePreference(RECENTS_KEY, "[]");
   /**
-   * ⌘K (Ctrl+K off Apple platforms) toggles search from anywhere, a focused composer or terminal
-   * included: caught at the document in the capture phase, before xterm or a textarea sees it.
-   * Another open dialog (settings, approvals, a sheet) keeps it, and keeps the key.
+   * ⌘K and ⌘J (Ctrl+K and Ctrl+J off Apple platforms) open the dialog on Search and on Portal from
+   * anywhere, a focused composer or terminal included: caught at the document in the capture phase,
+   * before xterm or a textarea sees them. The open tab's own key closes the dialog; the other one
+   * switches to its tab. Another open dialog (settings, approvals, a sheet) keeps them, and keeps the keys.
    */
   useEffect(() => {
     const mac = isMacPlatform(navigator.platform);
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isSearchShortcut(event, mac)) return;
+      const tab = paletteShortcut(event, mac);
+      if (!tab) return;
       // Held keys repeat; toggling on each would flicker the dialog. Still keep them from the page.
       if (event.repeat) {
         event.preventDefault();
         return;
       }
-      const searchOpen = !!document.querySelector("[data-search-dialog][data-state=open]");
+      const paletteOpen = !!document.querySelector("[data-search-dialog][data-state=open]");
       const otherOpen = !!document.querySelector(
         ":is([role=dialog], [role=alertdialog])[data-state=open]:not([data-search-dialog])",
       );
-      if (!searchOpen && otherOpen) return;
+      if (!paletteOpen && otherOpen) return;
       event.preventDefault();
       event.stopPropagation();
-      setShowSearch(!searchOpen);
+      setPalette((current) => (current === tab ? null : tab));
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
@@ -803,7 +807,7 @@ function ChatShell() {
   const sidebarOpenSettings = useStableCallback(() => setShowSettings(true));
   const sidebarOpenSearch = useStableCallback(() => {
     setShowSidebar(false);
-    setShowSearch(true);
+    setPalette("search");
   });
   /** Remember what search opened (its Recent section), newest first; entries for what is gone make room. */
   const rememberSearchOpen = (kind: RecentItem["kind"], id: string) => {
@@ -883,8 +887,8 @@ function ChatShell() {
           }}
         />
         <SearchDialog
-          open={showSearch}
-          onOpenChange={setShowSearch}
+          tab={palette}
+          onTabChange={setPalette}
           sessions={sessions}
           projects={orderedProjects}
           onOpenSession={searchOpenSession}

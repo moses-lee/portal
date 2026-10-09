@@ -161,7 +161,7 @@ test("a pending query shows neither the last query's PR hits nor an empty state"
   await expect(dialog(page)).toContainText("No results for “423”");
 });
 
-test("⌘K / Ctrl+K does nothing while Settings is open", async ({ page }) => {
+test("⌘K / Ctrl+K and ⌘J / Ctrl+J do nothing while Settings is open", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   await hydrated(page);
@@ -169,7 +169,9 @@ test("⌘K / Ctrl+K does nothing while Settings is open", async ({ page }) => {
   const settings = page.getByRole("dialog", { name: "Settings" });
   await expect(settings).toBeVisible();
   await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.press("ControlOrMeta+j");
   await page.waitForTimeout(200);
   await expect(dialog(page)).toHaveCount(0);
+  await expect(page.locator("[data-search-dialog]")).toHaveCount(0);
   await expect(settings).toBeVisible();
 });
