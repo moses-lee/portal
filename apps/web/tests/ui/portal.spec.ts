@@ -569,8 +569,8 @@ test("the room renders a still under reduced motion and sidebar search finds ses
   await expect(room).toHaveAttribute("data-scene", /^(day|night)$/);
   await expect.poll(async () => JSON.parse((await room.getAttribute("data-room")) ?? "{}").still).toBe(true);
   expect(await room.evaluate((node) => getComputedStyle(node).animationName)).toBe("none");
-  // The photos are gone: under the canvas (or instead of it) is the gradient sky.
-  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("linear-gradient");
+  // The photos are gone: without WebGL (the fixtures' default) the pencil sketch stands in.
+  await expect(room).toHaveAttribute("data-placeholder", "sketch");
   await page
     .getByRole("textbox", { name: "Search sessions" })
     .fill("overlapping");

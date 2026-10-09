@@ -20,6 +20,7 @@ import {
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { agentBadge, robotLook, robotSpot, SPOTS, type RobotCrowd, type RobotSpec } from "../live";
 import { waveStartedAt } from "../pointer";
+import { BENCH } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { matteMaterial, palette, ROUGHNESS } from "./materials";
 
@@ -335,18 +336,18 @@ const Robot = memo(function Robot({
 
 /** The tiny workbench on the rug where working robots stand. */
 function Bench() {
-  const [x, z] = SPOTS.bench;
   const wood = matteMaterial(palette.woodLight);
+  const { leg } = BENCH;
   const legs: [number, number][] = [
-    [-1.38, -0.12],
-    [1.38, -0.12],
-    [-1.38, 0.12],
-    [1.38, 0.12],
+    [-leg.x, -leg.z],
+    [leg.x, -leg.z],
+    [-leg.x, leg.z],
+    [leg.x, leg.z],
   ];
   return (
-    <group position={[x, 0, z]}>
-      <mesh position={[0, 0.25, 0]} material={wood} castShadow receiveShadow>
-        <boxGeometry args={[2.9, 0.045, 0.34]} />
+    <group position={[BENCH.x, 0, BENCH.z]}>
+      <mesh position={[0, BENCH.top, 0]} material={wood} castShadow receiveShadow>
+        <boxGeometry args={[BENCH.width, BENCH.thickness, BENCH.depth]} />
       </mesh>
       {legs.map(([lx, lz]) => (
         <mesh key={`${lx}:${lz}`} position={[lx, 0.115, lz]} material={matteMaterial(palette.wood)} castShadow>

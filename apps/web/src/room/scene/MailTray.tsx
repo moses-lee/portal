@@ -5,7 +5,7 @@ import { useThree } from "@react-three/fiber";
 import { BoxGeometry, Color, CylinderGeometry, InstancedMesh, Object3D } from "three";
 import { mulberry32 } from "@portal/shared/room";
 import { MAIL_CAP } from "../live";
-import { ROOM } from "../layout";
+import { MAIL_SHELF as SHELF, ROOM } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { instancedMatte, markForUpload, palette } from "./materials";
 import { Soft } from "./Shell";
@@ -17,8 +17,6 @@ const SEALED = new Color("#c9ab7c");
 const scratch = new Object3D();
 const HIDDEN = 1e-4;
 
-/** The tray's shelf: on the back wall between the hearth's chimney breast and the door. */
-const SHELF = { x: 2.55, y: 1.0, z: ROOM.back + 0.13 } as const;
 const PILE = { x: 2.55, z: ROOM.back + 0.45 } as const;
 
 /**
@@ -86,7 +84,7 @@ export default function MailTray({ sealed, open, pile }: { sealed: number; open:
   return (
     <group>
       {/* The wall shelf and the tray on it. */}
-      <Soft size={[0.44, 0.03, 0.26]} position={[SHELF.x, SHELF.y, SHELF.z]} color={palette.woodLight} radius={0.01} />
+      <Soft size={[SHELF.width, 0.03, SHELF.depth]} position={[SHELF.x, SHELF.y, SHELF.z]} color={palette.woodLight} radius={0.01} />
       <Soft size={[0.32, 0.02, 0.21]} position={[SHELF.x, SHELF.y + 0.025, SHELF.z]} color={palette.wood} radius={0.008} />
       <Soft size={[0.32, 0.05, 0.015]} position={[SHELF.x, SHELF.y + 0.05, SHELF.z + 0.105]} color={palette.wood} radius={0.006} />
       <Soft size={[0.32, 0.09, 0.015]} position={[SHELF.x, SHELF.y + 0.07, SHELF.z - 0.105]} color={palette.wood} radius={0.006} />

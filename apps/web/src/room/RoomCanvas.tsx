@@ -2,13 +2,13 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { AgXToneMapping, PCFShadowMap } from "three";
+import { AgXToneMapping, PCFShadowMap, type WebGLRenderer } from "three";
 import type { RoomWeather } from "@portal/contracts/room";
-import FrostPass from "./frost/FrostPass";
+import FrostPass, { compileRoom } from "./frost/FrostPass";
 import type { GrowthScene } from "./growth";
 import type { HearthLevel, LampState, RobotCrowd } from "./live";
 import { setCurrentLoop, startRoomLoop, type RoomLoop } from "./loop";
-import { clearRoomReport } from "./report";
+import { clearRoomReport, reportRoom } from "./report";
 import type { SunClock } from "./sun";
 import Books from "./scene/Books";
 import CameraRig from "./scene/Camera";
@@ -38,32 +38,66 @@ const CAMERA = { fov: 30, near: 0.5, far: 220, position: [6, 6, 12] as [number, 
 const DPR: [number, number] = [1, 1.5];
 const STYLE = { position: "absolute", inset: 0, pointerEvents: "none" } as const;
 
-/** Drives the canvas (`frameloop="never"`) from the capped loop; a new `revision` or size asks for a frame. */
+/** The shader compile before a renderer's first frame, once per renderer (a loop restarted under another motion setting reuses it). */
+const compiled = new WeakMap<WebGLRenderer, Promise<unknown>>();
+
+/**
+ * Drives the canvas (`frameloop="never"`) from the capped loop; a new `revision` or size asks for a
+ * frame. Before the first frame it compiles the scene's shaders (`compileRoom`), off the main
+ * thread where the browser can, and starts the loop when they are ready (or at once if the compile
+ * fails: the first frame then compiles them, as it would have). After the first frame it reports
+ * `drawn`, which fades the canvas in over the placeholder.
+ */
 function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; revision: string; onLoop: (loop: RoomLoop | null) => void }) {
   const advance = useThree((state) => state.advance);
   const gl = useThree((state) => state.gl);
+  const get = useThree((state) => state.get);
   const size = useThree((state) => state.size);
   const own = useRef<RoomLoop | null>(null);
   useEffect(() => {
     const context = gl.getContext();
-    // R3F's clock takes the timestamp as given under `frameloop="never"`: seconds, as every `useFrame` reads it.
-    // Nothing draws while the GPU has the context (lost until it is restored and the canvas remounts).
-    const started = startRoomLoop(
-      (time) => {
-        if (!context.isContextLost()) advance(time / 1000);
-      },
-      { reducedMotion },
-    );
-    own.current = started;
-    onLoop(started);
-    setCurrentLoop(started);
+    let started: RoomLoop | null = null;
+    let cancelled = false;
+    let drawn = false;
+    const start = () => {
+      // A canvas unmounted during the compile starts no loop.
+      if (cancelled) return;
+      // R3F's clock takes the timestamp as given under `frameloop="never"`: seconds, as every `useFrame` reads it.
+      // Nothing draws while the GPU has the context (lost until it is restored and the canvas remounts).
+      started = startRoomLoop(
+        (time) => {
+          if (context.isContextLost()) return;
+          advance(time / 1000);
+          if (!drawn) {
+            drawn = true;
+            reportRoom("drawn", true);
+          }
+        },
+        { reducedMotion },
+      );
+      own.current = started;
+      onLoop(started);
+      setCurrentLoop(started);
+    };
+    let compile = compiled.get(gl);
+    if (!compile) {
+      const { scene, camera } = get();
+      // A throw in the synchronous part becomes a rejection too.
+      compile = new Promise((resolve) => resolve(compileRoom(gl, scene, camera))).catch((error: unknown) => {
+        console.warn("The room's shaders did not compile ahead; the first frame compiles them.", error);
+      });
+      compiled.set(gl, compile);
+    }
+    void compile.then(start);
     return () => {
+      cancelled = true;
+      if (!started) return;
       started.stop();
       own.current = null;
       onLoop(null);
       setCurrentLoop(null);
     };
-  }, [advance, gl, reducedMotion, onLoop]);
+  }, [advance, gl, get, reducedMotion, onLoop]);
   useEffect(() => {
     own.current?.request();
   }, [revision, size.width, size.height]);
@@ -86,7 +120,7 @@ export type RoomCanvasProps = {
   growth: GrowthScene;
   weather: RoomWeather | null;
   reducedMotion: boolean;
-  /** The GPU dropped the context: the background shows the gradient until it is restored. */
+  /** The GPU dropped the context: the background shows the sketch until it is restored. */
   onContextLost: () => void;
   /** The GPU gave the context back: the background remounts the canvas from scratch. */
   onContextRestored: () => void;
@@ -110,6 +144,18 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
   const liveKey = useMemo(() => JSON.stringify(live), [live]);
   const growthKey = useMemo(() => `${JSON.stringify(growth)}:${[...shown].join(",")}`, [growth, shown]);
   useEffect(() => () => clearRoomReport(), []);
+  /**
+   * Mounted: R3F disposes an unmounted canvas's renderer with `forceContextLoss()`, whose
+   * `webglcontextlost` must not count as the GPU taking the room away (the canvas remounted under a
+   * new key after a restore would be hidden for good).
+   */
+  const attached = useRef(false);
+  useEffect(() => {
+    attached.current = true;
+    return () => {
+      attached.current = false;
+    };
+  }, []);
   const onLoop = useCallback((started: RoomLoop | null) => {
     loop.current = started;
   }, []);
@@ -124,11 +170,15 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
       style={STYLE}
       onCreated={({ gl }) => {
         gl.domElement.addEventListener("webglcontextlost", (event) => {
+          if (!attached.current) return;
           // Prevented, so the browser may restore it.
           event.preventDefault();
+          reportRoom("drawn", false);
           onContextLost();
         });
-        gl.domElement.addEventListener("webglcontextrestored", () => onContextRestored());
+        gl.domElement.addEventListener("webglcontextrestored", () => {
+          if (attached.current) onContextRestored();
+        });
       }}
     >
       <Loop reducedMotion={reducedMotion} revision={`${clock.at}:${condition}:${liveKey}:${growthKey}`} onLoop={onLoop} />

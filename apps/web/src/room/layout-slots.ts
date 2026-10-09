@@ -45,6 +45,11 @@ export const ANCHORS = {
 
 export type AnchorId = keyof typeof ANCHORS;
 
+/** The corkboard above the shelving: its cork's width along the wall and the frame's height. */
+export const CORKBOARD = { width: 1.3, height: 0.68 } as const;
+/** The wide pinboard's width and centre along the wall (it grows towards the room's front). */
+export const PINBOARD = { width: 2.1, centre: ANCHORS.board[2] + 0.35 } as const;
+
 /** What a slot takes. */
 export type SlotKind = "book" | "note" | "plant" | "frame" | "key";
 

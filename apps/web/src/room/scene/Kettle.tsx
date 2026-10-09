@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import { IcosahedronGeometry, InstancedMesh, MeshBasicMaterial, Object3D } from "three";
-import { ROOM } from "../layout";
+import { STOVE } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { markForUpload, matteMaterial } from "./materials";
 import { Soft } from "./Shell";
@@ -13,8 +13,6 @@ const IRON = "#3f3b39";
 const KETTLE = "#5f9ea0";
 const scratch = new Object3D();
 
-/** Where the stove stands: against the back wall, between the desk and the hearth. */
-export const STOVE = { x: 0.32, z: ROOM.back + 0.3 } as const;
 
 /**
  * The kettle on a small stove by the hearth (docs/PALACE.md, Objects): it steams while one of

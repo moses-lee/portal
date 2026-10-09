@@ -157,9 +157,12 @@
 }
 
 /*
- * The room (docs/PALACE.md) sits behind the workspace. Without WebGL it is this gradient sky, its
- * colours set from the sun by RoomBackground; the canvas, when it draws, covers it. A veil keeps text
- * readable: the full one over the gradient, a lighter one over the 3D room.
+ * The room (docs/PALACE.md) sits behind the workspace: the WebGL canvas over a placeholder (the
+ * pencil sketch, `room/Sketch.tsx`), or the sketch alone without WebGL, after a lost context or a
+ * canvas failure, and under reduced transparency. The ground colour is the page's first paint
+ * before hydration. The canvas mounts transparent and fades in over the placeholder once it has
+ * drawn a frame (`data-drawn`); the placeholder stays opaque under it and goes after the fade. One
+ * veil over all of it keeps text readable; it does not depend on what is under it.
  */
 .room-scene {
   position: fixed;
@@ -167,44 +170,84 @@
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
-  background-color: #302d27;
-  background-image: linear-gradient(
-    180deg,
-    var(--room-sky-top, #232a3a) 0%,
-    var(--room-sky-horizon, #4a4440) 62%,
-    #3a3029 62%,
-    #2a231e 100%
-  );
+  background-color: #241f1a;
 }
 .room-scene canvas {
-  animation: room-in 600ms ease-out;
+  opacity: 0;
+  transition: opacity 600ms ease-out;
 }
-/* A canvas whose context the GPU took stays mounted for the browser to restore; the gradient shows meanwhile. */
+.room-scene[data-drawn] canvas {
+  opacity: 1;
+}
+/* A canvas whose context the GPU took stays mounted for the browser to restore; the sketch shows meanwhile. */
 .room-scene[data-renderer="fallback"] canvas {
   visibility: hidden;
 }
-@keyframes room-in {
+.room-sketch {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  animation: room-sketch-in 600ms ease-out;
+}
+/* The first sketch of a page load draws itself in instead of fading in. */
+.room-sketch[data-draw-in] {
+  animation: none;
+}
+.room-sketch-wall {
+  fill: #2c2621;
+}
+.room-sketch-sky-top {
+  stop-color: var(--room-sky-top, #232a3a);
+  stop-opacity: 0.7;
+}
+.room-sketch-sky-horizon {
+  stop-color: var(--room-sky-horizon, #4a4440);
+  stop-opacity: 0.7;
+}
+.room-sketch-strokes path {
+  fill: none;
+  stroke: #e8dcc8;
+  stroke-opacity: 0.55;
+  stroke-width: 1.25px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* With pathLength="1": one dash the path's length, a gap longer than it, so no cap shows before the draw-in. */
+  stroke-dasharray: 1 1.1;
+  stroke-dashoffset: 0;
+}
+.room-sketch[data-draw-in] .room-sketch-strokes path {
+  animation: room-sketch-draw 900ms ease-out both;
+}
+@keyframes room-sketch-draw {
+  from {
+    stroke-dashoffset: 1.05;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes room-sketch-in {
   from {
     opacity: 0;
+  }
+}
+/* The global reduced-motion rule shortens durations but keeps the delays, which would still stagger the strokes. */
+@media (prefers-reduced-motion: reduce) {
+  .room-sketch[data-draw-in] .room-sketch-strokes path {
+    animation: none;
   }
 }
 .room-scene::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: #151713a3;
-}
-.room-scene[data-scene="night"]::after {
-  background: #110f0c70;
-}
-.room-scene[data-renderer="webgl"]::after {
   background: #1517138a;
 }
-.room-scene[data-renderer="webgl"][data-scene="night"]::after {
+.room-scene[data-scene="night"]::after {
   background: #110f0c4d;
 }
 /* The Palace page has no text over the room: no veil. */
-.room-scene[data-renderer="webgl"][data-view="palace"]::after {
+.room-scene[data-view="palace"]::after {
   background: none;
 }
 
@@ -697,27 +740,21 @@
   .composer-context {
     font-size: 10px;
   }
-  .room-scene::after {
-    background: #151713ad;
-  }
-  .room-scene[data-scene="night"]::after {
-    background: #110f0c8a;
-  }
   /*
    * On a phone the text runs over the bright middle of the room (the hearth, the stove): a stronger
    * veil than the desktop's over the 3D room, strongest at the top where the header and the first
    * lines sit. Where the workspace shows the room strip, its 72 px keep the desktop's veil.
    */
-  .room-scene[data-renderer="webgl"]:not([data-view="palace"])::after {
+  .room-scene:not([data-view="palace"])::after {
     background: linear-gradient(180deg, #151713d9 0, #151713cc 50%, #151713b3 100%);
   }
-  .room-scene[data-renderer="webgl"][data-scene="night"]:not([data-view="palace"])::after {
+  .room-scene[data-scene="night"]:not([data-view="palace"])::after {
     background: linear-gradient(180deg, #110f0cb3 0, #110f0ca6 50%, #110f0c8a 100%);
   }
-  .portal-shell:has([data-room-strip]) .room-scene[data-renderer="webgl"]:not([data-view="palace"])::after {
+  .portal-shell:has([data-room-strip]) .room-scene:not([data-view="palace"])::after {
     background: linear-gradient(180deg, #1517138a 0, #1517138a 72px, #151713d9 72px, #151713cc 50%, #151713b3 100%);
   }
-  .portal-shell:has([data-room-strip]) .room-scene[data-renderer="webgl"][data-scene="night"]:not([data-view="palace"])::after {
+  .portal-shell:has([data-room-strip]) .room-scene[data-scene="night"]:not([data-view="palace"])::after {
     background: linear-gradient(180deg, #110f0c4d 0, #110f0c4d 72px, #110f0cb3 72px, #110f0ca6 50%, #110f0c8a 100%);
   }
   button[data-size="icon"] {

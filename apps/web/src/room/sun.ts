@@ -1,7 +1,7 @@
 /**
  * The room's sun clock (docs/PALACE.md, Lighting): where the sun and moon are for a place and a
  * moment, whether the room reads as day or night, which way the light falls in room space, and the
- * sky's two colours (the dome in the scene, the CSS gradient when there is no WebGL). The client
+ * sky's two colours (the dome in the scene, the sketch's window panes). The client
  * clock is trusted; the server only supplies the coordinates. No React, no DOM: the node test
  * runner loads this file directly.
  */

@@ -5,7 +5,7 @@ import { useThree } from "@react-three/fiber";
 import { BoxGeometry, Color, InstancedMesh, Object3D, SphereGeometry } from "three";
 import { hashId, mulberry32 } from "@portal/shared/room";
 import { LOOSE_CAP, NOTE_CAP, type NoteCount } from "../growth";
-import { ANCHORS, furnitureFor, placeItems } from "../layout-slots";
+import { ANCHORS, CORKBOARD, furnitureFor, PINBOARD, placeItems } from "../layout-slots";
 import { Hotspot } from "./Hotspot";
 import { instancedMatte, markForUpload, palette, setDrawCount } from "./materials";
 import { Soft } from "./Shell";
@@ -22,15 +22,12 @@ const tint = new Color();
 /** The loose inbox notes' corner of the desk, right of the papers. */
 const DESK = { x: -0.58, z: ANCHORS.desk[2] - 0.05, y: ANCHORS.desk[1] + 0.002 } as const;
 
-/** The wide pinboard's width and centre along the wall (it grows towards the room's front). */
-export const PINBOARD = { width: 2.1, centre: ANCHORS.board[2] + 0.35 } as const;
-
 /** A board on the left wall above the shelving: the corkboard the room starts with, or (wider) the pinboard. */
-export function CorkboardFrame({ width = 1.3, centre = ANCHORS.board[2] }: { width?: number; centre?: number }) {
+export function CorkboardFrame({ width = CORKBOARD.width, centre = ANCHORS.board[2] }: { width?: number; centre?: number }) {
   const [x, y] = ANCHORS.board;
   return (
     <group position={[x, y, centre]}>
-      <Soft size={[0.04, 0.68, width + 0.06]} position={[0.02, 0, 0]} color={palette.wood} radius={0.012} />
+      <Soft size={[0.04, CORKBOARD.height, width + 0.06]} position={[0.02, 0, 0]} color={palette.wood} radius={0.012} />
       <Soft size={[0.03, 0.6, width - 0.02]} position={[0.035, 0, 0]} color={CORK} radius={0.008} />
     </group>
   );

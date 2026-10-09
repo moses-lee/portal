@@ -8,6 +8,7 @@ import type { RoomWeather } from "@portal/contracts/room";
 import type { LivenessState, SessionLink } from "@portal/contracts/types";
 import { assignSlots, bucket, hashId, mulberry32 } from "@portal/shared/room";
 import { sessionState, sessionStateLabels } from "@portal/shared/session-state";
+import { BENCH } from "./layout.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Robots
@@ -141,7 +142,7 @@ export const SPOTS = {
   /** Just inside the door. */
   inside: [3.35, -2.35] as const,
   /** The bench's centre on the rug; robots work behind it, facing the camera. */
-  bench: [0.3, 0.6] as const,
+  bench: [BENCH.x, BENCH.z] as const,
 } as const;
 
 /** The floor position `[x, z]` of a robot's slot. */

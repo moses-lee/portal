@@ -4,12 +4,11 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useFrame } from "@react-three/fiber";
 import { DoubleSide, MeshStandardMaterial, type Group } from "three";
 import type { RoomMilestone } from "@portal/contracts/room";
-import { ROOM } from "../layout";
-import { ANCHORS, furniture } from "../layout-slots";
+import { BOOKCASE, CHAIR, ROOM } from "../layout";
+import { ANCHORS, furniture, PINBOARD } from "../layout-slots";
 import { SPOTS } from "../live";
 import { reportRoom } from "../report";
-import { CorkboardFrame, PINBOARD } from "./Corkboard";
-import { CHAIR } from "./Lamp";
+import { CorkboardFrame } from "./Corkboard";
 import { matteMaterial, palette, ROUGHNESS } from "./materials";
 import { Soft } from "./Shell";
 
@@ -230,8 +229,7 @@ function Bookcase({ id }: { id: "tall-bookcase" | "second-bookcase" }) {
   const piece = furniture(id);
   const centre = piece.rows[0][2] + (piece.pitch[2] * (piece.perRow - 1)) / 2;
   const width = piece.pitch[2] * piece.perRow + 0.12;
-  const depth = 0.38;
-  const height = 2.45;
+  const { depth, height } = BOOKCASE;
   const x = ROOM.left + depth / 2;
   return (
     <group position={[x, 0, centre]}>

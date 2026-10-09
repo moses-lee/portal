@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { BoxGeometry, DoubleSide, InstancedMesh, MeshStandardMaterial, Object3D, type PointLight } from "three";
 import type { LampState } from "../live";
-import { ROOM } from "../layout";
+import { CHAIR, DESK, DESK_LAMP } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { KitMesh, WithKit } from "./kit";
 import { instancedMatte, markForUpload, matteMaterial, palette, ROUGHNESS, setGlow } from "./materials";
@@ -19,11 +19,6 @@ const LEVELS: Record<LampState, { light: number; glow: number }> = {
 
 const PAPERS = 4;
 
-/**
- * Portal's chair: pulled out from the desk and turned side-on to the room, so its seat (where the
- * year's cat sleeps) shows from the camera instead of hiding behind the backrest.
- */
-export const CHAIR = { x: ROOM.window.x + 0.2, z: ROOM.back + 0.45 + 0.72, turn: -1.2, seat: 0.42 } as const;
 const scratch = new Object3D();
 
 /** The desk's papers: where each sheet rests, and how it turns. */
@@ -41,8 +36,8 @@ const SHEETS = [
  * its intensity (no recompiles). The papers are one instanced mesh.
  */
 export default function Lamp({ state, reducedMotion }: { state: LampState; reducedMotion: boolean }) {
-  const x = ROOM.window.x;
-  const z = ROOM.back + 0.45;
+  const x = DESK.x;
+  const z = DESK.z;
   const light = useRef<PointLight>(null);
   const shade = useMemo(
     () => new MeshStandardMaterial({ color: palette.shade, emissive: "#ffb35c", emissiveIntensity: LEVELS[state].glow, roughness: ROUGHNESS, side: DoubleSide }),
@@ -94,7 +89,7 @@ export default function Lamp({ state, reducedMotion }: { state: LampState; reduc
   ];
   return (
     <group>
-      <primitive object={papers} position={[x - 0.05, 0.795, z + 0.05]} castShadow receiveShadow frustumCulled={false} />
+      <primitive object={papers} position={[x - 0.05, DESK.top, z + 0.05]} castShadow receiveShadow frustumCulled={false} />
       <group position={[CHAIR.x, 0, CHAIR.z]} rotation={[0, CHAIR.turn, 0]}>
         <WithKit
           fallback={
@@ -111,15 +106,15 @@ export default function Lamp({ state, reducedMotion }: { state: LampState; reduc
           <KitMesh piece="chair_A_wood" color={palette.chair} rotation={[0, Math.PI, 0]} scale={CHAIR.seat / 0.49} />
         </WithKit>
       </group>
-      <group position={[x - 0.62, 0.795, z - 0.1]}>
+      <group position={[DESK_LAMP.x, DESK.top, DESK_LAMP.z]}>
         <mesh position={[0, 0.02, 0]} castShadow material={matteMaterial(palette.brass)}>
-          <cylinderGeometry args={[0.1, 0.12, 0.04, 14]} />
+          <cylinderGeometry args={[DESK_LAMP.base - 0.02, DESK_LAMP.base, 0.04, 14]} />
         </mesh>
-        <mesh position={[0, 0.22, 0]} castShadow material={matteMaterial(palette.brass)}>
-          <cylinderGeometry args={[0.014, 0.014, 0.38, 8]} />
+        <mesh position={[0, 0.03 + DESK_LAMP.stem / 2, 0]} castShadow material={matteMaterial(palette.brass)}>
+          <cylinderGeometry args={[0.014, 0.014, DESK_LAMP.stem, 8]} />
         </mesh>
-        <mesh position={[0, 0.44, 0]} castShadow material={shade}>
-          <cylinderGeometry args={[0.07, 0.17, 0.2, 14, 1, true]} />
+        <mesh position={[0, DESK_LAMP.shade.y, 0]} castShadow material={shade}>
+          <cylinderGeometry args={[DESK_LAMP.shade.top, DESK_LAMP.shade.bottom, DESK_LAMP.shade.height, 14, 1, true]} />
         </mesh>
         <pointLight ref={light} position={[0, 0.36, 0]} color="#ffbf73" intensity={LEVELS[state].light} distance={7} decay={2} />
       </group>

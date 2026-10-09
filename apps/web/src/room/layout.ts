@@ -103,6 +103,60 @@ export type Point3 = readonly [number, number, number];
 /** The window opening's centre, on the glass: where the phone strip aims. */
 export const WINDOW_CENTRE: Point3 = [ROOM.window.x, (ROOM.window.sill + ROOM.window.top) / 2, ROOM.back - 0.12];
 
+/**
+ * Sizes the scene and the sketch (`sketch.ts`) both read, so the sketch's lines stay on the 3D
+ * room's edges. Metres, in the room's frame; the scene files build their meshes from these.
+ */
+/** The desk under the window: its top's centre and size, its legs' inset, and the drawer block under its right half. */
+export const DESK = {
+  x: ROOM.window.x,
+  z: ROOM.back + 0.45,
+  width: 1.84,
+  depth: 0.68,
+  top: 0.795,
+  thickness: 0.07,
+  leg: { x: 0.82, z: 0.28, size: 0.07 },
+  drawer: { x: 0.55, width: 0.5, height: 0.2, depth: 0.6, y: 0.62 },
+} as const;
+
+/** The desk lamp at the desk's left end, on the desk's top: base, stem and shade. */
+export const DESK_LAMP = { x: DESK.x - 0.62, z: DESK.z - 0.1, base: 0.12, stem: 0.38, shade: { y: 0.44, height: 0.2, top: 0.07, bottom: 0.17 } } as const;
+
+/**
+ * Portal's chair: pulled out from the desk and turned side-on to the room, so its seat (where the
+ * year's cat sleeps) shows from the camera instead of hiding behind the backrest.
+ */
+export const CHAIR = { x: ROOM.window.x + 0.2, z: ROOM.back + 0.45 + 0.72, turn: -1.2, seat: 0.42 } as const;
+
+/** Where the stove stands: against the back wall, between the desk and the hearth. */
+export const STOVE = { x: 0.32, z: ROOM.back + 0.3 } as const;
+
+/** The hearth's parts in front of the chimney breast: the brick surround, the firebox, the mantel shelf and the hearthstone. */
+export const HEARTH = {
+  surround: { half: 0.62, height: 1.08, depth: 0.04 },
+  firebox: { half: 0.4, height: 0.78 },
+  mantel: { width: 1.7, y: 1.14, height: 0.08, depth: 0.3, out: 0.08 },
+  stone: { width: 1.7, height: 0.05, depth: 0.55, out: 0.28 },
+} as const;
+
+/** The rug on the floor: its centre, the border's size and the inner field's. */
+export const RUG = { x: 0.3, z: 0.5, outer: [3.7, 2.5], inner: [3.3, 2.1] } as const;
+
+/** The robots' workbench on the rug: centre, size, the top's height, the legs' offsets. */
+export const BENCH = { x: 0.3, z: 0.6, width: 2.9, depth: 0.34, top: 0.25, thickness: 0.045, leg: { x: 1.38, z: 0.12 } } as const;
+
+/** The small shelf on the left wall the room starts with: two boards, two brackets under the lower one. */
+export const SMALL_SHELF = { x: ROOM.left + 0.17, z: -1.3, boards: [1.65, 2.15], depth: 0.3, length: 1.5, thickness: 0.05, brackets: [-0.7, 0.7] } as const;
+
+/** A floor-standing bookcase against the left wall (the session milestones'). */
+export const BOOKCASE = { depth: 0.38, height: 2.45 } as const;
+
+/** The mail tray's shelf on the back wall between the chimney breast and the door. */
+export const MAIL_SHELF = { x: 2.55, y: 1.0, z: ROOM.back + 0.13, width: 0.44, depth: 0.26 } as const;
+
+/** The bay window (a milestone): how far it stands out beyond the wall, and how its sides angle in. */
+export const BAY = { depth: 0.55, cheek: 0.45 } as const;
+
 export type CameraPose = {
   /** Radians: yaw turns the camera to the right of the room's axis, pitch looks down. */
   yaw: number;

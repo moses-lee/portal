@@ -591,7 +591,7 @@ export async function setupPortal(
     /**
      * Let the room draw in WebGL. Off by default: headless Chromium rasterises WebGL in software,
      * and a room redrawn 24 times a second in every test would slow the whole suite and skew its
-     * timings; without it the room is the gradient fallback, which carries the same attributes.
+     * timings; without it the room is the pencil sketch, which carries the same attributes.
      */
     webgl?: boolean;
   } = {},

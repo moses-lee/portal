@@ -17,10 +17,19 @@ export const KIT_URL = "/room/kit.glb";
 
 export type KitPiece = "chair_A_wood";
 
+/** `useGLTF`'s arguments for the kit: no Draco, the meshopt decoder. */
+const DRACO = false;
+const MESHOPT = true;
+
 /** The kit's meshes by node name; suspends until the GLB has loaded (meshopt decoding, no Draco). */
 function useKit(): Record<string, Mesh> {
-  return useGLTF(KIT_URL, false, true).nodes as Record<string, Mesh>;
+  return useGLTF(KIT_URL, DRACO, MESHOPT).nodes as Record<string, Mesh>;
 }
+
+// Fetched as the room's chunk evaluates, so the first frame usually has the kit's chair rather than
+// its stand-in. The arguments must be `useKit`'s: R3F caches by loader and URL only, so the first
+// call decides the decoder.
+useGLTF.preload(KIT_URL, DRACO, MESHOPT);
 
 /** One kit piece in a room colour, at the kit's own scale unless given one. */
 export function KitMesh({

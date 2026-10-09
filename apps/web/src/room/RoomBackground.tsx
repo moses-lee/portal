@@ -46,11 +46,19 @@ import { requestRoomFrame } from "./loop";
 import { hideCard, pinCard, startRoomPointer, waveRobot, WAVE_MS } from "./pointer";
 import { onRoomReport, readRoomReport } from "./report";
 import type { RoomLiveScene } from "./RoomCanvas";
+// The extension is explicit: on a case-insensitive disk "./Sketch" could resolve to sketch.ts.
+import Sketch from "./Sketch.tsx";
 import { sceneForAltitude, skyColours } from "./sun";
 import { useRoomState, useSunClock } from "./useRoomState";
 
+/**
+ * The WebGL room's chunk (three.js and the scene). Named once so the background can start the
+ * download as it mounts, before the canvas does: the bundler's module cache makes this and
+ * `next/dynamic`'s call the same request and the same module, evaluated once.
+ */
+const loadRoomCanvas = () => import("./RoomCanvas");
 /** The WebGL room loads on the client only, in its own chunk: three.js stays off the first paint. */
-const RoomCanvas = dynamic(() => import("./RoomCanvas"), { ssr: false });
+const RoomCanvas = dynamic(loadRoomCanvas, { ssr: false });
 /** The hover card shows only over the canvas: it loads with it. */
 const RoomHoverCard = dynamic(() => import("./RoomHoverCard"), { ssr: false });
 
@@ -58,7 +66,7 @@ let webglSupport: boolean | null = null;
 
 /**
  * Whether this browser can open a WebGL 2 context, the only kind three.js still creates (a WebGL
- * 1-only browser gets the gradient); asked once, the probe context released at once.
+ * 1-only browser gets the sketch); asked once, the probe context released at once.
  */
 function hasWebGL(): boolean {
   if (webglSupport !== null) return webglSupport;
@@ -74,8 +82,10 @@ function hasWebGL(): boolean {
 }
 
 const subscribeNever = () => () => {};
+const hydratedOnClient = () => true;
+const notOnServer = () => false;
 
-/** Catches whatever the canvas throws (no context could be created, a scene error) and hands over to the gradient. */
+/** Catches whatever the canvas throws (no context could be created, a scene error) and hands over to the sketch. */
 class CanvasBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
 
@@ -84,7 +94,7 @@ class CanvasBoundary extends Component<{ onError: () => void; children: ReactNod
   }
 
   componentDidCatch(error: unknown) {
-    console.error("The room's canvas failed; showing the gradient instead.", error);
+    console.error("The room's canvas failed; showing the sketch instead.", error);
     this.props.onError();
   }
 
@@ -95,6 +105,10 @@ class CanvasBoundary extends Component<{ onError: () => void; children: ReactNod
 
 /** Set once the page has had its first idle moment; later mounts (another view) draw at once. */
 let settled = false;
+/** The longest the canvas waits for that idle moment (its chunk is already loading meanwhile). */
+const SETTLE_MS = 800;
+/** The canvas's fade-in over the placeholder (`globals.css`); the placeholder goes after it. */
+const FADE_MS = 600;
 
 /**
  * Whether the page has settled enough to start the canvas: its first frame compiles shaders, which
@@ -109,7 +123,7 @@ function useSettled(): boolean {
       setReady(true);
     };
     if (typeof window.requestIdleCallback === "function") {
-      const id = window.requestIdleCallback(done, { timeout: 1500 });
+      const id = window.requestIdleCallback(done, { timeout: SETTLE_MS });
       return () => window.cancelIdleCallback(id);
     }
     const timer = setTimeout(done, 300);
@@ -147,17 +161,20 @@ function openView(view: PortalView) {
 
 /**
  * The room behind every Portal view and the workspace (docs/PALACE.md): the 3D canvas when the
- * browser can draw it, else a CSS gradient sky with the same colours under the dark veil (no
- * WebGL, a lost context, or `prefers-reduced-transparency`). It follows the real sun at the room's
+ * browser can draw it, over a placeholder until its first frame is drawn (the pencil sketch,
+ * `Sketch.tsx`); the sketch alone without WebGL, after a lost context or a canvas failure, and
+ * under `prefers-reduced-transparency`; one veil over either. It follows the real sun at the room's
  * location, never a setting. The live objects follow the session list, the portal stream's status
  * and the census; the accumulated ones (books, notes, plants, frames, keys, the tree) the census,
  * the session and project lists and the active watches, and the milestones mount their furniture;
  * with the canvas up, a document-level pointer listener (`pointer.ts`) shows their hover cards and
  * clicks through. `palace` is the Palace page, where a clicked robot waves first.
  * The fixed `.room-scene` element carries what tests and CSS read: `data-scene` (day or night,
- * from the sun's altitude), `data-activity`, `data-renderer`, and a `data-room` JSON summary (the
- * live and accumulated objects, and what the canvas reports: the camera's pose and frame, the objects' screen
- * points, and the milestone in the crate).
+ * from the sun's altitude), `data-activity`, `data-renderer` (`webgl` while the canvas is up or
+ * coming), `data-placeholder` (what is under the canvas: `sketch`, or nothing once the canvas has
+ * drawn and faded in), `data-drawn` (the canvas has drawn a frame), and a `data-room` JSON summary
+ * (the live and accumulated objects, and what the canvas reports: `drawn`, the camera's pose and
+ * frame, the objects' screen points, and the milestone in the crate).
  */
 export default function RoomBackground({ activity, palace = false }: { activity: AgentActivity; palace?: boolean }) {
   const room = useRoomState();
@@ -166,13 +183,14 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   const webgl = useSyncExternalStore(subscribeNever, hasWebGL, () => false);
   const reducedTransparency = useMediaQuery("(prefers-reduced-transparency: reduce)");
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  /** The canvas failed for good (it threw): the gradient for the rest of the visit. */
+  /** The canvas failed for good (it threw): the sketch for the rest of the visit. */
   const [lost, setLost] = useState(false);
   /** The GPU took the context away; the canvas stays mounted, hidden, for the browser to give it back. */
   const [contextLost, setContextLost] = useState(false);
   /** A new canvas after a restored context: a fresh renderer, scene and frost pipeline. */
   const [canvasKey, setCanvasKey] = useState(0);
   const ready = useSettled();
+  const hydrated = useSyncExternalStore(subscribeNever, hydratedOnClient, notOnServer);
   const renderer = webgl && !lost && !contextLost && !reducedTransparency ? "webgl" : "fallback";
   const weather = environment?.weather ?? null;
   const condition = weather?.condition ?? "clear";
@@ -290,8 +308,13 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   useLayoutEffect(() => {
     palaceRef.current = palace;
   });
+  /** The canvas will mount: its chunk starts loading now, not when the page has settled. */
+  const coming = webgl && !lost && !reducedTransparency;
+  useEffect(() => {
+    if (coming) void loadRoomCanvas();
+  }, [coming]);
   /** The canvas is mounted (also while its context is lost, waiting to be restored). */
-  const mounted = webgl && !lost && !reducedTransparency && !!clock && ready;
+  const mounted = coming && !!clock && ready;
   const drawing = mounted && !contextLost;
   useEffect(() => {
     if (!drawing) return;
@@ -328,14 +351,31 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   const baseJson = JSON.stringify(base);
   const liveJson = JSON.stringify({ ...liveSummary(data), ...growthSummary(growthData) });
   const element = useRef<HTMLDivElement>(null);
+  /** The canvas has drawn a frame (its report's `drawn`): it fades in, and the placeholder goes after. */
+  const [drawn, setDrawn] = useState(false);
   useLayoutEffect(() => {
     const merged = { ...(JSON.parse(baseJson) as object), ...(JSON.parse(liveJson) as object) };
     const write = (report: Record<string, unknown>) => {
       if (element.current) element.current.dataset.room = JSON.stringify({ ...merged, ...report });
+      setDrawn(report.drawn === true);
     };
     write(readRoomReport());
     return onRoomReport(write);
   }, [baseJson, liveJson]);
+  /** The placeholder stays opaque under the canvas while it fades in, and goes once it has. */
+  const [faded, setFaded] = useState(false);
+  const [wasDrawn, setWasDrawn] = useState(drawn);
+  if (wasDrawn !== drawn) {
+    setWasDrawn(drawn);
+    if (!drawn) setFaded(false);
+  }
+  useEffect(() => {
+    if (!drawn) return;
+    const timer = setTimeout(() => setFaded(true), FADE_MS);
+    return () => clearTimeout(timer);
+  }, [drawn]);
+  /** What is under the canvas (docs/PALACE.md, The veil): nothing before hydration (the ground), the sketch until the canvas has drawn and faded in. */
+  const placeholder = hydrated && !(drawn && faded) ? "sketch" : null;
   const failed = useCallback(() => setLost(true), []);
   const onContextLost = useCallback(() => setContextLost(true), []);
   const onContextRestored = useCallback(() => {
@@ -350,11 +390,14 @@ export default function RoomBackground({ activity, palace = false }: { activity:
       data-scene={scene}
       data-activity={activity}
       data-renderer={renderer}
+      data-placeholder={placeholder ?? undefined}
+      data-drawn={drawn ? "" : undefined}
       data-room={baseJson}
       data-view={palace ? "palace" : undefined}
       style={style}
       aria-hidden="true"
     >
+      {placeholder === "sketch" && <Sketch milestones={milestones} />}
       {mounted && (
         <CanvasBoundary key={canvasKey} onError={failed}>
           <RoomCanvas

@@ -5,6 +5,7 @@ import { useThree } from "@react-three/fiber";
 import { BoxGeometry, Color, InstancedMesh, Object3D } from "three";
 import { hashId, MILESTONES } from "@portal/shared/room";
 import type { BookSpec } from "../growth";
+import { SMALL_SHELF } from "../layout";
 import { capacityOf, furnitureFor, placeItems } from "../layout-slots";
 import { InstancedHotspot, type HotspotSpot } from "./Hotspot";
 import { instancedMatte, markForUpload, palette, setDrawCount } from "./materials";
@@ -22,10 +23,11 @@ const tint = new Color();
 /** The small shelf on the left wall the room starts with: one row of books on its lower board. */
 function SmallShelf() {
   return (
-    <group position={[-3.83, 0, -1.3]}>
-      <Soft size={[0.3, 0.05, 1.5]} position={[0, 1.65, 0]} color={palette.woodLight} radius={0.012} />
-      <Soft size={[0.3, 0.05, 1.5]} position={[0, 2.15, 0]} color={palette.woodLight} radius={0.012} />
-      {[-0.7, 0.7].map((z) => (
+    <group position={[SMALL_SHELF.x, 0, SMALL_SHELF.z]}>
+      {SMALL_SHELF.boards.map((y) => (
+        <Soft key={y} size={[SMALL_SHELF.depth, SMALL_SHELF.thickness, SMALL_SHELF.length]} position={[0, y, 0]} color={palette.woodLight} radius={0.012} />
+      ))}
+      {SMALL_SHELF.brackets.map((z) => (
         <Soft key={z} size={[0.24, 0.16, 0.04]} position={[0.02, 1.56, z]} color={palette.wood} radius={0.01} />
       ))}
     </group>

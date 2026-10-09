@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   BufferAttribute,
@@ -180,6 +180,22 @@ class FrostPipeline {
     this.draw(material, output);
   }
 
+  /**
+   * Compiles every material in `scene` for the scene target, where every frame renders it (no tone
+   * mapping, linear output: other programs than the screen's), without waiting on the driver where
+   * `KHR_parallel_shader_compile` lets it. The synchronous part runs with the target bound.
+   */
+  compile(scene: Scene, camera: Camera): Promise<unknown> {
+    const renderer = this.renderer;
+    const previous = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.scene);
+    try {
+      return renderer.compileAsync(scene, camera);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
+  }
+
   /** One frame: the scene to the screen, frosted under every panel. `size` is the canvas in CSS pixels. */
   render(scene: Scene, camera: Camera, size: { left: number; top: number; width: number; height: number }) {
     const renderer = this.renderer;
@@ -280,25 +296,44 @@ class FrostPipeline {
   }
 }
 
+/** One pipeline per renderer, made for whichever comes first: the compile before the first frame, or the first frame. */
+const pipelines = new WeakMap<WebGLRenderer, FrostPipeline>();
+
+function pipelineFor(renderer: WebGLRenderer): FrostPipeline {
+  let pipeline = pipelines.get(renderer);
+  if (!pipeline) {
+    pipeline = new FrostPipeline(renderer);
+    pipelines.set(renderer, pipeline);
+  }
+  return pipeline;
+}
+
+/**
+ * Compiles the room's shaders before its first frame, for the frost pass's scene target that every
+ * frame renders into (docs/PALACE.md, Less waiting): resolves when the programs are ready, polled
+ * without blocking where the browser compiles in parallel. What mounts later compiles on first use.
+ */
+export function compileRoom(renderer: WebGLRenderer, scene: Scene, camera: Camera): Promise<unknown> {
+  return pipelineFor(renderer).compile(scene, camera);
+}
+
 /**
  * Takes over the canvas's rendering (a positive `useFrame` priority stops R3F's own render) and
  * draws each frame through the frost pipeline. Mount it once inside the room's `Canvas`.
  */
 export default function FrostPass() {
   const gl = useThree((state) => state.gl);
-  const pipeline = useRef<FrostPipeline | null>(null);
   useEffect(
     () => () => {
-      pipeline.current?.dispose();
-      pipeline.current = null;
+      pipelines.get(gl)?.dispose();
+      pipelines.delete(gl);
       resetFrost();
     },
     [gl],
   );
   useFrame((state) => {
-    // Made on the first frame rather than in an effect, so not even the first frame renders another way.
-    pipeline.current ??= new FrostPipeline(state.gl);
-    pipeline.current.render(state.scene, state.camera, state.size);
+    // Made on demand rather than in an effect, so not even the first frame renders another way.
+    pipelineFor(state.gl).render(state.scene, state.camera, state.size);
   }, 1);
   return null;
 }

@@ -3,7 +3,7 @@
 import { useRef, type ReactNode } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Vector3, type Group } from "three";
-import { ROOM, WINDOW_CENTRE } from "../layout";
+import { BAY, ROOM, WINDOW_CENTRE } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { matteMaterial, palette } from "./materials";
 
@@ -29,8 +29,6 @@ export function WindowView({ distance, children }: { distance: number; children:
   return <group ref={group}>{children}</group>;
 }
 
-/** How far the bay window stands out beyond the wall, and how its sides angle in. */
-const BAY = { depth: 0.55, cheek: 0.45 } as const;
 
 /**
  * The bay window (the 600-session milestone): the opening stays, and beyond it a box of glass stands

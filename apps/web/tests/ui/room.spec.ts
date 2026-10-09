@@ -22,7 +22,7 @@ test("the room's canvas mounts behind Portal and reports day or night from the s
   await page.screenshot({ path: info.outputPath("room-noon.png") });
 });
 
-test("at night the scene says so, and without WebGL the gradient sky stands in", async ({ page }, info) => {
+test("at night the scene says so, and without WebGL the sketch stands in", async ({ page }, info) => {
   // 11pm in New York.
   await page.clock.install({ time: new Date(Date.UTC(2026, 9, 5, 3, 0, 0)) });
   // The fixture refuses WebGL unless asked, as a browser without it would.
@@ -31,10 +31,86 @@ test("at night the scene says so, and without WebGL the gradient sky stands in",
   const room = page.locator(".room-scene");
   await expect(room).toHaveAttribute("data-scene", "night");
   await expect(room).toHaveAttribute("data-renderer", "fallback");
+  await expect(room).toHaveAttribute("data-placeholder", "sketch");
+  await expect.poll(() => room.locator("svg[data-room-sketch] path").count()).toBeGreaterThan(30);
   await expect(room.locator("canvas")).toHaveCount(0);
-  const background = await room.evaluate((node) => getComputedStyle(node).backgroundImage);
-  expect(background).toContain("linear-gradient");
-  await page.screenshot({ path: info.outputPath("room-fallback-night.png") });
+  await expect(room).not.toHaveAttribute("data-drawn");
+  // The gradient sky is gone: the ground is a flat colour, the sketch draws the rest.
+  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toBe("none");
+  await page.screenshot({ path: info.outputPath("room-sketch-night.png") });
+});
+
+/**
+ * Holds the room's chunk (three.js and the scene) until the returned function is called; every
+ * other chunk passes at once. The production build names chunks by content hash, so the room's is
+ * the one carrying three.js's "WebGLRenderer: " message string.
+ */
+async function holdRoomChunk(page: Page): Promise<() => void> {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/_next/static/chunks/*.js", async (route) => {
+    const response = await route.fetch();
+    const body = await response.body();
+    if (body.includes("WebGLRenderer: ")) await released;
+    await route.fulfill({ response, body });
+  });
+  return release;
+}
+
+const veilOf = (room: Locator) => room.evaluate((node) => getComputedStyle(node, "::after").backgroundColor);
+
+test("the sketch shows while the room loads, and the canvas fades in over it", async ({ page }, info) => {
+  await setupPortal(page, { webgl: true });
+  const release = await holdRoomChunk(page);
+  // The chunk is requested as the background mounts, often before the load event, which then waits on it.
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-renderer", "webgl");
+  await expect(room).toHaveAttribute("data-placeholder", "sketch");
+  const sketch = room.locator("svg[data-room-sketch]");
+  await expect.poll(() => sketch.locator("path").count()).toBeGreaterThan(30);
+  await expect(room.locator("canvas")).toHaveCount(0);
+  await expect(room).not.toHaveAttribute("data-drawn");
+  const veil = await veilOf(room);
+  const window = (await sketch.getAttribute("data-window"))!.split(",").map(Number);
+  await page.screenshot({ path: info.outputPath("room-held.png") });
+
+  release();
+  await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
+  expect((await summary(room)).drawn).toBe(true);
+  // The placeholder stays under the canvas while it fades in, then goes.
+  await expect(room).not.toHaveAttribute("data-placeholder", { timeout: 1_000 });
+  await expect(sketch).toHaveCount(0);
+  expect(await veilOf(room)).toBe(veil);
+  // The sketch drew the window where the room draws it.
+  const [wx, wy] = await pointOf(room, "window:window");
+  expect(Math.abs(wx - window[0])).toBeLessThanOrEqual(2);
+  expect(Math.abs(wy - window[1])).toBeLessThanOrEqual(2);
+});
+
+test("a lost context brings the sketch back until it is restored", async ({ page }) => {
+  await setupPortal(page, { webgl: true });
+  await page.goto("/");
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
+  await expect(room).not.toHaveAttribute("data-placeholder");
+  await page.evaluate(() => {
+    const context = document.querySelector<HTMLCanvasElement>(".room-scene canvas")!.getContext("webgl2")!;
+    const lose = context.getExtension("WEBGL_lose_context")!;
+    (window as unknown as { __loseContext: WEBGL_lose_context }).__loseContext = lose;
+    lose.loseContext();
+  });
+  await expect(room).toHaveAttribute("data-placeholder", "sketch");
+  await expect(room).not.toHaveAttribute("data-drawn");
+  await expect(room).toHaveAttribute("data-renderer", "fallback");
+  // It comes back complete: no draw-in the second time.
+  await expect(room.locator("svg[data-room-sketch]")).not.toHaveAttribute("data-draw-in");
+  await page.evaluate(() => (window as unknown as { __loseContext: WEBGL_lose_context }).__loseContext.restoreContext());
+  await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
+  await expect(room).toHaveAttribute("data-renderer", "webgl");
+  await expect(room).not.toHaveAttribute("data-placeholder", { timeout: 2_000 });
 });
 
 test("the Palace page is the room alone: a sidebar entry, no header text, no tracked panel, no composer", async ({ page }, info) => {
@@ -103,8 +179,9 @@ test("under reduced transparency the panels are solid and the room draws no fros
   await expect(composer).toBeVisible();
   expect(await alphaOf(sidebar)).toBe(1);
   expect(await alphaOf(composer)).toBe(1);
-  // The room is the still gradient, so nothing is frosted behind the panels.
+  // The room is the sketch, so nothing is frosted behind the panels.
   await expect(page.locator(".room-scene")).toHaveAttribute("data-renderer", "fallback");
+  await expect(page.locator(".room-scene")).toHaveAttribute("data-placeholder", "sketch");
   await expect(page.locator(".room-scene canvas")).toHaveCount(0);
 });
 
@@ -127,7 +204,22 @@ test("under reduced motion the canvas draws a still, and draws again only when t
   expect((await live(scene)).robots).toContainEqual({ id: "s3", state: "working", place: "bench" });
 });
 
-test("without WebGL the frost panels keep their tint over the gradient", async ({ page }) => {
+test("under reduced motion the sketch is drawn at once", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setupPortal(page);
+  await page.goto("/");
+  const room = page.locator(".room-scene");
+  await expect(room).toHaveAttribute("data-placeholder", "sketch");
+  const paths = room.locator("svg[data-room-sketch] path");
+  await expect.poll(() => paths.count()).toBeGreaterThan(30);
+  const styles = await paths.evaluateAll((nodes) => nodes.map((node) => ({ name: getComputedStyle(node).animationName, offset: getComputedStyle(node).strokeDashoffset })));
+  for (const style of styles) {
+    expect(style.name).toBe("none");
+    expect(parseFloat(style.offset)).toBe(0);
+  }
+});
+
+test("without WebGL the frost panels keep their tint over the sketch", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   const composer = page.locator(".composer");
@@ -398,6 +490,8 @@ test("a milestone that arrives over the stream is delivered in a crate, then its
   await page.goto("/palace");
   const scene = page.locator(".room-scene");
   await expect.poll(async () => (await growth(scene)).books?.rows).toBe(1);
+  // The canvas is up and has drawn, so the milestone arrives over the stream rather than with its first state.
+  await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   await fixture.pushRoom({ ...base, census: { ...base.census, sessionsEver: 25 }, milestones: [milestone("tall-bookcase", Date.now())] });
   await expect.poll(async () => (await growth(scene)).delivery ?? null).toBe("tall-bookcase");
   await page.screenshot({ path: info.outputPath("delivery.png") });

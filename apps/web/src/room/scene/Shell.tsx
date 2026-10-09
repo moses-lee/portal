@@ -2,7 +2,7 @@
 
 import { RoundedBox } from "@react-three/drei";
 import { MeshBasicMaterial } from "three";
-import { ROOM } from "../layout";
+import { DESK, HEARTH, ROOM, RUG } from "../layout";
 import { matteMaterial, palette, shellMaterial } from "./materials";
 
 type Vec3 = [number, number, number];
@@ -77,9 +77,9 @@ function Floor() {
 
 function Rug() {
   return (
-    <group position={[0.3, 0, 0.5]}>
-      <Soft size={[3.7, 0.03, 2.5]} position={[0, 0.015, 0]} color={palette.rugBorder} radius={0.012} />
-      <Soft size={[3.3, 0.034, 2.1]} position={[0, 0.019, 0]} color={palette.rug} radius={0.012} />
+    <group position={[RUG.x, 0, RUG.z]}>
+      <Soft size={[RUG.outer[0], 0.03, RUG.outer[1]]} position={[0, 0.015, 0]} color={palette.rugBorder} radius={0.012} />
+      <Soft size={[RUG.inner[0], 0.034, RUG.inner[1]]} position={[0, 0.019, 0]} color={palette.rug} radius={0.012} />
     </group>
   );
 }
@@ -131,34 +131,35 @@ function Door() {
 function Alcove() {
   const { hearth, back } = ROOM;
   const front = back + hearth.depth;
+  const { surround, firebox, mantel, stone } = HEARTH;
   return (
     <group>
       <Slab from={[hearth.x - hearth.width / 2, 0, back]} to={[hearth.x + hearth.width / 2, TALL, front]} color={palette.wall} />
-      <Slab from={[hearth.x - 0.62, 0, front]} to={[hearth.x + 0.62, 1.08, front + 0.04]} color={palette.brick} shell={false} cast={false} />
-      <Slab from={[hearth.x - 0.4, 0, front + 0.04]} to={[hearth.x + 0.4, 0.78, front + 0.05]} color={palette.firebox} shell={false} cast={false} />
-      <Soft size={[1.7, 0.08, 0.3]} position={[hearth.x, 1.14, front + 0.08]} color={palette.wood} radius={0.02} />
-      <Soft size={[1.7, 0.05, 0.55]} position={[hearth.x, 0.025, front + 0.28]} color={palette.brick} radius={0.015} />
+      <Slab from={[hearth.x - surround.half, 0, front]} to={[hearth.x + surround.half, surround.height, front + surround.depth]} color={palette.brick} shell={false} cast={false} />
+      <Slab from={[hearth.x - firebox.half, 0, front + surround.depth]} to={[hearth.x + firebox.half, firebox.height, front + surround.depth + 0.01]} color={palette.firebox} shell={false} cast={false} />
+      <Soft size={[mantel.width, mantel.height, mantel.depth]} position={[hearth.x, mantel.y, front + mantel.out]} color={palette.wood} radius={0.02} />
+      <Soft size={[stone.width, stone.height, stone.depth]} position={[hearth.x, stone.height / 2, front + stone.out]} color={palette.brick} radius={0.015} />
     </group>
   );
 }
 
 /** The desk under the window (the lamp, chair and papers on it are the live `Lamp`). */
 function Desk() {
-  const x = ROOM.window.x;
-  const z = ROOM.back + 0.45;
+  const { leg, drawer } = DESK;
+  const legHeight = DESK.top - DESK.thickness;
   const legs: [number, number][] = [
-    [-0.82, -0.28],
-    [0.82, -0.28],
-    [-0.82, 0.28],
-    [0.82, 0.28],
+    [-leg.x, -leg.z],
+    [leg.x, -leg.z],
+    [-leg.x, leg.z],
+    [leg.x, leg.z],
   ];
   return (
-    <group position={[x, 0, z]}>
-      <Soft size={[1.84, 0.07, 0.68]} position={[0, 0.76, 0]} color={palette.wood} />
+    <group position={[DESK.x, 0, DESK.z]}>
+      <Soft size={[DESK.width, DESK.thickness, DESK.depth]} position={[0, DESK.top - DESK.thickness / 2, 0]} color={palette.wood} />
       {legs.map(([lx, lz]) => (
-        <Soft key={`${lx}:${lz}`} size={[0.07, 0.73, 0.07]} position={[lx, 0.365, lz]} color={palette.wood} radius={0.015} />
+        <Soft key={`${lx}:${lz}`} size={[leg.size, legHeight, leg.size]} position={[lx, legHeight / 2, lz]} color={palette.wood} radius={0.015} />
       ))}
-      <Soft size={[0.5, 0.2, 0.6]} position={[0.55, 0.62, 0]} color={palette.woodLight} />
+      <Soft size={[drawer.width, drawer.height, drawer.depth]} position={[drawer.x, drawer.y, 0]} color={palette.woodLight} />
     </group>
   );
 }
