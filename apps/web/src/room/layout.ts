@@ -403,7 +403,7 @@ export function registerStage(element: Element): () => void {
 const coverRefs = new Map<CoverKind, (element: Element | null) => (() => void) | undefined>();
 
 /**
- * A stable callback ref that reports its element as covering the room: `<aside ref={roomCover("left")}>`.
+ * A stable callback ref that reports its element as covering the room: `<Link ref={roomCover("focus")}>` (the phone strip).
  * React 19 runs the returned cleanup when the element detaches.
  */
 export function roomCover(kind: CoverKind): (element: Element | null) => (() => void) | undefined {

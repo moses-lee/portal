@@ -487,16 +487,22 @@ test.describe("at 1440 × 900 on the session page", () => {
     await expect(page.locator(".sidebar-shell")).toBeVisible();
     const before = await live(scene);
     expect(before.camera?.offset).toEqual([0, 0]);
+    // The registry measures in the next animation frame; two frames cover the measure and the commit after it.
+    const settle = () => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
     await expect(page.locator(".sidebar-shell")).toHaveCount(0);
-    await page.waitForTimeout(300);
+    await settle();
+    expect((await live(scene)).camera).toEqual(before.camera);
+    await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
+    await expect(page.locator(".sidebar-shell")).toBeVisible();
+    await settle();
     expect((await live(scene)).camera).toEqual(before.camera);
   });
 });
 
 test.describe("at 1440 × 900", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
-  test("the Palace page frames the room's hero box, centred in the open region and filling the pad", async ({ page }, info) => {
+  test("the Palace page frames the room's hero box where the fitted, aimed pose puts it, with no view offset", async ({ page }, info) => {
     await expectFittedFrame(page);
     await page.screenshot({ path: info.outputPath("palace-fitted.png") });
   });

@@ -97,12 +97,14 @@ test("the landscape aim draws the frame 140 px right of the centre at 1440 × 90
   assert.deepEqual(wide, desktop);
   const wideCentre = projectPoint(wide, unaimed(1920 / 1080).target, { width: 1920, height: 1080 });
   assert.ok(Math.abs(wideCentre.x - (960 + 140 * (1080 / 900))) < 1.2, `at 1920 × 1080: ${wideCentre.x}`);
+  // The portrait aim is zero: the phone's pose is the plain fit (the target pinned, so an aim on any axis would show).
   const phone = framePose(390 / 844);
   assert.deepEqual(phone.target, unaimed(390 / 844).target);
+  for (const [axis, expected] of [-0.159, 1.179, -0.901].entries()) assert.ok(Math.abs(phone.target[axis] - expected) < 0.001, `phone target ${axis}: ${phone.target[axis]}`);
   assert.equal(frameSpec(0.8).aim, 0);
   assert.ok(Math.abs(frameSpec(1.1).aim - frameSpec(1.4).aim / 2) < 1e-9, "the aim blends with the angles");
 
-  // No view offset without a strip, whatever the layout's covers say.
+  // No view offset without a strip.
   const plain = layoutOffset({ width: 1440, height: 900, covers: [] }, desktop);
   assert.deepEqual([plain.x, plain.y], [0, 0]);
   const strip = { width: 390, height: 844, covers: [{ kind: "focus", rect: rect(0, 390, 0, 72) }] };
