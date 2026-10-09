@@ -331,7 +331,7 @@ The frost adds six draw calls (69 against 63). Forcing the GPU to finish with a 
 
 ### Live objects
 
-Phase 3, 2026-10-09 (`9bf962b`). Built as written, with these differences:
+Phase 3, 2026-10-09 (`6880623`). Built as written, with these differences:
 
 - **Robot parts are instanced with drei's `Merged`**, one draw call per part across every robot; books and plants (phase 4) are plain `InstancedMesh`es written in a `useFrame`. drei's `Instances` is not used.
 - **Click targets the spec left open or named loosely**: the kettle opens `/watches` (the jobs live on the Watches page; there is no separate jobs view), and the lamp, which the spec gives no target, opens Portal's chat (`/`). A key opens the approvals dialog when an approval is pending; with none, the dialog would be empty, so it opens System, where the grants are listed.
@@ -340,7 +340,7 @@ Phase 3, 2026-10-09 (`9bf962b`). Built as written, with these differences:
 
 ### Growth
 
-Phase 4, 2026-10-09 (`3071f07`, `37bfa92`). Built as written, with these differences:
+Phase 4, 2026-10-09 (`3071f07`, `7fc100e`). Built as written, with these differences:
 
 - **The memory milestones read a high-water mark** (`memoryActive` in the `room` row), as the session and watch ones do; the spec's census has no memory high-water. The census's own `memoryActive` stays the live count (the notes on the board).
 - **When the census recounts**: cached 60 s as specified, plus a recount a few seconds after a new session, a change to watches, memory or grants (the orchestrator's events) or any Activity entry, and once a minute while a browser holds the stream open, so the hearth cools without a reload.
@@ -387,7 +387,7 @@ The scratch server was stopped and the clone dropped afterwards.
 
 ### Review fixes
 
-2026-10-09, after two reviews of the web side (`4d1b1e3` to `92fde56`). Where these differ from the sections above, these hold.
+2026-10-09, after two reviews of the web side (`4344ca0` to `1854614`). Where these differ from the sections above, these hold.
 
 - **Pointer.** A drag on the Palace page counted as a click on release (the press was forgotten on `pointerup`, so the click's slop check never ran) and flew the camera back or opened what it ended over; a mouse press is now kept for the click that follows. The room no longer shows through a whole `<main>`: `data-room-passthrough` is on the conversation's and Talk to Portal's viewports, the start page's wrapper, the Portal views' scrolling column (`ViewBody`, so their margins) and the Palace page. A `section`, `[role=tabpanel]`, `[role=separator]` or `[data-room-block]` (the terminal panel) stops it, so a click on a terminal or a resize handle over an object stays in the UI. Unit tests (`tests/room-pointer.test.mjs`, a minimal DOM stub) cover the passthrough, the slop, the double click and the tap; UI tests cover a drag keeping its look, a terminal over an object, and the sidebar's Palace entry being the current page.
 - **One render path.** Frames without a frosted panel used to render straight to the screen (AgX, sRGB) and frames with one into the target (linear, no tone mapping), so every material had two programs and recompiled the first time the count crossed zero. Every frame now goes through the target; with no panel the blur and mask are skipped, the mask is cleared once, and the composite passes the scene through. The sky, moon, rain and snow shaders end with `tonemapping_fragment` and `colorspace_fragment` like three's own, no-ops into the target, so the composite encodes everything exactly once. A frame with no panel now costs the scene target and the composite, about a full-screen pass more than before.
@@ -400,7 +400,7 @@ The scratch server was stopped and the clone dropped afterwards.
 - **Phone veil.** At 390 × 844 the chat's first lines sat over the bright hearth and stove under the desktop's veil (the phone rules lost to the WebGL ones on specificity). On phones outside the Palace page the veil is now a gradient from `#151713d9` at the top to `#151713b3` (night `#110f0cb3` to `#110f0c8a`), and the room strip's 72 px keep the desktop's veil (`:has([data-room-strip])`). Re-taken as in Polish: `/tmp/palace-shots/chat-day-clear-phone.png`.
 - **Cleanup.** The unused `.glass-subtle` is gone.
 
-Server side, from a third review (`58df4d3`):
+Server side, from a third review (`5ec383b`):
 
 - **Sessions counted once.** A new session reaches the census twice, in the list and as its "created" event, in either order; a recount landing between the two added it twice to the high-water `sessionsEver`. The census keeps the ids it has counted; only the first count after boot takes the list's size as a minimum.
 - **Weather every 20 minutes.** The refresh timer saw the weather as still fresh at each tick (the stamp was taken when the fetch finished) and fetched only every other tick; the timer treats it as stale half an interval early.
