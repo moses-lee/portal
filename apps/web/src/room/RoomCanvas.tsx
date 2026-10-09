@@ -41,11 +41,19 @@ const STYLE = { position: "absolute", inset: 0, pointerEvents: "none" } as const
 /** Drives the canvas (`frameloop="never"`) from the capped loop; a new `revision` or size asks for a frame. */
 function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; revision: string; onLoop: (loop: RoomLoop | null) => void }) {
   const advance = useThree((state) => state.advance);
+  const gl = useThree((state) => state.gl);
   const size = useThree((state) => state.size);
   const own = useRef<RoomLoop | null>(null);
   useEffect(() => {
+    const context = gl.getContext();
     // R3F's clock takes the timestamp as given under `frameloop="never"`: seconds, as every `useFrame` reads it.
-    const started = startRoomLoop((time) => advance(time / 1000), { reducedMotion });
+    // Nothing draws while the GPU has the context (lost until it is restored and the canvas remounts).
+    const started = startRoomLoop(
+      (time) => {
+        if (!context.isContextLost()) advance(time / 1000);
+      },
+      { reducedMotion },
+    );
     own.current = started;
     onLoop(started);
     setCurrentLoop(started);
@@ -55,7 +63,7 @@ function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; rev
       onLoop(null);
       setCurrentLoop(null);
     };
-  }, [advance, reducedMotion, onLoop]);
+  }, [advance, gl, reducedMotion, onLoop]);
   useEffect(() => {
     own.current?.request();
   }, [revision, size.width, size.height]);
@@ -78,8 +86,10 @@ export type RoomCanvasProps = {
   growth: GrowthScene;
   weather: RoomWeather | null;
   reducedMotion: boolean;
-  /** The GPU dropped the context: the background falls back to the gradient. */
+  /** The GPU dropped the context: the background shows the gradient until it is restored. */
   onContextLost: () => void;
+  /** The GPU gave the context back: the background remounts the canvas from scratch. */
+  onContextRestored: () => void;
 };
 
 /**
@@ -91,7 +101,7 @@ export type RoomCanvasProps = {
  * mounts as it is reached, a fresh one delivered in a crate (`Milestones`).
  * Loaded with `next/dynamic` (no SSR) by `RoomBackground`, which owns the fallbacks.
  */
-function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost }: RoomCanvasProps) {
+function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost, onContextRestored }: RoomCanvasProps) {
   const loop = useRef<RoomLoop | null>(null);
   const condition = weather?.condition ?? "clear";
   const deliveries = useDeliveries(growth.milestones, reducedMotion);
@@ -114,9 +124,11 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
       style={STYLE}
       onCreated={({ gl }) => {
         gl.domElement.addEventListener("webglcontextlost", (event) => {
+          // Prevented, so the browser may restore it.
           event.preventDefault();
           onContextLost();
         });
+        gl.domElement.addEventListener("webglcontextrestored", () => onContextRestored());
       }}
     >
       <Loop reducedMotion={reducedMotion} revision={`${clock.at}:${condition}:${liveKey}:${growthKey}`} onLoop={onLoop} />

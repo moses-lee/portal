@@ -6,7 +6,7 @@ import { BoxGeometry, Color, CylinderGeometry, InstancedMesh, Object3D, SphereGe
 import { FRAME_CAP, GALLERY_CAP, type FrameSpec } from "../growth";
 import { furniture, placeRemembered } from "../layout-slots";
 import { InstancedHotspot, type HotspotSpot } from "./Hotspot";
-import { markForUpload, matteMaterial, setDrawCount } from "./materials";
+import { instancedMatte, markForUpload, setDrawCount } from "./materials";
 
 const LIMIT = FRAME_CAP + GALLERY_CAP;
 /** A frame beside the window, and the gallery's small ones. */
@@ -26,7 +26,7 @@ const tint = new Color();
 export default function Frames({ frames }: { frames: readonly FrameSpec[] }) {
   const get = useThree((state) => state.get);
   const rig = useMemo(() => {
-    const white = matteMaterial("#ffffff");
+    const white = instancedMatte();
     const box = new BoxGeometry(1, 1, 1);
     const disc = new CylinderGeometry(0.5, 0.5, 1, 24);
     disc.rotateX(Math.PI / 2);

@@ -7,7 +7,7 @@ import { hashId } from "@portal/shared/room";
 import { KEY_CAP } from "../growth";
 import { furniture, placeItems } from "../layout-slots";
 import { Hotspot } from "./Hotspot";
-import { markForUpload, matteMaterial, palette, setDrawCount } from "./materials";
+import { instancedMatte, markForUpload, matteMaterial, palette, setDrawCount } from "./materials";
 import { Soft } from "./Shell";
 
 const METALS = ["#c9a46a", "#d8b878", "#b38b4d", "#bfc3c7", "#a87a52"] as const;
@@ -23,7 +23,7 @@ export default function Keys({ count }: { count: number }) {
   const get = useThree((state) => state.get);
   const rack = furniture("key-rack");
   const rig = useMemo(() => {
-    const white = matteMaterial("#ffffff");
+    const white = instancedMatte();
     const meshes = [
       new InstancedMesh(new TorusGeometry(0.016, 0.005, 6, 14), white, KEY_CAP),
       new InstancedMesh(new BoxGeometry(0.007, 0.07, 0.005), white, KEY_CAP),

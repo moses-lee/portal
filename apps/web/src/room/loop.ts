@@ -42,15 +42,18 @@ export function targetFps(conditions: LoopConditions): number {
 
 /** Samples of requestAnimationFrame intervals kept for the cadence check (about two seconds at 60 Hz). */
 export const CADENCE_SAMPLES = 120;
+/** The cadence check runs every this many ticks (half a second at 60 Hz), not on every one. */
+export const CADENCE_CHECK_TICKS = 30;
 
 /**
  * Whether requestAnimationFrame intervals (ms) look like Low Power Mode's 30 Hz cap: the median
  * sits between 28 and 40 ms. Needs a full window of samples; a few long frames (a busy main
  * thread) do not move the median.
  */
-export function looksLowPower(intervals: readonly number[]): boolean {
+export function looksLowPower(intervals: ArrayLike<number>): boolean {
   if (intervals.length < CADENCE_SAMPLES) return false;
-  const sorted = [...intervals].sort((a, b) => a - b);
+  // A typed array sorts numerically.
+  const sorted = Float64Array.from(intervals).sort();
   const median = sorted[Math.floor(sorted.length / 2)];
   return median >= 28 && median <= 40;
 }
@@ -73,7 +76,9 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
   let raf = 0;
   let last = -Infinity;
   let previousTick = 0;
-  let intervals: number[] = [];
+  /** The last `CADENCE_SAMPLES` intervals, a ring written at `ticks % CADENCE_SAMPLES`. */
+  const intervals = new Float64Array(CADENCE_SAMPLES);
+  let ticks = 0;
   let lowPower = false;
   let scrollUntil = 0;
   let slow = false;
@@ -109,10 +114,12 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
   const tick = (time: number) => {
     raf = 0;
     if (stopped) return;
+    // The next frame first: a render that throws must not stop the room for good.
+    raf = requestAnimationFrame(tick);
     if (previousTick) {
-      intervals.push(time - previousTick);
-      if (intervals.length > CADENCE_SAMPLES) intervals = intervals.slice(-CADENCE_SAMPLES);
-      lowPower = looksLowPower(intervals);
+      intervals[ticks % CADENCE_SAMPLES] = time - previousTick;
+      ticks += 1;
+      if (ticks >= CADENCE_SAMPLES && ticks % CADENCE_CHECK_TICKS === 0) lowPower = looksLowPower(intervals);
     }
     previousTick = time;
     if (time - slowCheckedAt >= SLOW_CHECK_MS) {
@@ -126,7 +133,6 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
       last = time;
       render(time);
     }
-    raf = requestAnimationFrame(tick);
   };
 
   const onScroll = () => {
@@ -139,7 +145,8 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
       return;
     }
     // The cadence before the tab was hidden says nothing about now.
-    intervals = [];
+    ticks = 0;
+    lowPower = false;
     previousTick = 0;
     requested = true;
     if (!raf) raf = requestAnimationFrame(tick);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { AgentActivity } from "@/lib/agent-activity";
 import { usePortalEvents, usePortalLive } from "@/components/portal/PortalLive";
@@ -56,12 +56,15 @@ const RoomHoverCard = dynamic(() => import("./RoomHoverCard"), { ssr: false });
 
 let webglSupport: boolean | null = null;
 
-/** Whether this browser can open a WebGL context at all; asked once, the probe context released at once. */
+/**
+ * Whether this browser can open a WebGL 2 context, the only kind three.js still creates (a WebGL
+ * 1-only browser gets the gradient); asked once, the probe context released at once.
+ */
 function hasWebGL(): boolean {
   if (webglSupport !== null) return webglSupport;
   try {
     const canvas = document.createElement("canvas");
-    const context = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    const context = canvas.getContext("webgl2");
     webglSupport = context !== null;
     context?.getExtension("WEBGL_lose_context")?.loseContext();
   } catch {
@@ -71,6 +74,24 @@ function hasWebGL(): boolean {
 }
 
 const subscribeNever = () => () => {};
+
+/** Catches whatever the canvas throws (no context could be created, a scene error) and hands over to the gradient. */
+class CanvasBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("The room's canvas failed; showing the gradient instead.", error);
+    this.props.onError();
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 /** Set once the page has had its first idle moment; later mounts (another view) draw at once. */
 let settled = false;
@@ -145,9 +166,14 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   const webgl = useSyncExternalStore(subscribeNever, hasWebGL, () => false);
   const reducedTransparency = useMediaQuery("(prefers-reduced-transparency: reduce)");
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  /** The canvas failed for good (it threw): the gradient for the rest of the visit. */
   const [lost, setLost] = useState(false);
+  /** The GPU took the context away; the canvas stays mounted, hidden, for the browser to give it back. */
+  const [contextLost, setContextLost] = useState(false);
+  /** A new canvas after a restored context: a fresh renderer, scene and frost pipeline. */
+  const [canvasKey, setCanvasKey] = useState(0);
   const ready = useSettled();
-  const renderer = webgl && !lost && !reducedTransparency ? "webgl" : "fallback";
+  const renderer = webgl && !lost && !contextLost && !reducedTransparency ? "webgl" : "fallback";
   const weather = environment?.weather ?? null;
   const condition = weather?.condition ?? "clear";
   const scene = clock ? sceneForAltitude(clock.sun.altitude) : "pending";
@@ -264,7 +290,9 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   useLayoutEffect(() => {
     palaceRef.current = palace;
   });
-  const drawing = renderer === "webgl" && !!clock && ready;
+  /** The canvas is mounted (also while its context is lost, waiting to be restored). */
+  const mounted = webgl && !lost && !reducedTransparency && !!clock && ready;
+  const drawing = mounted && !contextLost;
   useEffect(() => {
     if (!drawing) return;
     const waves = new Set<ReturnType<typeof setTimeout>>();
@@ -308,7 +336,12 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     write(readRoomReport());
     return onRoomReport(write);
   }, [baseJson, liveJson]);
-  const contextLost = useCallback(() => setLost(true), []);
+  const failed = useCallback(() => setLost(true), []);
+  const onContextLost = useCallback(() => setContextLost(true), []);
+  const onContextRestored = useCallback(() => {
+    setContextLost(false);
+    setCanvasKey((key) => key + 1);
+  }, []);
 
   return (
     <div
@@ -322,7 +355,19 @@ export default function RoomBackground({ activity, palace = false }: { activity:
       style={style}
       aria-hidden="true"
     >
-      {drawing && <RoomCanvas clock={clock} live={live} growth={growth} weather={weather} reducedMotion={reducedMotion} onContextLost={contextLost} />}
+      {mounted && (
+        <CanvasBoundary key={canvasKey} onError={failed}>
+          <RoomCanvas
+            clock={clock}
+            live={live}
+            growth={growth}
+            weather={weather}
+            reducedMotion={reducedMotion}
+            onContextLost={onContextLost}
+            onContextRestored={onContextRestored}
+          />
+        </CanvasBoundary>
+      )}
       {/* Portalled to the body, so outside this hidden element. */}
       {drawing && <RoomHoverCard describe={describe} open={open} />}
     </div>

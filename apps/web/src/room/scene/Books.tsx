@@ -7,7 +7,7 @@ import { hashId, MILESTONES } from "@portal/shared/room";
 import type { BookSpec } from "../growth";
 import { capacityOf, furnitureFor, placeItems } from "../layout-slots";
 import { InstancedHotspot, type HotspotSpot } from "./Hotspot";
-import { markForUpload, matteMaterial, palette, setDrawCount } from "./materials";
+import { instancedMatte, markForUpload, palette, setDrawCount } from "./materials";
 import { Soft } from "./Shell";
 
 /** The most books any shelving holds (both bookcases): the instanced meshes' size, made once. */
@@ -45,8 +45,8 @@ export default function Books({ books, shown }: { books: readonly BookSpec[]; sh
   const tall = shown.has("tall-bookcase");
   const rig = useMemo(() => {
     const geometry = new BoxGeometry(1, 1, 1);
-    const spines = new InstancedMesh(geometry, matteMaterial("#ffffff"), LIMIT);
-    const bands = new InstancedMesh(geometry, matteMaterial("#ffffff"), LIMIT);
+    const spines = new InstancedMesh(geometry, instancedMatte(), LIMIT);
+    const bands = new InstancedMesh(geometry, instancedMatte(), LIMIT);
     for (let index = 0; index < LIMIT; index++) {
       spines.setColorAt(index, BAND);
       bands.setColorAt(index, BAND);

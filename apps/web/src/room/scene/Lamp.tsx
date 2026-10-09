@@ -7,7 +7,7 @@ import type { LampState } from "../live";
 import { ROOM } from "../layout";
 import { Hotspot } from "./Hotspot";
 import { KitMesh, WithKit } from "./kit";
-import { markForUpload, matteMaterial, palette, ROUGHNESS, setGlow } from "./materials";
+import { instancedMatte, markForUpload, matteMaterial, palette, ROUGHNESS, setGlow } from "./materials";
 import { Soft } from "./Shell";
 
 /** The light's and the shade's glow for each state; the shade is emissive so the lamp reads as lit. */
@@ -50,7 +50,7 @@ export default function Lamp({ state, reducedMotion }: { state: LampState; reduc
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  const papers = useMemo(() => new InstancedMesh(new BoxGeometry(0.21, 0.003, 0.29), matteMaterial("#f4efe4"), PAPERS), []);
+  const papers = useMemo(() => new InstancedMesh(new BoxGeometry(0.21, 0.003, 0.29), instancedMatte("#f4efe4"), PAPERS), []);
   useEffect(
     () => () => {
       shade.dispose();

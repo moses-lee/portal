@@ -41,6 +41,22 @@ export function matteMaterial(color: string): MeshStandardMaterial {
   return material;
 }
 
+const instanced = new Map<string, MeshStandardMaterial>();
+
+/**
+ * The matte material for an instanced mesh, coloured per instance (white, so the instance colour is
+ * the colour). Kept apart from `matteMaterial`: one material drawn both instanced and plain would
+ * switch programs between the two every frame.
+ */
+export function instancedMatte(color = "#ffffff"): MeshStandardMaterial {
+  let material = instanced.get(color);
+  if (!material) {
+    material = new MeshStandardMaterial({ color: new Color(color), roughness: ROUGHNESS, metalness: 0 });
+    instanced.set(color, material);
+  }
+  return material;
+}
+
 const shell = new Map<string, MeshStandardMaterial>();
 
 /**

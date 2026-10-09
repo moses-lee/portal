@@ -7,7 +7,7 @@ import { hashId, mulberry32 } from "@portal/shared/room";
 import { LOOSE_CAP, NOTE_CAP, type NoteCount } from "../growth";
 import { ANCHORS, furnitureFor, placeItems } from "../layout-slots";
 import { Hotspot } from "./Hotspot";
-import { markForUpload, matteMaterial, palette, setDrawCount } from "./materials";
+import { instancedMatte, markForUpload, palette, setDrawCount } from "./materials";
 import { Soft } from "./Shell";
 
 const PAPERS = ["#fff3b0", "#ffd6a5", "#cdeac0", "#bde0fe", "#ffc8dd", "#f4efe4"] as const;
@@ -47,8 +47,8 @@ export default function Corkboard({ notes, shown }: { notes: NoteCount; shown: R
   const get = useThree((state) => state.get);
   const wide = shown.has("wide-pinboard");
   const rig = useMemo(() => {
-    const papers = new InstancedMesh(new BoxGeometry(1, 1, 1), matteMaterial("#ffffff"), LIMIT);
-    const pins = new InstancedMesh(new SphereGeometry(0.009, 8, 6), matteMaterial("#ffffff"), NOTE_CAP * 2);
+    const papers = new InstancedMesh(new BoxGeometry(1, 1, 1), instancedMatte(), LIMIT);
+    const pins = new InstancedMesh(new SphereGeometry(0.009, 8, 6), instancedMatte(), NOTE_CAP * 2);
     for (let index = 0; index < LIMIT; index++) papers.setColorAt(index, tint.set(PAPERS[0]));
     for (let index = 0; index < NOTE_CAP * 2; index++) pins.setColorAt(index, tint.set(PINS[0]));
     for (const mesh of [papers, pins]) {

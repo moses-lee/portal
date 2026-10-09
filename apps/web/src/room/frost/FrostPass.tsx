@@ -63,11 +63,14 @@ const target = (type: typeof HalfFloatType | typeof UnsignedByteType, options: {
     generateMipmaps: false,
   });
 
-const resize = (renderTarget: WebGLRenderTarget, width: number, height: number) => {
+/** Whether the target had to change size (its contents are gone then). */
+const resize = (renderTarget: WebGLRenderTarget, width: number, height: number): boolean => {
   const w = Math.max(1, Math.ceil(width));
   const h = Math.max(1, Math.ceil(height));
   // setSize reallocates on the GPU; only when the size really changed.
-  if (renderTarget.width !== w || renderTarget.height !== h) renderTarget.setSize(w, h);
+  if (renderTarget.width === w && renderTarget.height === h) return false;
+  renderTarget.setSize(w, h);
+  return true;
 };
 
 /** Sets `uniform` to one texel of `renderTarget` in UV units, times `spread`. */
@@ -84,8 +87,10 @@ const texel = (uniform: IUniform, renderTarget: WebGLRenderTarget, spread = 1) =
  * 5. a composite to the screen: the last Kawase upsample, tone mapping, saturation for the blurred
  *    copy, and the sharp scene and the copy mixed by the mask.
  *
- * Frames with no frosted panel on the page skip all of it and render the scene straight to the
- * screen. Targets are created once and resized only when the canvas's size changes.
+ * Every frame takes this path, so every material compiles once, for a render target (linear, no tone
+ * mapping), and the composite alone encodes for the screen. Frames with no frosted panel skip the
+ * blur and the mask (cleared once) and run the composite, which then passes the scene through.
+ * Targets are created once and resized only when the canvas's size changes.
  */
 class FrostPipeline {
   private readonly renderer: WebGLRenderer;
@@ -126,7 +131,10 @@ class FrostPipeline {
   private instances: InstancedInterleavedBuffer;
 
   private readonly clearColor = new Color();
+  private readonly space = { left: 0, top: 0, width: 0, height: 0, bufferWidth: 0, bufferHeight: 0 };
   private reported = -1;
+  /** The mask holds nothing (cleared since the last panel was drawn into it, at its current size). */
+  private maskEmpty = false;
 
   constructor(renderer: WebGLRenderer) {
     this.renderer = renderer;
@@ -178,27 +186,40 @@ class FrostPipeline {
     const canvas = renderer.domElement;
     const width = canvas.width;
     const height = canvas.height;
-    const count = collectFrost({ ...size, bufferWidth: width, bufferHeight: height }, this.buffer);
+    const space = this.space;
+    space.left = size.left;
+    space.top = size.top;
+    space.width = size.width;
+    space.height = size.height;
+    space.bufferWidth = width;
+    space.bufferHeight = height;
+    const count = collectFrost(space, this.buffer);
     if (count !== this.reported) {
       this.reported = count;
       // For tests and measurement: how many panels the last frame frosted.
       canvas.dataset.frost = String(count);
-    }
-    if (count === 0) {
-      renderer.setRenderTarget(null);
-      renderer.render(scene, camera);
-      return;
     }
 
     resize(this.scene, width, height);
     resize(this.quarter, width / 4, height / 4);
     resize(this.eighth, width / 8, height / 8);
     resize(this.sixteenth, width / 16, height / 16);
-    resize(this.mask, width / 2, height / 2);
+    if (resize(this.mask, width / 2, height / 2)) this.maskEmpty = false;
     const spread = SPREAD * Math.max(0.5, width / Math.max(1, size.width) / REFERENCE_DPR);
 
     renderer.setRenderTarget(this.scene);
     renderer.render(scene, camera);
+
+    if (count === 0) {
+      // No panel: no blur; an empty mask makes the composite pass the scene through.
+      if (!this.maskEmpty) {
+        this.clearMask();
+        this.maskEmpty = true;
+      }
+      this.compose(spread);
+      return;
+    }
+    this.maskEmpty = false;
 
     this.downsample.uniforms.tInput.value = this.scene.texture;
     texel(this.downsample.uniforms.uTexel, this.scene);
@@ -218,13 +239,32 @@ class FrostPipeline {
     this.maskMesh.geometry.instanceCount = count;
     (this.maskMaterial.uniforms.uResolution.value as Vector2).set(width, height);
     this.maskMaterial.uniforms.uTexelSize.value = width / this.mask.width;
+    this.withClearColour(() => {
+      renderer.setRenderTarget(this.mask);
+      renderer.render(this.maskScene, this.camera);
+    });
+    this.compose(spread);
+  }
+
+  /** Runs `draw` with the clear colour transparent black (the mask's empty value), then puts the renderer's back. */
+  private withClearColour(draw: () => void) {
+    const renderer = this.renderer;
     renderer.getClearColor(this.clearColor);
     const clearAlpha = renderer.getClearAlpha();
     renderer.setClearColor(0x000000, 0);
-    renderer.setRenderTarget(this.mask);
-    renderer.render(this.maskScene, this.camera);
+    draw();
     renderer.setClearColor(this.clearColor, clearAlpha);
+  }
 
+  private clearMask() {
+    this.withClearColour(() => {
+      this.renderer.setRenderTarget(this.mask);
+      this.renderer.clear(true, false, false);
+    });
+  }
+
+  /** The scene and its blurred copy to the screen, mixed by the mask. */
+  private compose(spread: number) {
     this.composite.uniforms.tScene.value = this.scene.texture;
     this.composite.uniforms.tBlur.value = this.eighth.texture;
     this.composite.uniforms.tMask.value = this.mask.texture;
@@ -247,18 +287,18 @@ class FrostPipeline {
 export default function FrostPass() {
   const gl = useThree((state) => state.gl);
   const pipeline = useRef<FrostPipeline | null>(null);
-  useEffect(() => {
-    const created = new FrostPipeline(gl);
-    pipeline.current = created;
-    return () => {
+  useEffect(
+    () => () => {
+      pipeline.current?.dispose();
       pipeline.current = null;
-      created.dispose();
       resetFrost();
-    };
-  }, [gl]);
+    },
+    [gl],
+  );
   useFrame((state) => {
-    if (pipeline.current) pipeline.current.render(state.scene, state.camera, state.size);
-    else state.gl.render(state.scene, state.camera);
+    // Made on the first frame rather than in an effect, so not even the first frame renders another way.
+    pipeline.current ??= new FrostPipeline(state.gl);
+    pipeline.current.render(state.scene, state.camera, state.size);
   }, 1);
   return null;
 }

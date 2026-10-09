@@ -165,8 +165,15 @@ function hotspotPoints(camera: Camera, canvas: HTMLCanvasElement): Record<string
 }
 
 /**
+ * Whether the page is driven by automation (Playwright, WebDriver): only then are the hotspots'
+ * screen points worth projecting and writing to the DOM, for the tests to aim at.
+ */
+const automated = typeof navigator !== "undefined" && navigator.webdriver === true;
+
+/**
  * Connects the canvas to the page's pointer listener (`pointer.ts`): registers the raycast against
- * the hotspots, and every 400 ms reports the hotspots' screen points (`data-room`'s `points`).
+ * the hotspots, and under automation every 400 ms reports the hotspots' screen points (`data-room`'s
+ * `points`).
  */
 export function PointerBridge() {
   const get = useThree((state) => state.get);
@@ -179,6 +186,7 @@ export function PointerBridge() {
   }, [get]);
   const reportedAt = useRef(-Infinity);
   useFrame(({ camera, gl }) => {
+    if (!automated) return;
     const now = performance.now();
     if (now - reportedAt.current < POINTS_MS) return;
     reportedAt.current = now;

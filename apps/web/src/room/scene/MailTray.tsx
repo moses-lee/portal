@@ -7,7 +7,7 @@ import { mulberry32 } from "@portal/shared/room";
 import { MAIL_CAP } from "../live";
 import { ROOM } from "../layout";
 import { Hotspot } from "./Hotspot";
-import { markForUpload, matteMaterial, palette } from "./materials";
+import { instancedMatte, markForUpload, palette } from "./materials";
 import { Soft } from "./Shell";
 
 /** Envelopes drawn on the floor pile however many are past twelve; the hover card has the number. */
@@ -30,8 +30,8 @@ const PILE = { x: 2.55, z: ROOM.back + 0.45 } as const;
 export default function MailTray({ sealed, open, pile }: { sealed: number; open: number; pile: number }) {
   const get = useThree((state) => state.get);
   const rig = useMemo(() => {
-    const envelopes = new InstancedMesh(new BoxGeometry(0.26, 0.008, 0.17), matteMaterial("#ffffff"), MAIL_CAP + PILE_DRAWN);
-    const seals = new InstancedMesh(new CylinderGeometry(0.018, 0.018, 0.006, 10), matteMaterial("#b8322b"), MAIL_CAP);
+    const envelopes = new InstancedMesh(new BoxGeometry(0.26, 0.008, 0.17), instancedMatte(), MAIL_CAP + PILE_DRAWN);
+    const seals = new InstancedMesh(new CylinderGeometry(0.018, 0.018, 0.006, 10), instancedMatte("#b8322b"), MAIL_CAP);
     for (const mesh of [envelopes, seals]) {
       mesh.frustumCulled = false;
       mesh.castShadow = true;

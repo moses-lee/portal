@@ -6,7 +6,8 @@
  * The maths (`parseRadius`, `frostQuad`) is pure and unit-tested. `collectFrost` is browser only:
  * it queries the panels once per rendered frame and reads their boxes then (they move with every
  * scroll), while each panel's corner radius and clipping ancestors are read once and kept until a
- * `ResizeObserver` or `MutationObserver` (class or style) says the panel changed.
+ * `ResizeObserver` or `MutationObserver` (class or style) says the panel changed. Per frame it
+ * allocates nothing of its own: the boxes, the quad and the bookkeeping are reused.
  */
 
 export type Box = { left: number; top: number; width: number; height: number };
@@ -53,7 +54,7 @@ export function parseRadius(value: string, width: number, height: number): numbe
  * to `clip` (CSS pixels; the overflow ancestors that hide part of it) and to the canvas. Null when
  * nothing of it shows.
  */
-export function frostQuad(box: Box, clip: Box | null, radius: number, space: FrostSpace): FrostQuad | null {
+export function frostQuad(box: Box, clip: Box | null, radius: number, space: FrostSpace, out?: FrostQuad): FrostQuad | null {
   if (box.width <= 0 || box.height <= 0 || space.width <= 0 || space.height <= 0) return null;
   const sx = space.bufferWidth / space.width;
   const sy = space.bufferHeight / space.height;
@@ -80,26 +81,31 @@ export function frostQuad(box: Box, clip: Box | null, radius: number, space: Fro
   }
   if (x1 - x0 <= 0 || y1 - y0 <= 0) return null;
 
-  return {
-    cx: left + halfWidth,
-    cy: bottom + halfHeight,
-    halfWidth,
-    halfHeight,
-    radius: Math.max(0, Math.min(radius * Math.min(sx, sy), halfWidth, halfHeight)),
-    x0,
-    y0,
-    x1,
-    y1,
-  };
+  const quad = out ?? ({} as FrostQuad);
+  quad.cx = left + halfWidth;
+  quad.cy = bottom + halfHeight;
+  quad.halfWidth = halfWidth;
+  quad.halfHeight = halfHeight;
+  quad.radius = Math.max(0, Math.min(radius * Math.min(sx, sy), halfWidth, halfHeight));
+  quad.x0 = x0;
+  quad.y0 = y0;
+  quad.x1 = x1;
+  quad.y1 = y1;
+  return quad;
 }
 
-/** The overlap of two boxes; zero-sized (not null) when they do not meet. */
-export function intersect(a: Box, b: Box): Box {
+/** The overlap of two boxes, written into `out` when given; zero-sized (not null) when they do not meet. */
+export function intersect(a: Box, b: Box, out?: Box): Box {
   const left = Math.max(a.left, b.left);
   const top = Math.max(a.top, b.top);
   const right = Math.min(a.left + a.width, b.left + b.width);
   const bottom = Math.min(a.top + a.height, b.top + b.height);
-  return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  const box = out ?? ({} as Box);
+  box.left = left;
+  box.top = top;
+  box.width = Math.max(0, right - left);
+  box.height = Math.max(0, bottom - top);
+  return box;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -108,10 +114,19 @@ export function intersect(a: Box, b: Box): Box {
 
 export const FROST_SELECTOR = ".frost, .frost-subtle";
 
-/** What is read once per panel: its radius as computed, and the ancestors whose overflow clips it. */
-type Panel = { radius: string; clips: Element[] };
+/**
+ * What is read once per panel: its radius as computed (empty when stale), that radius in CSS pixels
+ * for the panel's size then (a resize marks it stale), and the ancestors whose overflow clips it.
+ */
+type Panel = { radius: string; pixels: number; clips: Element[] };
 
 const panels = new Map<Element, Panel>();
+/** Reused every frame: the panels seen, the clipping ancestors' boxes (and which were measured this frame), the clip and the quad. */
+const seen = new Set<Element>();
+const clipBoxes = new Map<Element, Box>();
+const measured = new Set<Element>();
+const clipScratch: Box = { left: 0, top: 0, width: 0, height: 0 };
+const quadScratch = {} as FrostQuad;
 let resizeObserver: ResizeObserver | null = null;
 let mutationObserver: MutationObserver | null = null;
 let reducedTransparency: MediaQueryList | null = null;
@@ -144,18 +159,19 @@ function clippingAncestors(element: Element): Element[] {
   return clips;
 }
 
-function read(element: Element): Panel {
+function read(element: Element, box: { width: number; height: number }): Panel {
   let panel = panels.get(element);
   if (!panel) {
     const { resize, mutation } = observers();
     resize.observe(element);
     mutation.observe(element, { attributes: true, attributeFilter: ["class", "style"] });
-    panel = { radius: "", clips: [] };
+    panel = { radius: "", pixels: 0, clips: [] };
     panels.set(element, panel);
   }
   if (!panel.radius) {
     // Never empty once read, so a panel is read once per change.
     panel.radius = getComputedStyle(element).borderTopLeftRadius || "0px";
+    panel.pixels = parseRadius(panel.radius, box.width, box.height);
     panel.clips = clippingAncestors(element);
   }
   return panel;
@@ -172,26 +188,40 @@ export type FrostBuffer = { data: Float32Array };
 export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
   reducedTransparency ??= window.matchMedia("(prefers-reduced-transparency: reduce)");
   const elements = reducedTransparency.matches ? [] : document.querySelectorAll(FROST_SELECTOR);
-  const seen = new Set<Element>();
-  const clipBoxes = new Map<Element, Box>();
+  seen.clear();
+  measured.clear();
   let count = 0;
   for (const element of elements) {
     seen.add(element);
     if (typeof element.checkVisibility === "function" && !element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
     const box = element.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) continue;
-    const panel = read(element);
+    const panel = read(element, box);
     let clip: Box | null = null;
     for (const ancestor of panel.clips) {
       let ancestorBox = clipBoxes.get(ancestor);
       if (!ancestorBox) {
-        const rect = ancestor.getBoundingClientRect();
-        ancestorBox = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        ancestorBox = { left: 0, top: 0, width: 0, height: 0 };
         clipBoxes.set(ancestor, ancestorBox);
       }
-      clip = clip ? intersect(clip, ancestorBox) : ancestorBox;
+      if (!measured.has(ancestor)) {
+        const rect = ancestor.getBoundingClientRect();
+        ancestorBox.left = rect.left;
+        ancestorBox.top = rect.top;
+        ancestorBox.width = rect.width;
+        ancestorBox.height = rect.height;
+        measured.add(ancestor);
+      }
+      if (clip) clip = intersect(clip, ancestorBox, clipScratch);
+      else {
+        clipScratch.left = ancestorBox.left;
+        clipScratch.top = ancestorBox.top;
+        clipScratch.width = ancestorBox.width;
+        clipScratch.height = ancestorBox.height;
+        clip = clipScratch;
+      }
     }
-    const quad = frostQuad(box, clip, parseRadius(panel.radius, box.width, box.height), space);
+    const quad = frostQuad(box, clip, panel.pixels, space, quadScratch);
     if (!quad) continue;
     if ((count + 1) * FLOATS_PER_PANEL > buffer.data.length) {
       const grown = new Float32Array(Math.max(buffer.data.length * 2, (count + 1) * FLOATS_PER_PANEL));
@@ -211,18 +241,20 @@ export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
     data[at + 8] = quad.radius;
     count += 1;
   }
-  // Panels that left the page stop being observed.
+  // Panels that left the page stop being observed; ancestors no panel is clipped by any more are forgotten.
   for (const element of panels.keys()) {
     if (seen.has(element)) continue;
     panels.delete(element);
     resizeObserver?.unobserve(element);
   }
+  for (const ancestor of clipBoxes.keys()) if (!measured.has(ancestor)) clipBoxes.delete(ancestor);
   return count;
 }
 
 /** Stops observing every panel (the canvas unmounted). */
 export function resetFrost() {
   panels.clear();
+  clipBoxes.clear();
   resizeObserver?.disconnect();
   mutationObserver?.disconnect();
   resizeObserver = null;

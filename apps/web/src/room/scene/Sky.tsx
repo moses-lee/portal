@@ -33,6 +33,7 @@ void main() {
   vec3 colour = h < 0.0 ? mix(uHorizon * 0.55, uGround, smoothstep(0.0, 0.05, -h)) : sky;
   colour += uFlash * vec3(0.55, 0.58, 0.7);
   gl_FragColor = vec4(colour, 1.0);
+  #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }`;
 
@@ -59,10 +60,17 @@ void main() {
   vec3 colour = mix(vec3(0.07, 0.08, 0.12), vec3(0.96, 0.94, 0.86), lit);
   float edge = 1.0 - smoothstep(0.9, 1.0, r2);
   gl_FragColor = vec4(colour, edge * uOpacity);
+  #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }`;
 
 const DEGREE = Math.PI / 180;
+
+/*
+ * The shaders end as three's own materials do (tone mapping, then the output transfer), so they are
+ * encoded exactly once whatever they render into: into the frost's scene target both are no-ops and
+ * the composite encodes the frame (`FrostPass`).
+ */
 
 /** The dome's and the moon's materials behind a small API, created once per mount. */
 function createSkyRig() {

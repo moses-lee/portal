@@ -81,6 +81,8 @@ void main() {
   float alpha = mix(drop, flake, uSnow) * uOpacity;
   if (alpha < 0.01) discard;
   gl_FragColor = vec4(uColor, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }`;
 
 /** A soft round blob, drawn once, for the cloud sprites. */

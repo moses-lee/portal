@@ -7,7 +7,7 @@ import { hashId, mulberry32 } from "@portal/shared/room";
 import { SILL_CAP, STAND_CAP, standPlant, type PlantSpec } from "../growth";
 import { furniture, placeItems, placeRemembered } from "../layout-slots";
 import { InstancedHotspot, type HotspotSpot } from "./Hotspot";
-import { markForUpload, matteMaterial, palette, setDrawCount } from "./materials";
+import { instancedMatte, markForUpload, palette, setDrawCount } from "./materials";
 import { Soft } from "./Shell";
 
 const PLANTS = SILL_CAP + STAND_CAP;
@@ -111,7 +111,7 @@ function Stand() {
 export default function Plants({ sill, stand, reducedMotion }: { sill: readonly PlantSpec[]; stand: number; reducedMotion: boolean }) {
   const get = useThree((state) => state.get);
   const rig = useMemo(() => {
-    const white = matteMaterial("#ffffff");
+    const white = instancedMatte();
     const pots = new InstancedMesh(new CylinderGeometry(0.055, 0.042, POT_HEIGHT, 10), white, PLANTS);
     const bushes = new InstancedMesh(new IcosahedronGeometry(0.075, 0), white, BUSHES);
     const leaves = new InstancedMesh(new ConeGeometry(0.025, 0.16, 5), white, LEAVES);

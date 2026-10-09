@@ -184,6 +184,10 @@
 .room-scene canvas {
   animation: room-in 600ms ease-out;
 }
+/* A canvas whose context the GPU took stays mounted for the browser to restore; the gradient shows meanwhile. */
+.room-scene[data-renderer="fallback"] canvas {
+  visibility: hidden;
+}
 @keyframes room-in {
   from {
     opacity: 0;
