@@ -1,6 +1,6 @@
 # Palace: the room behind Portal
 
-Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08, nothing built.** Research behind it: `docs/PALACE-RESEARCH.md`. Branch `background`.
+Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08; all five phases built on branch `background` by 2026-10-09 (section As built), not merged.** Still owed: the Safari timeline on an M1 and an iPhone 13. Research behind it: `docs/PALACE-RESEARCH.md`.
 
 ## Why
 
@@ -294,6 +294,19 @@ Merge to main waits for Moses. No migration: the `room` settings row is created 
 
 ## As built
 
+### Foundation
+
+Phase 1, 2026-10-08 (`5cb48ac`, `2ed8066`). Built as written, with these differences:
+
+- **suncalc stays on 1.9** (`^1.9.0`): 2.x reports azimuth in degrees clockwise from north, where the room's direction maths (`sun.ts`, `directionFrom`) takes 1.9's radians from south towards west.
+- **The canvas waits for the page's first idle moment** (`requestIdleCallback`, 1.5 s at most) before it mounts: its first frame compiles every shader, which should not compete with the app's first render and first clicks. Later mounts (another view) draw at once.
+- **WebGL is off by default in the UI suite.** The fixtures refuse WebGL contexts unless a test passes `webgl: true`: headless Chromium rasterises WebGL in software, and a room redrawn 24 times a second in every test slowed the suite and skewed its timings. Without it the room is the gradient fallback, which carries the same attributes.
+- **A lighter veil over the 3D room** than over the gradient (the veil keeps text readable): `.room-scene[data-renderer="webgl"]` has its own, lighter by night. Phase 5 retuned both (section Polish).
+- **The moon and the clouds are pinned to the window's line of sight** (`WindowView`): a group set a fixed distance behind the glass along the line from the camera through the window, facing the camera, so they stay framed by the window from any pose (the drift, the parallax, the Palace page's look-around). Placed by azimuth on the dome instead, they left the window at the first turn.
+- **`data-room-slow`** marks the CSS-blurred overlays (the shadcn dialog and sheet overlays, the search dialog's) for the loop's 6 fps check, beside `dialog[open].glass` and `[role=dialog].glass`.
+- **`RoomStrip`** (`room/RoomStrip.tsx`) is new, not in the structure above: the phone's 72 px link above the pane header, reported to the camera as a `focus` cover so the room centres in it.
+- **The sky's horizon sits low**: the camera looks down through the window, so the dome's horizon line is moved down (`uHorizonAt`) and the window shows sky, with a band of dark land under it.
+
 ### Frost
 
 Phase 2, 2026-10-09. `apps/web/src/room/frost/`: `FrostPass.tsx` takes over the canvas's render (a `useFrame` at priority 1) and runs the scene into a full-size half-float target, a 4 × 4 box downsample to a quarter, three dual-Kawase passes (down to an eighth, down to a sixteenth, up to an eighth), the panel mask, and a composite to the screen that folds in the last Kawase upsample, applies AgX and the sRGB transfer to both copies, saturates the blurred one by 1.35 in display space (CSS `saturate()`'s Rec. 709 luma lerp), and mixes them by the mask. The mask is one instanced quad per panel, a rounded-rectangle SDF antialiased over one mask texel, MAX-blended into a half-size R8 target. `registry.ts` queries `.frost, .frost-subtle` on every rendered frame, skips invisible ones (`checkVisibility`), cuts each quad to its overflow-clipping ancestors (so a card scrolled under the header has a straight cut edge, not frost on empty room), and caches each panel's radius and clipping ancestors until a `ResizeObserver` or a class/style `MutationObserver` marks them stale. Frames with no frosted panel render the scene straight to the screen. Targets are resized only when the canvas's size changes. The canvas writes the last frame's panel count to `data-frost` for tests.
@@ -315,3 +328,59 @@ Phase 2, 2026-10-09. `apps/web/src/room/frost/`: `FrostPass.tsx` takes over the 
 | 2160 × 1440 (DPR 2, canvas capped at 1.5) | 3.68 / 3.93 / 4.41 | 2.55 / 2.60 / 2.69 | +1.14 ms | 1.63 / 1.20 |
 
 The frost adds six draw calls (69 against 63). Forcing the GPU to finish with a 1-pixel `readPixels` after each frame gave wall times of 5.7 against 4.6 ms (DPR 1) and 7.3 against 5.7 ms (DPR 2), consistent with the timer queries plus the readback stall. Default headless Chromium (SwiftShader, CPU rasteriser) took 54 against 32 ms and 114 against 68 ms per frame; that is software rendering and says nothing about a real GPU, but it is why the UI suite only enables WebGL where a test asks. An M1's GPU is roughly half an M4's, so expect about 2 ms for the frost and about 5 ms for the whole frame at DPR 1.5; the scene alone is already over the spec's 4 ms M1 budget at that size by this estimate, which is the scene's budget to meet, not the frost's.
+
+### Live objects
+
+Phase 3, 2026-10-09 (`9bf962b`). Built as written, with these differences:
+
+- **Robot parts are instanced with drei's `Merged`**, one draw call per part across every robot; books and plants (phase 4) are plain `InstancedMesh`es written in a `useFrame`. drei's `Instances` is not used.
+- **Click targets the spec left open or named loosely**: the kettle opens `/watches` (the jobs live on the Watches page; there is no separate jobs view), and the lamp, which the spec gives no target, opens Portal's chat (`/`). A key opens the approvals dialog when an approval is pending; with none, the dialog would be empty, so it opens System, where the grants are listed.
+- **On the Palace page a clicked robot waves, then its card shows pinned** with a button to its session; the click itself does not navigate. Elsewhere a click on a robot opens its session at once. Clicks on the Palace page wait out a possible double click first (the double click frames the object).
+- **The window, the tree and a purged book pin their card** on click: they have no page of their own.
+
+### Growth
+
+Phase 4, 2026-10-09 (`3071f07`, `37bfa92`). Built as written, with these differences:
+
+- **The memory milestones read a high-water mark** (`memoryActive` in the `room` row), as the session and watch ones do; the spec's census has no memory high-water. The census's own `memoryActive` stays the live count (the notes on the board).
+- **When the census recounts**: cached 60 s as specified, plus a recount a few seconds after a new session, a change to watches, memory or grants (the orchestrator's events) or any Activity entry, and once a minute while a browser holds the stream open, so the hearth cools without a reload.
+- **The memory inbox** is the `proposed` records.
+- **Fresh milestones**: one whose `at` is under two minutes old when the page first sees it, or that arrives over the stream, comes in the crate, one crate at a time; the rest are simply there. On the live instance's first start every milestone it has already passed is reached at once (five on the cloned database), so a page open within two minutes gets five crates in a row, and their five `room.expanded` entries warm the hearth to embers for the hour.
+
+### Polish
+
+Phase 5, 2026-10-09. The first look at the room with human eyes, from screenshots at 1440 × 900 and 390 × 844 (Playwright's Chromium with `--use-angle=metal` on the M4; the UI fixtures with 40 sessions, three active robots, one waiting on approval and one hung, memory, watches with fires, two pins, two grants, two milestones; day, night, rain, snow, overcast; the Palace page, Portal home, a conversation; every milestone at once; close-ups of the desk, the door, the shelves and the rug).
+
+What the shots showed, and what changed:
+
+- **The room was muddy**: lit almost only by the hemisphere at its ramp's strength, then veiled, the cream walls came out mid-brown and the whole room read grey. The sky fill is now 5.2 × the ramp (was 3.2) and the sun 3.4 ×; by day the room is cream with a warm patch of sun from the window, by night a cool moonlit fill (`#8f9cc8`, at least 0.95) with the lamp and the hearth glowing and the moon's patch through the window on the floor. The moon is a key of its own (0.9, more at full moon) instead of the ramp's dim tail.
+- **The veil**: none on the Palace page (no text over it: `.room-scene[data-view="palace"]`); elsewhere stronger than phase 1's (`#1517138a` by day, `#110f0c4d` by night) because the brighter room under the chat column made secondary text hard to read.
+- **Sunlight where there should be shade**: the floor past the room's open sides lay outside the walls' shadows and outside the shadow camera, and the hallway beyond the door had no roof, so bright bands showed at the front and a sunlit parallelogram under the door. An invisible ceiling at the room's height now casts the sun's shadow (`colorWrite` off, so it draws nothing), the hallway casts shadows and has a roof, and the shadow camera covers ±10 m (was ±7.5), so daylight comes in through the window only.
+- **Grey weather still threw sun patches**: `sunThrough` lets through 1 − 1.25 × the condition's grey (at least 5 %), so overcast, rain and snow leave little more than a trace.
+- **The wall tops showed on phones** (the portrait camera sees over 6 m walls): the walls are 10 m tall. The phone room sat high with a third of the screen empty wall: the portrait pose pitches 35° and aims lower and nearer. Through the phone's steeper look the window showed mostly land: the dome's horizon moved down again.
+- **The phone strip framed the desk**, not the window: with the strip reported, the portrait camera aims at the window (`cameraPose(aspect, strip)`), so the 72 px show sky, weather and the tree over the desk.
+- **The desktop room sat a little right** and, with every milestone, the reading nook's floor lamp was behind the sidebar: the camera target moved 0.5 m left, and the nook's lamp and side table swapped corners so nothing stands at the front-left edge.
+- **The cat was invisible**: it slept behind the chair's backrest. Portal's chair is pulled out from the desk and turned side-on to the room, with the cat on its seat.
+- **Book spines** were saturated against the pastels: the ten spine colours are softened.
+- **Baked corner darkening** (phase 1's shell shader, from world position) was convincing but faint; it now darkens corners by up to 50 % (was 40 %).
+- Looked fine and left alone: the frost's edges against the sidebar, composer and tracked panel; the hover card over the room; the hung robot, the approval robot and its sign by the door; rain and snow through the glass; the crate (it opens on the floor between the rug and the door; with Playwright's fake clock installed it does not show, which is a test-clock artefact).
+
+**Kit assets.** The Kenney Furniture Kit (kenney.nl) and KayKit Furniture Bits (KayKit's GitHub repository) both downloaded cleanly and are CC0; Quaternius was not tried. KayKit's pieces are coloured by a gradient texture in its own palette, so a piece here takes one room colour instead, which only works for pieces whose shape carries them. Tried in the room: KayKit's armchair read as a beanbag next to the primitive one with arms and a cushion, and stayed out; KayKit's wooden chair looked better than the primitive one, so `public/room/kit.glb` holds that one mesh (7.7 KB): glTF Transform stripped the texture and UVs, `gltfpack -cc -kn -noq` compressed it. `scene/kit.tsx` loads it with drei's `useGLTF` and the meshopt decoder inside a Suspense and an error boundary whose fallback is the primitive chair, asks for a frame and a shadow update when it lands (a still room draws only when asked), and colours it from the palette. Sources and licences: `public/room/LICENSES.md`.
+
+**Tests.** The UI suite now also checks that under reduced motion the canvas draws one still frame (two screenshots of the canvas a second apart are identical) and draws again when the room changes (a session starting work gets its robot at once), and that the kit loads. Everything else the spec's Tests section lists was already covered by phases 1 to 4.
+
+**Live check** on a scratch server against a clone of the live database (paths rewritten into `/tmp`, jobs paused, each guard verified in a separate select; outbound lookups on, no `PORTAL_LOCATION`; the orchestrator on, as the cloned keys allow):
+
+- `GET /api/room` resolved the server's public IP to New York (40.73, −74.00, `source: "ip"`) and Open-Meteo's weather: clear, night, 12.6 °C, matching the time there.
+- The `room` settings row did not exist before the first request and did after, holding `since`, the high-water marks and the milestones.
+- The census matched the database and the pages: 274 sessions (274 rows; the Palace page drew 240 books on ten rows of the two bookcases and boxed 34), 12 active memory records (12 notes), no active watches and 100 finished (26 cancelled, 73 done, 1 expired; 8 on the stand, its cap), 202 fires (the intents' sum), 11 grants (8 keys, the rack's cap), `since` the oldest session's `createdAt`; the mail tray's two open envelopes matched the sidebar's "2 items need you".
+- Five milestones were reached on the first count (tall and second bookcase, rolling ladder, window box, wind chime), each logged once to Activity as `room.expanded` by `system`.
+- One stream connection received thirteen `room` events over the check (on connect, when the environment landed, on recounts and refreshes).
+- A crossing: forty memory records inserted into the clone, then Refresh. The census crossed 50, logged "The corkboard became a wide pinboard at 50 memory records.", pushed it, and the open Palace page delivered the pinboard in a crate, after which it stayed.
+
+The scratch server was stopped and the clone dropped afterwards.
+
+**Still owed:**
+
+- **The Safari timeline on an M1 and an iPhone 13** (section Frost, Measurement): the frost's cost and the scene's against the 4 ms budget, and the frost's look in WebKit. The headless Chromium estimate already puts the scene alone over 4 ms on an M1 at a pixel ratio of 1.5. Phase 5 added one draw call that colours nothing (the ceiling), replaced the six boxes of the chair with one mesh, and spread the shadow map over ±10 m (a little softer shadows from the same 1024 map).
+- A look on a real phone: the strip and the Palace page were judged at 390 × 844 in Chromium only.
