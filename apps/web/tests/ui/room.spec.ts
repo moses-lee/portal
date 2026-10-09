@@ -417,3 +417,18 @@ test("the Settings dialog's Room section shows the location and weather, and Ref
   // The room itself took the new state too.
   await expect.poll(async () => (await summary(page.locator(".room-scene"))).weather).toBe("rain");
 });
+
+test("when the room cannot be loaded the Settings dialog says it is unavailable, and Refresh still works", async ({ page }) => {
+  const fixture = await setupPortal(page, { roomUnavailable: true });
+  await page.goto("/");
+  await expect.poll(() => fixture.requests.filter((request) => request.path === "/api/room" && request.method === "GET").length).toBeGreaterThan(0);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "room" } })));
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const location = dialog.locator("[data-room-location]");
+  const weather = dialog.locator("[data-room-weather]");
+  await expect(location).toHaveText("Unavailable");
+  await expect(weather).toContainText("Unavailable");
+  await dialog.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(location).toContainText("40.71, -74.01");
+  await expect(weather).toContainText("Clear, 18°C, day");
+});

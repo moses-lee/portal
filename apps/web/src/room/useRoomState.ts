@@ -7,16 +7,31 @@ import { nextMinute, roomCoordinates, sunClock, type SunClock } from "./sun";
 
 /**
  * The room's state for the whole visit: `GET /api/room` once per page load, then the portal
- * stream's `room` events (sent on connect and on every change). Kept at module level so the room's
- * two mount points (Portal, the workspace) share it and remounting does not refetch.
+ * stream's `room` events (sent on connect and on every change). Kept at module level so the room
+ * and the Settings dialog share it and remounting does not refetch. A failed request is forgotten,
+ * so the next component to subscribe (the Settings dialog opening) asks again; until a state
+ * arrives, `useRoomFailed` says the last request failed.
  */
 let cached: RoomState | null = null;
 let loading: Promise<void> | null = null;
+let failed = false;
 const listeners = new Set<() => void>();
+
+function notify() {
+  for (const listener of [...listeners]) listener();
+}
 
 function publish(state: RoomState) {
   cached = state;
-  for (const listener of [...listeners]) listener();
+  failed = false;
+  notify();
+}
+
+function fail() {
+  loading = null;
+  if (cached || failed) return;
+  failed = true;
+  notify();
 }
 
 /** Adopt a state the page got some other way (the Settings dialog's Refresh answers one). */
@@ -25,15 +40,17 @@ export function publishRoomState(state: RoomState) {
 }
 
 function loadOnce() {
+  if (cached) return Promise.resolve();
   loading ??= fetch("/api/room")
     .then(async (response) => {
-      if (!response.ok) return;
+      if (!response.ok) return fail();
       const state = (await response.json()) as RoomState;
       // The stream's copy, when it got here first, is the fresher one.
       if (!cached) publish(state);
     })
     .catch(() => {
       // The room falls back to the browser's time zone and a clear sky; the stream may still deliver.
+      fail();
     });
   return loading;
 }
@@ -48,6 +65,8 @@ function subscribeRoom(listener: () => void) {
 
 const readRoom = () => cached;
 const serverRoom = () => null;
+const readFailed = () => failed;
+const serverFailed = () => false;
 
 export function useRoomState(): RoomState | null {
   const state = useSyncExternalStore(subscribeRoom, readRoom, serverRoom);
@@ -55,6 +74,11 @@ export function useRoomState(): RoomState | null {
     if (event.type === "room") publish(event.state);
   });
   return state;
+}
+
+/** Whether the room's state could not be loaded (and none has arrived since). */
+export function useRoomFailed(): boolean {
+  return useSyncExternalStore(subscribeRoom, readFailed, serverFailed);
 }
 
 // ---------------------------------------------------------------------------------------------

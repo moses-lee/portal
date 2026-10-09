@@ -468,7 +468,8 @@ declare global {
       approvals: Approval[];
       tracked: TrackedSession[];
       workspace: Workspace;
-      room: RoomState;
+      /** Null while the server cannot answer the room (`roomUnavailable`). */
+      room: RoomState | null;
     };
     /**
      * Later copies of `__portalLive` fields, installed by init scripts the fixture adds after setup
@@ -585,6 +586,8 @@ export async function setupPortal(
     room?: RoomState;
     /** What `POST /api/room/refresh` answers (and the room becomes); the current room by default. */
     roomRefresh?: RoomState;
+    /** `GET /api/room` fails and the stream sends no room, until a Refresh answers `roomRefresh` (else `room`). */
+    roomUnavailable?: boolean;
     /**
      * Let the room draw in WebGL. Off by default: headless Chromium rasterises WebGL in software,
      * and a room redrawn 24 times a second in every test would slow the whole suite and skew its
@@ -607,7 +610,7 @@ export async function setupPortal(
     approvals: structuredClone(options.portal?.approvals ?? []),
     tracked: structuredClone(options.portal?.tracked ?? []),
     workspace: structuredClone(options.workspace ?? EMPTY_WORKSPACE),
-    room: structuredClone(options.room ?? roomState()),
+    room: options.roomUnavailable ? null : (structuredClone(options.room ?? roomState()) as RoomState | null),
   };
   let workspaceIds = 0;
   /**
@@ -686,7 +689,7 @@ export async function setupPortal(
               this.send({ type: "intents", intents: window.__portalLive.intents }, "message");
               this.send({ type: "tracked", sessions: window.__portalLive.tracked }, "message");
               this.send({ type: "workspace", workspace: window.__portalLive.workspace }, "message");
-              this.send({ type: "room", state: window.__portalLive.room }, "message");
+              if (window.__portalLive.room) this.send({ type: "room", state: window.__portalLive.room }, "message");
             } else
               this.send(
                 window.__portalSessions.find((session) =>
@@ -775,10 +778,11 @@ export async function setupPortal(
       });
     }
     if (path === "/api/portal") return json({ status: live.status });
-    if (path === "/api/room" && method === "GET") return json(live.room);
+    if (path === "/api/room" && method === "GET") return live.room ? json(live.room) : json({ error: "The room is unavailable." }, 503);
     if (path === "/api/room/refresh" && method === "POST") {
       // Like the server: look the environment up again and answer the whole state (the test's `roomRefresh`, when given).
       if (options.roomRefresh) live.room = structuredClone(options.roomRefresh);
+      live.room ??= structuredClone(options.room ?? roomState());
       return json(live.room);
     }
     if (path === "/api/search" && method === "GET") {

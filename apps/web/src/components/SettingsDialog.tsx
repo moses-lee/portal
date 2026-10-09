@@ -79,7 +79,7 @@ import type { RemovedProjectSummary } from "@/lib/types";
 import { portalSend } from "@/lib/orchestrator/api";
 import type { RoomEnvironment, RoomState, RoomWeather } from "@portal/contracts/room";
 import { LAYOUT_VERSION } from "@portal/shared/room";
-import { publishRoomState, useRoomState } from "@/room/useRoomState";
+import { publishRoomState, useRoomFailed, useRoomState } from "@/room/useRoomState";
 import { useMediaQuery } from "./useMediaQuery";
 import { usePreference } from "./usePreference";
 import {
@@ -1323,6 +1323,7 @@ const roomConditions: Record<RoomWeather["condition"], string> = {
  */
 function RoomSettings() {
   const room = useRoomState();
+  const unavailable = useRoomFailed();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshed, setRefreshed] = useState(false);
@@ -1350,7 +1351,9 @@ function RoomSettings() {
         <dt className="text-muted-foreground">Location</dt>
         <dd data-room-location>
           {!room
-            ? "Loading…"
+            ? unavailable
+              ? "Unavailable"
+              : "Loading…"
             : located
               ? `${environment.latitude!.toFixed(2)}, ${environment.longitude!.toFixed(2)}`
               : "Unknown"}
@@ -1363,7 +1366,9 @@ function RoomSettings() {
             ? `${roomConditions[weather.condition]}, ${Math.round(weather.temperature)}°C, ${weather.isDay ? "day" : "night"}`
             : room
               ? "Not known yet; the window shows a clear sky"
-              : "Loading…"}
+              : unavailable
+                ? "Unavailable"
+                : "Loading…"}
           {weather && (
             <span className="block text-muted-foreground">
               Updated {new Date(weather.fetchedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
