@@ -144,7 +144,11 @@
   color: #d9e1ed;
 }
 
-/* Photographic rooms sit behind the workspace; a flat veil preserves text contrast. */
+/*
+ * The room (docs/PALACE.md) sits behind the workspace. Without WebGL it is this gradient sky, its
+ * colours set from the sun by RoomBackground; the canvas, when it draws, covers it. A veil keeps text
+ * readable: the full one over the gradient, a lighter one over the 3D room.
+ */
 .room-scene {
   position: fixed;
   inset: 0;
@@ -152,27 +156,21 @@
   overflow: hidden;
   pointer-events: none;
   background-color: #302d27;
-  background-size: cover;
-  background-repeat: no-repeat;
-  background-position: var(--room-position, 50%) center;
+  background-image: linear-gradient(
+    180deg,
+    var(--room-sky-top, #232a3a) 0%,
+    var(--room-sky-horizon, #4a4440) 62%,
+    #3a3029 62%,
+    #2a231e 100%
+  );
 }
-.room-scene[data-scene="garden"] {
-  background-image: url("/rooms/light-room.webp");
+.room-scene canvas {
+  animation: room-in 600ms ease-out;
 }
-.room-scene[data-scene="study"] {
-  background-image: url("/rooms/dark-room.webp");
-}
-.room-scene[data-decor="olive"] {
-  --room-position: 44%;
-}
-.room-scene[data-decor="clay"] {
-  --room-position: 48%;
-}
-.room-scene[data-decor="blue"] {
-  --room-position: 52%;
-}
-.room-scene[data-decor="ochre"] {
-  --room-position: 56%;
+@keyframes room-in {
+  from {
+    opacity: 0;
+  }
 }
 .room-scene::after {
   content: "";
@@ -180,8 +178,14 @@
   inset: 0;
   background: #151713a3;
 }
-.room-scene[data-scene="study"]::after {
+.room-scene[data-scene="night"]::after {
   background: #110f0c70;
+}
+.room-scene[data-renderer="webgl"]::after {
+  background: #1517135c;
+}
+.room-scene[data-renderer="webgl"][data-scene="night"]::after {
+  background: #110f0c38;
 }
 
 .sidebar-shell {
@@ -673,16 +677,10 @@
   .composer-context {
     font-size: 10px;
   }
-  .room-scene[data-scene="garden"] {
-    background-position: 82% center;
-  }
-  .room-scene[data-scene="study"] {
-    background-position: 18% center;
-  }
   .room-scene::after {
     background: #151713ad;
   }
-  .room-scene[data-scene="study"]::after {
+  .room-scene[data-scene="night"]::after {
     background: #110f0c8a;
   }
   button[data-size="icon"] {
@@ -706,9 +704,6 @@
     background: var(--card);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-  }
-  .room-scene {
-    background-image: none !important;
   }
 }
 

@@ -3,7 +3,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { LoaderCircle, PanelLeft } from "lucide-react";
-import RoomBackground from "./RoomBackground";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import ResponsiveDialog from "./ResponsiveDialog";
@@ -14,6 +13,7 @@ import TrackedPanel, { TrackedPanelFromUrl, setPanelSession, type TrackedPanelPr
 import { TrackedToggle, trackedTitle } from "./tracked/parts";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
+import RoomBackground from "@/room/RoomBackground";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { portalActivity } from "@/lib/orchestrator/format";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
@@ -53,9 +53,9 @@ const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewL
  * Portal's pages: the orchestrator is the app's home. Chat (`/`) holds the main thread and the side
  * threads Portal opened (each its own conversation), and carries the live status line;
  * Needs you the items waiting on the user, Watches the intents (watches), upcoming jobs, and recent runs, Activity the audit log, Memory the curated
- * records, and System what the model is shown (CORE.md, the world) plus approval grants. The
- * sidebar switches between them and the URL says which, so reloads and links land in place. The
- * room scene sits behind every view and follows the viewer's local time.
+ * records, System what the model is shown (CORE.md, the world) plus approval grants, and Palace
+ * the room alone (docs/PALACE.md). The sidebar switches between them and the URL says which, so
+ * reloads and links land in place. The room sits behind every view and follows the real sun.
  */
 export default function PortalPage({
   pathname,
@@ -191,11 +191,20 @@ export default function PortalPage({
   };
 
   const threadExists = shownThread === MAIN_THREAD_ID || threads.some((thread) => thread.id === shownThread);
+  /** The Palace page shows nothing but the room: a bare header with the sidebar toggle, no title, status, tracked panel or composer. */
+  const palace = view === "palace";
 
   return (
     <>
       <main className="flex min-w-0 flex-1 flex-col">
         <RoomBackground activity={portalActivity(status, approvals)} />
+        {palace ? (
+          <header data-palace-header className="workspace-header !border-transparent">
+            <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
+              <PanelLeft className="size-4" />
+            </IconButton>
+          </header>
+        ) : (
         <header className="workspace-header !items-start max-sm:!items-center">
           <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
             <PanelLeft className="size-4" />
@@ -212,6 +221,7 @@ export default function PortalPage({
             className="xl:hidden"
           />
         </header>
+        )}
         {live.error && (
           <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
             {live.error}
@@ -251,6 +261,7 @@ export default function PortalPage({
           />
         )}
         {view === "system" && <SystemView links={links} />}
+        {palace && <section aria-label="Palace" data-palace className="min-h-0 flex-1" />}
         <ResponsiveDialog
           open={openItem !== null}
           onOpenChange={(open) => !open && setOpenItemId(null)}
@@ -261,9 +272,11 @@ export default function PortalPage({
         </ResponsiveDialog>
       </main>
       {/* The panel reads `?session=` through useSearchParams, which needs a boundary on these prerendered routes; the fallback is the list, so the server HTML already has the panel. */}
-      <Suspense fallback={<TrackedPanel {...trackedProps} selected={null} />}>
-        <TrackedPanelFromUrl {...trackedProps} />
-      </Suspense>
+      {!palace && (
+        <Suspense fallback={<TrackedPanel {...trackedProps} selected={null} />}>
+          <TrackedPanelFromUrl {...trackedProps} />
+        </Suspense>
+      )}
     </>
   );
 }

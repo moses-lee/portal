@@ -45,6 +45,7 @@ import dynamic from "next/dynamic";
 const DiffView = dynamic(() => import("./DiffView"));
 import type { Block, History, ToolBlock, Turn } from "@/lib/transcript";
 import { daySections } from "@/lib/orchestrator/format";
+import { roomCover } from "@/room/layout";
 
 const markdownComponents = {
   pre: CodeBlock,
@@ -560,6 +561,7 @@ export default function Conversation({
             </div>
           )}
           <MessageScrollerContent
+            ref={roomCover("column")}
             className="conversation-content !gap-10"
             role="log"
             aria-live="off"

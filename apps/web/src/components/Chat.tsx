@@ -708,8 +708,8 @@ function ChatShell() {
     () => new Set(allPanes(workspace).flatMap(({ pane }) => (pane.sessionId === null || pane.sessionId === active ? [] : [pane.sessionId]))),
     [workspace, active],
   );
-  // Decision: the document title is the focused session's display title, else "Portal".
-  const activeTitle = activeSession ? sessionDisplayTitle(activeSession.title) : null;
+  // Decision: the document title is the focused session's display title, else "Palace" on the Palace page, else "Portal".
+  const activeTitle = activeSession ? sessionDisplayTitle(activeSession.title) : portalView === "palace" ? "Palace" : null;
   useEffect(() => {
     document.title = activeTitle ?? "Portal";
   }, [activeTitle]);

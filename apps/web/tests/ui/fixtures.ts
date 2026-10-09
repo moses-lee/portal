@@ -33,11 +33,33 @@ import type {
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
 import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
+import type { RoomState } from "@portal/contracts/room";
 import type { Workspace } from "@portal/contracts/workspace";
 import type { SearchResponse } from "@portal/contracts/search";
 import { applyWorkspaceOp, EMPTY_WORKSPACE, parseWorkspaceOp, WorkspaceError } from "@portal/shared/workspace";
 
 const now = Date.now();
+
+/**
+ * The room's state (docs/PALACE.md) as `GET /api/room` and the stream's `room` event answer it: a
+ * configured location in New York with clear weather, so the sun (and so day or night) follows the
+ * clock a test installs.
+ */
+export function roomState(weather: Partial<NonNullable<RoomState["environment"]["weather"]>> = {}): RoomState {
+  return {
+    environment: {
+      latitude: 40.71,
+      longitude: -74.01,
+      timezone: "America/New_York",
+      source: "config",
+      weather: { code: 0, condition: "clear", isDay: true, cloudCover: 0, precipitation: 0, temperature: 18, fetchedAt: now, ...weather },
+      fetchedAt: now,
+    },
+    census: { sessionsEver: 3, memoryActive: 0, memoryInbox: 0, watches: { active: 0, finished: 0, fires: 0, ever: 0 }, grants: 0, activityLastHour: 0, since: null },
+    milestones: [],
+    layoutVersion: 1,
+  };
+}
 export const project: ProjectSummary = {
   id: "p1",
   name: "portal",
@@ -427,6 +449,7 @@ declare global {
       approvals: Approval[];
       tracked: TrackedSession[];
       workspace: Workspace;
+      room: RoomState;
     };
     /**
      * Later copies of `__portalLive` fields, installed by init scripts the fixture adds after setup
@@ -459,6 +482,15 @@ export async function emit(
 /** Pushes one orchestrator event through the page's open `/api/portal/stream`. */
 export const emitPortal = (page: Page, event: OrchestratorEvent) =>
   page.evaluate((event) => window.__portalEmit("/api/portal/stream", event, "message"), event);
+
+/** An init script: canvases refuse WebGL contexts, as in a browser without it (2D canvases still work). */
+export function disableWebGL() {
+  const original = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+    if (kind === "webgl" || kind === "webgl2" || kind === "experimental-webgl") return null;
+    return (original as (...args: unknown[]) => RenderingContext | null).call(this, kind, ...rest);
+  } as typeof original;
+}
 
 export async function setupPortal(
   page: Page,
@@ -530,6 +562,14 @@ export async function setupPortal(
     workspace?: Workspace;
     /** What `GET /api/search?q=` answers for a query; no hits by default. */
     search?: (q: string) => Omit<SearchResponse, "q">;
+    /** What `GET /api/room` and the stream's `room` event answer; `roomState()` by default. */
+    room?: RoomState;
+    /**
+     * Let the room draw in WebGL. Off by default: headless Chromium rasterises WebGL in software,
+     * and a room redrawn 24 times a second in every test would slow the whole suite and skew its
+     * timings; without it the room is the gradient fallback, which carries the same attributes.
+     */
+    webgl?: boolean;
   } = {},
 ) {
   const currentSessions = structuredClone(options.sessions ?? sessions);
@@ -546,6 +586,7 @@ export async function setupPortal(
     approvals: structuredClone(options.portal?.approvals ?? []),
     tracked: structuredClone(options.portal?.tracked ?? []),
     workspace: structuredClone(options.workspace ?? EMPTY_WORKSPACE),
+    room: structuredClone(options.room ?? roomState()),
   };
   let workspaceIds = 0;
   /**
@@ -584,6 +625,7 @@ export async function setupPortal(
   let failRename: string | null = null;
   /** Sends to these threads wait until the test releases them: a turn that stays "running". */
   const sendHolds = new Map<string, Promise<void>>();
+  if (!options.webgl) await page.addInitScript(disableWebGL);
   await page.addInitScript(
     ({ sessions, live }) => {
       window.__portalSessions = sessions;
@@ -623,6 +665,7 @@ export async function setupPortal(
               this.send({ type: "intents", intents: window.__portalLive.intents }, "message");
               this.send({ type: "tracked", sessions: window.__portalLive.tracked }, "message");
               this.send({ type: "workspace", workspace: window.__portalLive.workspace }, "message");
+              this.send({ type: "room", state: window.__portalLive.room }, "message");
             } else
               this.send(
                 window.__portalSessions.find((session) =>
@@ -711,6 +754,7 @@ export async function setupPortal(
       });
     }
     if (path === "/api/portal") return json({ status: live.status });
+    if (path === "/api/room" && method === "GET") return json(live.room);
     if (path === "/api/search" && method === "GET") {
       const q = url.searchParams.get("q") ?? "";
       return json({ q, ...(options.search?.(q) ?? { messages: [], pulls: [] }) });

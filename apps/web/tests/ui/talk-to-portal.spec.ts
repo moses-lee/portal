@@ -24,7 +24,7 @@ test("Portal is the home: the sidebar's Chat entry opens / and is marked current
   await expect(recent.getByRole("button", { name: new RegExp(firstTitle) })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: /1 item needs you/ })).toBeVisible();
   // What needs you is on the foyer card above, not a Portal entry; Chat carries no badge.
-  await expect(nav.getByRole("button")).toHaveText(["Chat", "Watches", "Activity", "Memory", "System", "Projects", "Terminal"]);
+  await expect(nav.getByRole("button")).toHaveText(["Chat", "Watches", "Activity", "Memory", "System", "Palace", "Projects", "Terminal"]);
   const button = nav.getByRole("button", { name: "Chat", exact: true });
   await expect(button).not.toHaveAttribute("aria-current", "page");
   await expect(nav.getByRole("button", { name: "Projects", exact: true })).toHaveAttribute("aria-current", "page");
@@ -307,12 +307,12 @@ test("Open session opens the session in the tracked panel", async ({
 test("the daytime room sits behind every Portal view and follows the user's turn and pending approvals", async ({
   page,
 }) => {
-  await page.clock.install({ time: new Date(2026, 9, 4, 10, 0, 0) });
+  // 10am in New York, where the fixture's room is.
+  await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 14, 0, 0)) });
   await setupPortal(page);
   await page.goto("/");
   const room = page.locator(".room-scene");
-  await expect(room).toHaveAttribute("data-scene", "garden");
-  expect(await room.evaluate((node) => getComputedStyle(node).backgroundImage)).toContain("light-room.webp");
+  await expect(room).toHaveAttribute("data-scene", "day");
   await expect(room).toHaveAttribute("data-activity", "idle");
   // A background job never colours it; a turn answering the user (in any thread) does.
   await emitPortal(page, {

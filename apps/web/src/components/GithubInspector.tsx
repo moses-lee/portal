@@ -9,6 +9,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import type { RefObject } from "react";
+import { roomCover } from "@/room/layout";
 import type { GithubPanelProps } from "./GithubPanel";
 import type { SessionSummary } from "@/lib/types";
 
@@ -79,6 +80,7 @@ export default function GithubInspector({
   if (!open) return null;
   return (
     <aside
+      ref={roomCover("right")}
       id="github-inspector"
       aria-label="GitHub inspector"
       className="glass-subtle flex w-[340px] shrink-0 flex-col border-l border-white/5 px-4 py-4 animate-in fade-in slide-in-from-right-2 duration-200"

@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import IconButton from "./IconButton";
 import PortalMark from "./PortalMark";
-import RoomModeControl from "./RoomModeControl";
 import PortalViewBadge, { sidebarViews, usePortalViewCounts, viewMeta, type PortalViewCounts } from "./portal/views";
 import ProjectsColumn from "./ProjectsColumn";
 import RemovedProjects from "./RemovedProjects";
@@ -31,6 +30,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import type { PortalView } from "@/lib/session-routes";
+import { roomCover } from "@/room/layout";
 import { isMacPlatform, newestSessions } from "@/lib/search";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import type { PinMap } from "@/lib/pins";
@@ -422,8 +422,7 @@ function SidebarContent(props: SidebarProps) {
         />
       )}
       <div className="mt-auto shrink-0 pb-1 pt-2">
-        <RoomModeControl />
-        <Button variant="ghost" onClick={props.onOpenSearch} className="mt-1 h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
+        <Button variant="ghost" onClick={props.onOpenSearch} className="h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
           <Search className="size-3.5" />
           Search
           <SearchShortcutHint />
@@ -476,6 +475,7 @@ export default function Sidebar(props: SidebarProps) {
   if (!props.desktopOpen) return null;
   return (
     <aside
+      ref={roomCover("left")}
       aria-label="Workspace sidebar"
       className="sidebar-shell glass-subtle relative"
       style={{ width }}

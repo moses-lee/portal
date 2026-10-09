@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { PaneNode } from "@portal/contracts/workspace";
 import PaneBar from "./PaneBar";
+import RoomStrip from "@/room/RoomStrip";
 import PanesSheet from "./PanesSheet";
 import type { SessionState } from "@/lib/session-state";
 import type { SessionSummary } from "@/lib/types";
@@ -25,6 +26,8 @@ export type MobileWorkspaceProps = {
   onNewSession: () => void;
   /** The sheet's line under its title; the default names the workspace. */
   sheetDescription?: string;
+  /** A phone: the room strip above the pane, which opens the Palace (docs/PALACE.md, decision 6). */
+  roomStrip?: boolean;
 };
 
 /**
@@ -45,11 +48,13 @@ export default function MobileWorkspace({
   onClosePane,
   onNewSession,
   sheetDescription,
+  roomStrip = false,
 }: MobileWorkspaceProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const { index, previous, next } = useMemo(() => paneNeighbours(panes, focused?.pane.id ?? null), [panes, focused]);
   return (
     <div data-mobile-workspace data-pane-bar-host className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {roomStrip && <RoomStrip />}
       {focused && renderPane(focused.tabId, focused.pane)}
       {focused && (
         <PaneBar

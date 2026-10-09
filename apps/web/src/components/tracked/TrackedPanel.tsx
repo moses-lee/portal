@@ -19,6 +19,7 @@ import {
   trackedSessionWidth,
 } from "@/lib/tracked-sessions";
 import type { SessionSummary } from "@/lib/types";
+import { registerCover, roomCover } from "@/room/layout";
 import TrackedList from "./TrackedList";
 import TrackedSessionView from "./TrackedSessionView";
 import { TrackedToggle, useTrackedGroups, type TrackedRowActions } from "./parts";
@@ -173,6 +174,7 @@ export default function TrackedPanel({
         </SessionAside>
       ) : expanded ? (
         <aside
+          ref={roomCover("right")}
           id="tracked-panel"
           aria-label="Tracked sessions"
           className="glass-subtle flex min-h-0 shrink-0 flex-col border-l border-white/5 max-xl:hidden"
@@ -182,6 +184,7 @@ export default function TrackedPanel({
         </aside>
       ) : (
         <aside
+          ref={roomCover("right")}
           id="tracked-panel"
           aria-label="Tracked sessions"
           className="glass-subtle flex w-12 shrink-0 flex-col items-center border-l border-white/5 py-3 max-xl:hidden"
@@ -208,6 +211,8 @@ function SessionAside({ children }: { children: ReactNode }) {
   const aside = useRef<HTMLElement>(null);
   /** The room the panel shares with the main pane (the shell less the sidebar); measured, so null until the first layout. */
   const [room, setRoom] = useState<{ shared: number } | null>(null);
+  // The panel covers the room's right side (docs/PALACE.md, Camera).
+  useEffect(() => (aside.current ? registerCover(aside.current, "right") : undefined), []);
   useEffect(() => {
     const panel = aside.current;
     const main = panel?.previousElementSibling as HTMLElement | null | undefined;

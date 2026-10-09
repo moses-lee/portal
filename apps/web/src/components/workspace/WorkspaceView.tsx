@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Tabs } from "radix-ui";
 import type { PaneNode, Tab } from "@portal/contracts/workspace";
 import { tabPanes } from "@portal/shared/workspace";
-import RoomBackground from "../RoomBackground";
+import RoomBackground from "@/room/RoomBackground";
 import SessionPane, { MissingConversation, type InitialSend, type StartPaneProps } from "../SessionPane";
 import { useSessions } from "../SessionsProvider";
 import { useMediaQuery } from "../useMediaQuery";
@@ -207,7 +207,7 @@ export default function WorkspaceView({
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <RoomBackground activity={roomActivity} sessionId={focusedSessionId} />
+      <RoomBackground activity={roomActivity} />
       {error && (
         <p role="alert" className="flex items-center gap-3 border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
           <span className="min-w-0 flex-1">{error}</span>
@@ -248,6 +248,7 @@ export default function WorkspaceView({
           onFocus={showPane}
           onClosePane={closePane}
           onNewSession={openStartTab}
+          roomStrip
         />
       ) : (
         <Tabs.Root

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { portalViews } from "@/lib/session-routes";
 
 /**
@@ -9,6 +10,12 @@ import { portalViews } from "@/lib/session-routes";
  */
 export function generateStaticParams(): { view: string[] }[] {
   return [{ view: [] }, ...portalViews.filter((view) => view !== "chat").map((view) => ({ view: [view] }))];
+}
+
+/** The Palace page is titled "Palace" from the first byte; the shell keeps the title current as the URL changes in place. */
+export async function generateMetadata({ params }: { params: Promise<{ view?: string[] }> }): Promise<Metadata> {
+  const { view } = await params;
+  return view?.length === 1 && view[0] === "palace" ? { title: "Palace" } : {};
 }
 
 /** Portal's home and views (`/`, `/threads/<id>`, `/watches`, ...); the layout renders the app and reads the route from the URL. */

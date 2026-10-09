@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Activity, BellRing, Brain, MessagesSquare, Radar, ServerCog, type LucideIcon } from "lucide-react";
+import { Activity, BellRing, Brain, Castle, MessagesSquare, Radar, ServerCog, type LucideIcon } from "lucide-react";
 import { isVisibleItem } from "../PortalItemCard";
 import { usePortalLive } from "./PortalLive";
 import { portalViews, type PortalView } from "@/lib/session-routes";
@@ -14,6 +14,7 @@ export const viewMeta: Record<PortalView, { label: string; title: string; icon: 
   activity: { label: "Activity", title: "Activity", icon: Activity },
   memory: { label: "Memory", title: "Memory", icon: Brain },
   system: { label: "System", title: "System", icon: ServerCog },
+  palace: { label: "Palace", title: "Palace", icon: Castle },
 };
 
 /** The views with a sidebar entry: Needs you has none, the foyer card at the top of the sidebar opens it. */
@@ -39,6 +40,7 @@ export function usePortalViewCounts(): PortalViewCounts {
     activity: 0,
     memory: counts?.inbox ?? 0,
     system: 0,
+    palace: 0,
     approvals: approvals.length,
   };
 }

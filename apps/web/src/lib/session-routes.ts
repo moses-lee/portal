@@ -1,7 +1,7 @@
 /**
  * Browser routes. Portal, the orchestrator, is the home: `/` is its main thread, `/threads/<id>` one
  * of the side threads it opened, and `/attention`, `/watches`, `/activity`, `/memory[/<entityId>]`, `/system` its
- * views; `/memory/curation[/<runId>]` is memory curation: its runs, or one run's digest and diff.
+ * views, `/palace` the room alone; `/memory/curation[/<runId>]` is memory curation: its runs, or one run's digest and diff.
  * `/tabs/<tabId>` is a workspace tab (docs/WORKSPACE.md), `?pane=<paneId>` the focused pane of a split.
  * `/new` (the start page) and `/sessions/<id>` are **resolvers**: the shell focuses the tab holding a
  * start-page pane or that session, opening one when none does, then rewrites the URL to the tab
@@ -132,15 +132,15 @@ export function isPortalPath(pathname: string): boolean {
   return !isWorkspacePath(pathname) && !isTerminalPath(pathname);
 }
 
-export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system";
-export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system"];
+export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system" | "palace";
+export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system", "palace"];
 
 /** Where a Portal path points; unknown paths land on the main thread. */
 export type PortalLocation = (
   | { view: "chat"; threadId: string }
   /** `runId` present: the curation pane (null lists the runs, an id shows one). */
   | { view: "memory"; entityId: string | null; runId?: string | null }
-  | { view: "attention" | "watches" | "activity" | "system" }
+  | { view: "attention" | "watches" | "activity" | "system" | "palace" }
 ) & {
   /** The session the tracked panel shows (`?session=`); absent or null when it shows its list. */
   session?: string | null;
@@ -184,7 +184,7 @@ function routeOf(pathname: string): PortalLocation {
     return { view: "memory", entityId: null, runId: segments[2] ? decodeSegment(segments[2]) : null };
   }
   if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
-  if ((head === "attention" || head === "watches" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
+  if ((head === "attention" || head === "watches" || head === "activity" || head === "system" || head === "palace") && segments.length === 1) return { view: head };
   return { view: "chat", threadId: "main" };
 }
 

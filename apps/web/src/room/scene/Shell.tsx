@@ -1,0 +1,197 @@
+"use client";
+
+import { RoundedBox } from "@react-three/drei";
+import { DoubleSide } from "three";
+import { ROOM } from "../layout";
+import { matteMaterial, palette, shellMaterial } from "./materials";
+
+type Vec3 = [number, number, number];
+
+/** A box from its min and max corners, in the shell's material (corner darkening) or a plain matte one. */
+function Slab({ from, to, color, shell = true, cast = true }: { from: Vec3; to: Vec3; color: string; shell?: boolean; cast?: boolean }) {
+  const size: Vec3 = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+  const position: Vec3 = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2];
+  return (
+    <mesh position={position} castShadow={cast} receiveShadow material={shell ? shellMaterial(color) : matteMaterial(color)}>
+      <boxGeometry args={size} />
+    </mesh>
+  );
+}
+
+/** A rounded low-poly box centred at `position`. */
+function Soft({ size, position, color, radius = 0.025, rotation }: { size: Vec3; position: Vec3; color: string; radius?: number; rotation?: Vec3 }) {
+  return (
+    <RoundedBox args={size} radius={radius} smoothness={2} position={position} rotation={rotation} castShadow receiveShadow material={matteMaterial(color)} />
+  );
+}
+
+/** Walls run past the room's edges (and high above it) so the long lens never shows where the set ends. */
+const FAR_RIGHT = 14;
+const FAR_FRONT = 10;
+const TALL = 6;
+const WALL = 0.25;
+
+function BackWall() {
+  const back = ROOM.back;
+  const behind = back - WALL;
+  const { window: w, door } = ROOM;
+  const windowLeft = w.x - w.width / 2;
+  const windowRight = w.x + w.width / 2;
+  const doorLeft = door.x - door.width / 2;
+  const doorRight = door.x + door.width / 2;
+  return (
+    <group>
+      <Slab from={[ROOM.left - WALL, 0, behind]} to={[windowLeft, TALL, back]} color={palette.wall} />
+      <Slab from={[windowLeft, 0, behind]} to={[windowRight, w.sill, back]} color={palette.wall} />
+      <Slab from={[windowLeft, w.top, behind]} to={[windowRight, TALL, back]} color={palette.wall} />
+      <Slab from={[windowRight, 0, behind]} to={[doorLeft, TALL, back]} color={palette.wall} />
+      <Slab from={[doorLeft, door.height, behind]} to={[doorRight, TALL, back]} color={palette.wall} />
+      <Slab from={[doorRight, 0, behind]} to={[FAR_RIGHT, TALL, back]} color={palette.wall} />
+      {/* Skirting along the back wall, broken by the door. */}
+      <Slab from={[ROOM.left, 0, back]} to={[doorLeft - 0.06, 0.12, back + 0.03]} color={palette.wallTrim} shell={false} cast={false} />
+      <Slab from={[doorRight + 0.06, 0, back]} to={[FAR_RIGHT, 0.12, back + 0.03]} color={palette.wallTrim} shell={false} cast={false} />
+    </group>
+  );
+}
+
+function LeftWall() {
+  return (
+    <group>
+      <Slab from={[ROOM.left - WALL, 0, ROOM.back - WALL]} to={[ROOM.left, TALL, FAR_FRONT]} color={palette.wall} />
+      <Slab from={[ROOM.left, 0, ROOM.back]} to={[ROOM.left + 0.03, 0.12, FAR_FRONT]} color={palette.wallTrim} shell={false} cast={false} />
+    </group>
+  );
+}
+
+function Floor() {
+  return (
+    <group>
+      <Slab from={[ROOM.left - WALL, -0.2, ROOM.back - WALL]} to={[FAR_RIGHT, 0, FAR_FRONT]} color={palette.floor} cast={false} />
+      {/* A few darker boards, so the floor reads as wood from far off. */}
+      {[-2.2, -0.4, 1.4, 3.2].map((z) => (
+        <Slab key={z} from={[ROOM.left, 0, z]} to={[FAR_RIGHT, 0.002, z + 0.05]} color={palette.floorDark} cast={false} />
+      ))}
+    </group>
+  );
+}
+
+function Rug() {
+  return (
+    <group position={[0.3, 0, 0.5]}>
+      <Soft size={[3.7, 0.03, 2.5]} position={[0, 0.015, 0]} color={palette.rugBorder} radius={0.012} />
+      <Soft size={[3.3, 0.034, 2.1]} position={[0, 0.019, 0]} color={palette.rug} radius={0.012} />
+    </group>
+  );
+}
+
+/** The door opening on the right of the back wall: casing, a dark hallway beyond, the leaf swung into the room. */
+function Door() {
+  const { door, back } = ROOM;
+  const left = door.x - door.width / 2;
+  const right = door.x + door.width / 2;
+  return (
+    <group>
+      <Slab from={[left - 0.08, 0, back]} to={[left, door.height + 0.08, back + 0.05]} color={palette.frame} shell={false} />
+      <Slab from={[right, 0, back]} to={[right + 0.08, door.height + 0.08, back + 0.05]} color={palette.frame} shell={false} />
+      <Slab from={[left - 0.08, door.height, back]} to={[right + 0.08, door.height + 0.08, back + 0.05]} color={palette.frame} shell={false} />
+      {/* The hallway beyond: a dark box (back, sides, floor) just big enough to fill the opening from any pose. */}
+      <Slab from={[left - 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.5, door.height + 0.6, back - WALL - 1.2]} color={palette.hallway} shell={false} cast={false} />
+      <Slab from={[left - 0.6, -0.2, back - WALL - 1.3]} to={[left - 0.5, door.height + 0.6, back - WALL]} color={palette.hallway} shell={false} cast={false} />
+      <Slab from={[right + 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.6, door.height + 0.6, back - WALL]} color={palette.hallway} shell={false} cast={false} />
+      <Slab from={[left - 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.5, 0, back]} color={palette.floorDark} shell={false} cast={false} />
+      {/* The leaf, hinged at the right jamb and open about 70°. */}
+      <group position={[right - 0.02, 0, back + 0.03]} rotation={[0, -1.2, 0]}>
+        <Soft size={[door.width - 0.04, door.height - 0.04, 0.05]} position={[-(door.width - 0.04) / 2, (door.height - 0.04) / 2, 0]} color={palette.woodLight} radius={0.02} />
+        <mesh position={[-(door.width - 0.16), 1.02, 0.05]} material={matteMaterial(palette.brass)}>
+          <sphereGeometry args={[0.035, 10, 8]} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+/** The hearth alcove on the right of the back wall: a chimney breast, brick surround, a dark firebox, mantel and hearthstone. */
+function Hearth() {
+  const { hearth, back } = ROOM;
+  const front = back + hearth.depth;
+  return (
+    <group>
+      <Slab from={[hearth.x - hearth.width / 2, 0, back]} to={[hearth.x + hearth.width / 2, TALL, front]} color={palette.wall} />
+      <Slab from={[hearth.x - 0.62, 0, front]} to={[hearth.x + 0.62, 1.08, front + 0.04]} color={palette.brick} shell={false} cast={false} />
+      <Slab from={[hearth.x - 0.4, 0, front + 0.04]} to={[hearth.x + 0.4, 0.78, front + 0.05]} color={palette.firebox} shell={false} cast={false} />
+      <Soft size={[1.7, 0.08, 0.3]} position={[hearth.x, 1.14, front + 0.08]} color={palette.wood} radius={0.02} />
+      <Soft size={[1.7, 0.05, 0.55]} position={[hearth.x, 0.025, front + 0.28]} color={palette.brick} radius={0.015} />
+      {/* The hearth's warm light: mounted now (so later fires never recompile the scene), only embers for now. */}
+      <pointLight position={[hearth.x, 0.35, front + 0.25]} color="#ff9a4d" intensity={0.6} distance={4} decay={2} />
+    </group>
+  );
+}
+
+/** The desk under the window, its chair, and the lamp (a placeholder until the live lamp). */
+function Desk() {
+  const x = ROOM.window.x;
+  const z = ROOM.back + 0.45;
+  const legs: [number, number][] = [
+    [-0.82, -0.28],
+    [0.82, -0.28],
+    [-0.82, 0.28],
+    [0.82, 0.28],
+  ];
+  return (
+    <group>
+      <group position={[x, 0, z]}>
+        <Soft size={[1.84, 0.07, 0.68]} position={[0, 0.76, 0]} color={palette.wood} />
+        {legs.map(([lx, lz]) => (
+          <Soft key={`${lx}:${lz}`} size={[0.07, 0.73, 0.07]} position={[lx, 0.365, lz]} color={palette.wood} radius={0.015} />
+        ))}
+        <Soft size={[0.5, 0.2, 0.6]} position={[0.55, 0.62, 0]} color={palette.woodLight} />
+      </group>
+      <group position={[x + 0.15, 0, z + 0.62]} rotation={[0, 0.25, 0]}>
+        <Soft size={[0.5, 0.06, 0.48]} position={[0, 0.46, 0]} color={palette.chair} />
+        <Soft size={[0.5, 0.52, 0.06]} position={[0, 0.76, 0.22]} color={palette.chair} />
+        {legs.map(([lx, lz]) => (
+          <Soft key={`${lx}:${lz}`} size={[0.05, 0.44, 0.05]} position={[lx * 0.26, 0.22, lz * 0.75]} color={palette.wood} radius={0.012} />
+        ))}
+      </group>
+      <group position={[x - 0.62, 0.795, z - 0.1]}>
+        <mesh position={[0, 0.02, 0]} castShadow material={matteMaterial(palette.brass)}>
+          <cylinderGeometry args={[0.1, 0.12, 0.04, 14]} />
+        </mesh>
+        <mesh position={[0, 0.22, 0]} castShadow material={matteMaterial(palette.brass)}>
+          <cylinderGeometry args={[0.014, 0.014, 0.38, 8]} />
+        </mesh>
+        <mesh position={[0, 0.44, 0]} castShadow>
+          <cylinderGeometry args={[0.07, 0.17, 0.2, 14, 1, true]} />
+          <meshStandardMaterial color={palette.shade} emissive="#ffb35c" emissiveIntensity={0.55} roughness={0.86} side={DoubleSide} />
+        </mesh>
+        <pointLight position={[0, 0.36, 0]} color="#ffbf73" intensity={2.4} distance={7} decay={2} />
+      </group>
+    </group>
+  );
+}
+
+/** A small shelf on the left wall: where the books start (a later phase fills it). */
+function Shelf() {
+  return (
+    <group position={[ROOM.left + 0.17, 0, -1.3]}>
+      <Soft size={[0.3, 0.05, 1.5]} position={[0, 1.65, 0]} color={palette.woodLight} radius={0.012} />
+      <Soft size={[0.3, 0.05, 1.5]} position={[0, 2.15, 0]} color={palette.woodLight} radius={0.012} />
+    </group>
+  );
+}
+
+/** The fixed parts of the room (docs/PALACE.md, Shell and anchors), all primitives for now. */
+export default function Shell() {
+  return (
+    <group>
+      <Floor />
+      <BackWall />
+      <LeftWall />
+      <Rug />
+      <Door />
+      <Hearth />
+      <Desk />
+      <Shelf />
+    </group>
+  );
+}
