@@ -123,11 +123,6 @@
   -webkit-backdrop-filter: blur(28px) saturate(135%);
   backdrop-filter: blur(28px) saturate(135%);
 }
-.glass-subtle {
-  background: #25231fc9;
-  -webkit-backdrop-filter: blur(24px);
-  backdrop-filter: blur(24px);
-}
 /*
  * Panels that sit over the room (docs/PALACE.md, Frost): the same tint, border and shadow as the
  * glass, but the blur is drawn by the room's WebGL canvas under each `.frost` element, so the
@@ -708,6 +703,23 @@
   .room-scene[data-scene="night"]::after {
     background: #110f0c8a;
   }
+  /*
+   * On a phone the text runs over the bright middle of the room (the hearth, the stove): a stronger
+   * veil than the desktop's over the 3D room, strongest at the top where the header and the first
+   * lines sit. Where the workspace shows the room strip, its 72 px keep the desktop's veil.
+   */
+  .room-scene[data-renderer="webgl"]:not([data-view="palace"])::after {
+    background: linear-gradient(180deg, #151713d9 0, #151713cc 50%, #151713b3 100%);
+  }
+  .room-scene[data-renderer="webgl"][data-scene="night"]:not([data-view="palace"])::after {
+    background: linear-gradient(180deg, #110f0cb3 0, #110f0ca6 50%, #110f0c8a 100%);
+  }
+  .portal-shell:has([data-room-strip]) .room-scene[data-renderer="webgl"]:not([data-view="palace"])::after {
+    background: linear-gradient(180deg, #1517138a 0, #1517138a 72px, #151713d9 72px, #151713cc 50%, #151713b3 100%);
+  }
+  .portal-shell:has([data-room-strip]) .room-scene[data-renderer="webgl"][data-scene="night"]:not([data-view="palace"])::after {
+    background: linear-gradient(180deg, #110f0c4d 0, #110f0c4d 72px, #110f0cb3 72px, #110f0ca6 50%, #110f0c8a 100%);
+  }
   button[data-size="icon"] {
     min-width: 40px;
     min-height: 40px;
@@ -725,7 +737,6 @@
 }
 @media (prefers-reduced-transparency: reduce) {
   .glass,
-  .glass-subtle,
   .frost,
   .frost-subtle {
     background: var(--card);
