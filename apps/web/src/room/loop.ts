@@ -162,3 +162,15 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
     },
   };
 }
+
+let current: RoomLoop | null = null;
+
+/** The running loop, set by the canvas while it is mounted, so input outside the canvas (the Palace page) can ask for a frame. */
+export function setCurrentLoop(loop: RoomLoop | null) {
+  current = loop;
+}
+
+/** Render a frame soon: needed under reduced motion, where nothing draws unless asked. */
+export function requestRoomFrame() {
+  current?.request();
+}

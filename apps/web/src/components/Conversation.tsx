@@ -529,6 +529,7 @@ export default function Conversation({
       <MessageScroller className="flex-1">
         <ScrollOnSend request={scrollRequest} />
         <MessageScrollerViewport
+          data-room-passthrough
           aria-label="Conversation"
           preserveScrollOnPrepend
           onScroll={(event) => {

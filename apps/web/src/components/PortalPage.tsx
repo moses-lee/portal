@@ -13,6 +13,7 @@ import TrackedPanel, { TrackedPanelFromUrl, setPanelSession, type TrackedPanelPr
 import { TrackedToggle, trackedTitle } from "./tracked/parts";
 import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
+import PalaceView from "@/room/PalaceView";
 import RoomBackground from "@/room/RoomBackground";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { portalActivity } from "@/lib/orchestrator/format";
@@ -196,8 +197,8 @@ export default function PortalPage({
 
   return (
     <>
-      <main className="flex min-w-0 flex-1 flex-col">
-        <RoomBackground activity={portalActivity(status, approvals)} />
+      <main data-room-passthrough className="flex min-w-0 flex-1 flex-col">
+        <RoomBackground activity={portalActivity(status, approvals)} palace={palace} />
         {palace ? (
           <header data-palace-header className="workspace-header !border-transparent">
             <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
@@ -261,7 +262,7 @@ export default function PortalPage({
           />
         )}
         {view === "system" && <SystemView links={links} />}
-        {palace && <section aria-label="Palace" data-palace className="min-h-0 flex-1" />}
+        {palace && <PalaceView />}
         <ResponsiveDialog
           open={openItem !== null}
           onOpenChange={(open) => !open && setOpenItemId(null)}

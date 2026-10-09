@@ -238,7 +238,7 @@ export default function SessionPane({
         </p>
       )}
       {!sessionId ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div data-room-passthrough className="min-h-0 flex-1 overflow-y-auto">
           <StartPage
             {...startPage}
             draftKey={key}

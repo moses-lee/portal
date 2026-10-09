@@ -77,3 +77,17 @@ export function shellMaterial(color: string): MeshStandardMaterial {
   }
   return material;
 }
+
+/**
+ * Asks three.js to upload a changed buffer (an instance matrix or colour). A function rather than an
+ * assignment in the component, so per-frame updates to objects a component made in a hook do not
+ * read to React's compiler as mutating hook values.
+ */
+export function markForUpload(attribute: { needsUpdate: boolean } | null | undefined) {
+  if (attribute) attribute.needsUpdate = true;
+}
+
+/** Sets a lit material's glow, for the same reason as `markForUpload`. */
+export function setGlow(material: MeshStandardMaterial, intensity: number) {
+  material.emissiveIntensity = intensity;
+}

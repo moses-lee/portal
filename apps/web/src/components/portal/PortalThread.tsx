@@ -398,6 +398,7 @@ export default function PortalThread({
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={80}>
         <MessageScroller className="flex-1">
           <MessageScrollerViewport
+            data-room-passthrough
             aria-label={isMain ? "Talk to Portal" : thread?.title ?? "Thread"}
             preserveScrollOnPrepend
             onScroll={(event) => {

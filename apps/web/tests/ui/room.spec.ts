@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { roomState, setupPortal } from "./fixtures";
+import { firstTitle, makeSession, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 import { pane, tab, workspaceOf } from "./workspace-fixtures";
 
 /** The scene's summary for tests (docs/PALACE.md, Tests): `{ scene, weather, renderer, source, still }`. */
@@ -132,4 +132,131 @@ test.describe("on a phone", () => {
     await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Open the Palace" })).toHaveCount(0);
   });
+});
+
+/** A session's list entry waiting on approval, working, or finished (no robot). */
+const approvalSession = { ...makeSession("s1", firstTitle), awaitingPermission: true, liveness: "blocked" as const };
+const workingSession = { ...makeSession("s2", secondTitle, "codex"), busy: true, liveness: "busy" as const };
+const finishedSession = makeSession("s3", thirdTitle, "codex");
+
+/** The scene's live objects, as `data-room` reports them. */
+type LiveSummary = {
+  robots: { id: string; state: string; place: string }[];
+  mail: { sealed: number; open: number; pile: number };
+  hearth: string;
+  kettle: boolean;
+  points?: Record<string, [number, number]>;
+  camera?: { yaw: number; pitch: number; zoom: number; focus: number };
+};
+const live = async (room: Locator) => (await summary(room)) as unknown as LiveSummary;
+
+/** Where the canvas last drew an object (CSS pixels), once it has reported it. */
+async function pointOf(room: Locator, key: string): Promise<[number, number]> {
+  await expect.poll(async () => (await live(room)).points?.[key] ?? null).not.toBeNull();
+  return (await live(room)).points![key];
+}
+
+test("live objects: a session waiting on approval puts its robot by the door, and the tray, hearth and kettle follow the status", async ({ page }, info) => {
+  const room = roomState();
+  room.census.activityLastHour = 25;
+  await setupPortal(page, {
+    webgl: true,
+    room,
+    sessions: [approvalSession, workingSession, finishedSession],
+    portal: {
+      status: {
+        counts: { needsYou: 14, inbox: 0, approvals: 1, intents: 0 },
+        runs: [{ id: "r1", kind: "consolidate", jobId: "consolidate", threadId: null, startedAt: Date.now(), summary: "Curating memory" }],
+      },
+    },
+  });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  await expect.poll(async () => (await live(scene)).robots).toEqual([
+    { id: "s1", state: "approval", place: "door" },
+    { id: "s2", state: "working", place: "bench" },
+  ]);
+  const summaryNow = await live(scene);
+  expect(summaryNow.mail).toEqual({ sealed: 1, open: 11, pile: 3 });
+  expect(summaryNow.hearth).toBe("fire");
+  expect(summaryNow.kettle).toBe(true);
+  // Every live object has a hotspot the pointer can find.
+  await expect
+    .poll(async () => Object.keys((await live(scene)).points ?? {}).sort())
+    .toEqual(["hearth:hearth", "kettle:kettle", "lamp:lamp", "mail:mail", "robot:s1", "robot:s2", "window:window"]);
+  await page.screenshot({ path: info.outputPath("live-objects.png") });
+
+  // The tray's card says what is in it; a click opens Needs you (on the Palace page, once a double click is ruled out).
+  const [mx, my] = await pointOf(scene, "mail:mail");
+  await page.mouse.move(mx, my);
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText("Mail tray");
+  await expect(tooltip).toContainText("12 in the tray and a pile of 3 more");
+  await expect(tooltip).toContainText("Click to open Needs you");
+  await page.mouse.click(mx, my);
+  await expect(page).toHaveURL(/\/attention$/);
+});
+
+test("a robot's hover card names its session; on the Palace page a click makes it wave, then its card opens the session", async ({ page }, info) => {
+  await setupPortal(page, { webgl: true, sessions: [approvalSession, workingSession, finishedSession] });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  const [x, y] = await pointOf(scene, "robot:s1");
+  await page.mouse.move(x, y);
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText(firstTitle);
+  await expect(tooltip).toContainText("Needs approval · Claude Code");
+  await expect(tooltip).toContainText("2 active sessions in the room");
+  await expect(tooltip).toContainText("Click to open the session");
+  // Over the robot the room's surface shows a pointer.
+  await expect(page.locator("[data-palace]")).toHaveCSS("cursor", "pointer");
+  await page.screenshot({ path: info.outputPath("robot-hover.png") });
+
+  await page.mouse.click(x, y);
+  // The wave comes first; the card, pinned with its button, after it.
+  const card = page.getByRole("dialog", { name: firstTitle });
+  await expect(card).toBeVisible();
+  await page.screenshot({ path: info.outputPath("robot-card.png") });
+  await card.getByRole("button", { name: "Open the session" }).click();
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
+});
+
+test("the Palace page's drag turns the camera within its limits, the wheel zooms, and Escape flies back", async ({ page }) => {
+  await setupPortal(page, { webgl: true });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  const camera = async () => (await live(scene)).camera ?? null;
+  await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
+  const box = (await page.locator("[data-palace]").boundingBox())!;
+  // Start in the open sky above the room, away from every object.
+  const start = { x: box.x + box.width * 0.5, y: box.y + 40 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x - 60, start.y, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => (await camera())!.yaw).toBeGreaterThan(5);
+  // A long drag stops at 20° of yaw and 40° of pitch.
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x - 900, start.y + 900, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(camera).toMatchObject({ yaw: 20, pitch: 40 });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 900, start.y - 900, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(camera).toMatchObject({ yaw: -20, pitch: 10 });
+  await page.mouse.move(start.x, start.y + 100);
+  await page.mouse.wheel(0, -2000);
+  await expect.poll(async () => (await camera())!.zoom).toBe(1.3);
+  await page.keyboard.press("Escape");
+  await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
+  // Elsewhere the look is gone: leaving the page put the camera back.
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x - 300, start.y, { steps: 4 });
+  await page.mouse.up();
+  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Activity", exact: true }).click();
+  await expect.poll(camera).toEqual({ yaw: 0, pitch: 25, zoom: 1, focus: 0 });
 });

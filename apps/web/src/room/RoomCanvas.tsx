@@ -1,13 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { AgXToneMapping, PCFShadowMap } from "three";
 import type { RoomWeather } from "@portal/contracts/room";
 import FrostPass from "./frost/FrostPass";
-import { startRoomLoop, type RoomLoop } from "./loop";
+import type { HearthLevel, LampState, RobotCrowd } from "./live";
+import { setCurrentLoop, startRoomLoop, type RoomLoop } from "./loop";
+import { clearRoomReport } from "./report";
 import type { SunClock } from "./sun";
 import CameraRig from "./scene/Camera";
+import Hearth from "./scene/Hearth";
+import { PointerBridge } from "./scene/Hotspot";
+import Kettle from "./scene/Kettle";
+import Lamp from "./scene/Lamp";
+import MailTray from "./scene/MailTray";
+import Robots from "./scene/Robots";
 import Shell from "./scene/Shell";
 import Sky from "./scene/Sky";
 import Sun from "./scene/Sun";
@@ -28,13 +36,16 @@ function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; rev
   const size = useThree((state) => state.size);
   const own = useRef<RoomLoop | null>(null);
   useEffect(() => {
-    const started = startRoomLoop((time) => advance(time), { reducedMotion });
+    // R3F's clock takes the timestamp as given under `frameloop="never"`: seconds, as every `useFrame` reads it.
+    const started = startRoomLoop((time) => advance(time / 1000), { reducedMotion });
     own.current = started;
     onLoop(started);
+    setCurrentLoop(started);
     return () => {
       started.stop();
       own.current = null;
       onLoop(null);
+      setCurrentLoop(null);
     };
   }, [advance, reducedMotion, onLoop]);
   useEffect(() => {
@@ -43,8 +54,18 @@ function Loop({ reducedMotion, revision, onLoop }: { reducedMotion: boolean; rev
   return null;
 }
 
+/** What the live objects show (docs/PALACE.md, Objects), from `RoomBackground`. */
+export type RoomLiveScene = {
+  crowd: RobotCrowd;
+  mail: { sealed: number; open: number; pile: number };
+  hearth: HearthLevel;
+  lamp: LampState;
+  kettle: boolean;
+};
+
 export type RoomCanvasProps = {
   clock: SunClock;
+  live: RoomLiveScene;
   weather: RoomWeather | null;
   reducedMotion: boolean;
   /** The GPU dropped the context: the background falls back to the gradient. */
@@ -54,12 +75,16 @@ export type RoomCanvasProps = {
 /**
  * The room's WebGL canvas (docs/PALACE.md, Web): react-three-fiber with a capped hand-driven loop,
  * DPR at most 1.5, no antialiasing, a low-power context, AgX tone mapping, and one sun shadow map.
- * Every frame goes through `FrostPass`, which blurs the room under the `.frost` panels.
+ * Every frame goes through `FrostPass`, which blurs the room under the `.frost` panels. The live
+ * objects (robots, lamp, hearth, kettle, mail tray) are hotspots for the page's pointer (`pointer.ts`).
  * Loaded with `next/dynamic` (no SSR) by `RoomBackground`, which owns the fallbacks.
  */
-export default function RoomCanvas({ clock, weather, reducedMotion, onContextLost }: RoomCanvasProps) {
+function RoomCanvas({ clock, live, weather, reducedMotion, onContextLost }: RoomCanvasProps) {
   const loop = useRef<RoomLoop | null>(null);
   const condition = weather?.condition ?? "clear";
+  // A change in what the live objects show asks for a frame (the only way one draws under reduced motion).
+  const liveKey = useMemo(() => JSON.stringify(live), [live]);
+  useEffect(() => () => clearRoomReport(), []);
   const onLoop = useCallback((started: RoomLoop | null) => {
     loop.current = started;
   }, []);
@@ -79,7 +104,7 @@ export default function RoomCanvas({ clock, weather, reducedMotion, onContextLos
         });
       }}
     >
-      <Loop reducedMotion={reducedMotion} revision={`${clock.at}:${condition}`} onLoop={onLoop} />
+      <Loop reducedMotion={reducedMotion} revision={`${clock.at}:${condition}:${liveKey}`} onLoop={onLoop} />
       <color attach="background" args={["#1d1916"]} />
       <fogExp2 attach="fog" args={["#8b8f94", 0]} />
       <CameraRig reducedMotion={reducedMotion} onChange={requestFrame} />
@@ -88,7 +113,16 @@ export default function RoomCanvas({ clock, weather, reducedMotion, onContextLos
       <Weather weather={weather} clock={clock} reducedMotion={reducedMotion} />
       <Shell />
       <Window />
+      <Lamp state={live.lamp} reducedMotion={reducedMotion} />
+      <Hearth level={live.hearth} reducedMotion={reducedMotion} />
+      <Kettle steaming={live.kettle} reducedMotion={reducedMotion} />
+      <MailTray sealed={live.mail.sealed} open={live.mail.open} pile={live.mail.pile} />
+      <Robots crowd={live.crowd} reducedMotion={reducedMotion} />
+      <PointerBridge />
       <FrostPass />
     </Canvas>
   );
 }
+
+/** Memoised: the background re-renders with every session list change, the scene only when what it shows changed. */
+export default memo(RoomCanvas);

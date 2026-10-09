@@ -4,6 +4,7 @@ import { useRef, type ReactNode } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Vector3, type Group } from "three";
 import { ROOM } from "../layout";
+import { Hotspot } from "./Hotspot";
 import { matteMaterial, palette } from "./materials";
 
 /** The window opening's centre, on the glass. */
@@ -28,7 +29,7 @@ export function WindowView({ distance, children }: { distance: number; children:
   return <group ref={group}>{children}</group>;
 }
 
-/** The window's frame, mullions, sill and glass (the view through it is the sky and the weather). */
+/** The window's frame, mullions, sill and glass (the view through it is the sky and the weather), and its hover card's hotspot. */
 export default function Window() {
   const { window: w, back } = ROOM;
   const left = w.x - w.width / 2;
@@ -66,6 +67,8 @@ export default function Window() {
         <planeGeometry args={[w.width, height]} />
         <meshBasicMaterial color={palette.glass} transparent opacity={0.07} depthWrite={false} />
       </mesh>
+      {/* Hovered or clicked, the window shows its card only: the weather and its source. */}
+      <Hotspot kind="window" size={[w.width, height, 0.3]} position={[w.x, w.sill + height / 2, z]} />
     </group>
   );
 }

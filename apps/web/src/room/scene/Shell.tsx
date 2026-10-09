@@ -1,7 +1,6 @@
 "use client";
 
 import { RoundedBox } from "@react-three/drei";
-import { DoubleSide } from "three";
 import { ROOM } from "../layout";
 import { matteMaterial, palette, shellMaterial } from "./materials";
 
@@ -19,7 +18,7 @@ function Slab({ from, to, color, shell = true, cast = true }: { from: Vec3; to: 
 }
 
 /** A rounded low-poly box centred at `position`. */
-function Soft({ size, position, color, radius = 0.025, rotation }: { size: Vec3; position: Vec3; color: string; radius?: number; rotation?: Vec3 }) {
+export function Soft({ size, position, color, radius = 0.025, rotation }: { size: Vec3; position: Vec3; color: string; radius?: number; rotation?: Vec3 }) {
   return (
     <RoundedBox args={size} radius={radius} smoothness={2} position={position} rotation={rotation} castShadow receiveShadow material={matteMaterial(color)} />
   );
@@ -110,8 +109,8 @@ function Door() {
   );
 }
 
-/** The hearth alcove on the right of the back wall: a chimney breast, brick surround, a dark firebox, mantel and hearthstone. */
-function Hearth() {
+/** The hearth alcove on the right of the back wall: a chimney breast, brick surround, a dark firebox, mantel and hearthstone (the fire is the live `Hearth`). */
+function Alcove() {
   const { hearth, back } = ROOM;
   const front = back + hearth.depth;
   return (
@@ -121,13 +120,11 @@ function Hearth() {
       <Slab from={[hearth.x - 0.4, 0, front + 0.04]} to={[hearth.x + 0.4, 0.78, front + 0.05]} color={palette.firebox} shell={false} cast={false} />
       <Soft size={[1.7, 0.08, 0.3]} position={[hearth.x, 1.14, front + 0.08]} color={palette.wood} radius={0.02} />
       <Soft size={[1.7, 0.05, 0.55]} position={[hearth.x, 0.025, front + 0.28]} color={palette.brick} radius={0.015} />
-      {/* The hearth's warm light: mounted now (so later fires never recompile the scene), only embers for now. */}
-      <pointLight position={[hearth.x, 0.35, front + 0.25]} color="#ff9a4d" intensity={0.6} distance={4} decay={2} />
     </group>
   );
 }
 
-/** The desk under the window, its chair, and the lamp (a placeholder until the live lamp). */
+/** The desk under the window (the lamp, chair and papers on it are the live `Lamp`). */
 function Desk() {
   const x = ROOM.window.x;
   const z = ROOM.back + 0.45;
@@ -138,34 +135,12 @@ function Desk() {
     [0.82, 0.28],
   ];
   return (
-    <group>
-      <group position={[x, 0, z]}>
-        <Soft size={[1.84, 0.07, 0.68]} position={[0, 0.76, 0]} color={palette.wood} />
-        {legs.map(([lx, lz]) => (
-          <Soft key={`${lx}:${lz}`} size={[0.07, 0.73, 0.07]} position={[lx, 0.365, lz]} color={palette.wood} radius={0.015} />
-        ))}
-        <Soft size={[0.5, 0.2, 0.6]} position={[0.55, 0.62, 0]} color={palette.woodLight} />
-      </group>
-      <group position={[x + 0.15, 0, z + 0.62]} rotation={[0, 0.25, 0]}>
-        <Soft size={[0.5, 0.06, 0.48]} position={[0, 0.46, 0]} color={palette.chair} />
-        <Soft size={[0.5, 0.52, 0.06]} position={[0, 0.76, 0.22]} color={palette.chair} />
-        {legs.map(([lx, lz]) => (
-          <Soft key={`${lx}:${lz}`} size={[0.05, 0.44, 0.05]} position={[lx * 0.26, 0.22, lz * 0.75]} color={palette.wood} radius={0.012} />
-        ))}
-      </group>
-      <group position={[x - 0.62, 0.795, z - 0.1]}>
-        <mesh position={[0, 0.02, 0]} castShadow material={matteMaterial(palette.brass)}>
-          <cylinderGeometry args={[0.1, 0.12, 0.04, 14]} />
-        </mesh>
-        <mesh position={[0, 0.22, 0]} castShadow material={matteMaterial(palette.brass)}>
-          <cylinderGeometry args={[0.014, 0.014, 0.38, 8]} />
-        </mesh>
-        <mesh position={[0, 0.44, 0]} castShadow>
-          <cylinderGeometry args={[0.07, 0.17, 0.2, 14, 1, true]} />
-          <meshStandardMaterial color={palette.shade} emissive="#ffb35c" emissiveIntensity={0.55} roughness={0.86} side={DoubleSide} />
-        </mesh>
-        <pointLight position={[0, 0.36, 0]} color="#ffbf73" intensity={2.4} distance={7} decay={2} />
-      </group>
+    <group position={[x, 0, z]}>
+      <Soft size={[1.84, 0.07, 0.68]} position={[0, 0.76, 0]} color={palette.wood} />
+      {legs.map(([lx, lz]) => (
+        <Soft key={`${lx}:${lz}`} size={[0.07, 0.73, 0.07]} position={[lx, 0.365, lz]} color={palette.wood} radius={0.015} />
+      ))}
+      <Soft size={[0.5, 0.2, 0.6]} position={[0.55, 0.62, 0]} color={palette.woodLight} />
     </group>
   );
 }
@@ -189,7 +164,7 @@ export default function Shell() {
       <LeftWall />
       <Rug />
       <Door />
-      <Hearth />
+      <Alcove />
       <Desk />
       <Shelf />
     </group>
