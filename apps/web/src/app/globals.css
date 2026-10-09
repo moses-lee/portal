@@ -205,7 +205,7 @@
   background: #110f0c4d;
 }
 /* The Palace page has no text over the room: no veil. */
-.room-scene[data-renderer="webgl"][data-palace]::after {
+.room-scene[data-renderer="webgl"][data-view="palace"]::after {
   background: none;
 }
 

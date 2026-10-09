@@ -9,7 +9,10 @@ test("the room's canvas mounts behind Portal and reports day or night from the s
   // Noon in New York, where the fixture's room is; an overcast sky.
   await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 16, 0, 0)) });
   await setupPortal(page, { webgl: true, room: roomState({ code: 3, condition: "overcast", cloudCover: 100 }) });
+  // The canvas loads the furniture kit (a meshopt GLB) as it starts.
+  const kit = page.waitForResponse((response) => new URL(response.url()).pathname === "/room/kit.glb");
   await page.goto("/");
+  expect((await kit).ok()).toBe(true);
   const room = page.locator(".room-scene");
   await expect(room).toHaveAttribute("data-scene", "day");
   await expect(room).toHaveAttribute("data-renderer", "webgl");
@@ -102,6 +105,25 @@ test("under reduced transparency the panels are solid and the room draws no fros
   // The room is the still gradient, so nothing is frosted behind the panels.
   await expect(page.locator(".room-scene")).toHaveAttribute("data-renderer", "fallback");
   await expect(page.locator(".room-scene canvas")).toHaveCount(0);
+});
+
+test("under reduced motion the canvas draws a still, and draws again only when the room changes", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 16, 0, 0)) });
+  await setupPortal(page, { webgl: true, sessions: [approvalSession, finishedSession] });
+  await page.goto("/palace");
+  const scene = page.locator(".room-scene");
+  await expect.poll(async () => (await summary(scene)).still).toBe(true);
+  await pointOf(scene, "robot:s1");
+  // Nothing moves: no drift, no flicker, no weather, no walking; two frames a while apart are the same picture.
+  const canvas = scene.locator("canvas");
+  const first = await canvas.screenshot();
+  await page.waitForTimeout(1200);
+  expect((await canvas.screenshot()).equals(first)).toBe(true);
+  // A session starting work asks for a frame: its robot is drawn at the bench at once.
+  await page.evaluate(() => window.__portalEmit("/api/sessions/stream", { type: "updated", id: "s3", patch: { busy: true, liveness: "busy" } }, "message"));
+  await pointOf(scene, "robot:s3");
+  expect((await live(scene)).robots).toContainEqual({ id: "s3", state: "working", place: "bench" });
 });
 
 test("without WebGL the frost panels keep their tint over the gradient", async ({ page }) => {

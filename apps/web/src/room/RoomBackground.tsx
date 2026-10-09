@@ -318,7 +318,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
       data-activity={activity}
       data-renderer={renderer}
       data-room={baseJson}
-      data-palace={palace ? "" : undefined}
+      data-view={palace ? "palace" : undefined}
       style={style}
       aria-hidden="true"
     >
