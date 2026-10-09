@@ -145,7 +145,10 @@ export function skyColours(altitude: number, condition: RoomCondition = "clear")
   return { zenith: hex(grey(zenith, amount)), horizon: hex(grey(horizon, amount)) };
 }
 
-/** How much of the sun's direct light a condition lets through (1 on a clear day). */
+/**
+ * How much of the sun's direct light a condition lets through (1 on a clear day): grey skies leave
+ * little more than a trace of the window's patch of sun on the floor.
+ */
 export function sunThrough(condition: RoomCondition): number {
-  return 1 - 0.85 * (GREY[condition] ?? 0);
+  return Math.max(0.05, 1 - 1.25 * (GREY[condition] ?? 0));
 }

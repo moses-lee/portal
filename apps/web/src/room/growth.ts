@@ -39,7 +39,7 @@ export type BookSpec = {
   thickness: number;
 };
 
-const SPINES = ["#b8483e", "#3f6fb0", "#d08a2c", "#5d8a4a", "#8a5aa8", "#2f8f8a", "#b85c7a", "#c4a03a", "#4a6b8a", "#9c5b33"] as const;
+const SPINES = ["#c86f62", "#6f93c4", "#dca457", "#86a874", "#a585bf", "#5fa8a2", "#cf8aa0", "#d4b866", "#7890ab", "#b98059"] as const;
 /** A book whose project is gone: a plain cloth spine. */
 export const NEUTRAL_SPINE = "#b6ab9a";
 /** A purged session's book: neutral and a little greyer. */

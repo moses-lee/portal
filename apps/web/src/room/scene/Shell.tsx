@@ -1,6 +1,7 @@
 "use client";
 
 import { RoundedBox } from "@react-three/drei";
+import { MeshBasicMaterial } from "three";
 import { ROOM } from "../layout";
 import { matteMaterial, palette, shellMaterial } from "./materials";
 
@@ -27,7 +28,7 @@ export function Soft({ size, position, color, radius = 0.025, rotation }: { size
 /** Walls run past the room's edges (and high above it) so the long lens never shows where the set ends. */
 const FAR_RIGHT = 14;
 const FAR_FRONT = 10;
-const TALL = 6;
+const TALL = 10;
 const WALL = 0.25;
 
 function BackWall() {
@@ -83,6 +84,22 @@ function Rug() {
   );
 }
 
+/** Casts shadows and draws nothing. */
+const shadowOnly = new MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+
+/**
+ * The ceiling the room would have: invisible, but it casts the sun's shadow, so daylight comes in
+ * through the window only, and the floor out past the room's open sides is in the same shade as
+ * the floor inside it (the walls alone would leave it sunlit wherever their shadows end).
+ */
+function Ceiling() {
+  return (
+    <mesh position={[(ROOM.left - WALL + FAR_RIGHT) / 2, ROOM.height + 0.1, (ROOM.back - WALL + FAR_FRONT) / 2]} material={shadowOnly} castShadow>
+      <boxGeometry args={[FAR_RIGHT - ROOM.left + WALL, 0.2, FAR_FRONT - ROOM.back + WALL]} />
+    </mesh>
+  );
+}
+
 /** The door opening on the right of the back wall: casing, a dark hallway beyond, the leaf swung into the room. */
 function Door() {
   const { door, back } = ROOM;
@@ -94,9 +111,10 @@ function Door() {
       <Slab from={[right, 0, back]} to={[right + 0.08, door.height + 0.08, back + 0.05]} color={palette.frame} shell={false} />
       <Slab from={[left - 0.08, door.height, back]} to={[right + 0.08, door.height + 0.08, back + 0.05]} color={palette.frame} shell={false} />
       {/* The hallway beyond: a dark box (back, sides, floor) just big enough to fill the opening from any pose. */}
-      <Slab from={[left - 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.5, door.height + 0.6, back - WALL - 1.2]} color={palette.hallway} shell={false} cast={false} />
-      <Slab from={[left - 0.6, -0.2, back - WALL - 1.3]} to={[left - 0.5, door.height + 0.6, back - WALL]} color={palette.hallway} shell={false} cast={false} />
-      <Slab from={[right + 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.6, door.height + 0.6, back - WALL]} color={palette.hallway} shell={false} cast={false} />
+      <Slab from={[left - 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.5, door.height + 0.6, back - WALL - 1.2]} color={palette.hallway} shell={false} />
+      <Slab from={[left - 0.6, -0.2, back - WALL - 1.3]} to={[left - 0.5, door.height + 0.6, back - WALL]} color={palette.hallway} shell={false} />
+      <Slab from={[right + 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.6, door.height + 0.6, back - WALL]} color={palette.hallway} shell={false} />
+      <Slab from={[left - 0.6, door.height + 0.6, back - WALL - 1.3]} to={[right + 0.6, door.height + 0.7, back - WALL]} color={palette.hallway} shell={false} />
       <Slab from={[left - 0.5, -0.2, back - WALL - 1.3]} to={[right + 0.5, 0, back]} color={palette.floorDark} shell={false} cast={false} />
       {/* The leaf, hinged at the right jamb and open about 70°. */}
       <group position={[right - 0.02, 0, back + 0.03]} rotation={[0, -1.2, 0]}>
@@ -154,6 +172,7 @@ export default function Shell() {
   return (
     <group>
       <Floor />
+      <Ceiling />
       <BackWall />
       <LeftWall />
       <Rug />

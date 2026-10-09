@@ -104,12 +104,15 @@ const DEGREE = Math.PI / 180;
  * The camera for a viewport aspect: a three-quarter view from the missing fourth wall (yaw ~25°,
  * pitch ~25°, a long lens from far off). Below `PORTRAIT_ASPECT` it pulls back, rises, turns more
  * square to the back wall and aims at it, so a phone crops the same room instead of re-laying it.
+ * With `strip` (a `focus` cover: the phone's room strip) it aims at the window instead.
  */
-export function cameraPose(aspect: number): CameraPose {
+export function cameraPose(aspect: number, strip = false): CameraPose {
   if (aspect < PORTRAIT_ASPECT) {
-    return { yaw: 14 * DEGREE, pitch: 31 * DEGREE, distance: 21, fov: 30, target: [-0.3, 1.4, -2.2] };
+    // The phone strip is 72 px tall: it frames the window (sky, weather, the tree) over the desk.
+    if (strip) return { yaw: 14 * DEGREE, pitch: 31 * DEGREE, distance: 21, fov: 30, target: [-0.6, 1.85, -2.8] };
+    return { yaw: 14 * DEGREE, pitch: 35 * DEGREE, distance: 21, fov: 30, target: [-0.2, 1.05, -1.6] };
   }
-  return { yaw: 25 * DEGREE, pitch: 25 * DEGREE, distance: 15, fov: 30, target: [-0.1, 1.15, -1.1] };
+  return { yaw: 25 * DEGREE, pitch: 25 * DEGREE, distance: 15, fov: 30, target: [-0.6, 1.15, -1.1] };
 }
 
 /** The camera's position for a pose, after the drift and parallax offsets (radians). */

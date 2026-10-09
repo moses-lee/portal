@@ -199,10 +199,14 @@
   background: #110f0c70;
 }
 .room-scene[data-renderer="webgl"]::after {
-  background: #1517135c;
+  background: #1517138a;
 }
 .room-scene[data-renderer="webgl"][data-scene="night"]::after {
-  background: #110f0c38;
+  background: #110f0c4d;
+}
+/* The Palace page has no text over the room: no veil. */
+.room-scene[data-renderer="webgl"][data-palace]::after {
+  background: none;
 }
 
 .sidebar-shell {

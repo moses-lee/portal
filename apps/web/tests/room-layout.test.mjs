@@ -67,6 +67,9 @@ test("the camera is a three-quarter view; portrait screens pull back, rise and f
   assert.ok(tall.pitch > wide.pitch);
   assert.ok(tall.yaw < wide.yaw);
   assert.ok(tall.target[2] < wide.target[2], "aims nearer the back wall");
+  const strip = cameraPose(0.46, true);
+  assert.ok(strip.target[1] > tall.target[1] && strip.target[2] < tall.target[2], "the phone strip aims up at the window");
+  assert.deepEqual(cameraPose(1.6, true), wide, "only phones have the strip");
   const [, y, z] = cameraPosition(wide);
   assert.ok(y > wide.target[1] && z > wide.target[2], "above and in front of the room");
 });

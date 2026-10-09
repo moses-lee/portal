@@ -9,6 +9,7 @@ import { ANCHORS, furniture } from "../layout-slots";
 import { SPOTS } from "../live";
 import { reportRoom } from "../report";
 import { CorkboardFrame, PINBOARD } from "./Corkboard";
+import { CHAIR } from "./Lamp";
 import { matteMaterial, palette, ROUGHNESS } from "./materials";
 import { Soft } from "./Shell";
 
@@ -281,21 +282,30 @@ function Ladder() {
 const nookShade = new MeshStandardMaterial({ color: palette.shade, emissive: "#ffc77a", emissiveIntensity: 0.55, roughness: ROUGHNESS, side: DoubleSide });
 
 /** The reading nook in the front-left corner: an armchair, a floor lamp and a side table. */
+/** The nook's armchair (the kit's read as a beanbag in one flat colour; these primitives keep its arms and cushion). */
+function Armchair({ fabric }: { fabric: string }) {
+  return (
+    <>
+      <Soft size={[0.72, 0.18, 0.66]} position={[0, 0.3, 0]} color={fabric} radius={0.06} />
+      <Soft size={[0.62, 0.12, 0.56]} position={[0, 0.44, 0.04]} color="#c97a63" radius={0.05} />
+      <Soft size={[0.72, 0.62, 0.16]} position={[0, 0.66, -0.27]} color={fabric} radius={0.07} />
+      {[-1, 1].map((side) => (
+        <Soft key={side} size={[0.13, 0.3, 0.62]} position={[side * 0.33, 0.52, 0.02]} color={fabric} radius={0.05} />
+      ))}
+      {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Soft key={`${sx}:${sz}`} size={[0.05, 0.2, 0.05]} position={[sx * 0.3, 0.1, sz * 0.27]} color={palette.wood} radius={0.01} />))}
+    </>
+  );
+}
+
 function ReadingNook() {
   const [x, , z] = ANCHORS.floor;
   const fabric = "#b5654f";
   return (
     <group>
       <group position={[x, 0, z]} rotation={[0, Math.PI / 2 - 0.35, 0]}>
-        <Soft size={[0.72, 0.18, 0.66]} position={[0, 0.3, 0]} color={fabric} radius={0.06} />
-        <Soft size={[0.62, 0.12, 0.56]} position={[0, 0.44, 0.04]} color="#c97a63" radius={0.05} />
-        <Soft size={[0.72, 0.62, 0.16]} position={[0, 0.66, -0.27]} color={fabric} radius={0.07} />
-        {[-1, 1].map((side) => (
-          <Soft key={side} size={[0.13, 0.3, 0.62]} position={[side * 0.33, 0.52, 0.02]} color={fabric} radius={0.05} />
-        ))}
-        {[-1, 1].flatMap((sx) => [-1, 1].map((sz) => <Soft key={`${sx}:${sz}`} size={[0.05, 0.2, 0.05]} position={[sx * 0.3, 0.1, sz * 0.27]} color={palette.wood} radius={0.01} />))}
+        <Armchair fabric={fabric} />
       </group>
-      <group position={[x - 0.45, 0, z + 0.62]}>
+      <group position={[x - 0.45, 0, z - 0.42]}>
         <mesh position={[0, 0.02, 0]} material={matteMaterial(palette.brass)} castShadow>
           <cylinderGeometry args={[0.14, 0.16, 0.04, 14]} />
         </mesh>
@@ -306,7 +316,7 @@ function ReadingNook() {
           <cylinderGeometry args={[0.13, 0.22, 0.26, 16, 1, true]} />
         </mesh>
       </group>
-      <group position={[x - 0.2, 0, z - 0.62]}>
+      <group position={[x + 0.05, 0, z + 0.66]}>
         <mesh position={[0, 0.55, 0]} material={matteMaterial(palette.woodLight)} castShadow receiveShadow>
           <cylinderGeometry args={[0.22, 0.22, 0.04, 18]} />
         </mesh>
@@ -411,9 +421,8 @@ function Cat({ reducedMotion }: { reducedMotion: boolean }) {
     node.scale.y = reducedMotion ? 1 : 1 + Math.sin(clock.elapsedTime * 1.6) * 0.04;
   });
   const fur = "#d98e4a";
-  const chair = { x: ROOM.window.x + 0.15, z: ROOM.back + 0.45 + 0.62 };
   return (
-    <group position={[chair.x, 0.49, chair.z]} rotation={[0, 0.9, 0]}>
+    <group position={[CHAIR.x, CHAIR.seat - 0.01, CHAIR.z]} rotation={[0, CHAIR.turn + 0.65, 0]}>
       <group ref={body}>
         <mesh position={[0, 0.07, 0]} scale={[1.25, 0.7, 0.95]} material={matteMaterial(fur)} castShadow>
           <sphereGeometry args={[0.13, 14, 10]} />

@@ -6,6 +6,7 @@ import { BoxGeometry, DoubleSide, InstancedMesh, MeshStandardMaterial, Object3D,
 import type { LampState } from "../live";
 import { ROOM } from "../layout";
 import { Hotspot } from "./Hotspot";
+import { KitMesh, WithKit } from "./kit";
 import { markForUpload, matteMaterial, palette, ROUGHNESS, setGlow } from "./materials";
 import { Soft } from "./Shell";
 
@@ -17,6 +18,12 @@ const LEVELS: Record<LampState, { light: number; glow: number }> = {
 };
 
 const PAPERS = 4;
+
+/**
+ * Portal's chair: pulled out from the desk and turned side-on to the room, so its seat (where the
+ * year's cat sleeps) shows from the camera instead of hiding behind the backrest.
+ */
+export const CHAIR = { x: ROOM.window.x + 0.2, z: ROOM.back + 0.45 + 0.72, turn: -1.2, seat: 0.42 } as const;
 const scratch = new Object3D();
 
 /** The desk's papers: where each sheet rests, and how it turns. */
@@ -88,12 +95,21 @@ export default function Lamp({ state, reducedMotion }: { state: LampState; reduc
   return (
     <group>
       <primitive object={papers} position={[x - 0.05, 0.795, z + 0.05]} castShadow receiveShadow frustumCulled={false} />
-      <group position={[x + 0.15, 0, z + 0.62]} rotation={[0, 0.25, 0]}>
-        <Soft size={[0.5, 0.06, 0.48]} position={[0, 0.46, 0]} color={palette.chair} />
-        <Soft size={[0.5, 0.52, 0.06]} position={[0, 0.76, 0.22]} color={palette.chair} />
-        {legs.map(([lx, lz]) => (
-          <Soft key={`${lx}:${lz}`} size={[0.05, 0.44, 0.05]} position={[lx * 0.26, 0.22, lz * 0.75]} color={palette.wood} radius={0.012} />
-        ))}
+      <group position={[CHAIR.x, 0, CHAIR.z]} rotation={[0, CHAIR.turn, 0]}>
+        <WithKit
+          fallback={
+            <>
+              <Soft size={[0.5, 0.06, 0.48]} position={[0, CHAIR.seat - 0.03, 0]} color={palette.chair} />
+              <Soft size={[0.5, 0.52, 0.06]} position={[0, CHAIR.seat + 0.27, 0.22]} color={palette.chair} />
+              {legs.map(([lx, lz]) => (
+                <Soft key={`${lx}:${lz}`} size={[0.05, CHAIR.seat - 0.06, 0.05]} position={[lx * 0.26, (CHAIR.seat - 0.06) / 2, lz * 0.75]} color={palette.wood} radius={0.012} />
+              ))}
+            </>
+          }
+        >
+          {/* The kit chair's seat is at 0.49 of its height units. */}
+          <KitMesh piece="chair_A_wood" color={palette.chair} rotation={[0, Math.PI, 0]} scale={CHAIR.seat / 0.49} />
+        </WithKit>
       </group>
       <group position={[x - 0.62, 0.795, z - 0.1]}>
         <mesh position={[0, 0.02, 0]} castShadow material={matteMaterial(palette.brass)}>

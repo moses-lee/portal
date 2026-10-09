@@ -76,7 +76,7 @@ function createSkyRig() {
       uZenith: { value: new Color() },
       uHorizon: { value: new Color() },
       uGround: { value: new Color("#1f2a22") },
-      uHorizonAt: { value: -0.42 },
+      uHorizonAt: { value: -0.56 },
       uFlash: { value: 0 },
     },
   });

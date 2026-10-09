@@ -68,7 +68,7 @@ export function shellMaterial(color: string): MeshStandardMaterial {
             float nearBack = 1.0 - smoothstep(0.0, reach, vRoomWorld.z - (${ROOM.back.toFixed(2)}));
             // A surface is "near" its own plane everywhere; the corner is where a second one is near too.
             float occlusion = clamp(nearFloor + nearLeft + nearBack - max(nearFloor, max(nearLeft, nearBack)), 0.0, 1.0);
-            diffuseColor.rgb *= 1.0 - 0.4 * occlusion * occlusion;
+            diffuseColor.rgb *= 1.0 - 0.5 * occlusion * occlusion;
           }`,
         );
     };

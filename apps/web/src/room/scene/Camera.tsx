@@ -21,7 +21,8 @@ export default function CameraRig({ reducedMotion, onChange }: { reducedMotion: 
   const get = useThree((state) => state.get);
   const size = useThree((state) => state.size);
   const layout = useSyncExternalStore(subscribeLayout, readLayout, readLayout);
-  const pose = useMemo(() => cameraPose(size.width / Math.max(1, size.height)), [size.width, size.height]);
+  const strip = layout.covers.some((cover) => cover.kind === "focus");
+  const pose = useMemo(() => cameraPose(size.width / Math.max(1, size.height), strip), [size.width, size.height, strip]);
 
   useLayoutEffect(() => {
     if (!size.width || !size.height) return;

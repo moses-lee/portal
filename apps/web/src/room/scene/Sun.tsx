@@ -14,9 +14,16 @@ const LOWEST = 4 * DEGREE;
 /** With the moon down too, a cool light from high over the window. */
 const NO_MOON = { altitude: 35 * DEGREE, azimuth: 0 };
 const DISTANCE = 20;
-/** The shadow camera frames the room and no more (the walls run on past it). */
-const FRUSTUM = 7.5;
+/** The shadow camera frames the room and the floor the camera sees beyond its open sides. */
+const FRUSTUM = 10;
 const WARM_WHITE = new Color("#fff1dc");
+/** The sun's and the sky's strength at full day: the room is lit mostly by the sky, so it reads cream, not grey. */
+const KEY = 3.4;
+const FILL = 5.2;
+/** At night the fill stays at this, cool from the night sky's colour: a room you can still see by. */
+const NIGHT_FILL = 0.95;
+const MOON_KEY = 0.9;
+const NIGHT_SKY = new Color("#8f9cc8");
 
 /**
  * The sun (docs/PALACE.md, Lighting): one shadow-casting directional light placed from the sun's
@@ -35,11 +42,14 @@ export default function Sun({ clock, condition }: { clock: SunClock; condition: 
   const [x, y, z] = directionFrom(Math.max(LOWEST, body.altitude), body.azimuth);
   const rgb = kelvinToRgb(ramp.kelvin);
   const through = sunThrough(condition);
-  const moonlight = ramp.moon ? 0.45 + 0.55 * clock.moon.fraction : 1;
-  const intensity = ramp.sun * 3.2 * through * moonlight;
+  // The moon is a stronger key than the ramp's dim tail would make it, so its light through the window still reads.
+  const moonlight = ramp.moon ? MOON_KEY * (0.5 + 0.5 * clock.moon.fraction) : 0;
+  const intensity = ramp.moon ? Math.max(ramp.sun * KEY, moonlight) * through : ramp.sun * KEY * through;
   // The fill is the sky's colour washed towards warm white, so the room reads cream by day, not blue.
-  const sky = `#${new Color(skyColours(clock.sun.altitude, condition).zenith).lerp(WARM_WHITE, 0.6).getHexString()}`;
-  const fill = ramp.sky * 3.2 * (1 + 0.35 * (1 - through));
+  // At night it turns to a moonlit blue-grey over the last of the twilight.
+  const dusk = Math.min(1, Math.max(0, (clock.sun.altitude / DEGREE + 8) / 8));
+  const sky = `#${NIGHT_SKY.clone().lerp(new Color(skyColours(clock.sun.altitude, condition).zenith).lerp(WARM_WHITE, 0.6), dusk * dusk * (3 - 2 * dusk)).getHexString()}`;
+  const fill = Math.max(NIGHT_FILL, ramp.sky * FILL) * (1 + 0.35 * (1 - through));
   const mapSize = small ? 512 : 1024;
 
   useEffect(() => {
