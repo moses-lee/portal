@@ -21,6 +21,8 @@ export const MAX_ACTIVITY_LIMIT = 500;
 export interface ActivityStore {
   append(entry: Omit<ActivityEntry, "id">): Promise<ActivityEntry>;
   list(filter?: ActivityFilter): Promise<ActivityEntry[]>;
+  /** How many entries were recorded at or after `at` (the room's hearth counts the last hour). */
+  countSince(at: number): Promise<number>;
 }
 
 export function clampLimit(limit: number | undefined): number {
@@ -53,5 +55,6 @@ export function createMemoryActivityStore(): ActivityStore {
       }
       return found;
     },
+    countSince: async (at) => entries.filter((entry) => entry.at >= at).length,
   };
 }

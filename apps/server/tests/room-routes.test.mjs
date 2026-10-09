@@ -12,9 +12,12 @@ const EMPTY_CENSUS = {
   sessionsEver: 0, memoryActive: 0, memoryInbox: 0, watches: { active: 0, finished: 0, fires: 0, ever: 0 }, grants: 0, activityLastHour: 0, since: null,
 };
 
+/** A day before the fake clock's start, so no milestone counts the days since. */
+const SESSION_AT = 1_700_000_000_000 - 86_400_000;
+
 function sessionRecord(id) {
   return {
-    id, agentId: "claude", agentName: "Claude Code", cwd: "/repos/x", projectId: "p1", createdAt: 1, lastActiveAt: 1, title: null,
+    id, agentId: "claude", agentName: "Claude Code", cwd: "/repos/x", projectId: "p1", createdAt: SESSION_AT, lastActiveAt: SESSION_AT, title: null,
     upstreamId: `up-${id}`, state: { modes: null, configOptions: [], commands: [] }, lost: null, turnOpen: false,
   };
 }
@@ -46,7 +49,7 @@ async function createApp(t, { orchestrator = false, sessions = [], env = {} } = 
   return { app, fake, clock };
 }
 
-test("GET /api/room answers source none at once, then the resolved environment; the census stub counts sessions", async (t) => {
+test("GET /api/room answers source none at once, then the resolved environment, with the census", async (t) => {
   await withApp(t, { sessions: ["s1", "s2"] }, async ({ app, fake }) => {
     const gate = Promise.withResolvers();
     fake.state.gate = gate.promise;
@@ -55,7 +58,7 @@ test("GET /api/room answers source none at once, then the resolved environment; 
     const state = first.json();
     assert.equal(state.layoutVersion, 1);
     assert.deepEqual(state.milestones, []);
-    assert.deepEqual(state.census, { ...EMPTY_CENSUS, sessionsEver: 2 });
+    assert.deepEqual(state.census, { ...EMPTY_CENSUS, sessionsEver: 2, since: SESSION_AT }, "since is the oldest session's createdAt");
     assert.equal(state.environment.source, "none");
     assert.deepEqual([state.environment.latitude, state.environment.longitude, state.environment.timezone], [52.52, 13.4, "Europe/Berlin"]);
     assert.equal(state.environment.weather, null);
@@ -108,7 +111,7 @@ test("loadConfig reads PORTAL_LOCATION and PORTAL_ROOM_OFFLINE", () => {
 });
 
 test("the portal stream opens with the room's state and pushes it when the environment changes", async (t) => {
-  await withApp(t, { orchestrator: true }, async ({ app, fake }) => {
+  await withApp(t, { orchestrator: true }, async ({ app, fake, clock }) => {
     const ctx = appContext(app);
     await ctx.orchestrator.ready;
     const gate = Promise.withResolvers();
@@ -147,7 +150,8 @@ test("the portal stream opens with the room's state and pushes it when the envir
     do event = await next(); while (event.type !== "room");
     assert.equal(event.state.environment.source, "ip");
     assert.equal(event.state.environment.weather.condition, "rain");
-    assert.deepEqual(event.state.census, EMPTY_CENSUS);
+    // The orchestrator logs on its own as the stream opens (the presence refresh), so the hearth's count is not pinned here.
+    assert.deepEqual({ ...event.state.census, activityLastHour: 0 }, { ...EMPTY_CENSUS, since: clock.now() }, "without sessions since is the first count's time");
     controller.abort();
   });
 });

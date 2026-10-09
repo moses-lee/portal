@@ -110,6 +110,15 @@ function activityBehaviour(label, open) {
     assert.deepEqual((await store.list({ threadId: "main" })).map((e) => e.id), [b.id, a.id]);
     assert.deepEqual((await store.list({ runId: "run1" })).map((e) => e.id), [c.id, b.id]);
   });
+
+  test(`${label}: countSince counts the entries at or after a time`, async (t) => {
+    const store = await open(t);
+    assert.equal(await store.countSince(0), 0);
+    for (const at of [1, 2, 3]) await store.append(entry("tool.call", at));
+    assert.equal(await store.countSince(0), 3);
+    assert.equal(await store.countSince(2), 2);
+    assert.equal(await store.countSince(4), 0);
+  });
 }
 
 activityBehaviour("memory activity", async () => createMemoryActivityStore());

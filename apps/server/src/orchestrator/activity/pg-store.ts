@@ -1,5 +1,5 @@
 /** The activity log in Postgres (`activity_log`). Rows are only ever inserted. */
-import { and, desc, eq, like, lt, or, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, like, lt, or, type SQL } from "drizzle-orm";
 import type { ActivityEntry } from "@portal/contracts/activity";
 import type { Db } from "../../db/client.ts";
 import { stripNul } from "../../db/sanitize.ts";
@@ -39,6 +39,10 @@ export function createPgActivityStore({ db }: { db: Db }): ActivityStore {
       const rows = await db.select().from(activityLog).where(where.length ? and(...where) : undefined)
         .orderBy(desc(activityLog.id)).limit(clampLimit(filter.limit));
       return rows.map(fromRow);
+    },
+    async countSince(at) {
+      const [row] = await db.select({ n: count() }).from(activityLog).where(gte(activityLog.at, at));
+      return row?.n ?? 0;
     },
   };
 }
