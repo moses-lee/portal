@@ -8,6 +8,8 @@ import {
   driftYaw,
   interestPoint,
   parallax,
+  readLayout,
+  registerCover,
   viewOffset,
 } from "../src/room/layout.ts";
 import { looksLowPower, targetFps, CADENCE_SAMPLES } from "../src/room/loop.ts";
@@ -101,4 +103,29 @@ test("Low Power Mode is a ~30 Hz animation-frame cadence over a full window", ()
   assert.equal(looksLowPower(fill(33.3).slice(1)), false, "needs a full window");
   // A few long frames on a 60 Hz display do not count.
   assert.equal(looksLowPower([...fill(16.7).slice(10), ...Array(10).fill(34)]), false);
+});
+
+test("a cover's element leaves the registry when its registration is undone, and the room stops making room for it", () => {
+  // Just enough browser for the registry: a window, a ResizeObserver, frames run on demand.
+  const frames = [];
+  globalThis.window = { innerWidth: 1440, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+  };
+  globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+  const flush = () => frames.splice(0).forEach((callback) => callback(0));
+  try {
+    const column = { getBoundingClientRect: () => ({ left: 400, top: 0, width: 720, height: 900 }) };
+    const unregister = registerCover(column, "column");
+    flush();
+    assert.deepEqual(readLayout().covers, [{ kind: "column", rect: { left: 400, top: 0, width: 720, height: 900 } }]);
+    unregister();
+    flush();
+    assert.deepEqual(readLayout().covers, []);
+  } finally {
+    delete globalThis.window;
+    delete globalThis.ResizeObserver;
+    delete globalThis.requestAnimationFrame;
+  }
 });

@@ -4,7 +4,9 @@
  *
  * The maths (`interestPoint`, `viewOffset`, `cameraPose`) is pure and unit-tested; the registry
  * below it measures the reported elements only when one of them resizes or the window does, never
- * per frame. Parts report through `roomCover.<kind>` as a callback ref:
+ * per frame. Parts report through `roomCover(kind)` as a callback ref on their own element, or
+ * `useRoomCover(kind)` (`useRoomCover.ts`) where the ref passes through another component's ref
+ * merger, which may drop a callback ref's cleanup:
  *
  * - `left`: covers the viewport from its left edge (the sidebar).
  * - `right`: covers it from the right (the GitHub inspector, the tracked-sessions panel).

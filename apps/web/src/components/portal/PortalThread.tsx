@@ -25,7 +25,7 @@ import { daySections, formatDateTime } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
 import { panelSessionFromSearch } from "@/lib/session-routes";
-import { roomCover } from "@/room/layout";
+import { useRoomCover } from "@/room/useRoomCover";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
@@ -185,6 +185,8 @@ export default function PortalThread({
     return { sessionId: focus.sessionId, tabId: focus.tabId, paneId: focus.paneId };
   });
   const routes = useMemo(() => threadRoutes(threadId), [threadId]);
+  /** The message column covers the room's middle (docs/PALACE.md, Camera). */
+  const column = useRoomCover<HTMLDivElement>("column");
   const key = threadDraftKey(threadId);
   const [ack] = useState(() => new Acknowledgement());
   const transport = useMemo(
@@ -415,7 +417,7 @@ export default function PortalThread({
               </div>
             )}
             <MessageScrollerContent
-              ref={roomCover("column")}
+              ref={column}
               className="conversation-content !gap-8"
               role="log"
               aria-live="off"

@@ -45,7 +45,7 @@ import dynamic from "next/dynamic";
 const DiffView = dynamic(() => import("./DiffView"));
 import type { Block, History, ToolBlock, Turn } from "@/lib/transcript";
 import { daySections } from "@/lib/orchestrator/format";
-import { roomCover } from "@/room/layout";
+import { useRoomCover } from "@/room/useRoomCover";
 
 const markdownComponents = {
   pre: CodeBlock,
@@ -520,6 +520,8 @@ export default function Conversation({
 }) {
   /** Where the day dividers go, and the day each turn sits under (0 before the first known time). */
   const days = useMemo(() => daySections(history.turns.map(turnTime)), [history.turns]);
+  /** The message column covers the room's middle (docs/PALACE.md, Camera). */
+  const column = useRoomCover<HTMLDivElement>("column");
   return (
     <MessageScrollerProvider
       autoScroll
@@ -562,7 +564,7 @@ export default function Conversation({
             </div>
           )}
           <MessageScrollerContent
-            ref={roomCover("column")}
+            ref={column}
             className="conversation-content !gap-10"
             role="log"
             aria-live="off"
