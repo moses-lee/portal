@@ -247,15 +247,15 @@
     animation: none;
   }
 }
-/* Revision 3: lighter than built (54 % and 30 %), as Moses chose from a comparison: 40 % by day, the rest scaled by the same 0.74. */
+/* Revision 3: lighter than built (54 % and 30 %), as Moses chose from a comparison: 30 % by day, the rest scaled by the same 0.56. */
 .room-scene::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: #15171366;
+  background: #1517134d;
 }
 .room-scene[data-scene="night"]::after {
-  background: #110f0c38;
+  background: #110f0c2b;
 }
 /* The Palace page has no text over the room: no veil. */
 .room-scene[data-view="palace"]::after {
@@ -757,16 +757,16 @@
    * lines sit. Where the workspace shows the room strip, its 72 px keep the desktop's veil.
    */
   .room-scene:not([data-view="palace"])::after {
-    background: linear-gradient(180deg, #151713a1 0, #15171396 50%, #15171385 100%);
+    background: linear-gradient(180deg, #15171378 0, #15171370 50%, #15171363 100%);
   }
   .room-scene[data-scene="night"]:not([data-view="palace"])::after {
-    background: linear-gradient(180deg, #110f0c85 0, #110f0c7a 50%, #110f0c66 100%);
+    background: linear-gradient(180deg, #110f0c63 0, #110f0c5c 50%, #110f0c4d 100%);
   }
   .portal-shell:has([data-room-strip]) .room-scene:not([data-view="palace"])::after {
-    background: linear-gradient(180deg, #15171366 0, #15171366 72px, #151713a1 72px, #15171396 50%, #15171385 100%);
+    background: linear-gradient(180deg, #1517134d 0, #1517134d 72px, #15171378 72px, #15171370 50%, #15171363 100%);
   }
   .portal-shell:has([data-room-strip]) .room-scene[data-scene="night"]:not([data-view="palace"])::after {
-    background: linear-gradient(180deg, #110f0c38 0, #110f0c38 72px, #110f0c85 72px, #110f0c7a 50%, #110f0c66 100%);
+    background: linear-gradient(180deg, #110f0c2b 0, #110f0c2b 72px, #110f0c63 72px, #110f0c5c 50%, #110f0c4d 100%);
   }
   button[data-size="icon"] {
     min-width: 40px;
