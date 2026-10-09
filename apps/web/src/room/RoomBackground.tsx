@@ -31,7 +31,7 @@ import {
   type GrowthScene,
 } from "./growth";
 import { useRoomHost } from "./host";
-import { readLayout, subscribeLayout } from "./layout";
+import { readLayout, registerStage, subscribeLayout } from "./layout";
 import {
   backgroundRuns,
   describeObject,
@@ -48,7 +48,7 @@ import { hideCard, pinCard, startRoomPointer, waveRobot, WAVE_MS } from "./point
 import { onRoomReport, readRoomReport } from "./report";
 import type { RoomLiveScene } from "./RoomCanvas";
 // The extension is explicit: on a case-insensitive disk "./Sketch" could resolve to sketch.ts.
-import Sketch from "./Sketch.tsx";
+import Sketch, { skipSketchDrawIn } from "./Sketch.tsx";
 import { peekSnapshot, snapshotEligibility, snapshotRead, SNAPSHOT_READ_WAIT_MS, type SnapshotRecord } from "./snapshot.ts";
 import SnapshotImage from "./SnapshotImage";
 import { sceneForAltitude, skyColours } from "./sun";
@@ -154,20 +154,31 @@ let pageChoice: SnapshotRecord | null | undefined;
 /** The snapshot has stood in once (the canvas drew and faded in over it) or cannot (a lost context, a failure): only the sketch from now on. */
 let snapshotSpent = false;
 
+/** The viewport's aspect from the layout registry's measure; 0 before the first. */
+function readAspect(): number {
+  const { width, height } = readLayout();
+  return width > 0 && height > 0 ? width / height : 0;
+}
+const noAspect = () => 0;
+
 /**
  * The snapshot to show before the room draws, or null for the sketch; undefined while it is still
- * being chosen. Chosen once the page has hydrated, the scene is known, the layout registry has its
- * first measure and the read has answered; a read that has not answered `SNAPSHOT_READ_WAIT_MS`
- * after hydration means the sketch, and its later answer is not used.
+ * being chosen. Chosen once the page has hydrated, the layout registry has its first measure and
+ * the read has answered; a read that has not answered `SNAPSHOT_READ_WAIT_MS` after hydration
+ * means the sketch, and its later answer is not used. The registry is read only until the choice
+ * is made, so the background does not re-render with every layout change after it. The scene the
+ * record is checked against is worked out over the record's own coordinates (`snapshotEligibility`),
+ * not taken from this page's sun clock, which starts from the browser zone's guess.
  */
-function useSnapshotChoice(hydrated: boolean, scene: string): SnapshotRecord | null | undefined {
-  const layout = useSyncExternalStore(subscribeLayout, readLayout, readLayout);
+function useSnapshotChoice(hydrated: boolean): SnapshotRecord | null | undefined {
   /** The read's answer and when it came (the record's age is taken then). */
   const [answer, setAnswer] = useState<{ record: SnapshotRecord | null; at: number } | undefined>(() => {
     const record = pageChoice === undefined ? peekSnapshot() : null;
     return record === undefined ? undefined : { record, at: Date.now() };
   });
   const [choice, setChoice] = useState<SnapshotRecord | null | undefined>(() => (snapshotSpent ? null : pageChoice));
+  const choosing = choice === undefined;
+  const aspect = useSyncExternalStore(choosing ? subscribeLayout : subscribeNever, choosing ? readAspect : noAspect, noAspect);
   const waiting = hydrated && answer === undefined;
   useEffect(() => {
     if (!waiting) return;
@@ -183,13 +194,15 @@ function useSnapshotChoice(hydrated: boolean, scene: string): SnapshotRecord | n
       clearTimeout(timer);
     };
   }, [waiting]);
-  if (choice === undefined && hydrated && answer !== undefined && scene !== "pending" && layout.width > 0 && layout.height > 0) {
+  if (choosing && hydrated && answer !== undefined && aspect > 0) {
     const { record, at } = answer;
-    const eligible = record !== null && snapshotEligibility(record, { layoutVersion: LAYOUT_VERSION, at, scene, aspect: layout.width / layout.height }) === "eligible";
+    const eligible = record !== null && snapshotEligibility(record, { layoutVersion: LAYOUT_VERSION, at, aspect }) === "eligible";
     setChoice(eligible ? record : null);
   }
   useEffect(() => {
     if (choice !== undefined && pageChoice === undefined) pageChoice = choice;
+    // The room has been seen: a sketch that follows the snapshot appears complete, without the draw-in.
+    if (choice) skipSketchDrawIn();
   }, [choice]);
   return choice;
 }
@@ -365,11 +378,18 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   /** The canvas will mount: its chunk starts loading now, not when the page has settled. */
   const coming = webgl && !lost && !reducedTransparency;
   useEffect(() => {
-    if (coming) void loadRoomCanvas();
+    // A failed download is the lazy component's to handle (the boundary, then the sketch), not an unhandled rejection.
+    if (coming) loadRoomCanvas().catch(() => {});
   }, [coming]);
+  /** The canvas has drawn a frame (its report's `drawn`): it fades in, and the placeholder goes after. */
+  const [drawn, setDrawn] = useState(false);
   /** The canvas is mounted (also while its context is lost, waiting to be restored). */
   const mounted = coming && !!clock && ready;
-  const drawing = mounted && !contextLost;
+  /**
+   * The canvas is on screen: it has drawn (before that it is transparent, and no frame has updated
+   * the objects' matrices for the raycast) and its context is not lost. Hover cards and clicks only then.
+   */
+  const drawing = mounted && !contextLost && drawn;
   useEffect(() => {
     if (!drawing) return;
     const waves = new Set<ReturnType<typeof setTimeout>>();
@@ -405,8 +425,8 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   const baseJson = JSON.stringify(base);
   const liveJson = JSON.stringify({ ...liveSummary(data), ...growthSummary(growthData) });
   const element = useRef<HTMLDivElement>(null);
-  /** The canvas has drawn a frame (its report's `drawn`): it fades in, and the placeholder goes after. */
-  const [drawn, setDrawn] = useState(false);
+  // The layout registry measures the viewport as this fixed element's box, the size the canvas takes.
+  useLayoutEffect(() => (element.current ? registerStage(element.current) : undefined), []);
   useLayoutEffect(() => {
     const merged = { ...(JSON.parse(baseJson) as object), ...(JSON.parse(liveJson) as object) };
     const write = (report: Record<string, unknown>) => {
@@ -427,6 +447,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   const [spent, setSpent] = useState(snapshotSpent);
   const spend = useCallback(() => {
     snapshotSpent = true;
+    skipSketchDrawIn();
     setSpent(true);
   }, []);
   useEffect(() => {
@@ -437,7 +458,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     }, FADE_MS);
     return () => clearTimeout(timer);
   }, [drawn, spend]);
-  const choice = useSnapshotChoice(hydrated, scene);
+  const choice = useSnapshotChoice(hydrated);
   const snapshot = renderer === "webgl" && !spent && choice ? choice : null;
   /**
    * What is under the canvas (docs/PALACE.md, The veil): nothing before hydration (the ground), then

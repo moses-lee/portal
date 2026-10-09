@@ -20,7 +20,11 @@
 export type Rect = { left: number; top: number; width: number; height: number };
 export type CoverKind = "left" | "right" | "column" | "focus";
 export type RoomLayout = {
-  /** The viewport, in CSS pixels (the canvas fills it). */
+  /**
+   * The viewport, in CSS pixels: the room's fixed element's box (`registerStage`), which the canvas
+   * fills and R3F measures, so the camera, the sketch and the snapshot share one size; before it
+   * registers, the root's client size (without a classic scrollbar, unlike `innerWidth`).
+   */
   width: number;
   height: number;
   covers: readonly { kind: CoverKind; rect: Rect }[];
@@ -332,6 +336,8 @@ const listeners = new Set<() => void>();
 let snapshot: RoomLayout = { width: 0, height: 0, covers: [] };
 let observer: ResizeObserver | null = null;
 let frame = 0;
+/** The room's fixed element (`.room-scene`), whose box is the viewport the canvas fills. */
+let stage: Element | null = null;
 
 function sameLayout(a: RoomLayout, b: RoomLayout): boolean {
   if (a.width !== b.width || a.height !== b.height || a.covers.length !== b.covers.length) return false;
@@ -354,10 +360,20 @@ function measure() {
     const box = element.getBoundingClientRect();
     if (box.width > 0 && box.height > 0) covers.push({ kind, rect: { left: box.left, top: box.top, width: box.width, height: box.height } });
   }
-  const next = { width: window.innerWidth, height: window.innerHeight, covers };
+  const next = { ...viewportSize(), covers };
   if (sameLayout(snapshot, next)) return;
   snapshot = next;
   for (const listener of [...listeners]) listener();
+}
+
+/** The viewport the canvas fills: the stage's box, else the root's client size. */
+function viewportSize(): { width: number; height: number } {
+  if (stage) {
+    const box = stage.getBoundingClientRect();
+    if (box.width > 0 && box.height > 0) return { width: box.width, height: box.height };
+  }
+  const root = document.documentElement;
+  return { width: root.clientWidth || window.innerWidth, height: root.clientHeight || window.innerHeight };
 }
 
 /** Measure on the next frame, once however many changes arrive before it. */
@@ -374,6 +390,22 @@ export function registerCover(element: Element, kind: CoverKind): () => void {
   schedule();
   return () => {
     entries.delete(element);
+    observer?.unobserve(element);
+    schedule();
+  };
+}
+
+/**
+ * Reports `element` (the room's fixed `.room-scene`) as the viewport the canvas fills, measured
+ * whenever it resizes, until the returned function is called.
+ */
+export function registerStage(element: Element): () => void {
+  stage = element;
+  observer ??= new ResizeObserver(schedule);
+  observer.observe(element);
+  schedule();
+  return () => {
+    if (stage === element) stage = null;
     observer?.unobserve(element);
     schedule();
   };

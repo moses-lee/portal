@@ -16,6 +16,7 @@ import {
   projectPoint,
   readLayout,
   registerCover,
+  registerStage,
   viewOffset,
 } from "../src/room/layout.ts";
 import { looksLowPower, targetFps, CADENCE_SAMPLES } from "../src/room/loop.ts";
@@ -190,6 +191,7 @@ test("a cover's element leaves the registry when its registration is undone, and
   // Just enough browser for the registry: a window, a ResizeObserver, frames run on demand.
   const frames = [];
   globalThis.window = { innerWidth: 1440, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { documentElement: { clientWidth: 1440, clientHeight: 900 } };
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
@@ -206,6 +208,40 @@ test("a cover's element leaves the registry when its registration is undone, and
     assert.deepEqual(readLayout().covers, []);
   } finally {
     delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.ResizeObserver;
+    delete globalThis.requestAnimationFrame;
+  }
+});
+
+test("the registry's viewport is the room's fixed element, the size the canvas takes, not the window's inner size", () => {
+  const frames = [];
+  // A classic scrollbar: the window is 1440 wide, the root and the fixed element 1425.
+  globalThis.window = { innerWidth: 1440, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { documentElement: { clientWidth: 1425, clientHeight: 900 } };
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+  };
+  globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+  const flush = () => frames.splice(0).forEach((callback) => callback(0));
+  try {
+    const sidebar = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 280, height: 900 }) };
+    const unregister = registerCover(sidebar, "left");
+    flush();
+    // Before the stage registers: the root's client size.
+    assert.equal(readLayout().width, 1425);
+    const stage = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1425, height: 812 }) };
+    const unstage = registerStage(stage);
+    flush();
+    assert.deepEqual([readLayout().width, readLayout().height], [1425, 812]);
+    unstage();
+    unregister();
+    flush();
+    assert.deepEqual([readLayout().width, readLayout().height], [1425, 900]);
+  } finally {
+    delete globalThis.window;
+    delete globalThis.document;
     delete globalThis.ResizeObserver;
     delete globalThis.requestAnimationFrame;
   }

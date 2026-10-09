@@ -22,6 +22,7 @@ test("the sun clock reports suncalc's radians, the moon's phase, and the instant
   const at = Date.UTC(2026, 5, 21, 17);
   const clock = sunClock(at, newYork);
   assert.equal(clock.at, at);
+  assert.deepEqual(clock.place, newYork);
   // Near the summer solstice at local solar noon the sun is ~73° up and close to due south.
   assert.ok(Math.abs(clock.sun.altitude / DEGREE - 72.7) < 1.5, `altitude ${clock.sun.altitude / DEGREE}`);
   assert.ok(Math.abs(clock.sun.azimuth) < 0.2, `azimuth ${clock.sun.azimuth}`);

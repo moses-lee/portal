@@ -11,12 +11,14 @@
  *   until that task ends; then, asynchronously, a JPEG and one IndexedDB `put`.
  * - The read: started as this module evaluates on the client (`snapshotRead`), so it has usually
  *   answered by hydration. A record from another `LAYOUT_VERSION` is deleted.
- * - The pure parts, unit-tested: `snapshotEligibility` (layout version, age, scene, aspect),
+ * - The pure parts, unit-tested: `snapshotEligibility` (layout version, age, scene, aspect; the
+ *   scene now worked out over the coordinates the record was taken at),
  *   `snapshotPlacement` (where the stored frame lands for another viewport and view offset) and
  *   `captureSize`.
  */
 import { LAYOUT_VERSION } from "@portal/shared/room";
-import { framePose, interestPoint, layoutOffset, readLayout } from "./layout.ts";
+import { framePose, layoutOffset, readLayout } from "./layout.ts";
+import { sceneAt } from "./sun.ts";
 
 /** A snapshot older than this is not shown. */
 export const SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -49,11 +51,17 @@ export type SnapshotMeta = {
   width: number;
   height: number;
   aspect: number;
-  /** `interestPoint(readLayout())` at the capture. */
-  interest: Pixels;
   /** The camera's view offset at the capture (`layoutOffset`'s `x` and `y`, the strip's anchor included). */
   offset: Pixels;
+  /** The room's scene at the capture. */
   scene: SnapshotScene;
+  /**
+   * The coordinates the room's sun clock used at the capture (the server's, or the browser zone's
+   * before they arrived): the scene now is worked out over these, not over the next visit's first
+   * guess, which is the zone's until the room's state arrives.
+   */
+  latitude: number;
+  longitude: number;
   /** Epoch ms. */
   at: number;
 };
@@ -65,17 +73,19 @@ export type SnapshotEligibility = "eligible" | "layout" | "stale" | "scene" | "a
 /**
  * Whether a stored snapshot may stand in for the room now: the same `LAYOUT_VERSION`, under
  * `SNAPSHOT_MAX_AGE_MS` old (a record from the future, after the clock moved back, is not), the
- * current scene, and an aspect within `SNAPSHOT_ASPECT_TOLERANCE` of the viewport's (at the edge,
- * still eligible). Otherwise the first rule it fails.
+ * scene it was taken in still the scene now at the place it was taken (`sceneAt` over the record's
+ * coordinates, so the answer does not hang on where the page first guesses the room is), and an
+ * aspect within `SNAPSHOT_ASPECT_TOLERANCE` of the viewport's (at the edge, still eligible).
+ * Otherwise the first rule it fails.
  */
 export function snapshotEligibility(
-  record: Pick<SnapshotMeta, "layoutVersion" | "at" | "scene" | "aspect">,
-  now: { layoutVersion: number; at: number; scene: string; aspect: number },
+  record: Pick<SnapshotMeta, "layoutVersion" | "at" | "scene" | "aspect" | "latitude" | "longitude">,
+  now: { layoutVersion: number; at: number; aspect: number },
 ): SnapshotEligibility {
   if (record.layoutVersion !== now.layoutVersion) return "layout";
   const age = now.at - record.at;
   if (!(age >= 0 && age < SNAPSHOT_MAX_AGE_MS)) return "stale";
-  if (record.scene !== now.scene) return "scene";
+  if (record.scene !== sceneAt(now.at, record)) return "scene";
   if (!(Math.abs(record.aspect / now.aspect - 1) <= SNAPSHOT_ASPECT_TOLERANCE + 1e-12)) return "aspect";
   return "eligible";
 }
@@ -154,9 +164,9 @@ const isPixels = (value: unknown): value is Pixels =>
 function asRecord(value: unknown): SnapshotRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as SnapshotRecord;
-  const numbers = [record.layoutVersion, record.width, record.height, record.aspect, record.at];
+  const numbers = [record.layoutVersion, record.width, record.height, record.aspect, record.latitude, record.longitude, record.at];
   if (!numbers.every((each) => typeof each === "number" && Number.isFinite(each))) return null;
-  if (record.width <= 0 || record.height <= 0 || !isPixels(record.interest) || !isPixels(record.offset)) return null;
+  if (record.width <= 0 || record.height <= 0 || !isPixels(record.offset)) return null;
   if (record.scene !== "day" && record.scene !== "night") return null;
   if (typeof Blob === "undefined" || !(record.blob instanceof Blob)) return null;
   return record;
@@ -191,7 +201,7 @@ void read.then((record) => {
   answered = record;
 });
 
-/** The stored record (eligibility not checked: that needs the viewport and the scene). */
+/** The stored record (eligibility not checked: that needs the viewport and the time). */
 export function snapshotRead(): Promise<SnapshotRecord | null> {
   return read;
 }
@@ -225,9 +235,13 @@ let lastCapture = -Infinity;
  * Starts taking snapshots of a canvas that has drawn (docs/PALACE.md, The snapshot); returns the
  * stop. `capture` renders a frame without the frost, copies it with `copyFrame` and renders a
  * frosted one, in one task, returning the copy (null when the context is lost or it failed).
- * `scene` is the room's scene now. Nothing is taken under reduced transparency.
+ * `place` is the room's scene now and the coordinates its sun clock uses. Nothing is taken under
+ * reduced transparency.
  */
-export function armSnapshots(options: { capture: () => HTMLCanvasElement | null; scene: () => SnapshotScene }): () => void {
+export function armSnapshots(options: {
+  capture: () => HTMLCanvasElement | null;
+  place: () => { scene: SnapshotScene; latitude: number; longitude: number };
+}): () => void {
   if (typeof indexedDB === "undefined" || window.matchMedia("(prefers-reduced-transparency: reduce)").matches) return () => {};
   let stopped = false;
   const take = () => {
@@ -241,14 +255,16 @@ export function armSnapshots(options: { capture: () => HTMLCanvasElement | null;
     const frame = options.capture();
     if (!frame) return;
     lastCapture = now;
+    const { scene, latitude, longitude } = options.place();
     const meta: SnapshotMeta = {
       layoutVersion: LAYOUT_VERSION,
       width: layout.width,
       height: layout.height,
       aspect: layout.width / layout.height,
-      interest: interestPoint(layout),
       offset: { x: offset.x, y: offset.y },
-      scene: options.scene(),
+      scene,
+      latitude,
+      longitude,
       at: now,
     };
     frame.toBlob(

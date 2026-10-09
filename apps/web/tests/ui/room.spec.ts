@@ -75,13 +75,18 @@ test("the sketch shows while the room loads, and the canvas fades in over it", a
   await expect(room).not.toHaveAttribute("data-drawn");
   const veil = await veilOf(room);
   const window = (await sketch.getAttribute("data-window"))!.split(",").map(Number);
+  // Nothing is pointed at before the canvas has drawn: over the window, no card and no pointer.
+  await page.mouse.move(window[0], window[1]);
+  await page.waitForTimeout(200);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  expect(await page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)!).cursor, window)).not.toBe("pointer");
   await page.screenshot({ path: info.outputPath("room-held.png") });
 
   release();
   await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   expect((await summary(room)).drawn).toBe(true);
-  // The placeholder stays under the canvas while it fades in, then goes.
-  await expect(room).not.toHaveAttribute("data-placeholder", { timeout: 1_000 });
+  // The placeholder stays under the canvas while it fades in (600 ms), then goes; slack for SwiftShader.
+  await expect(room).not.toHaveAttribute("data-placeholder", { timeout: 3_000 });
   await expect(sketch).toHaveCount(0);
   expect(await veilOf(room)).toBe(veil);
   // The sketch drew the window where the room draws it.
@@ -142,13 +147,29 @@ test("a second visit shows the last frame before the room draws", async ({ page 
   await page.goto("/");
   const room = page.locator(".room-scene");
   await expect(room).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
-  // The document turns hidden, as when the tab is switched away.
+  const canvas = room.locator("canvas");
+  await expect.poll(async () => Number(await canvas.getAttribute("data-frost"))).toBeGreaterThan(0);
+  const frosted = await canvas.getAttribute("data-frost");
+  // The document turns hidden, as when the tab is switched away; the frost counts of the frames the capture renders are kept.
   await page.evaluate(() => {
+    const seen: string[] = [];
+    (window as unknown as { __frost: string[] }).__frost = seen;
+    const target = document.querySelector(".room-scene canvas")!;
+    // One task renders both frames, so one callback gets both records: each record's old value, then the attribute now.
+    new MutationObserver((records) => {
+      for (const record of records) seen.push(record.oldValue ?? "");
+      seen.push(target.getAttribute("data-frost") ?? "");
+    }).observe(target, { attributes: true, attributeFilter: ["data-frost"], attributeOldValue: true });
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect.poll(() => storedSnapshot(page), { timeout: 10_000 }).toBeGreaterThan(0);
+  // The capture drew one frame with no frost and then a frosted one: the screen is frosted again.
+  const seen = await page.evaluate(() => (window as unknown as { __frost: string[] }).__frost);
+  expect(seen).toContain("0");
+  expect(seen.at(-1)).toBe(frosted);
+  await expect(canvas).toHaveAttribute("data-frost", frosted!);
 
   const release = await holdRoomChunk(page);
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -414,6 +435,8 @@ test("a drag and a wheel on the Palace page leave the camera where it is", async
   await page.goto("/palace");
   const scene = page.locator(".room-scene");
   const camera = async () => (await live(scene)).camera ?? null;
+  // Read once the layout has settled (the first frame is drawn after the covers registered), so a late cover cannot move it under the test.
+  await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   await expect.poll(camera).not.toBeNull();
   const before = await camera();
   // The default cursor: nothing to grab.
@@ -434,6 +457,7 @@ async function expectFittedFrame(page: Page) {
   await setupPortal(page, { webgl: true });
   await page.goto("/palace");
   const scene = page.locator(".room-scene");
+  await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   await expect.poll(async () => (await live(scene)).camera ?? null).not.toBeNull();
   const { box, offset } = (await live(scene)).camera!;
   const { width, height } = page.viewportSize()!;

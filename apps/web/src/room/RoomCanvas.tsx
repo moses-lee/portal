@@ -11,6 +11,8 @@ import type { HearthLevel, LampState, RobotCrowd } from "./live";
 import { setCurrentLoop, startRoomLoop, type RoomLoop } from "./loop";
 import { clearRoomReport, reportRoom } from "./report";
 import { armSnapshots, copyFrame, type SnapshotScene } from "./snapshot.ts";
+
+type SnapshotPlace = { scene: SnapshotScene; latitude: number; longitude: number };
 import { sceneForAltitude, type SunClock } from "./sun";
 import Books from "./scene/Books";
 import CameraRig from "./scene/Camera";
@@ -53,13 +55,13 @@ const compiled = new WeakMap<WebGLRenderer, Promise<unknown>>();
 function Loop({
   reducedMotion,
   revision,
-  scene,
+  place,
   onLoop,
 }: {
   reducedMotion: boolean;
   revision: string;
-  /** The room's scene now, for the snapshot's record. */
-  scene: SnapshotScene;
+  /** The room's scene now and the coordinates its sun clock uses, for the snapshot's record. */
+  place: SnapshotPlace;
   onLoop: (loop: RoomLoop | null) => void;
 }) {
   const advance = useThree((state) => state.advance);
@@ -67,10 +69,10 @@ function Loop({
   const get = useThree((state) => state.get);
   const size = useThree((state) => state.size);
   const own = useRef<RoomLoop | null>(null);
-  const sceneRef = useRef(scene);
+  const placeRef = useRef(place);
   useEffect(() => {
-    sceneRef.current = scene;
-  }, [scene]);
+    placeRef.current = place;
+  }, [place]);
   useEffect(() => {
     const context = gl.getContext();
     let started: RoomLoop | null = null;
@@ -80,14 +82,17 @@ function Loop({
     /**
      * The snapshot's frame (docs/PALACE.md, The snapshot), in one task: a frame with no frost, its
      * copy while the drawing buffer still holds it, then a frosted frame, so the screen never shows
-     * the unfrosted one.
+     * the unfrosted one. Both render at the clock's current time (a delta of zero): a timestamp
+     * from `performance.now()` could run ahead of the loop's next rAF timestamp, and that frame
+     * would get a negative delta.
      */
     const capture = (): HTMLCanvasElement | null => {
       if (cancelled || context.isContextLost()) return null;
       let copy: HTMLCanvasElement | null = null;
+      const time = get().clock.elapsedTime;
       suspendFrost(true);
       try {
-        advance(performance.now() / 1000);
+        advance(time);
         copy = copyFrame(gl.domElement);
       } catch (error) {
         console.warn("The room's snapshot could not be taken.", error);
@@ -96,7 +101,7 @@ function Loop({
         suspendFrost(false);
       }
       try {
-        advance(performance.now() / 1000);
+        advance(time);
       } catch {
         // The loop's next frame draws it.
       }
@@ -110,11 +115,12 @@ function Loop({
       started = startRoomLoop(
         (time) => {
           if (context.isContextLost()) return;
-          advance(time / 1000);
+          // Never behind the clock, so no frame gets a negative delta.
+          advance(Math.max(time / 1000, get().clock.elapsedTime));
           if (!drawn) {
             drawn = true;
             reportRoom("drawn", true);
-            disarm = armSnapshots({ capture, scene: () => sceneRef.current });
+            disarm = armSnapshots({ capture, place: () => placeRef.current });
           }
         },
         { reducedMotion },
@@ -205,6 +211,9 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
     loop.current = started;
   }, []);
   const requestFrame = useCallback(() => loop.current?.request(), []);
+  const scene = sceneForAltitude(clock.sun.altitude);
+  const { latitude, longitude } = clock.place;
+  const place = useMemo<SnapshotPlace>(() => ({ scene, latitude, longitude }), [scene, latitude, longitude]);
   return (
     <Canvas
       frameloop="never"
@@ -229,7 +238,7 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
       <Loop
         reducedMotion={reducedMotion}
         revision={`${clock.at}:${condition}:${liveKey}:${growthKey}`}
-        scene={sceneForAltitude(clock.sun.altitude)}
+        place={place}
         onLoop={onLoop}
       />
       <color attach="background" args={["#1d1916"]} />

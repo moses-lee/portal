@@ -10,6 +10,14 @@ import type { RoomMilestone } from "@portal/contracts/room";
 /** The draw-in plays the first time a sketch shows in a page load, and never again. */
 let drawnIn = false;
 
+/**
+ * No draw-in from now on in this page load: the room has already been seen (a snapshot stood in
+ * for it), so a sketch that follows (a lost context, a failed decode) appears complete.
+ */
+export function skipSketchDrawIn() {
+  drawnIn = true;
+}
+
 const round = (value: number) => Math.round(value * 10) / 10;
 
 /**

@@ -36,6 +36,8 @@ export function roomCoordinates(
 export type SunClock = {
   /** Epoch ms the positions are for. */
   at: number;
+  /** Where they are for (the snapshot's record keeps it, so its scene can be worked out again later). */
+  place: { latitude: number; longitude: number };
   /** Radians; altitude above the horizon, azimuth from south towards west (suncalc 1.9). */
   sun: { altitude: number; azimuth: number };
   /** As the sun, plus the lit fraction (0..1) and the phase (0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter). */
@@ -50,6 +52,7 @@ export function sunClock(at: number, coordinates: { latitude: number; longitude:
   const light = SunCalc.getMoonIllumination(date);
   return {
     at,
+    place: { latitude: coordinates.latitude, longitude: coordinates.longitude },
     sun: { altitude: sun.altitude, azimuth: sun.azimuth },
     moon: { altitude: moon.altitude, azimuth: moon.azimuth, fraction: light.fraction, phase: light.phase },
   };
@@ -61,6 +64,11 @@ export const HORIZON_ALTITUDE = (-0.833 * Math.PI) / 180;
 /** What `data-scene` says: day from sunrise to sunset, night otherwise. */
 export function sceneForAltitude(altitude: number): "day" | "night" {
   return altitude > HORIZON_ALTITUDE ? "day" : "night";
+}
+
+/** The scene (`sceneForAltitude`) over `coordinates` at `at`. */
+export function sceneAt(at: number, coordinates: { latitude: number; longitude: number }): "day" | "night" {
+  return sceneForAltitude(SunCalc.getPosition(new Date(at), coordinates.latitude, coordinates.longitude).altitude);
 }
 
 /** The start of the next minute after `now`: the sun clock ticks on minute boundaries. */

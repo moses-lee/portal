@@ -10,12 +10,16 @@ import {
   snapshotEligibility,
   snapshotPlacement,
 } from "../src/room/snapshot.ts";
+import { sceneAt } from "../src/room/sun.ts";
 
 const rect = (left, width, top = 0, height = 900) => ({ left, top, width, height });
 
+/** 11:00 EDT in New York, where the record was taken. */
 const AT = Date.UTC(2026, 9, 9, 15, 0, 0);
-const record = { layoutVersion: LAYOUT_VERSION, at: AT, scene: "day", aspect: 1.6 };
-const now = { layoutVersion: LAYOUT_VERSION, at: AT + 60_000, scene: "day", aspect: 1.6 };
+const newYork = { latitude: 40.71, longitude: -74.01 };
+const berlin = { latitude: 52.52, longitude: 13.4 };
+const record = { layoutVersion: LAYOUT_VERSION, at: AT, scene: "day", aspect: 1.6, ...newYork };
+const now = { layoutVersion: LAYOUT_VERSION, at: AT + 60_000, aspect: 1.6 };
 
 test("a snapshot is eligible from this layout version, under six hours old, in this scene, at an aspect within 5 %", () => {
   assert.equal(snapshotEligibility(record, now), "eligible");
@@ -34,9 +38,28 @@ test("eligibility: six hours old is too old, a millisecond less is not, and a re
 });
 
 test("eligibility: a day snapshot is not shown at night, nor a night one by day", () => {
-  assert.equal(snapshotEligibility(record, { ...now, scene: "night" }), "scene");
+  // 23:00 EDT, five hours after sunset in New York.
+  const night = Date.UTC(2026, 9, 10, 3, 0, 0);
+  // Taken at 15:00 EDT, looked at 19:00 EDT, after sunset.
+  assert.equal(snapshotEligibility({ ...record, at: Date.UTC(2026, 9, 9, 19, 0, 0) }, { ...now, at: Date.UTC(2026, 9, 9, 23, 0, 0) }), "scene");
   assert.equal(snapshotEligibility({ ...record, scene: "night" }, now), "scene");
-  assert.equal(snapshotEligibility({ ...record, scene: "night" }, { ...now, scene: "night" }), "eligible");
+  assert.equal(snapshotEligibility({ ...record, at: night - 60_000, scene: "night" }, { ...now, at: night }), "eligible");
+});
+
+test("eligibility: the scene now is worked out at the place the snapshot was taken, whatever the page guesses first", () => {
+  // Sunset in New York on 2026-10-09 is about 18:26 EDT (22:26 UTC).
+  const before = Date.UTC(2026, 9, 9, 22, 0, 0);
+  const soon = Date.UTC(2026, 9, 9, 22, 10, 0);
+  const after = Date.UTC(2026, 9, 9, 22, 40, 0);
+  assert.equal(sceneAt(soon, newYork), "day");
+  assert.equal(sceneAt(after, newYork), "night");
+  // At the same instants it is night in Berlin: a check over another place's sun would refuse the first.
+  assert.equal(sceneAt(soon, berlin), "night");
+  const dusk = { ...record, at: before, scene: "day" };
+  assert.equal(snapshotEligibility(dusk, { ...now, at: soon }), "eligible");
+  assert.equal(snapshotEligibility(dusk, { ...now, at: after }), "scene");
+  // Taken in Berlin at night, it stays eligible however New York's sun stands.
+  assert.equal(snapshotEligibility({ ...dusk, scene: "night", ...berlin }, { ...now, at: soon }), "eligible");
 });
 
 test("eligibility: the aspect within 5 % of the viewport's either way, at the edge included, and not past it", () => {

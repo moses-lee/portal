@@ -126,7 +126,7 @@
 /*
  * Panels that sit over the room (docs/PALACE.md, Frost): the same tint, border and shadow as the
  * glass, but the blur is drawn by the room's WebGL canvas under each `.frost` element, so the
- * browser does not re-blur the page every frame. Without WebGL they keep the tint over the gradient.
+ * browser does not re-blur the page every frame. Without WebGL they keep the tint over the sketch.
  * Small transient surfaces (dialogs, sheets, menus, popovers) keep `.glass` and its CSS blur.
  */
 .frost {
@@ -158,6 +158,7 @@
 
 /*
  * The room (docs/PALACE.md) sits behind the workspace: the WebGL canvas over a placeholder (the
+ * last frame drawn on the previous visit, `room/SnapshotImage.tsx`, when one is eligible, else the
  * pencil sketch, `room/Sketch.tsx`), or the sketch alone without WebGL, after a lost context or a
  * canvas failure, and under reduced transparency. The ground colour is the page's first paint
  * before hydration. The canvas mounts transparent and fades in over the placeholder once it has
