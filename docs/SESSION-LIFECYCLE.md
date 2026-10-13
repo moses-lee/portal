@@ -222,3 +222,5 @@ Portal now negotiates `_meta.terminal_output_delta`, preserves nonempty output c
 Mode ids remain agent-controlled. `read-only` now requires approval for workspace edits; `workspace-write` ("Workspace access") provides the earlier workspace-write behavior, and `agent` is now labelled "Auto review". Saved mode/model selections are preserved rather than migrated. AIR file-read calls now omit file contents upstream; search/list results still arrive as `rawOutput`.
 
 A smoke check through Portal's real runtime, using a temporary Codex home and no model prompt, advertised and selected `gpt-6.1-sol` and round-tripped `workspace-write`.
+
+The New Session picker also refreshes its available choices from the most recently active connected session for that agent, overlaying the user's saved picks. Previously the entire saved settings record won, so a pre-upgrade model list hid GPT-6.1 even after a restart and a successful Codex connection. Offline sessions cannot replace that catalog; with no connected session, the picker retains its saved choices until the agent connects. This does not change the user's defaults or write settings until the user makes a selection.

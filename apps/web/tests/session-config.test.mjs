@@ -4,6 +4,7 @@ import {
   applyConfigChange,
   hasSettings,
   latestStateForAgent,
+  startSettingsForAgent,
   nextConfigChange,
 } from "../src/lib/session-config.ts";
 
@@ -80,4 +81,46 @@ test("latestStateForAgent picks the most recently active session with settings",
   assert.equal(latestStateForAgent(sessions, "other"), null);
   assert.equal(hasSettings(state([])), false);
   assert.equal(hasSettings(state([], modes("a", ["a"]))), true);
+});
+
+test("new-session settings refresh stale model and mode choices while preserving the user's picks", () => {
+  const stored = state([
+    select("model", "model", "gpt-6-astra", ["gpt-6-astra"]),
+    select("effort", "thought_level", "xhigh", ["low", "xhigh"]),
+    bool("fast", true),
+    select("mode", "mode", "agent", ["agent", "read-only"]),
+  ], modes("agent", ["agent", "read-only"]));
+  const current = state([
+    grouped("model", "model", "gpt-6.1-sol", ["gpt-6.1-sol", "gpt-6-astra"]),
+    select("effort", "thought_level", "low", ["low", "xhigh"]),
+    bool("fast", false),
+    select("mode", "mode", "workspace-write", ["read-only", "workspace-write", "agent"]),
+  ], modes("workspace-write", ["read-only", "workspace-write", "agent"]));
+  const session = (agentId, status, lastActiveAt, state) => ({ agentId, link: { status }, lastActiveAt, createdAt: lastActiveAt, state });
+  const sessions = [
+    session("codex", "offline", 100, stored),
+    session("codex", "live", 2, current),
+    session("claude", "live", 200, state([select("model", "model", "opus", ["opus"])])),
+  ];
+  const before = structuredClone({ stored, current });
+  const refreshed = startSettingsForAgent(sessions, "codex", stored);
+  assert.deepEqual(refreshed.configOptions[0].options, current.configOptions[0].options);
+  assert.deepEqual(refreshed.configOptions.map((option) => option.currentValue), ["gpt-6-astra", "xhigh", true, "agent"]);
+  assert.equal(refreshed.modes.currentModeId, "agent");
+  assert.deepEqual(refreshed.modes.availableModes, current.modes.availableModes);
+  assert.deepEqual({ stored, current }, before, "refreshing never mutates saved preferences or a live session");
+  assert.deepEqual(nextConfigChange(applyConfigChange(refreshed, { configId: "model", value: "gpt-6.1-sol" }), refreshed), { configId: "model", value: "gpt-6.1-sol" });
+});
+
+test("new-session settings keep offline choices until a live catalog exists and drop unavailable picks", () => {
+  const saved = state([select("model", "model", "old", ["old"])]);
+  const current = state([select("model", "model", "new", ["new"])]);
+  const offline = { agentId: "codex", link: { status: "offline" }, lastActiveAt: 1, createdAt: 1, state: current };
+  assert.equal(startSettingsForAgent([offline], "codex", saved), saved);
+  assert.equal(startSettingsForAgent([offline], "codex"), current);
+  assert.equal(startSettingsForAgent([], "codex"), null);
+  const live = { ...offline, link: { status: "live" } };
+  assert.equal(startSettingsForAgent([live], "codex", saved).configOptions[0].currentValue, "new");
+  assert.equal(startSettingsForAgent([live], "codex"), current);
+  assert.equal(startSettingsForAgent([{ ...live, state: state([]) }], "codex", saved), saved);
 });

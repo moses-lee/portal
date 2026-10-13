@@ -734,6 +734,39 @@ test("each project has a new conversation button, and the start page applies cho
   await expect(settings).toContainText("Opus");
 });
 
+test("the new-session picker offers upgraded models while preserving the saved selection", async ({ page }) => {
+  const codex = makeSession("codex-current", "Connected Codex", "codex");
+  codex.state.configOptions = [{
+    id: "model", category: "model", name: "Model", type: "select", currentValue: "gpt-6.1-sol",
+    options: [{ value: "gpt-6.1-sol", name: "6.1 Sol" }, { value: "gpt-6-astra", name: "6 Astra" }],
+  }];
+  await setupPortal(page, { sessions: [codex] });
+  const saved = {
+    agentId: "codex",
+    settings: { codex: { modes: null, configOptions: [{
+      id: "model", category: "model", name: "Model", type: "select", currentValue: "gpt-6-astra",
+      options: [{ value: "gpt-6-astra", name: "6 Astra" }],
+    }] } },
+  };
+  const writes: unknown[] = [];
+  await page.route("**/api/last-used", async (route) => {
+    if (route.request().method() === "PATCH") writes.push(route.request().postDataJSON());
+    await route.fulfill({ json: { lastUsed: saved } });
+  });
+  await page.goto("/new");
+  const settings = page.getByRole("button", { name: "Agent settings", exact: true });
+  await expect(settings).toContainText("6 Astra");
+  await settings.click();
+  const dialog = page.getByRole("dialog", { name: "Agent settings" });
+  await dialog.getByRole("combobox", { name: "Model" }).click();
+  await expect(page.getByRole("option", { name: "6.1 Sol", exact: true })).toBeVisible();
+  expect(writes).toEqual([]);
+  await page.getByRole("option", { name: "6.1 Sol", exact: true }).click();
+  await expect.poll(() => writes).toEqual([{
+    settings: { codex: { modes: null, configOptions: codex.state.configOptions } },
+  }]);
+});
+
 test("sidebar rows are compact with single-line titles", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/sessions/s1");

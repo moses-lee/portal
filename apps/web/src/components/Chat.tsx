@@ -42,7 +42,7 @@ import { defaultSettings, type GitActionKind } from "@/lib/settings";
 import {
   applyConfigChange,
   hasSettings,
-  latestStateForAgent,
+  startSettingsForAgent,
   MAX_CONFIG_STEPS,
   nextConfigChange,
   overlaySettings,
@@ -319,12 +319,11 @@ function ChatShell() {
       ? worktreePick.choice
       : ORIGINAL;
 
-  // The start page's agent settings: the ones the user last left this agent with (with the option
-  // lists they were picked from). Before Portal has any for the agent, its latest session's; null
-  // until the agent has had a session.
+  // Keep the user's picks, refreshing the available models/modes from a connected session.
+  // A saved option list can predate an adapter upgrade even after Portal itself restarts.
   const storedSettings = lastUsed?.settings[selectedAgentId];
   const startSettings = useMemo(
-    () => storedSettings ?? latestStateForAgent(sessions, selectedAgentId),
+    () => startSettingsForAgent(sessions, selectedAgentId, storedSettings),
     [storedSettings, selectedAgentId, sessions],
   );
   const changeStartSetting = (request: SetConfigRequest) => {
