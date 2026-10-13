@@ -234,6 +234,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       respond(id, { stopReason: "end_turn" });
       return;
     }
+    if (text === "terminal-stream") {
+      // Codex 2.x AIR reports only changed fields; shell output is no longer copied to rawOutput.
+      update(params.sessionId, { sessionUpdate: "tool_call", toolCallId: "shell", title: "pnpm test", kind: "execute", status: "in_progress", content: [{ type: "terminal", terminalId: "shell" }] });
+      for (const data of ["PASS\n", "PASS\n"]) update(params.sessionId, {
+        sessionUpdate: "tool_call_update", toolCallId: "shell", _meta: { terminal_output_delta: { terminal_id: "shell", data } },
+      });
+      update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "shell", status: "completed", _meta: { terminal_exit: { terminal_id: "shell", exit_code: 0, signal: null } } });
+      respond(id, { stopReason: "end_turn" });
+      return;
+    }
     if (text === "stream") {
       // What a real turn looks like on the wire: text in small chunks, a tool that heartbeats while
       // it runs, a screenshot in the result (repeated in rawOutput, as Claude Code does), more text.

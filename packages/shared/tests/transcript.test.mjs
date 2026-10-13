@@ -5,6 +5,44 @@ import { appendEvent, firstSeq, lastSeq, reduce, segment } from "../src/transcri
 const text = (seq, t, kind = "agent_message_chunk") => ({ seq, ts: 0, type: "update", update: { sessionUpdate: kind, content: { type: "text", text: t } } });
 const user = (seq, t) => ({ seq, ts: 0, type: "user", text: t });
 
+test("Codex terminal deltas render live and from history without losing sparse updates or repeating replayed chunks", () => {
+  const call = (seq, extra) => ({ seq, ts: 0, type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "shell", ...extra } });
+  const chunk = (data, terminal_id = "shell") => ({ terminal_output_delta: { terminal_id, data } });
+  const events = [
+    { seq: 0, ts: 0, type: "update", update: {
+      sessionUpdate: "tool_call", toolCallId: "shell", title: "pnpm test", kind: "execute", status: "in_progress",
+      rawInput: { command: "pnpm test" }, content: [{ type: "terminal", terminalId: "shell" }],
+      _meta: chunk("Starting\n"),
+    } },
+    call(1, { _meta: chunk("PASS\n") }),
+    call(2, { _meta: chunk("PASS\n") }),
+    call(3, { _meta: chunk("wrong terminal", "other") }),
+    call(4, { _meta: chunk(42) }),
+    call(5, { _meta: { terminal_output_delta: null } }),
+    call(6, { status: "completed", _meta: { terminal_exit: { terminal_id: "shell", exit_code: 0, signal: null } } }),
+  ];
+  let history = { turns: segment(events.slice(0, 1)), hasMore: false };
+  const before = history.turns[0].blocks[0];
+  for (const event of events.slice(1)) history = appendEvent(history, event);
+  const [block] = history.turns[0].blocks;
+  assert.equal(before.rawOutput, "Starting\n", "old snapshots stay immutable");
+  assert.equal(block.rawOutput, "Starting\nPASS\nPASS\n");
+  assert.equal(block.title, "pnpm test");
+  assert.equal(block.toolKind, "execute");
+  assert.equal(block.status, "completed");
+  assert.deepEqual(block.rawInput, { command: "pnpm test" });
+  assert.deepEqual(reduce(events), [block], "stored history renders exactly like live chunks");
+  assert.equal(appendEvent(history, events[2]), history, "replayed sequence numbers do not append twice");
+});
+
+test("Codex completion-only output and old aggregate results remain readable", () => {
+  const start = { seq: 0, ts: 0, type: "update", update: { sessionUpdate: "tool_call", toolCallId: "shell", title: "echo ok" } };
+  const end = (extra) => ({ seq: 1, ts: 0, type: "update", update: { sessionUpdate: "tool_call_update", toolCallId: "shell", status: "completed", ...extra } });
+  assert.equal(reduce([start, end({ _meta: { terminal_output_delta: { terminal_id: "shell", data: "ok\n" } } })])[0].rawOutput, "ok\n");
+  assert.deepEqual(reduce([start, end({ rawOutput: { formatted_output: "ok\n", exit_code: 0 } })])[0].rawOutput, { formatted_output: "ok\n", exit_code: 0 });
+  assert.equal(reduce([start, end({ rawOutput: "search result" })])[0].rawOutput, "search result");
+});
+
 test("reduce concatenates adjacent text, tracks tool updates, and settles permissions at turn end", () => {
   const blocks = reduce([
     user(0, "hi"),

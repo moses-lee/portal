@@ -775,8 +775,9 @@ export function createAcpRuntime(
       protocolVersion: acp.PROTOCOL_VERSION,
       clientInfo: { name: "portal", version: "0.1.0" },
       // `{}` advertises support; agents may then offer boolean config options. The AIR meta asks
-      // the adapters to report background tasks (see `air-tasks.ts`).
-      clientCapabilities: { session: { configOptions: { boolean: {} } }, _meta: AIR_CLIENT_META },
+      // the adapters to report background tasks (see `air-tasks.ts`). Codex 2.x sends shell output
+      // only over the negotiated terminal channel, without a duplicate result at completion.
+      clientCapabilities: { session: { configOptions: { boolean: {} } }, _meta: { ...AIR_CLIENT_META, terminal_output_delta: true } },
     }).then((response) => {
       if (response.protocolVersion !== acp.PROTOCOL_VERSION) {
         throw new Error(`unsupported ACP protocol version ${response.protocolVersion}`);

@@ -46,6 +46,21 @@ test("tool calls open on start, stay open through heartbeats, and close when fin
   assert.equal(trackToolCall(open, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } }, 70), false);
 });
 
+test("Codex terminal deltas count as progress and are never discarded as heartbeats", () => {
+  const open = new Map();
+  const progressing = new Set(["shell"]);
+  trackToolCall(open, { sessionUpdate: "tool_call", toolCallId: "shell", title: "pnpm test", status: "in_progress" }, 10);
+  const update = (data, terminal_id = "shell") => ({ sessionUpdate: "tool_call_update", toolCallId: "shell", _meta: { terminal_output_delta: { terminal_id, data } } });
+  assert.equal(livenessModule.isHeartbeat(update("PASS\n"), progressing), false);
+  assert.equal(trackToolCall(open, update("PASS\n"), 20), true);
+  assert.equal(open.get("shell").lastOutputAt, 20);
+  for (const empty of [update(""), update(42), update("wrong", "other")]) {
+    assert.equal(livenessModule.isHeartbeat(empty, progressing), true);
+    assert.equal(trackToolCall(open, empty, 30), false);
+  }
+  assert.equal(open.get("shell").lastOutputAt, 20);
+});
+
 test("the probe finds the session's own process, lists the turn's children, and measures CPU over the window", () => {
   const state = createProbeState();
   const first = sampleProbe(state, tableAt(T0 + 10_000, [agent, sessionProc(600_000), mcp, shell, bazel(100)]), target);

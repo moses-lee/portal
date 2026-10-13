@@ -14,6 +14,7 @@
     "./session-state": "./src/session-state.ts",
     "./settings": "./src/settings.ts",
     "./transcript": "./src/transcript.ts",
+    "./tool-output": "./src/tool-output.ts",
     "./workspace": "./src/workspace.ts"
   },
   "scripts": {

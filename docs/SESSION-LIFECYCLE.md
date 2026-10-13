@@ -213,3 +213,12 @@ Everything above landed. Where the code departs from the plan:
 
 Live check (scratch server on a cloned database with every real path rewritten): Claude and Codex sessions both reported `background` with their shell task while the turn was over and flipped to finished when it ended; the user rename held against Codex's own title; the orchestrator renamed a Portal-titled session and refused a user-titled one; with both clocks at 1 hour the sweep untracked 26 sessions, removed the clean worktree (pre-delete script ran, merged branch deleted), kept the dirty one with "uncommitted changes" logged once, and left the one with a running background task alone; a second sweep changed nothing; the purge deleted 191 removed sessions and dropped their records.
 
+### Codex ACP 2.2.2 (2026-10-13)
+
+The adapter now bundles Codex 0.160.1. Its entry point and ACP SDK 1.5 protocol remain compatible with Portal's initialization, session creation/resume, permissions, cancellation, config options, and AIR background tasks. The [2.0 breaking change](https://github.com/agentclientprotocol/codex-acp/blob/v2.2.2/docs/air-extensions.md#tool-call-contract) applies to Portal because it declares AIR for background tasks: shell output is no longer duplicated in `rawOutput`, and tool updates contain only changed fields.
+
+Portal now negotiates `_meta.terminal_output_delta`, preserves nonempty output chunks through heartbeat filtering, counts them as progress, and appends them in the shared transcript reducer. Stored history and live output use the same reducer; repeated equal chunks are kept, while replayed sequence numbers are ignored. The existing tool card renders the accumulated text. A production restart must include a web rebuild to pick up this reducer change.
+
+Mode ids remain agent-controlled. `read-only` now requires approval for workspace edits; `workspace-write` ("Workspace access") provides the earlier workspace-write behavior, and `agent` is now labelled "Auto review". Saved mode/model selections are preserved rather than migrated. AIR file-read calls now omit file contents upstream; search/list results still arrive as `rawOutput`.
+
+A smoke check through Portal's real runtime, using a temporary Codex home and no model prompt, advertised and selected `gpt-6.1-sol` and round-tripped `workspace-write`.

@@ -7,6 +7,7 @@
  */
 import type { PermissionOption, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { StoredEvent, PermissionAnswerer } from "@portal/contracts/types";
+import { terminalOutputDelta } from "./tool-output.ts";
 
 export type PermissionResponse =
   | { outcome: "selected"; optionId: string; optionName: string; by?: PermissionAnswerer; reason?: string }
@@ -148,7 +149,7 @@ export function createTurnReducer(): TurnReducer {
               status: u.status ?? "pending",
               content: u.content ?? [],
               rawInput: u.rawInput,
-              rawOutput: u.rawOutput,
+              rawOutput: terminalOutputDelta(u) ?? u.rawOutput,
             });
             tools.set(u.toolCallId, index);
             return true;
@@ -163,6 +164,8 @@ export function createTurnReducer(): TurnReducer {
             if (u.content) b.content = u.content;
             if (u.rawInput !== undefined) b.rawInput = u.rawInput;
             if (u.rawOutput !== undefined) b.rawOutput = u.rawOutput;
+            const delta = terminalOutputDelta(u);
+            if (delta) b.rawOutput = (typeof b.rawOutput === "string" ? b.rawOutput : "") + delta;
             replace(index, b);
             return true;
           }

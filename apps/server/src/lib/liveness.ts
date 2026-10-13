@@ -7,6 +7,7 @@
  * one state. Everything here is pure; the runtime owns the timers and the `ps` reads.
  */
 import type * as acp from "@agentclientprotocol/sdk";
+import { terminalOutputDelta } from "@portal/shared/tool-output";
 import type { BackgroundTask, LivenessState, OpenToolCall, SessionLiveness, SessionLoss, SessionProcessProbe } from "@portal/contracts/types";
 import { type ProcessRow, type ProcessTable, descendants, findSessionRoot } from "./process-probe.ts";
 
@@ -35,7 +36,9 @@ const TITLE_LENGTH = 80;
 const FINISHED = new Set(["completed", "failed", "cancelled"]);
 
 function hasOutput(update: acp.ToolCallUpdate): boolean {
-  return (Array.isArray(update.content) && update.content.length > 0) || (update.rawOutput !== undefined && update.rawOutput !== null);
+  return (Array.isArray(update.content) && update.content.length > 0)
+    || (update.rawOutput !== undefined && update.rawOutput !== null)
+    || !!terminalOutputDelta(update);
 }
 
 /**
@@ -87,8 +90,7 @@ export function isHeartbeat(update: acp.SessionUpdate, progressing: ReadonlySet<
   if (update.sessionUpdate !== "tool_call_update") return false;
   if (update.status !== undefined && update.status !== null && update.status !== "in_progress") return false;
   if (!progressing.has(update.toolCallId)) return false;
-  if (Array.isArray(update.content) && update.content.length > 0) return false;
-  if (update.rawOutput !== undefined && update.rawOutput !== null) return false;
+  if (hasOutput(update)) return false;
   if (update.rawInput !== undefined && update.rawInput !== null) return false;
   if (update.title) return false;
   if (update.kind) return false;

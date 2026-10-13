@@ -14,6 +14,7 @@ import { readProcessTable } from "../src/lib/process-probe.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/store.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
+import { reduce } from "@portal/shared/transcript";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/fake-acp-agent.mjs", import.meta.url));
 
@@ -311,7 +312,7 @@ test("initialize advertises boolean config options and session/new state is capt
   assert.deepEqual(messages("claude", "initialize")[0].message.params.clientCapabilities, {
     session: { configOptions: { boolean: {} } },
     // JetBrains' AIR extension: the adapters report background tasks only to a client that asks.
-    _meta: { jetbrains: { air: { version: 1, capabilities: ["asyncTasks"] } } },
+    _meta: { jetbrains: { air: { version: 1, capabilities: ["asyncTasks"] } }, terminal_output_delta: true },
   });
   assert.deepEqual(session.state.modes, {
     currentModeId: "default",
@@ -1320,6 +1321,20 @@ test("a closed connection is recorded as such, not as Portal's own kill that fol
   await delay(100);
   assert.equal(session.lost.reason, "connection_closed");
   assert.equal(session.lost.detail, "Claude Code closed its connection to Portal");
+});
+
+test("Codex terminal output survives SDK parsing, heartbeat filtering, and persisted history", async (t) => {
+  const store = createMemorySessionStore();
+  const { runtime, cwd } = setup(t, { store });
+  const session = await runtime.createSession(cwd, "codex");
+  await runtime.sendPrompt(session.id, "terminal-stream");
+  await until(() => !session.busy, "terminal output turn");
+  const page = await runtime.readEvents(session.id);
+  const deltas = page.events.filter((event) => event.type === "update" && event.update._meta?.terminal_output_delta);
+  assert.equal(deltas.length, 2, "output-only notifications are not heartbeats");
+  const tool = reduce(page.events).find((block) => block.kind === "tool");
+  assert.equal(tool.rawOutput, "PASS\nPASS\n");
+  assert.equal(tool.status, "completed");
 });
 
 test("a streamed turn is logged compactly: text merged under its last seq, no heartbeats, images as blobs", async (t) => {
