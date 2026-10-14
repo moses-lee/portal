@@ -1,11 +1,10 @@
 "use client";
 
-import { Activity, memo, useCallback, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
+import { memo, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
 import {
   ArrowUpRight,
-  ChevronRight,
+  Bot,
   DoorOpen,
-  FolderKanban,
   House,
   PanelLeftClose,
   Search,
@@ -18,7 +17,6 @@ import IconButton from "./IconButton";
 import PortalMark from "./PortalMark";
 import PortalViewBadge, { sidebarViews, usePortalViewCounts, viewMeta, type PortalViewCounts } from "./portal/views";
 import ProjectsColumn from "./ProjectsColumn";
-import RemovedProjects from "./RemovedProjects";
 import { useMediaQuery } from "./useMediaQuery";
 import { useSessions } from "./SessionsProvider";
 import { usePreference } from "./usePreference";
@@ -72,8 +70,12 @@ export type SidebarProps = {
   /** The pinned projects were dragged into `ids` order (every pinned id, first to last). */
   onReorderPinned: (ids: readonly string[]) => Promise<void>;
   onOpenSettings: () => void;
-  /** Open global search (also ⌘K / Ctrl+K); on mobile the sheet closes first. */
+  /** Open the Agent popup (also ⌘K / Ctrl+K); on mobile the sheet closes first. */
+  onOpenAgent: () => void;
+  /** Open global search (also /); on mobile the sheet closes first. */
   onOpenSearch: () => void;
+  /** Open Removed projects in a page overlay. */
+  onOpenRemoved: () => void;
   onRenameProject: (id: string, name: string) => void | Promise<void>;
   onRemoveProject: (
     id: string,
@@ -153,23 +155,19 @@ function foyerSummary(sessions: SessionSummary[], counts: PortalViewCounts) {
 const HomeColumn = memo(function HomeColumn({
   sessions,
   portalView,
-  projectsActive,
   terminalActive,
   onPortalView,
   onTerminal,
   onSelect,
   onPrefetch,
-  onShowProjects,
 }: {
   sessions: SessionSummary[];
   portalView: PortalView | null;
-  projectsActive: boolean;
   terminalActive: boolean;
   onPortalView: (view: PortalView) => void;
   onTerminal: () => void;
   onSelect: (id: string) => void;
   onPrefetch: (id: string) => void;
-  onShowProjects: () => void;
 }) {
   const counts = usePortalViewCounts();
   const recent = useMemo(() => newestSessions(sessions, 3), [sessions]);
@@ -178,7 +176,7 @@ const HomeColumn = memo(function HomeColumn({
   const openStatus = () => onPortalView("attention");
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-0.5 pb-1">
+    <div className="flex flex-col px-0.5 pb-1">
       <div className="px-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Your foyer</div>
       <button
         type="button"
@@ -203,7 +201,6 @@ const HomeColumn = memo(function HomeColumn({
       <section aria-labelledby="recent-rooms-title" className="mt-6">
         <div className="flex items-center justify-between gap-2 px-1.5">
           <h2 id="recent-rooms-title" className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Recent rooms</h2>
-          <button type="button" onClick={onShowProjects} className="rounded-md px-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">View all</button>
         </div>
         {recent.length > 0 ? (
           <div className="mt-2 space-y-1">
@@ -234,17 +231,6 @@ const HomeColumn = memo(function HomeColumn({
       <nav aria-label="Portal" className="mt-6 flex flex-col">
         <span className="px-1.5 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Portal</span>
         <PortalViewEntries portalView={portalView} onPortalView={onPortalView} counts={counts} />
-        <span className="mt-4 px-1.5 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">Workspace</span>
-        <Button
-          variant="ghost"
-          onClick={onShowProjects}
-          aria-current={projectsActive ? "page" : undefined}
-          className={`mb-0.5 h-8 justify-start gap-2.5 rounded-lg px-2 text-[13px] ${projectsActive ? "bg-muted/70 text-foreground" : "text-foreground/75"}`}
-        >
-          <FolderKanban className="size-4" />
-          Projects
-          <ChevronRight className="ml-auto size-3.5 text-muted-foreground" aria-hidden="true" />
-        </Button>
         <Button
           variant="ghost"
           onClick={onTerminal}
@@ -262,7 +248,7 @@ const HomeColumn = memo(function HomeColumn({
 const subscribeNever = () => () => {};
 
 /** "⌘K" on Apple platforms, "Ctrl K" elsewhere; nothing during server rendering, which cannot know. */
-function SearchShortcutHint() {
+function AgentShortcutHint() {
   const mac = useSyncExternalStore(subscribeNever, () => isMacPlatform(navigator.platform), () => null);
   if (mac === null) return null;
   return (
@@ -292,51 +278,20 @@ function SidebarContent(props: SidebarProps) {
     terminalActive,
     onPortalView,
     portalView,
-    projectsActive,
     onNewConversation,
     onReorderPinned,
     onRenameProject,
     onRemoveProject,
     removedProjects,
-    removedError,
-    onRefreshRemoved,
-    onRestoreProject,
-    onDiscardRemoved,
   } = props;
-  const { sessions, tracked, track, untrack, renameSession } = useSessions();
-  const trackedIds = useMemo(
-    () => new Set(tracked.map((entry) => entry.sessionId)),
-    [tracked],
-  );
-  // Stable (track and untrack are), so the memoised rows keep their props.
-  const toggleTrack = useCallback(
-    (id: string, on: boolean) => (on ? track(id) : untrack(id)),
-    [track, untrack],
-  );
-  /**
-   * The column on show: Portal's views (home), the Projects section (projects and their
-   * conversations), or the list of removed projects. It follows the URL: a session or the start page
-   * opens Projects so the active row is in view, a Portal view opens home. Removed is reached from
-   * Projects only.
-   */
-  const wanted: "home" | "projects" = projectsActive ? "projects" : "home";
-  const [column, setColumn] = useState<"home" | "projects" | "removed">(wanted);
-  const [followed, setFollowed] = useState(wanted);
-  if (wanted !== followed) {
-    setFollowed(wanted);
-    setColumn(wanted);
-  }
-  // Stable, so the memoised Projects column is not re-rendered by a new arrow on every sidebar render.
-  const showHome = useCallback(() => setColumn("home"), []);
-  const showProjects = useCallback(() => setColumn("projects"), []);
-  const showRemoved = useCallback(() => setColumn("removed"), []);
+  const { sessions, renameSession } = useSessions();
   return (
     <div className="sidebar-content">
-      <div className="mb-4 flex items-center gap-2 px-2">
+      <div className="mb-3 flex shrink-0 items-center gap-2 px-2">
         <button
           type="button"
           aria-label="Portal home"
-          onClick={() => onPortalView("chat")}
+          onClick={() => onPortalView("palace")}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left"
         >
           <PortalMark />
@@ -361,25 +316,27 @@ function SidebarContent(props: SidebarProps) {
           <X />
         </Button>
       </div>
-      {/*
-        Home and Projects stay mounted and swap under Activity, so going back and forth keeps the
-        project tree's scroll position, search, and expanded lists. Hidden means display:none on the
-        column's root, so the one on show takes the full height.
-      */}
-      <Activity mode={column === "home" ? "visible" : "hidden"}>
+      <div className="mb-4 flex shrink-0 items-center gap-1">
+        <Button variant="ghost" onClick={props.onOpenAgent} className="h-9 min-w-0 flex-1 justify-start gap-2 rounded-xl px-2 text-xs text-foreground/80">
+          <Bot className="size-4" />
+          Agent
+          <AgentShortcutHint />
+        </Button>
+        <IconButton label="Search" title="Search (/)" onClick={props.onOpenSearch} className="text-muted-foreground">
+          <Search className="size-4" />
+        </IconButton>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto" data-sidebar-scroll>
         <HomeColumn
           sessions={sessions}
           portalView={portalView}
-          projectsActive={projectsActive}
           terminalActive={terminalActive}
           onPortalView={onPortalView}
           onTerminal={onTerminal}
           onSelect={onSelect}
           onPrefetch={onPrefetch}
-          onShowProjects={showProjects}
         />
-      </Activity>
-      <Activity mode={column === "projects" ? "visible" : "hidden"}>
+        <div className="my-5 border-t border-border/70" />
         <ProjectsColumn
           projects={projects}
           sessions={sessions}
@@ -394,8 +351,6 @@ function SidebarContent(props: SidebarProps) {
           onDeleteSession={onDeleteSession}
           onTogglePinSession={onTogglePinSession}
           onTogglePinProject={onTogglePinProject}
-          trackedIds={trackedIds}
-          onToggleTrack={toggleTrack}
           onRenameSession={renameSession}
           onNewSession={onNewSession}
           onNewConversation={onNewConversation}
@@ -403,29 +358,10 @@ function SidebarContent(props: SidebarProps) {
           onRenameProject={onRenameProject}
           onRemoveProject={onRemoveProject}
           removedCount={removedProjects.length}
-          onBack={showHome}
-          onOpenRemoved={showRemoved}
+          onOpenRemoved={props.onOpenRemoved}
         />
-      </Activity>
-      {column === "removed" && (
-        <RemovedProjects
-          rows={removedProjects}
-          error={removedError}
-          onBack={() => setColumn("projects")}
-          onRefresh={onRefreshRemoved}
-          onRestore={async (id) => {
-            await onRestoreProject(id);
-            setColumn("projects");
-          }}
-          onDiscard={onDiscardRemoved}
-        />
-      )}
+      </div>
       <div className="mt-auto shrink-0 pb-1 pt-2">
-        <Button variant="ghost" onClick={props.onOpenSearch} className="h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
-          <Search className="size-3.5" />
-          Search
-          <SearchShortcutHint />
-        </Button>
         <Button variant="ghost" onClick={props.onOpenSettings} className="mt-1 h-8 w-full justify-start gap-2 rounded-xl px-2 text-xs text-muted-foreground">
           <Settings className="size-3.5" />
           Settings

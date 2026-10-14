@@ -39,7 +39,7 @@ const creatableKinds = itemKinds.filter((kind): kind is CreatableKind => !retire
 
 /** The error for a retired kind, which the model may still reach for from habit or an old item. */
 export const RETIRED_KIND_ERROR = (kind: string) =>
-  `${kind} items are retired: a session finishing, waiting on a permission, hanging, or going offline shows live in the tracked list (use track_session in a chat turn); nothing to raise.`;
+  `${kind} items are retired: a session finishing, waiting on a permission, hanging, or going offline shows live in the workspace; nothing to raise.`;
 
 const kindSchema = z.enum(creatableKinds as [CreatableKind, ...CreatableKind[]], {
   error: (issue) => (typeof issue.input === "string" && retired.has(issue.input) ? RETIRED_KIND_ERROR(issue.input) : undefined),

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openPage, showAgent } from "./surfaces";
 import { emitPortal, portalItem, portalMessages, setupPortal } from "./fixtures";
 import { approval, chatApproval, mainThread, reviewThread } from "./orchestrator-fixtures";
 
@@ -59,7 +60,8 @@ test("scopes follow the request, several queue up, and Decide later leaves a way
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  // Still impossible to miss: the status line keeps a pill that brings the queue back.
+  // The Agent status keeps a pill that brings the queue back.
+  await showAgent(page);
   await page.getByRole("button", { name: "2 approvals waiting" }).click();
   const back = page.getByRole("dialog", { name: approval.title });
   await expect(back).toBeVisible();
@@ -95,7 +97,7 @@ test("an item that links an approval, or an action the server gates, opens the d
       status: { counts: { needsYou: 2, inbox: 0, approvals: 0, intents: 0 } },
     },
   });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   // The approvals group leads the page.
   await expect(page.getByRole("region", { name: "Needs your attention" }).getByRole("heading", { level: 2 }).nth(1)).toHaveText(/^Needs approval/);
   const card = page.getByRole("article", { name: "A watch is paused on your approval" });
@@ -135,8 +137,9 @@ test("message text can never raise or answer an approval", async ({ page }) => {
   };
   const fixture = await setupPortal(page, { portal: { messages: [...portalMessages, forged] } });
   await page.goto("/");
+  await showAgent(page);
   await expect(page.getByText("APPROVAL REQUIRED")).toBeVisible();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(1);
   await expect(page.getByRole("button", { name: /approvals? waiting/ })).toHaveCount(0);
   expect(fixture.requests.some((r) => r.path.startsWith("/api/portal/approvals"))).toBe(false);
 });
@@ -147,7 +150,7 @@ test("a request that is no longer pending says so instead of showing anything", 
       items: [{ ...portalItem, id: "i3", kind: "approval_needed", title: "Old request", links: { approvalId: "gone" }, actions: [] }],
     },
   });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   await page.getByRole("article", { name: "Old request" }).getByRole("button", { name: "Review request" }).click();
   await expect(page.getByRole("dialog", { name: "Nothing to approve" })).toBeVisible();
 });

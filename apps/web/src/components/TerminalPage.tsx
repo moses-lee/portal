@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, X } from "lucide-react";
 import IconButton from "./IconButton";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
@@ -14,8 +14,10 @@ const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
 /** The standalone terminal page: shells owned by no session fill the main column, tabs and all. */
 export default function TerminalPage({
   onOpenSidebar,
+  onClose,
 }: {
   onOpenSidebar: (opener?: HTMLElement | null) => void;
+  onClose: () => void;
 }) {
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -37,6 +39,7 @@ export default function TerminalPage({
             elsewhere.
           </p>
         </div>
+        <IconButton label="Close page" onClick={onClose}><X className="size-4" /></IconButton>
       </header>
       <div className="min-h-0 flex-1">
         <TerminalPanel endpoint="/api/terminals" autoCreate />

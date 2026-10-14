@@ -1,7 +1,7 @@
 /**
  * One stream for every session view on the page.
  *
- * Each view of a session (`useSessionStream`: a workspace pane, the tracked panel) follows the
+ * Each view of a session (`useSessionStream`: a workspace pane) follows the
  * session's events live. A browser allows six HTTP/1.1 connections per host and Portal runs on
  * plain HTTP, so a stream per view (a split of four panes, three more tabs kept mounted) would use
  * them all and every other request would wait. The hub holds one `EventSource` to

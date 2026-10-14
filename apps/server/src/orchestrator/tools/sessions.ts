@@ -8,8 +8,7 @@ import type { OrchestratorDeps } from "../deps.ts";
 import type { DomainToolContext } from "../hub.ts";
 import { lastTurnEnd, snapshotActivity } from "../digest.ts";
 import { pickById } from "../ids.ts";
-import { type SessionTracker, httpError, requireSession, startSession } from "../ops.ts";
-import { trackContext } from "../tracked/tools.ts";
+import { httpError, requireSession, sessionWorkspace, startSession } from "../ops.ts";
 import { DEFAULT_LIMIT, type ToolContext, capped, define } from "./context.ts";
 
 const sessionId = z.string().min(1);
@@ -29,7 +28,7 @@ const TURN_END_WINDOW = 20;
 
 const livenessStates = ["dead", "blocked", "busy", "hung", "background", "idle"] as const satisfies readonly LivenessState[];
 
-/** A session as the list tools answer it (list_sessions, list_tracked_sessions, ...). */
+/** A session as the list tools answer it (list_sessions, list_active_sessions, ...). */
 export function sessionRow(meta: SessionMeta) {
   return {
     id: meta.id, title: meta.title, projectId: meta.projectId || null, agent: meta.agentId,
@@ -108,10 +107,9 @@ export async function readTranscript(deps: OrchestratorDeps, id: string, lastTur
 
 export function sessionTools(ctx: ToolContext) {
   const { deps } = ctx;
-  // Turns build these tools over the domain context; a bare tool context (a test) has no tracked list.
+  // Turns build these tools over the domain context; a bare tool context (a test) has no workspace.
   const domain = "hub" in ctx ? (ctx as DomainToolContext) : null;
-  /** Sessions the orchestrator starts are tracked (as Portal's), attributed to this turn. */
-  const tracker: SessionTracker | undefined = domain ? { tracked: domain.hub.tracked, context: trackContext(domain) } : undefined;
+  const destination = domain ? sessionWorkspace(domain) : undefined;
   /** The full id of the session `id` names (itself or a unique prefix). */
   const full = async (id: string) => (await requireSession(deps, id)).id;
   return {
@@ -207,9 +205,9 @@ export function sessionTools(ctx: ToolContext) {
       },
     ),
     create_session: define(
-      "Start a new session in a project, optionally sending a first prompt right away; it is tracked. title names it for what it is for (otherwise the first prompt does). Returns the session id.",
+      "Start a new session in a project, optionally sending a first prompt right away; it opens in a background workspace tab without changing what the user is viewing. title names it for what it is for (otherwise the first prompt does). Returns the session id.",
       z.object({ projectId: z.string().min(1), agentId: z.string().optional(), prompt: z.string().optional(), title: sessionTitle.optional() }),
-      (input) => startSession(deps, input, tracker),
+      (input) => startSession(deps, input, destination),
     ),
     // Chat turns only: renaming is for when the user is in the loop, never background work.
     ...(domain?.turn.origin === "chat" ? {
@@ -228,7 +226,7 @@ export function sessionTools(ctx: ToolContext) {
           const from = before.title?.trim() || `${before.agentName} session ${id.slice(0, 8)}`;
           await domain.hub.activity.log({
             actor: "agent", kind: "session.renamed", summary: `Renamed "${from}" to "${title}"`,
-            refs: { sessionId: id, ...(before.projectId ? { projectId: before.projectId } : {}), ...trackContext(domain) },
+            refs: { sessionId: id, ...(before.projectId ? { projectId: before.projectId } : {}), ...destination?.context },
             detail: { from: before.title, to: title, titleSource: "portal" },
           });
           return { ...sessionRow(after), titleSource: after.titleSource };
@@ -307,8 +305,6 @@ export function sessionTools(ctx: ToolContext) {
       z.object({ sessionId }),
       async (input) => {
         const sessionId = await full(input.sessionId);
-        // Untracked first, so the activity log shows the untrack before the delete (the cascade would drop the row unlogged).
-        if (domain) await domain.hub.tracked.untrack(sessionId, "portal", trackContext(domain, "deleted"));
         // Its workspace pane goes the same way (the delete event would close it a moment later; this keeps the order deterministic).
         if (domain) await domain.hub.workspace.onSessionDeleted(sessionId);
         return { sessionId, deleted: await deps.sessions.remove(sessionId) };

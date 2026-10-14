@@ -15,9 +15,6 @@ import { TOOL_GROUPS } from "../src/orchestrator/tools/groups.ts";
 import { BACKGROUND_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
 import { DEFAULT_FILE_BYTES, OUTPUT_CAP } from "../src/orchestrator/tools/shell.ts";
 import { TRANSCRIPT_CAP } from "../src/orchestrator/tools/sessions.ts";
-import { createTrackedService } from "../src/orchestrator/tracked/service.ts";
-import { createMemoryTrackedStore } from "../src/orchestrator/tracked/store.ts";
-import { trackedTools } from "../src/orchestrator/tracked/tools.ts";
 import { createWorkspaceService } from "../src/workspace/service.ts";
 import { createMemoryWorkspaceStore } from "../src/workspace/store.ts";
 import { workspaceTools } from "../src/orchestrator/workspace/tools.ts";
@@ -45,22 +42,21 @@ function setup({ interactive = true, settings = fakeSettings(), memory = [], ...
         .map((entry) => ({ entity: { id: `e-${entry.key}`, type: entry.type, key: entry.key }, records: entry.records }))),
     },
   };
-  // The tracked list: the real service over a memory store, its activity entries and pushes recorded, the world holding the set.
+  // Record workspace activity and pushes from the real service over a memory store.
   const activity = [];
   const events = [];
-  const world = { tracked: [] };
+  const world = {};
   Object.assign(hub, {
     deps, timers: { now: () => T0 }, emit: (event) => events.push(event),
     activity: { log: async (entry) => { activity.push(entry); } },
-    world: { current: async () => world, trackedChanged: (ids) => { world.tracked = ids; } },
+    world: { current: async () => world },
   });
-  hub.tracked = createTrackedService(hub, createMemoryTrackedStore({ sessionExists: (id) => state.sessions.some((meta) => meta.id === id) }));
   hub.workspace = createWorkspaceService(hub, createMemoryWorkspaceStore());
   const ctx = {
     store, deps, touched, settings, interactive, now: () => T0,
     hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job" },
   };
-  return { tools: { ...createTools(ctx), ...trackedTools(ctx), ...workspaceTools(ctx) }, store, deps, state, touched, intents, hub, activity, events, world };
+  return { tools: { ...createTools(ctx), ...workspaceTools(ctx) }, store, deps, state, touched, intents, hub, activity, events, world };
 }
 
 /** Call a tool the way the SDK does: the input goes through its zod schema first, so bounds are asserted for real. */
@@ -733,95 +729,53 @@ test("session tools report liveness: rows carry the state and its line, get_sess
 });
 
 // ---------------------------------------------------------------------------------------------
-// Tracked sessions
+// Agent-created workspace tabs
 // ---------------------------------------------------------------------------------------------
 
-test("track_session takes an id prefix, tracks as Portal with the turn's run and thread, and is idempotent", async () => {
-  const { tools, hub, activity, events, world } = prefixed();
-  const tracked = await run(tools.track_session, { sessionId: "17329ac6" });
-  assert.deepEqual(tracked, { sessionId: REVIEW, tracked: true, trackedAt: T0, trackedBy: "portal" });
-  assert.deepEqual((await hub.tracked.list()).map((row) => row.sessionId), [REVIEW], "stored with the full id");
-  assert.deepEqual(world.tracked, [REVIEW], "the world's set follows at once");
-  assert.equal(activity.length, 1);
-  assert.equal(activity[0].kind, "session.tracked");
-  assert.equal(activity[0].actor, "agent");
-  assert.deepEqual(activity[0].refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" });
-  assert.equal(events.filter((event) => event.type === "tracked").length, 1);
-
-  const again = await run(tools.track_session, { sessionId: REVIEW });
-  assert.equal(again.tracked, true);
-  assert.match(again.note, /already tracked/);
-  assert.equal(activity.length, 1, "nothing logged the second time");
-
-  assert.match((await run(tools.track_session, { sessionId: "deadbeef" })).error, /^No session has id "deadbeef"/);
-  assert.match((await run(tools.track_session, { sessionId: "5e0f" })).error, /ambiguous/);
-  assert.equal((await hub.tracked.list()).length, 1);
-});
-
-test("untrack_session puts its reason into the activity entry and says when the session was not tracked", async () => {
-  const { tools, hub, activity } = prefixed();
-  await hub.tracked.track(REVIEW, "user");
-  const untracked = await run(tools.untrack_session, { sessionId: "17329ac6", reason: "  review summarized  " });
-  assert.deepEqual(untracked, { sessionId: REVIEW, untracked: true });
-  const entry = activity.at(-1);
-  assert.equal(entry.kind, "session.untracked");
-  assert.match(entry.summary, /^Untracked "Review auth": review summarized$/);
-  assert.deepEqual(entry.detail, { trackedBy: "portal", reason: "review summarized" });
-  assert.equal(entry.refs.runId, "run1");
-  assert.deepEqual(await hub.tracked.list(), []);
-
-  const again = await run(tools.untrack_session, { sessionId: REVIEW });
-  assert.equal(again.untracked, false);
-  assert.match(again.note, /not tracked/);
-  assert.match((await run(tools.untrack_session, { sessionId: "deadbeef" })).error, /^No session has id "deadbeef"/);
-  assert.equal((await run(tools.untrack_session, { sessionId: REVIEW, reason: "x".repeat(201) })).invalidInput, true);
-});
-
-test("list_tracked_sessions answers the world's tracked set with list_sessions' rows plus when and by whom", async () => {
-  const { tools, hub, state, world } = prefixed();
-  state.sessions[1].liveness = liveness("busy", "running tool: tests for 3m");
-  await hub.tracked.track(FIRST, "user");
-  await hub.tracked.track(REVIEW, "portal");
-  const listed = await run(tools.list_tracked_sessions, {});
-  const plain = await run(tools.list_sessions, {});
-  assert.deepEqual(listed.sessions.map((row) => row.id), world.tracked);
-  for (const row of listed.sessions) {
-    const { trackedAt, trackedBy, ...rest } = row;
-    assert.deepEqual(rest, plain.sessions.find((entry) => entry.id === row.id), "the same row as list_sessions");
-    assert.equal(trackedAt, T0);
-    assert.equal(trackedBy, row.id === FIRST ? "user" : "portal");
-  }
-  assert.equal(listed.sessions.find((row) => row.id === FIRST).liveness, "busy");
-
-  // The world's set decides, so the section and the tool agree even before the next build.
-  world.tracked = [REVIEW];
-  assert.deepEqual((await run(tools.list_tracked_sessions, {})).sessions.map((row) => row.id), [REVIEW]);
-  assert.deepEqual((await run(tools.untrack_session, { sessionId: REVIEW })).untracked, true);
-  assert.deepEqual((await run(tools.list_tracked_sessions, {})).sessions, [FIRST].map((id) => ({ ...plain.sessions.find((entry) => entry.id === id), trackedAt: T0, trackedBy: "user" })));
-});
-
-test("sessions Portal starts are tracked: create_session and each of setup_pr_reviews' sessions", async () => {
-  const { tools, hub, activity } = setup({
+test("create_session and each PR review open background tabs attributed to the creating turn", async () => {
+  const { tools, hub, activity, events, deps } = setup({
     projects: [project()],
-    getPull: async (repoRoot, number) => ({ number, title: `PR ${number}`, branch: `feat/${number}`, state: "open", updatedAt: T0, fork: false, author: "moses-lee" }),
+    getPull: async (root, number) => ({ number, title: `PR ${number}`, branch: `feat/${number}`, state: "open", updatedAt: T0, fork: false, author: "moses-lee" }),
     ensureWorktree: async ({ branch }) => ({ path: `/wt/${branch}`, created: true }),
-    originUrl: async (dir) => (dir === "/repo" ? "git@github.com:acme/app.git" : null),
+    originUrl: async (dir) => dir === "/repo" ? "git@github.com:acme/app.git" : null,
   });
+  // An existing tab and split are not rearranged by Agent-created work.
+  await hub.workspace.apply({ op: "open", sessionId: null }, "user");
+  const original = (await hub.workspace.read()).tabs[0];
+  const prompt = deps.sessions.prompt;
+  const openBeforePrompt = [];
+  deps.sessions.prompt = async (id, text) => {
+    openBeforePrompt.push((await hub.workspace.read()).tabs.some((tab) => tab.root.sessionId === id));
+    return prompt(id, text);
+  };
   const created = await run(tools.create_session, { projectId: "p1", prompt: "Say hi" });
-  assert.deepEqual(await hub.tracked.list(), [{ sessionId: created.sessionId, trackedAt: T0, trackedBy: "portal" }]);
-  assert.deepEqual(activity[0].refs, { sessionId: created.sessionId, projectId: "p1", runId: "run1", threadId: "main" });
-
   const reviews = await run(tools.setup_pr_reviews, { repo: "acme/app", numbers: [3, 4] });
-  const ids = reviews.sessions.map((entry) => entry.sessionId);
-  assert.equal(ids.length, 2);
-  assert.deepEqual((await hub.tracked.list()).map((row) => row.sessionId), [created.sessionId, ...ids]);
-  assert.ok((await hub.tracked.list()).every((row) => row.trackedBy === "portal"));
-  assert.deepEqual(activity.filter((entry) => entry.kind === "session.tracked").map((entry) => entry.detail.reason ?? null), [null, "review of acme/app#3", "review of acme/app#4"]);
+  const ids = [created.sessionId, ...reviews.sessions.map((entry) => entry.sessionId)];
+  const workspace = await hub.workspace.read();
+  assert.deepEqual(workspace.tabs[0], original, "the existing tab is unchanged");
+  assert.deepEqual(workspace.tabs.slice(1).map((tab) => tab.root.sessionId), ids);
+  assert.deepEqual(openBeforePrompt, [true, true, true], "every tab opens before its first prompt");
+  const opened = activity.filter((entry) => entry.kind === "workspace.opened" && entry.actor === "agent");
+  assert.deepEqual(opened.map((entry) => entry.refs.sessionId), ids);
+  assert.ok(opened.every((entry) => entry.refs.runId === "run1" && entry.refs.threadId === "main"));
+  assert.ok(events.every((event) => event.type === "workspace"), "workspace events carry no client navigation or focus");
+  assert.ok(!("focus" in workspace) && !("activeTabId" in workspace));
 });
 
-test("a session Portal starts is still started when tracking it fails", async () => {
+test("Agent creation without a prompt and named job creation both open background workspace tabs", async () => {
+  const { tools, hub, deps, store, activity } = setup({ projects: [project()] });
+  assert.deepEqual(await run(tools.create_session, { projectId: "p1" }), { sessionId: "s1" });
+  const jobTools = createTools({ store, deps, touched: new Set(), settings: fakeSettings(), interactive: true, now: () => T0,
+    hub, turn: { runId: "job-run", threadId: "review-thread", kind: "job", origin: "job" } });
+  assert.deepEqual(await run(jobTools.create_session, { projectId: "p1", prompt: "Background work" }), { sessionId: "s2" });
+  assert.deepEqual((await hub.workspace.read()).tabs.map((tab) => tab.root.sessionId), ["s1", "s2"]);
+  assert.deepEqual(activity.at(-1).refs.runId, "job-run");
+  assert.deepEqual(activity.at(-1).refs.threadId, "review-thread");
+});
+
+test("a workspace failure preserves the created session and still sends its first prompt", async () => {
   const { tools, hub, state } = setup({ projects: [project()] });
-  hub.tracked.track = async () => { throw new Error("db down"); };
+  hub.workspace.apply = async () => { throw new Error("db down"); };
   const errors = [];
   const original = console.error;
   console.error = (line) => errors.push(line);
@@ -831,32 +785,26 @@ test("a session Portal starts is still started when tracking it fails", async ()
     console.error = original;
   }
   assert.deepEqual(state.prompts, [{ id: "s1", text: "Go" }]);
-  assert.match(errors[0], /Could not track session s1: db down/);
+  assert.match(errors[0], /Could not open session s1 in the workspace: db down/);
 });
 
-test("a session whose first prompt fails is still tracked, and the prompt error is returned", async () => {
+test("a failed first prompt leaves its session open in a background tab", async () => {
   const { tools, hub, state } = setup({ projects: [project()] });
   state.promptFailure = "agent not ready";
   assert.deepEqual(await run(tools.create_session, { projectId: "p1", prompt: "Go" }), { sessionId: "s1", promptError: "agent not ready" });
-  assert.deepEqual(await hub.tracked.list(), [{ sessionId: "s1", trackedAt: T0, trackedBy: "portal" }]);
+  assert.deepEqual((await hub.workspace.read()).tabs.map((tab) => tab.root.sessionId), ["s1"]);
 });
 
-test("delete_session untracks first, so the activity log shows the untrack before the delete", async () => {
-  const { tools, hub, deps, activity } = prefixed();
-  await hub.tracked.track(REVIEW, "user");
+test("delete_session closes its workspace pane before deleting the session", async () => {
+  const { tools, hub, deps } = prefixed();
+  await hub.workspace.apply({ op: "open", sessionId: REVIEW }, "user");
+  await hub.workspace.apply({ op: "open", sessionId: FIRST }, "user");
   const remove = deps.sessions.remove;
-  let loggedBeforeRemove = null;
   deps.sessions.remove = async (id) => {
-    loggedBeforeRemove = activity.map((entry) => entry.kind);
+    assert.deepEqual((await hub.workspace.read()).tabs.map((tab) => tab.root.sessionId), [FIRST]);
     return remove(id);
   };
   assert.deepEqual(await run(tools.delete_session, { sessionId: "17329ac6" }), { sessionId: REVIEW, deleted: true });
-  assert.deepEqual(loggedBeforeRemove, ["session.tracked", "session.untracked"]);
-  assert.deepEqual(activity.at(-1).detail, { trackedBy: "portal", reason: "deleted" });
-  assert.deepEqual(await hub.tracked.list(), []);
-  // An untracked session is deleted without an untrack entry.
-  await run(tools.delete_session, { sessionId: FIRST });
-  assert.equal(activity.filter((entry) => entry.kind === "session.untracked").length, 1);
 });
 
 test("rename_session takes an id prefix, renames as Portal, logs session.renamed, and answers the row", async () => {
@@ -902,7 +850,7 @@ test("rename_session is a chat-turn tool in the sessions group, never in a backg
   // A job's run that names its own tools is offered everything else interactively, but not renaming.
   const { deps } = fakeDeps({});
   const jobCtx = { store: createMemoryOrchestratorStore(), deps, touched: new Set(), settings: fakeSettings(), interactive: true, now: () => T0,
-    hub: { deps, activity: { log: async () => {} }, tracked: {} }, turn: { runId: "run1", threadId: null, kind: "job", origin: "job" } };
+    hub: { deps, activity: { log: async () => {} }, workspace: {} }, turn: { runId: "run1", threadId: null, kind: "job", origin: "job" } };
   assert.equal(createTools(jobCtx).rename_session, undefined);
   assert.ok(createTools(jobCtx).create_session, "the rest of the session tools are there");
 });
@@ -921,12 +869,12 @@ test("the system prompt asks to name sessions on create and never rename one the
   assert.match(prompt, /Name sessions you start for what they are for \(title on create_session\); rename a session when its title no longer says what it does \(rename_session\)\. Never rename a session the user named\./);
 });
 
-test("create_item and update_item refuse the retired session kinds and point at track_session", async () => {
+test("create_item and update_item refuse the retired session kinds and point at the workspace", async () => {
   const { tools, store } = setup();
   for (const kind of ["session_finished", "session_stopped", "session_waiting", "session_offline", "session_hung"]) {
     const refused = await run(tools.create_item, { kind, title: "Session done", body: "It finished.", fingerprint: `${kind}:s1` });
     assert.equal(refused.invalidInput, true, kind);
-    assert.match(refused.error, new RegExp(`^kind: ${kind} items are retired: .*\\(use track_session in a chat turn\\); nothing to raise\\.$`), kind);
+    assert.match(refused.error, new RegExp(`^kind: ${kind} items are retired: .*workspace; nothing to raise\\.$`), kind);
   }
   assert.deepEqual(await store.listItems(), []);
   const { id } = await run(tools.create_item, { kind: "custom", title: "Keep", body: "", fingerprint: "custom:keep" });

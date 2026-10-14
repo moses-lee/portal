@@ -150,9 +150,8 @@ function checkScriptField(kind: ScriptKind, field: keyof ScriptSettingsPatch, va
   }
 }
 
-/** The sessions section's two clocks: `sessions.<group>.<field>`, each in whole hours. */
+/** The sessions section's worktree clock, in whole hours. */
 const sessionsFields = [
-  ["tracked", "untrackAfterHours"],
   ["worktrees", "removeAfterHours"],
 ] as const;
 

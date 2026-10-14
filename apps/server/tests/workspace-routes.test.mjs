@@ -190,7 +190,7 @@ test("structural ops are logged as workspace.* entries by the user; move_tab and
   ], "newest first; resize and move_tab leave no entry");
 });
 
-test("GET /api/portal/stream opens with the workspace right after the tracked list and pushes it after every change", async (t) => {
+test("GET /api/portal/stream opens with the workspace after the intent list and pushes it after every change", async (t) => {
   const { app, post } = await setup(t);
   const { workspace: initial } = (await post({ op: "open", sessionId: "s1" })).json();
   await app.listen({ port: 0, host: "127.0.0.1" });
@@ -217,9 +217,9 @@ test("GET /api/portal/stream opens with the workspace right after the tracked li
     }
   }
   const opening = [];
-  for (let i = 0; i < 7; i++) opening.push(await next());
-  assert.deepEqual(opening.map((event) => event.type), ["status", "items", "threads", "approvals", "intents", "tracked", "workspace"]);
-  assert.deepEqual(opening[6].workspace, initial);
+  for (let i = 0; i < 6; i++) opening.push(await next());
+  assert.deepEqual(opening.map((event) => event.type), ["status", "items", "threads", "approvals", "intents", "workspace"]);
+  assert.deepEqual(opening[5].workspace, initial);
 
   // No keep-alive, or closing the app waits for the idle socket to time out.
   const posted = await fetch(`http://127.0.0.1:${port}/api/workspace/ops`, {
@@ -235,7 +235,7 @@ test("GET /api/portal/stream opens with the workspace right after the tracked li
 
 test("deleting a session through the route closes its pane: the split collapses, the change is pushed, nothing is logged", async (t) => {
   const { inject, post, read, events, activity, deleted } = await setup(t);
-  assert.equal(deleted.size, 2, "the tracked and workspace services listen for deleted sessions");
+  assert.equal(deleted.size, 1, "the workspace service listens for deleted sessions");
   const { location } = (await post({ op: "open", sessionId: "s1" })).json();
   await post({ op: "open", sessionId: "s2", target: { ...location, edge: "bottom" } });
   const before = events.length;

@@ -306,7 +306,6 @@ const Robot = memo(function Robot({
       {look.antenna === 0 && stem("a", 0, 0)}
       {look.antenna === 1 && [stem("l", 0.05, -0.35), stem("r", -0.05, 0.35)]}
       {look.antenna === 2 && stem("b", 0.03, -0.55)}
-      {spec.tracked && <P.scarf position={[0, 0.44, 0]} rotation={[Math.PI / 2, 0, 0]} color={colours.scarf} />}
       <group ref={armLeft} position={[0.165, 0.39, 0]}>
         <P.arm position={[0, -0.075, 0]} color={colours.limb} />
       </group>

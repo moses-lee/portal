@@ -140,10 +140,10 @@ test("the portal stream opens with the room's state and pushes it when the envir
       }
     }
     const opening = [];
-    for (let i = 0; i < 8; i++) opening.push(await next());
-    assert.deepEqual(opening.map((event) => event.type), ["status", "items", "threads", "approvals", "intents", "tracked", "workspace", "room"]);
-    assert.equal(opening[7].state.environment.source, "none");
-    assert.equal(opening[7].state.layoutVersion, 1);
+    for (let i = 0; i < 7; i++) opening.push(await next());
+    assert.deepEqual(opening.map((event) => event.type), ["status", "items", "threads", "approvals", "intents", "workspace", "room"]);
+    assert.equal(opening[6].state.environment.source, "none");
+    assert.equal(opening[6].state.layoutVersion, 1);
 
     gate.resolve();
     let event;
@@ -175,14 +175,14 @@ test("the portal stream opens without the room when the room's state cannot be r
     assert.equal(response.status, 200);
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = "";
-    while (buffer.split("\n\n").filter((frame) => frame.includes("data: ")).length < 7) {
+    while (buffer.split("\n\n").filter((frame) => frame.includes("data: ")).length < 6) {
       const { value, done } = await reader.read();
       if (done) throw new Error("stream ended");
       buffer += value;
     }
     const types = buffer.split("\n\n").flatMap((frame) => frame.split("\n").filter((line) => line.startsWith("data: "))).map((line) => JSON.parse(line.slice(6)).type);
-    assert.deepEqual(types.slice(0, 7), ["status", "items", "threads", "approvals", "intents", "tracked", "workspace"]);
-    assert.ok(!types.slice(0, 8).includes("room"), "no room in the opening events");
+    assert.deepEqual(types.slice(0, 6), ["status", "items", "threads", "approvals", "intents", "workspace"]);
+    assert.ok(!types.slice(0, 7).includes("room"), "no room in the opening events");
     assert.ok(warnings.some((message) => message.includes("the census could not count")), "the failure is logged");
     controller.abort();
   });

@@ -1,6 +1,6 @@
 /**
  * One session's state, the single derivation every view shares: the sidebar's status dot, the
- * tracked panel's badge, and (mapped onto `AgentActivity`) the session header and the orchestrator's
+ * workspace's badge, and (mapped onto `AgentActivity`) the session header and the orchestrator's
  * world. Pure, so the node test runner can load it.
  */
 import type { LivenessState, SessionLink } from "@portal/contracts/types";

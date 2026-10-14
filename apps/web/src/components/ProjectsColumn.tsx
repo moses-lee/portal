@@ -4,7 +4,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,13 +27,10 @@ import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } 
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import {
   ArchiveRestore,
-  ArrowLeft,
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   Columns2,
-  Eye,
-  EyeOff,
   Folder,
   FolderGit2,
   GripVertical,
@@ -98,10 +94,6 @@ export type ProjectsColumnProps = {
   onDeleteSession: (id: string) => void | Promise<void>;
   onTogglePinSession: (id: string) => void;
   onTogglePinProject: (id: string) => void;
-  /** Sessions in the tracked set; their row menus offer Untrack instead of Track. */
-  trackedIds: ReadonlySet<string>;
-  /** Track (`true`) or untrack a session; rejects with the server's message. */
-  onToggleTrack: (id: string, track: boolean) => Promise<void>;
   /** `PATCH /api/sessions/:id {title}`; rejects with the server's message. */
   onRenameSession: (id: string, title: string) => Promise<void>;
   onNewSession: (projectId: string) => void;
@@ -116,8 +108,6 @@ export type ProjectsColumnProps = {
   ) => void | Promise<void>;
   /** How many projects the Removed view lists; shown on its button. */
   removedCount: number;
-  /** Go back to Portal's views. */
-  onBack: () => void;
   /** Open the Removed view. */
   onOpenRemoved: () => void;
 };
@@ -201,7 +191,6 @@ const SessionRow = memo(function SessionRow({
   active,
   inWorkspace,
   pinned,
-  tracked,
   now,
   onSelect,
   onOpenInNewTab,
@@ -209,7 +198,6 @@ const SessionRow = memo(function SessionRow({
   onPrefetch,
   onDelete,
   onTogglePin,
-  onToggleTrack,
   onRename,
 }: {
   session: SessionSummary;
@@ -217,7 +205,6 @@ const SessionRow = memo(function SessionRow({
   /** Open in some tab (not necessarily the focused one). */
   inWorkspace: boolean;
   pinned: boolean;
-  tracked: boolean;
   now: number;
   onSelect: (id: string) => void;
   onOpenInNewTab: (id: string) => void;
@@ -225,14 +212,13 @@ const SessionRow = memo(function SessionRow({
   onPrefetch: (id: string) => void;
   onDelete: (id: string) => void | Promise<void>;
   onTogglePin: (id: string) => void;
-  onToggleTrack: (id: string, track: boolean) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Errors from the menu's quick actions (track, rename), shown under the row. */
-  const [trackError, setTrackError] = useState<string | null>(null);
+  /** Errors from the menu's rename action, shown under the row. */
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
   const hover = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -293,19 +279,6 @@ const SessionRow = memo(function SessionRow({
         {pinned ? <PinOff /> : <Pin />}
         {pinned ? "Unpin session" : "Pin session"}
       </MenuItem>
-      <MenuItem
-        onSelect={() => {
-          setTrackError(null);
-          onToggleTrack(session.id, !tracked).catch((e: unknown) =>
-            setTrackError(
-              e instanceof Error ? e.message : "Could not change tracking.",
-            ),
-          );
-        }}
-      >
-        {tracked ? <EyeOff /> : <Eye />}
-        {tracked ? "Untrack session" : "Track session"}
-      </MenuItem>
       <MenuSeparator />
       <MenuItem
         variant="destructive"
@@ -329,9 +302,9 @@ const SessionRow = memo(function SessionRow({
               onCancel={() => setRenaming(false)}
               onCommit={(next) => {
                 setRenaming(false);
-                setTrackError(null);
+                setRenameError(null);
                 onRename(session.id, next).catch((e: unknown) =>
-                  setTrackError(
+                  setRenameError(
                     e instanceof Error ? e.message : "Could not rename the session.",
                   ),
                 );
@@ -443,9 +416,9 @@ const SessionRow = memo(function SessionRow({
             </div>
           </div>
         )}
-        {trackError && (
+        {renameError && (
           <p role="alert" className="col-span-2 px-3 pb-1 text-[11px] text-destructive">
-            {trackError}
+            {renameError}
           </p>
         )}
       </div>
@@ -473,8 +446,6 @@ const ProjectsColumn = memo(function ProjectsColumn({
   onDeleteSession,
   onTogglePinSession,
   onTogglePinProject,
-  trackedIds,
-  onToggleTrack,
   onRenameSession,
   onNewSession,
   onNewConversation,
@@ -482,7 +453,6 @@ const ProjectsColumn = memo(function ProjectsColumn({
   onRenameProject,
   onRemoveProject,
   removedCount,
-  onBack,
   onOpenRemoved,
 }: ProjectsColumnProps) {
   const { settings } = useSettings();
@@ -519,16 +489,6 @@ const ProjectsColumn = memo(function ProjectsColumn({
   const [error, setError] = useState<{ id: string; message: string } | null>(
     null,
   );
-  /**
-   * The tree's scroll offset, tracked as it scrolls and put back when the column shows again. The
-   * sidebar hides this column with Activity (display:none), and browsers may drop an element's scroll
-   * position while it has no layout box; Activity re-runs layout effects on show, before paint.
-   */
-  const tree = useRef<HTMLElement>(null);
-  const scrolled = useRef(0);
-  useLayoutEffect(() => {
-    if (tree.current) tree.current.scrollTop = scrolled.current;
-  }, []);
   const [now, setNow] = useState(0);
   useEffect(() => {
     const update = () => setNow(Date.now());
@@ -638,16 +598,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
     storeCollapsedIds([]);
   };
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex flex-col">
       <div className="mb-2 flex items-center gap-1 px-1">
-        <IconButton
-          label="Back to Portal"
-          size="icon-xs"
-          onClick={onBack}
-          className="text-muted-foreground"
-        >
-          <ArrowLeft />
-        </IconButton>
         <h2 className="flex-1 text-[10px] font-semibold tracking-[.12em] text-muted-foreground/80 uppercase">
           Projects
         </h2>
@@ -680,12 +632,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
         />
       </div>
       <nav
-        ref={tree}
-        onScroll={(e) => {
-          scrolled.current = e.currentTarget.scrollTop;
-        }}
         aria-label="Projects and sessions"
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4"
+        className="space-y-3 pb-4"
       >
         {groups.length === 0 && (
           <p className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
@@ -900,13 +848,11 @@ const ProjectsColumn = memo(function ProjectsColumn({
                             onOpenInNewTab={onOpenInNewTab}
                             onOpenBeside={onOpenBeside}
                             pinned={session.id in sessionPins}
-                            tracked={trackedIds.has(session.id)}
                             now={now || session.lastActiveAt}
                             onSelect={onSelect}
                             onPrefetch={onPrefetch}
                             onDelete={onDeleteSession}
                             onTogglePin={onTogglePinSession}
-                            onToggleTrack={onToggleTrack}
                             onRename={onRenameSession}
                           />
                         ))}

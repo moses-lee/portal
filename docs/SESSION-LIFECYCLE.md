@@ -1,5 +1,8 @@
 # Session lifecycle: tracked clutter, worktree retention, rename, background work
 
+Updated 2026-10-14: tracked sessions, automatic untracking, and the tracking retention setting have been removed. The lifecycle sweep now handles idle worktree removal only. Workspace tabs preserve work, and Agent-created sessions open background tabs. Older tracking decisions below are historical.
+
+
 Date: 2026-10-04. Status: built on `fix-sessions` the same day (steps 1 to 9), reviewed, live-checked on a scratch instance; merge to main waits for Moses. See "As built" at the end for where the code departs from the plan.
 
 ## Why

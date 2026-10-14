@@ -1,7 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { openPage } from "./surfaces";
 import { emitPortal, portalStatus, setupPortal } from "./fixtures";
 import type { Intent } from "../../src/lib/orchestrator/types";
-import { failedRun, helperJob, helperRun, intent, intentJob, mainThread, nightlyJob, reviewThread } from "./orchestrator-fixtures";
+import { orchestratorFixtureTime, failedRun, helperJob, helperRun, intent, intentJob, mainThread, nightlyJob, reviewThread } from "./orchestrator-fixtures";
+
+// Fixture timestamps are created at module load; the full suite may reach this file minutes later.
+test.beforeEach(async ({ page }) => { await page.clock.setFixedTime(orchestratorFixtureTime); });
 
 const portal = () => ({
   threads: [mainThread, reviewThread],
@@ -15,7 +19,7 @@ test("Watches lists the active intents, upcoming jobs by next run, and recent ru
   const fixture = await setupPortal(page, { portal: portal() });
   await page.goto("/");
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Watches", exact: true }).click();
-  await expect(page).toHaveURL(/\/watches$/);
+  await expect(page).toHaveURL("/");
   const view = page.getByRole("region", { name: "Watches" });
 
   const card = view.getByRole("article", { name: intent.text });
@@ -53,7 +57,7 @@ test("Watches lists the active intents, upcoming jobs by next run, and recent ru
 
 test("jobs pause, resume, run now, and cancel; watches cancel after a confirm", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/watches");
+  await openPage(page, "watches");
   const view = page.getByRole("region", { name: "Watches" });
   const row = view.getByRole("listitem", { name: intentJob.title, exact: true });
 
@@ -80,7 +84,7 @@ test("jobs pause, resume, run now, and cancel; watches cancel after a confirm", 
 
 test("run events update the recent runs live and jobs events refetch the schedule", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/watches");
+  await openPage(page, "watches");
   const view = page.getByRole("region", { name: "Watches" });
   await expect(view.getByRole("listitem", { name: /^Run:/ })).toHaveCount(2);
   const started = { ...helperRun, id: "run-live", status: "running" as const, finishedAt: null, usage: null, summary: "Reading review comments" };
@@ -100,7 +104,7 @@ test("run events update the recent runs live and jobs events refetch the schedul
 
 test("empty Watches explains itself", async ({ page }) => {
   await setupPortal(page);
-  await page.goto("/watches");
+  await openPage(page, "watches");
   const view = page.getByRole("region", { name: "Watches" });
   await expect(view.getByText(/No standing watches/)).toBeVisible();
   await expect(view.getByText("Nothing is scheduled.")).toBeVisible();
@@ -115,7 +119,7 @@ const closedIntents: Intent[] = [
 
 test("Closed lists the ended watches with their end state, and Re-activate brings one back", async ({ page }, info) => {
   const fixture = await setupPortal(page, { portal: { ...portal(), closedIntents } });
-  await page.goto("/watches");
+  await openPage(page, "watches");
   const view = page.getByRole("region", { name: "Watches" });
   const which = view.getByRole("group", { name: "Which watches" });
   await expect(which.getByRole("button", { name: "Active" })).toHaveAttribute("aria-pressed", "true");
@@ -156,7 +160,7 @@ test("Closed lists the ended watches with their end state, and Re-activate bring
 
 test("Closed with nothing ended says so", async ({ page }) => {
   await setupPortal(page, { portal: portal() });
-  await page.goto("/watches");
+  await openPage(page, "watches");
   const view = page.getByRole("region", { name: "Watches" });
   await view.getByRole("group", { name: "Which watches" }).getByRole("button", { name: "Closed" }).click();
   await expect(view.getByText("No watch has closed yet.")).toBeVisible();
@@ -164,7 +168,7 @@ test("Closed with nothing ended says so", async ({ page }) => {
 
 test("the sidebar's Watches count and the list follow the stream", async ({ page }) => {
   await setupPortal(page, { portal: portal() });
-  await page.goto("/watches");
+  await openPage(page, "watches");
   const view = page.getByRole("region", { name: "Watches" });
   const entry = page
     .getByRole("complementary", { name: "Workspace sidebar" })

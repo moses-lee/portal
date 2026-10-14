@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Folder, FolderGit2, Trash2 } from "lucide-react";
+import { Folder, FolderGit2, Trash2, X } from "lucide-react";
 import IconButton from "./IconButton";
 import { Button } from "@/components/ui/button";
 import { relativeAge } from "@/lib/relative-age";
@@ -157,7 +157,7 @@ function RemovedRow({
   );
 }
 
-/** The sidebar's Removed view: projects taken out of the workspace whose conversations remain. */
+/** Projects taken out of the workspace whose conversations remain, shown in a page overlay. */
 export default function RemovedProjects({
   rows,
   error,
@@ -179,29 +179,23 @@ export default function RemovedProjects({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <section
-      aria-label="Removed projects"
-      className="flex min-h-0 flex-1 flex-col"
-    >
-      <div className="mb-3 flex items-center gap-1 px-1">
+    <section className="flex min-h-0 flex-1 flex-col">
+      <div className="workspace-header">
+        <h1 className="min-w-0 flex-1 text-[13px] font-medium">Removed projects</h1>
         <IconButton
-          label="Back to projects"
-          size="icon-xs"
+          label="Close removed projects"
           onClick={onBack}
           className="text-muted-foreground"
         >
-          <ArrowLeft />
+          <X className="size-4" />
         </IconButton>
-        <h2 className="text-[10px] font-semibold tracking-[.12em] text-muted-foreground/80 uppercase">
-          Removed projects
-        </h2>
       </div>
       {error && (
         <p role="alert" className="px-3 pb-2 text-xs text-destructive">
           {error}
         </p>
       )}
-      <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto pb-4">
+      <ul className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6 [&>li]:mx-auto [&>li]:max-w-3xl">
         {rows.length === 0 && !error && (
           <li className="px-3 py-6 text-xs leading-relaxed text-muted-foreground">
             Nothing to bring back. Projects you remove while they still have

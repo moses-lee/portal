@@ -58,10 +58,10 @@ test("PATCH /api/settings round-trips, masks keys, and seals them under the serv
 
 test("PATCH /api/settings round-trips the sessions clocks", async (t) => {
   const { app, patch } = await setup(t);
-  const response = await patch({ sessions: { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 168 } } });
+  const response = await patch({ sessions: { worktrees: { removeAfterHours: 168 } } });
   assert.equal(response.statusCode, 200);
   const { settings } = response.json();
-  assert.deepEqual(settings.sessions, { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 168 } });
+  assert.deepEqual(settings.sessions, { worktrees: { removeAfterHours: 168 } });
   assert.deepEqual((await app.inject({ method: "GET", url: "/api/settings" })).json(), { settings });
 });
 
@@ -71,7 +71,6 @@ test("PATCH /api/settings answers 400 { error } for bad bodies", async (t) => {
     [{ gitActions: { prompts: { deploy: "x" } } }, /Unknown git action "deploy"/],
     [{ orchestrator: { model: 5 } }, /model must be a string/],
     [{ orchestrator: { apiKeys: { google: "sk" } } }, /Unknown provider "google"/],
-    [{ sessions: { tracked: { untrackAfterHours: 0 } } }, /sessions\.tracked\.untrackAfterHours must be a whole number of hours between 1 and 720/],
     [{ sessions: { worktrees: { removeAfterHours: 12.5 } } }, /sessions\.worktrees\.removeAfterHours must be a whole number of hours/],
     [[1, 2], /Expected a JSON object/],
     ["null", /Expected a JSON object/],

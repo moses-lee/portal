@@ -46,7 +46,7 @@ test("mergeSettings fills in defaults and ignores blank overrides", () => {
   assert.notEqual(mergeSettings({}), defaultSettings, "returns a fresh object");
   assert.notEqual(mergeSettings({}).orchestrator, defaultSettings.orchestrator, "returns a fresh orchestrator section");
   assert.notEqual(mergeSettings({}).orchestrator.apiKeys, defaultSettings.orchestrator.apiKeys, "returns fresh apiKeys");
-  assert.notEqual(mergeSettings({}).sessions.tracked, defaultSettings.sessions.tracked, "returns a fresh sessions section");
+  assert.notEqual(mergeSettings({}).sessions.worktrees, defaultSettings.sessions.worktrees, "returns a fresh sessions section");
 
   const merged = mergeSettings({ gitActions: { prompts: { checks: "Look at CI", review: "   " } } });
   assert.deepEqual(merged, {
@@ -296,30 +296,31 @@ test("isLifecycleHours accepts whole hours from 1 to 720 only", () => {
   for (const bad of [0, -1, 721, 1.5, NaN, Infinity, "48", null, undefined, true]) assert.equal(isLifecycleHours(bad), false, String(bad));
 });
 
-test("the sessions clocks default to 48h and 72h, merge only whole hours in range, and are written only when they differ", () => {
-  assert.deepEqual(defaultSettings.sessions, { tracked: { untrackAfterHours: 48 }, worktrees: { removeAfterHours: 72 } });
+test("worktree retention defaults to 72h, merges only whole hours in range, and is written only when different", () => {
+  assert.deepEqual(defaultSettings.sessions, { worktrees: { removeAfterHours: 72 } });
   // Stored overrides from before the section existed get the defaults.
   assert.deepEqual(mergeSettings({ gitActions: { prompts: { checks: "x" } } }).sessions, defaultSessionsSettings);
   assert.deepEqual(mergeSettings({ sessions: {} }).sessions, defaultSessionsSettings);
   assert.deepEqual(mergeSettings({ sessions: "x" }).sessions, defaultSessionsSettings);
 
-  assert.deepEqual(mergeSettings({ sessions: { tracked: { untrackAfterHours: 1 } } }).sessions, { tracked: { untrackAfterHours: 1 }, worktrees: { removeAfterHours: 72 } });
-  assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: 720 } } }).sessions, { tracked: { untrackAfterHours: 48 }, worktrees: { removeAfterHours: 720 } });
+  // Stored settings from the retired tracked-sessions feature no longer surface or persist.
+  assert.deepEqual(mergeSettings({ sessions: { tracked: { untrackAfterHours: 1 } } }).sessions, defaultSessionsSettings);
+  assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: 720 } } }).sessions, { worktrees: { removeAfterHours: 720 } });
   for (const bad of [0, 721, 2.5, "24", null]) {
-    assert.deepEqual(mergeSettings({ sessions: { tracked: { untrackAfterHours: bad }, worktrees: { removeAfterHours: bad } } }).sessions, defaultSessionsSettings, String(bad));
+    assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: bad } } }).sessions, defaultSessionsSettings, String(bad));
   }
-  assert.deepEqual(mergeSettings({ sessions: { tracked: 5, worktrees: null } }).sessions, defaultSessionsSettings);
+  assert.deepEqual(mergeSettings({ sessions: { worktrees: null } }).sessions, defaultSessionsSettings);
 
-  const changed = applySettingsPatch(defaultSettings, { sessions: { tracked: { untrackAfterHours: 24 } } });
-  assert.deepEqual(changed.sessions, { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 72 } });
-  assert.deepEqual(settingsOverrides(changed), { sessions: { tracked: { untrackAfterHours: 24 } } });
+  const changed = applySettingsPatch(defaultSettings, { sessions: { worktrees: { removeAfterHours: 24 } } });
+  assert.deepEqual(changed.sessions, { worktrees: { removeAfterHours: 24 } });
+  assert.deepEqual(settingsOverrides(changed), { sessions: { worktrees: { removeAfterHours: 24 } } });
   assert.deepEqual(mergeSettings(settingsOverrides(changed)), changed);
   // A patch about another field or section keeps it; a bad value in a patch leaves the current one.
   const both = applySettingsPatch(changed, { sessions: { worktrees: { removeAfterHours: 168 } } });
-  assert.deepEqual(both.sessions, { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 168 } });
+  assert.deepEqual(both.sessions, { worktrees: { removeAfterHours: 168 } });
   assert.deepEqual(applySettingsPatch(both, { orchestrator: { model: "claude-x" } }).sessions, both.sessions);
-  assert.deepEqual(applySettingsPatch(both, { sessions: { tracked: { untrackAfterHours: 0 } } }).sessions, both.sessions);
+  assert.deepEqual(applySettingsPatch(both, { sessions: { worktrees: { removeAfterHours: 0 } } }).sessions, both.sessions);
   // Back to the default value means no override.
-  const reset = applySettingsPatch(both, { sessions: { tracked: { untrackAfterHours: 48 }, worktrees: { removeAfterHours: 72 } } });
+  const reset = applySettingsPatch(both, { sessions: { worktrees: { removeAfterHours: 72 } } });
   assert.deepEqual(settingsOverrides(reset), {});
 });

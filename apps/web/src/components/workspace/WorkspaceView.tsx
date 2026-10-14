@@ -45,7 +45,7 @@ export type WorkspaceViewProps = {
  * provider for the sidebar, the GitHub inspector and the title. The resolvers (`/sessions/<id>`,
  * `/new`) are settled by `useRouteResolver` once the workspace has loaded; a session the server does
  * not have shows the missing-conversation pane under the strip. An empty workspace is the start page
- * without a strip; creating a session there opens the first tab. The viewport decides the shape
+ * with an empty desktop strip; creating a session there opens the first tab. The viewport decides the shape
  * (`viewportKind`): below 768 px the flat pane list (`MobileWorkspace`) replaces the strip and the
  * trees; up to 1100 px the strip stays and tabs of 3 or 4 panes show one pane with the switcher
  * (decisions 18 and 20). The pane rendering is shared by all three.
@@ -189,10 +189,10 @@ export default function WorkspaceView({
   const switcher = useMemo(() => switcherPanes(workspace, tab, kind), [workspace, tab, kind]);
   const focusedRef = useMemo<PaneRef | null>(() => (tab && pane ? { tabId: tab.id, pane } : null), [tab, pane]);
 
-  /** No tabs: the bare start page (also before the workspace has loaded, when `/new` is the path, so it shows at once). */
+  /** No tabs: the start page under the desktop strip (also before the workspace has loaded, when `/new` is the path, so it shows at once). */
   const empty = workspace.tabs.length === 0 && (loaded || route.kind === "start");
   /** The strip, where the viewport has one and there are tabs to list. */
-  const strip = kind !== "mobile" && workspace.tabs.length > 0 && (
+  const strip = kind !== "mobile" && (
     <TabStrip
       tabs={workspace.tabs}
       focusedTabId={focusedTabId}
@@ -210,6 +210,8 @@ export default function WorkspaceView({
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
+      <Tabs.Root value={focusedTabId ?? ""} onValueChange={(tabId) => navigateTo(pathOfTab(tabId))} activationMode="manual" className="flex min-h-0 flex-1 flex-col">
+      {strip}
       {error && (
         <p role="alert" className="flex items-center gap-3 border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
           <span className="min-w-0 flex-1">{error}</span>
@@ -222,7 +224,7 @@ export default function WorkspaceView({
         // No strip here (a phone, or no tabs): the missing pane alone, with the way to a new conversation.
         <MissingConversation onNew={openStartTab} />
       ) : empty ? (
-        // Decision 9: no strip; the first session created here opens the first tab.
+        // The first session created here opens the first tab.
         <SessionPane
           key="start"
           sessionId={null}
@@ -252,13 +254,7 @@ export default function WorkspaceView({
           onNewSession={openStartTab}
         />
       ) : (
-        <Tabs.Root
-          value={focusedTabId ?? ""}
-          onValueChange={(tabId) => navigateTo(pathOfTab(tabId))}
-          activationMode="manual"
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          {strip}
+        <>
           {/* No tab is current while the URL names a missing session: the strip stays, the mounted tabs stay hidden (their streams run), the body says so. */}
           {missing && <MissingConversation onNew={openStartTab} />}
           {workspace.tabs
@@ -300,8 +296,9 @@ export default function WorkspaceView({
                 )}
               </Tabs.Content>
             ))}
-        </Tabs.Root>
+        </>
       )}
+      </Tabs.Root>
     </main>
   );
 }

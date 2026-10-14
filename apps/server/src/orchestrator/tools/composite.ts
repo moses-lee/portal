@@ -1,8 +1,7 @@
 import { z } from "zod";
 import type { Project } from "../../lib/types.ts";
 import type { DomainToolContext } from "../hub.ts";
-import { findProjectForRepo, httpError, repoOf, requireProject, startSession, worktreeProject } from "../ops.ts";
-import { trackContext } from "../tracked/tools.ts";
+import { findProjectForRepo, httpError, repoOf, requireProject, sessionWorkspace, startSession, worktreeProject } from "../ops.ts";
 import { REVIEW_CHECK_MS, type ReviewSession } from "../jobs/review-watch.ts";
 import type { OrchestratorHub } from "../hub.ts";
 import type { MemoryRecord } from "@portal/contracts/memory";
@@ -111,7 +110,7 @@ export function compositeTools(ctx: ToolContext) {
             const reviewPrompt = reviewPromptFor({ given: prompt, author: pull.author, login, stored });
             const { sessionId, promptError } = await startSession(
               deps, { projectId: target.id, agentId, prompt: `${reviewPrompt}\n\nPR #${number}: ${url}` },
-              domain ? { tracked: domain.hub.tracked, context: trackContext(domain, `review of ${origin.repo}#${number}`) } : undefined,
+              domain ? sessionWorkspace(domain) : undefined,
             );
             sessions.push({
               pr: number, url, sessionId, projectId: target.id, title: pull.title, ...(pull.author ? { author: pull.author } : {}), ...(promptError ? { promptError } : {}),

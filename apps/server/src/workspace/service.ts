@@ -7,8 +7,7 @@
  * `workspace.arranged`, `workspace.renamed`; `resize` and `move_tab` are not logged).
  *
  * A deleted session (the route, the orchestrator's `delete_session`, the purge of removed sessions)
- * loses its pane: the service hears of it through `deps.sessions.onDeleted`, the way the tracked
- * list does, and closes the pane without logging (whoever deleted the session logs the delete).
+ * loses its pane: the service hears of it through `deps.sessions.onDeleted`, and closes the pane without logging (whoever deleted the session logs the delete).
  */
 import { randomUUID } from "node:crypto";
 import type { ActivityActor, ActivityRefs } from "@portal/contracts/activity";
@@ -200,7 +199,7 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
       });
       // A session deleted between that check and the write: its delete event ran the cascade
       // before the pane existed, so the pane would stay, with nothing left to close it by session
-      // (the tracked service rechecks the same way). Close it now as the delete would have, one
+      // Close it now as the delete would have, one
       // push and no entry, and answer as the check would have a moment earlier.
       const vanished = await missing();
       if (vanished.length > 0) {

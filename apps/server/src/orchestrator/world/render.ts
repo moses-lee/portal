@@ -1,7 +1,7 @@
 /**
  * The world as prompt text: compact, deterministic lines within a token budget (estimated at four
  * characters per token), clearly marked as generated data. What the turn's scope names comes
- * first, then the tracked sessions (always, "none" when there are none), then other sessions that need the user or are working, PRs that need attention, the repo →
+ * first, then the workspace tabs, sessions that need the user or are working, PRs that need attention, the repo →
  * projects map (always complete, compressed when space is short, because resolving "the monorepo"
  * or "PR 2367" depends on it), and then recent sessions, other PRs, intents and jobs, open items,
  * and terminals. Anything cut says "+N more". Names and short ids only: no paths beyond a folder
@@ -20,7 +20,7 @@ export const CHARS_PER_TOKEN = 4;
 /** The prefix length ids are shown with; tools accept a unique prefix (see ids.ts), the resolve tools return full ids. */
 export const SHORT_ID = 8;
 
-const caps = { tracked: 20, workspaceTabs: 8, attentionPulls: 15, recentSessions: 8, otherPulls: 10, intents: 10, jobs: 8, items: 10, terminals: 8, errors: 3 };
+const caps = { workspaceTabs: 8, attentionPulls: 15, recentSessions: 8, otherPulls: 10, intents: 10, jobs: 8, items: 10, terminals: 8, errors: 3 };
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -92,12 +92,6 @@ const activeOrder = (session: WorldSession) => (session.liveness ? livenessOrder
 /** `suffix` is added to the status ("idle" + ", turn ended, ..."). */
 function sessionLine(session: WorldSession, lookup: Lookup, now: number, suffix = ""): string {
   return `- ${quoted(session.title)} [${shortId(session.id)}] in ${projectRef(lookup, session.projectId)} · ${session.agentName} · ${sessionStatus(session)}${suffix} · last prompt ${ago(session.lastActiveAt, now)}`;
-}
-
-/** A tracked session's line: the session line, and for an idle one with its agent attached, that it waits on a reply (its turn ended). */
-function trackedLine(session: WorldSession, lookup: Lookup, now: number): string {
-  const idle = session.liveness ? session.liveness === "idle" : session.activity === "idle";
-  return sessionLine(session, lookup, now, idle && session.link === "live" ? ", turn ended, waiting on a reply" : "");
 }
 
 function pullLine(pull: PullAttention, lookup: Lookup): string {
@@ -239,17 +233,7 @@ export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_T
     out.section("In focus for this turn:", rows, { reserve });
   }
 
-  // Tracked sessions, oldest tracked first, all of them: what the user and Portal are waiting on.
-  const tracked = world.tracked ?? [];
   const sessionsById = new Map(world.sessions.map((s) => [s.id, s]));
-  const trackedRows = tracked.map((id) => {
-    const session = sessionsById.get(id);
-    if (!session) return `- session ${shortId(id)} (not in this build yet; get_session has it)`;
-    shownSessions.add(session.id);
-    return trackedLine(session, lookup, now);
-  });
-  if (trackedRows.length) out.section("Tracked sessions:", trackedRows, { reserve, cap: caps.tracked });
-  else if (out.fits("Tracked sessions: none.", reserve)) out.push("Tracked sessions: none.");
 
   // The workspace's tabs in strip order: where the user is working (docs/WORKSPACE.md). Tab ids are prefixes the workspace tools accept.
   if (workspace && workspace.tabs.length > 0) {

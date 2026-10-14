@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { makeSession, portalItem, project, removedProject, setupPortal, worktree } from "./fixtures";
 import type { ProjectSummary } from "../../src/lib/types";
+import { showSettings } from "./surfaces";
 
 const sidebarOf = (page: Page) => page.getByRole("complementary", { name: "Workspace sidebar" });
 const renames = (requests: { path: string; method: string; body: unknown }[]) =>
@@ -93,21 +94,17 @@ test("the header says Background with the task titles while background work runs
 test("the Sessions settings save a clock and refuse an out-of-range or unparsable one", async ({ page }) => {
   const fixture = await setupPortal(page);
   await page.goto("/");
-  await page.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "sessions" } })),
-  );
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = await showSettings(page, "Sessions");
   await expect(dialog.getByRole("heading", { name: "Sessions" })).toBeVisible();
-  const untrack = dialog.getByRole("textbox", { name: /Untrack a finished session after/ });
   const remove = dialog.getByRole("textbox", { name: /Remove an idle worktree after/ });
-  await expect(untrack).toHaveValue("48");
+  await expect(dialog.getByRole("textbox", { name: /Untrack/ })).toHaveCount(0);
   await expect(remove).toHaveValue("72");
   const patches = () =>
     fixture.requests.filter((r) => r.path === "/api/settings" && r.method === "PATCH").map((r) => r.body);
 
-  await untrack.fill("24");
-  await untrack.press("Tab");
-  await expect.poll(() => patches().at(-1)).toEqual({ sessions: { tracked: { untrackAfterHours: 24 } } });
+  await remove.fill("24");
+  await remove.press("Tab");
+  await expect.poll(() => patches().at(-1)).toEqual({ sessions: { worktrees: { removeAfterHours: 24 } } });
   await expect(dialog.getByText("Saved", { exact: true })).toBeVisible();
 
   const sent = patches().length;
@@ -130,10 +127,7 @@ test("the Data section retries a failed count, then deletes removed sessions", a
     return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Database unavailable." }) });
   });
   await page.goto("/");
-  await page.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "data" } })),
-  );
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = await showSettings(page, "Data");
   await expect(dialog.getByRole("alert")).toHaveText("Database unavailable.");
   const remove = dialog.getByRole("button", { name: "Delete removed sessions" });
   await expect(remove).toBeDisabled();
@@ -178,7 +172,7 @@ test("worktree rows say when they will be removed, or why the sweep kept them", 
   await expect(sidebar.getByRole("region", { name: project.name, exact: true }).getByTestId("worktree-retention")).toHaveCount(0);
 });
 
-test("six open items: the Needs-you badge says 6, the page lists six cards by kind, and the chat shows none", async ({ page }) => {
+test("six open items: the foyer says 6 and its overlay lists six cards by kind", async ({ page }) => {
   const items = Array.from({ length: 6 }, (_, i) => ({
     ...portalItem,
     id: `i${i + 1}`,
@@ -189,7 +183,6 @@ test("six open items: the Needs-you badge says 6, the page lists six cards by ki
   }));
   await setupPortal(page, { portal: { items } });
   await page.goto("/");
-  await expect(page.getByText("Nothing yet. I will keep an eye on your pull requests.")).toBeVisible();
   await expect(page.getByRole("article")).toHaveCount(0);
   const entry = page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ });
   await expect(entry).toContainText("6 items need you");

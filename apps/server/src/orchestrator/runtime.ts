@@ -26,8 +26,6 @@ import { createMemoryService } from "./memory/service.ts";
 import { buildLanguageModel, providerOptionsFor, roleChoice } from "./model.ts";
 import { httpError } from "./ops.ts";
 import { type SchedulerTimers, realTimers } from "./jobs/timers.ts";
-import { createTrackedService } from "./tracked/service.ts";
-import { type TrackedStore, createMemoryTrackedStore } from "./tracked/store.ts";
 import { createWorkspaceService } from "../workspace/service.ts";
 import { type WorkspaceStore, createMemoryWorkspaceStore } from "../workspace/store.ts";
 import { prepareTurn, runUsage } from "./turn.ts";
@@ -85,8 +83,6 @@ export type OrchestratorRuntimeOptions = {
   sql?: Sql | null;
   /** Where activity is recorded; in memory unless given. */
   activityStore?: ActivityStore;
-  /** Where tracked sessions are kept; in memory unless given. */
-  trackedStore?: TrackedStore;
   /** Where the workspace (tabs and panes) is kept; in memory unless given. */
   workspaceStore?: WorkspaceStore;
   domains?: DomainFactories;
@@ -209,7 +205,7 @@ export function historyWindow(messages: OrchestratorMessage[], budgetTokens = HI
 
 export function createOrchestratorRuntime({
   store, settingsStore, deps, timers = realTimers, presence, model: buildModel = buildLanguageModel, db = null, sql = null,
-  activityStore = createMemoryActivityStore(), trackedStore = createMemoryTrackedStore(), workspaceStore = createMemoryWorkspaceStore(), domains = {},
+  activityStore = createMemoryActivityStore(), workspaceStore = createMemoryWorkspaceStore(), domains = {},
 }: OrchestratorRuntimeOptions): OrchestratorRuntime {
   const listeners = new Set<(event: OrchestratorEvent) => void>();
   /** The chat turn running in each thread; a thread takes one turn at a time. */
@@ -251,7 +247,6 @@ export function createOrchestratorRuntime({
     },
   } as OrchestratorHub;
   hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
-  hub.tracked = createTrackedService(hub, trackedStore);
   hub.workspace = createWorkspaceService(hub, workspaceStore);
   hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, { trimThread: trimStoredThread })))(hub);
   hub.world = (domains.world ?? createWorldService)(hub);
@@ -579,7 +574,6 @@ export function createOrchestratorRuntime({
     async dispose() {
       disposed = true;
       deps.sessions.setPermissionAdvisor(null);
-      hub.tracked.dispose();
       hub.workspace.dispose();
       unsubscribePresence();
       unsubscribeSettings();

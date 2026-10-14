@@ -2,6 +2,12 @@
 
 Date: 2026-10-05, built 2026-10-06. Status: implemented on `feat/workspace` (steps 1 to 8, reviewed); the live instance needs a restart for the new routes and tools. No migration.
 
+## Current UI (2026-10-14)
+
+The unified sidebar always contains the foyer, recent rooms, navigation, and projects. Desktop workspace tabs remain present even when empty; mobile keeps its bottom pane bar and sheet. Non-session pages cover the full area beside the sidebar, including the tabs. The workspace remains mounted, preserving focused panes, drafts, transcript scroll, and session terminals. Closing a page reveals that same workspace, or Palace when opened over Palace. Background URL repairs and workspace changes do not dismiss pages.
+
+Agent is a separate popup (⌘K/Ctrl+K), and `/` opens Search outside editors. Tracked sessions and their controls/tools/settings/storage have been removed. Every session Agent creates opens a background tab automatically; focus is still per device and never steered by creation. Public URLs remain for home (`/`, Palace), tabs, and session/start resolvers. Page overlays and Agent threads have no standalone URLs. These decisions supersede the older tracked-panel and auto-open entries below.
+
 ## Why
 
 Portal shows one session at a time. The URL names it, switching remounts the pane, and the only way to see two sessions together is the tracked panel on the orchestrator pages, which shows one session beside the thread. Working across several agent sessions means bouncing through the sidebar.
@@ -29,15 +35,15 @@ This spec adds a **workspace**: a strip of tabs, each tab holding one session or
 | 6 | Per-device focus | Which tab and pane a device shows is that device's business. Another device or the orchestrator can rearrange the workspace, never steer focus. |
 | 7 | URL | `/tabs/<tabId>` is the focused tab, `?pane=<paneId>` the focused pane of a split. The "session by itself" page goes away. `/sessions/<id>` and `/new` stay as resolvers: focus the tab that holds the session (or a start-page pane), else open one, then rewrite the URL. Old links keep working. |
 | 8 | Opening | Sidebar rows, the tracked panel's "open full page", item links and orchestrator links all do the same thing: focus the session if it is open anywhere, otherwise open it in a new tab. Closing a tab or pane never touches the session. |
-| 9 | Start page | `/new` is a "new session" pane. The pane becomes the session's pane once it is created. An empty workspace renders the start page without a tab strip; creating a session there opens the first tab. |
+| 9 | Start page | `/new` is a "new session" pane. The pane becomes the session's pane once it is created. An empty workspace renders the start page with an empty desktop tab strip and `+`; creating a session there opens the first tab. |
 | 10 | Tab icon | Each tab shows a miniature of its layout, one cell per pane, each cell a dot in the state colours the sidebar uses (one vocabulary). A start-page cell is hollow. A ring around the icon marks unread: a hidden pane's turn ended, or asked for approval, since the tab was last focused. |
 | 11 | Shortcuts | None in round one. |
 | 12 | Pins and recent rooms | Unchanged. |
 | 13 | Orchestrator can | Read the workspace and what the asking device is looking at; open a session in a tab or beside another; arrange sessions into a preset; close a tab or pane; rename a tab. |
 | 14 | When | Chat turns only. Never background turns, watches or jobs. Ungated: every edit is reversible. |
-| 15 | Auto-open | No. Sessions the orchestrator creates are tracked, not opened. It opens a tab only when asked. |
+| 15 | Auto-open | Sessions the orchestrator creates open background tabs without changing the device's focus. |
 | 16 | "This session" | Each orchestrator chat message carries the sending device's view (the tracked panel's open session if any, else the focused pane's session and tab). The turn's prompt gets a "You are looking at" line. |
-| 17 | Tracked panel | Unchanged, on every Portal view, no tabs or splits there. |
+| 17 | Page overlays | Tracked sessions are removed. Non-session pages cover the tabs and leave the workspace mounted underneath. |
 | 18 | Mobile | Below 768 px the workspace renders as a flat list of panes (every pane of every tab, in order). A slim bar under the composer shows the current pane's title and state dot; swipe left or right on the bar to switch, tap to open the tabs sheet. Hidden while the keyboard is up. Swiping the transcript does nothing. |
 | 19 | Mobile edits | Shared like any other: closing a pane on the phone removes that pane from its split on every device. |
 | 20 | Tablet | 768 to 1100 px: tabs with 1 or 2 panes render as splits; bigger tabs render the focused pane with a pane switcher. |

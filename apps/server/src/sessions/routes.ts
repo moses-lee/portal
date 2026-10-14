@@ -85,8 +85,8 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   const projectOf = (projectId: string) => ctx.projects.get(projectId) ?? null;
 
   /**
-   * Run the lifecycle sweep now (docs/SESSION-LIFECYCLE.md, "Sweep"): untrack idle tracked sessions,
-   * remove idle worktrees. Joins a sweep already running. Answers `{ untracked, removed, kept }`.
+   * Run the lifecycle sweep now (docs/SESSION-LIFECYCLE.md, "Sweep"): remove idle worktrees.
+   * Joins a sweep already running. Answers `{ removed, kept }`.
    */
   app.post("/api/lifecycle/sweep", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;

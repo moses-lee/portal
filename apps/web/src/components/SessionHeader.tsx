@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
-  Eye,
   GitBranch,
   LayoutPanelLeft,
   PanelLeft,
@@ -54,9 +53,6 @@ export default function SessionHeader({
   onGithub,
   shellButton,
   terminalPanelId,
-  tracked,
-  trackPending,
-  onToggleTrack,
   renameFrom,
   onRename,
   pane,
@@ -83,11 +79,6 @@ export default function SessionHeader({
   shellButton: RefObject<HTMLButtonElement | null>;
   /** The terminal panel's element id, for the toggle's `aria-controls`. */
   terminalPanelId?: string;
-  /** Whether the session is in the tracked set (the Portal views' right panel lists it). */
-  tracked: boolean;
-  /** A track or untrack request is in flight. */
-  trackPending: boolean;
-  onToggleTrack: () => void;
   /** The pane menu: split, move to a tab, close. */
   pane?: PaneMenu;
 }) {
@@ -204,19 +195,6 @@ export default function SessionHeader({
               className="hidden text-muted-foreground sm:inline-flex"
             >
               <SquarePen className="size-4" />
-            </IconButton>
-          )}
-          {hasSession && (
-            <IconButton
-              label="Track session"
-              aria-pressed={tracked}
-              disabled={trackPending}
-              onClick={onToggleTrack}
-              className={
-                tracked ? "bg-white/8 text-foreground" : "text-muted-foreground"
-              }
-            >
-              <Eye className="size-4" />
             </IconButton>
           )}
           {hasSession && (

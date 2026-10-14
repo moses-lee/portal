@@ -1,21 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import dynamic from "next/dynamic";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { Bot, FolderGit2, GitPullRequest, Loader2, Search, Sparkles, User } from "lucide-react";
+import { Bot, FolderGit2, GitPullRequest, Loader2, Search, User } from "lucide-react";
 import AgentLogo from "./AgentLogo";
-import { useNow, usePortalLive } from "./portal/PortalLive";
+import { useNow } from "./portal/PortalLive";
 import { usePreference } from "./usePreference";
 import { useMediaQuery } from "./useMediaQuery";
 import { useSearch } from "./useSearch";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
-import { pushPath } from "@/lib/navigation";
-import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import { relativeAge } from "@/lib/relative-age";
 import {
   highlightRanges,
-  isMacPlatform,
   matchProjects,
   matchSessions,
   MESSAGE_CAP,
@@ -25,27 +21,14 @@ import {
   pullLabel,
   RECENTS_KEY,
   resolveRecents,
-  type PaletteTab,
   type RowPull,
 } from "@/lib/search";
-import { portalPath } from "@/lib/session-routes";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
 
-/** The thread, its markdown and the chat SDK load when the Portal tab first opens, not with search. */
-const PortalThread = dynamic(() => import("./portal/PortalThread"), {
-  loading: () => (
-    <div className="flex flex-1 items-center justify-center text-muted-foreground">
-      <Loader2 className="size-4 animate-spin" aria-label="Opening Portal" />
-    </div>
-  ),
-});
-
 export type SearchDialogProps = {
-  /** The open tab; null while the dialog is closed. */
-  tab: PaletteTab | null;
-  /** Switch tabs, or close with null. */
-  onTabChange: (tab: PaletteTab | null) => void;
+  open: boolean;
+  onClose: () => void;
   sessions: SessionSummary[];
   projects: ProjectSummary[];
   /** Open a session from a session or message row; the dialog has closed by then. */
@@ -54,28 +37,11 @@ export type SearchDialogProps = {
   onOpenProject: (id: string) => void;
 };
 
-const tabText = {
-  search: { title: "Search", description: "Find sessions, projects, and messages." },
-  portal: { title: "Portal", description: "Talk to Portal in its main thread." },
-} as const;
-
-/**
- * Global search (⌘K / Ctrl+K, or the sidebar's Search button) and Portal (⌘J / Ctrl+J), as two
- * tabs of one dialog. Search: sessions and projects matched here from the lists the client holds,
- * message text and PR-linked sessions from `GET /api/search`. Portal: the orchestrator's main
- * thread, the same conversation as the Portal page's Chat.
- * Raycast-like on desktop (near the top over a blurred page); a bottom sheet on phones. The
- * contents mount only while open, so the query, selection, and answer cache start fresh each time;
- * a tab once shown stays mounted until the dialog closes.
- */
+/** Global search: the existing search experience, independent of the Agent conversation. */
 export default function SearchDialog(props: SearchDialogProps) {
-  const { tab, onTabChange } = props;
-  const open = tab !== null;
-  /** The tab on screen: the open one, kept through the closing animation. */
-  const [shown, setShown] = useState<PaletteTab>(tab ?? "search");
-  if (tab !== null && tab !== shown) setShown(tab);
+  const { open, onClose } = props;
   const desktop = useMediaQuery("(min-width: 640px)", true);
-  const onOpenChange = useCallback((next: boolean) => !next && onTabChange(null), [onTabChange]);
+  const onOpenChange = useCallback((next: boolean) => !next && onClose(), [onClose]);
   /**
    * Where focus goes back to on close: the composer, terminal, or button the dialog was opened from.
    * Radix returns focus only to a `Trigger`, and the shortcuts have none. Noted before the panels'
@@ -98,17 +64,18 @@ export default function SearchDialog(props: SearchDialogProps) {
   // Stable, so the panel's rows are not rebuilt on every render of the shell.
   const onOpened = useCallback(() => {
     opened.current = true;
-    onTabChange(null);
-  }, [onTabChange]);
-  const { title, description } = tabText[shown];
-  const body = <PaletteBody {...props} tab={shown} onOpened={onOpened} />;
+    onClose();
+  }, [onClose]);
+  const title = "Search";
+  const description = "Find sessions, projects, and messages.";
+  const body = <SearchPanel {...props} visible={open} onOpened={onOpened} />;
   if (!desktop)
     return (
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent
           side="bottom"
           showCloseButton={false}
-          data-search-dialog=""
+          data-search-dialog="" data-palette-dialog=""
           onCloseAutoFocus={closeAutoFocus}
           className="glass gap-0 data-[side=bottom]:h-[85dvh] rounded-t-3xl p-0 pb-[env(safe-area-inset-bottom)]"
         >
@@ -123,7 +90,7 @@ export default function SearchDialog(props: SearchDialogProps) {
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay data-room-slow="" className="fixed inset-0 isolate z-50 bg-black/45 duration-100 supports-backdrop-filter:backdrop-blur-md data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
         <DialogPrimitive.Content
-          data-search-dialog=""
+          data-search-dialog="" data-palette-dialog=""
           onCloseAutoFocus={closeAutoFocus}
           className="glass fixed top-[12vh] left-1/2 z-50 flex h-[min(520px,calc(76vh+2.5rem))] w-[min(640px,calc(100%-2rem))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl text-sm text-popover-foreground outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[0.98] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.98]"
         >
@@ -133,135 +100,6 @@ export default function SearchDialog(props: SearchDialogProps) {
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
-  );
-}
-
-const tabs = [
-  { id: "search", label: "Search", Icon: Search, letter: "K" },
-  { id: "portal", label: "Portal", Icon: Sparkles, letter: "J" },
-] as const;
-
-type BodyProps = Omit<SearchDialogProps, "tab"> & { tab: PaletteTab; onOpened: () => void };
-
-/** The tab strip over the two panels; the Portal panel mounts the first time its tab shows. */
-function PaletteBody({ tab, onTabChange, onOpened, ...searchProps }: BodyProps) {
-  const [portalMounted, setPortalMounted] = useState(tab === "portal");
-  if (tab === "portal" && !portalMounted) setPortalMounted(true);
-  // The dialog renders only on the client, once open.
-  const [mac] = useState(() => isMacPlatform(navigator.platform));
-  const baseId = useId();
-  const tabId = (id: PaletteTab) => `${baseId}-tab-${id}`;
-  const panelId = (id: PaletteTab) => `${baseId}-panel-${id}`;
-  const strip = useRef<HTMLDivElement>(null);
-  /**
-   * Left and Right move between the tabs, as in any tab list. Focus stays on the strip: it is
-   * taken back the frame after the shown panel focused its own field.
-   */
-  const onStripKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const next = tab === "search" ? "portal" : "search";
-    onTabChange(next);
-    requestAnimationFrame(() => strip.current?.querySelector<HTMLElement>(`#${CSS.escape(tabId(next))}`)?.focus());
-  };
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        ref={strip}
-        role="tablist"
-        aria-label="Search or Portal"
-        onKeyDown={onStripKeyDown}
-        className="flex h-10 shrink-0 items-center gap-1 border-b border-white/[0.07] px-2"
-      >
-        {tabs.map(({ id, label, Icon, letter }) => {
-          const selected = id === tab;
-          return (
-            <button
-              key={id}
-              id={tabId(id)}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls={panelId(id)}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => onTabChange(id)}
-              className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-xs transition-colors ${
-                selected ? "bg-white/[0.1] text-foreground" : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground"
-              }`}
-            >
-              <Icon className="size-3.5" aria-hidden="true" />
-              {label}
-              <kbd aria-hidden="true" className="font-sans text-[10px] tracking-wide text-muted-foreground/70 max-sm:hidden">
-                {mac ? `⌘${letter}` : `Ctrl ${letter}`}
-              </kbd>
-            </button>
-          );
-        })}
-      </div>
-      <div role="tabpanel" id={panelId("search")} aria-labelledby={tabId("search")} hidden={tab !== "search"} className="flex min-h-0 flex-1 flex-col">
-        <SearchPanel {...searchProps} visible={tab === "search"} onOpened={onOpened} />
-      </div>
-      {portalMounted && (
-        <div role="tabpanel" id={panelId("portal")} aria-labelledby={tabId("portal")} hidden={tab !== "portal"} className="flex min-h-0 flex-1 flex-col">
-          <PortalPanel visible={tab === "portal"} onOpened={onOpened} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * The orchestrator's main thread, as on the Portal page: history, composer, drafts (shared with
- * the page). What it links to elsewhere in the app (a session or tab in a reply, a curation run)
- * closes the dialog and goes there.
- */
-function PortalPanel({ visible, onOpened }: { visible: boolean; onOpened: () => void }) {
-  const { threads } = usePortalLive();
-  const thread = threads.find((candidate) => candidate.id === MAIN_THREAD_ID) ?? null;
-  const root = useRef<HTMLDivElement>(null);
-  const handlers = useMemo(
-    () => ({
-      onOpenCurationRun: (runId: string) => {
-        onOpened();
-        pushPath(portalPath({ view: "memory", entityId: null, runId }));
-      },
-    }),
-    [onOpened],
-  );
-  const openWatches = useCallback(() => {
-    onOpened();
-    pushPath(portalPath("watches"));
-  }, [onOpened]);
-  // Focus the composer, caret at the end, when the tab shows; the thread's chunk may still be loading.
-  useEffect(() => {
-    const element = root.current;
-    if (!visible || !element) return;
-    const focus = () => {
-      const textarea = element.querySelector("textarea");
-      if (!textarea) return false;
-      if (!textarea.disabled) {
-        textarea.focus();
-        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-      }
-      return true;
-    };
-    if (focus()) return;
-    const observer = new MutationObserver(() => focus() && observer.disconnect());
-    observer.observe(element, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [visible]);
-  return (
-    <div
-      ref={root}
-      // An in-app link in a reply navigates in place (it prevents the default); the dialog gives way to it.
-      onClick={(event) => {
-        const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
-        if (link && !link.getAttribute("target") && event.defaultPrevented) onOpened();
-      }}
-      className="flex min-h-0 flex-1 flex-col [&_.composer-wrap]:!px-3 [&_.composer-wrap]:!pb-3 [&_.conversation-content]:!px-5 [&_.conversation-content]:!pt-5"
-    >
-      <PortalThread threadId={MAIN_THREAD_ID} thread={thread} visible={visible} handlers={handlers} onOpenWatches={openWatches} />
-    </div>
   );
 }
 
@@ -426,7 +264,7 @@ function SearchPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.07] px-4">
         <Search className="size-[18px] shrink-0 text-muted-foreground" aria-hidden="true" />
-        {/* Focused whenever the tab shows. */}
+        {/* Focused whenever search opens. */}
         <input
           ref={inputRef}
           value={query}

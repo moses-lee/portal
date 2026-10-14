@@ -17,7 +17,6 @@ import { READ_ONLY_TOOLS, createTools, currentToolName } from "./tools/index.ts"
 import { withRedaction } from "./tools/context.ts";
 import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
 import { threadTools } from "./tools/threads.ts";
-import { trackedTools } from "./tracked/tools.ts";
 import { lookingAtLine } from "./workspace/view.ts";
 import { workspaceTools } from "./workspace/tools.ts";
 import type { ModelRole, Scope } from "./types.ts";
@@ -178,7 +177,7 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
   // (a background turn gets the background subset of the classic tools and the domains' background tools).
   const offered: DomainToolContext = toolNames ? { ...ctx, interactive: true } : ctx;
   const domain: ToolSet = {
-    ...threadTools(offered), ...trackedTools(offered), ...workspaceTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered),
+    ...threadTools(offered), ...workspaceTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered),
   };
   const classic = createTools(offered) as unknown as ToolSet;
   let tools: ToolSet = { ...classic, ...withRedaction(ctx, domain) };

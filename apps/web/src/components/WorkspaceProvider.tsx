@@ -83,6 +83,8 @@ export type WorkspaceContextValue = {
   focus: WorkspaceFocus;
   /** The workspace view's business: it reads the URL and reports here for the shell (sidebar, inspector, title). */
   setFocus: (focus: WorkspaceFocus) => void;
+  /** A page surface covers the workspace; preserve focus context but accrue unread changes. */
+  setCovered: (covered: boolean) => void;
   /** Tabs with news since they were last focused (decision 10 and 30); in memory only. */
   unread: ReadonlySet<string>;
   /** The panes with news since the device last showed them: the source of `unread`, and the sheet's row markers on a phone. */
@@ -105,7 +107,7 @@ type InFlight = { op: WorkspaceOp; base: Workspace; made: string[]; guess: OpOut
 /**
  * The workspace for the whole app (docs/WORKSPACE.md, "Web / State"): one REST read so it does not
  * wait for the stream, the portal stream's `workspace` event to keep it current (the stream's copy
- * wins over a slower read, the tracked pattern), optimistic `apply`, the focus the view reports, and
+ * wins over a slower read, the same live-state pattern), optimistic `apply`, the focus the view reports, and
  * unread tabs derived from the session list's patches. Needs `PortalLiveProvider` and
  * `SessionsProvider` above it.
  *
@@ -124,6 +126,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState<WorkspaceFocus>(NO_FOCUS);
+  const [covered, setCovered] = useState(false);
   const [unreadPanes, setUnreadPanes] = useState<ReadonlySet<string>>(() => new Set());
   /** Ops posted and not yet answered (`pending` is any). */
   const [inFlight, setInFlight] = useState(0);
@@ -318,10 +321,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const reportedTabId = focus.tabId;
   const reportedPaneId = focus.paneId;
   const visible = useMemo(() => {
+    if (covered) return new Set<string>();
     if (!onePane) return visiblePaneIds(workspace, focusedTabId, null);
     // The report lags the URL by a render; while they disagree, nothing is shown for certain (so no mark is cleared early).
     return reportedTabId === focusedTabId ? visiblePaneIds(workspace, focusedTabId, reportedPaneId) : new Set<string>();
-  }, [workspace, focusedTabId, onePane, reportedTabId, reportedPaneId]);
+  }, [workspace, focusedTabId, onePane, reportedTabId, reportedPaneId, covered]);
   const signalsRef = useRef<ReadonlyMap<string, SessionSignal> | null>(null);
   useEffect(() => {
     const next = signalsOf(sessions);
@@ -339,7 +343,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const pending = inFlight > 0;
   const value = useMemo<WorkspaceContextValue>(
-    () => ({ workspace, loaded, pending, error, dismissError, apply, locate, focus, setFocus, unread, unreadPanes, keyOf }),
+    () => ({ workspace, loaded, pending, error, dismissError, apply, locate, focus, setFocus, setCovered, unread, unreadPanes, keyOf }),
     [workspace, loaded, pending, error, dismissError, apply, locate, focus, unread, unreadPanes, keyOf],
   );
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

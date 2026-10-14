@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   highlightRanges, isMacPlatform, matchProjects, matchSessions, mergePullHits, newestSessions, paletteShortcut,
-  parseRecents, pruneRecents, pullLabel, rankScore, recentsAfterOpen, resolveRecents,
+  parseRecents, pruneRecents, pullLabel, rankScore, recentsAfterOpen, resolveRecents, searchShortcutAllowed,
 } from "../src/lib/search.ts";
 
 const project = (id, name, extra = {}) => ({ id, name, displayPath: `~/repos/${name}`, path: `/r/${name}`, ...extra });
@@ -134,28 +134,47 @@ test("recents: parse defensively, move to front, dedupe, cap, resolve what still
   );
 });
 
-test("paletteShortcut: ⌘K and ⌘J on a Mac, Ctrl+K and Ctrl+J elsewhere, nothing else", () => {
+test("paletteShortcut: platform command-K opens Agent, slash opens Search, command-J is unbound", () => {
   const key = (k, mods = {}) => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
-  assert.equal(paletteShortcut(key("k", { metaKey: true }), true), "search");
-  assert.equal(paletteShortcut(key("K", { metaKey: true }), true), "search");
-  assert.equal(paletteShortcut(key("j", { metaKey: true }), true), "portal");
+  assert.equal(paletteShortcut(key("k", { metaKey: true }), true), "agent");
+  assert.equal(paletteShortcut(key("K", { metaKey: true }), true), "agent");
+  assert.equal(paletteShortcut(key("k", { ctrlKey: true }), false), "agent");
   assert.equal(paletteShortcut(key("k", { ctrlKey: true }), true), null);
-  assert.equal(paletteShortcut(key("j", { ctrlKey: true }), true), null);
-  assert.equal(paletteShortcut(key("k", { ctrlKey: true }), false), "search");
-  assert.equal(paletteShortcut(key("j", { ctrlKey: true }), false), "portal");
   assert.equal(paletteShortcut(key("k", { metaKey: true }), false), null);
   assert.equal(paletteShortcut(key("k", { ctrlKey: true, shiftKey: true }), false), null);
-  assert.equal(paletteShortcut(key("j", { metaKey: true, altKey: true }), true), null);
-  assert.equal(paletteShortcut(key("l", { ctrlKey: true }), false), null);
+  assert.equal(paletteShortcut(key("k", { metaKey: true, altKey: true }), true), null);
+  assert.equal(paletteShortcut(key("k", { metaKey: true, ctrlKey: true }), true), null);
   assert.equal(paletteShortcut(key("k"), true), null);
-  // A non-Latin layout: the K and J keys type other letters.
-  assert.equal(paletteShortcut(key("л", { code: "KeyK", metaKey: true }), true), "search");
-  assert.equal(paletteShortcut(key("о", { code: "KeyJ", metaKey: true }), true), "portal");
-  assert.equal(paletteShortcut(key("л", { code: "KeyL", metaKey: true }), true), null);
-  // A Latin layout goes by the letter: Dvorak's physical J key types "h".
-  assert.equal(paletteShortcut(key("h", { code: "KeyJ", metaKey: true }), true), null);
-  assert.equal(paletteShortcut(key("j", { code: "KeyC", metaKey: true }), true), "portal");
+  assert.equal(paletteShortcut(key("j", { metaKey: true }), true), null);
+  assert.equal(paletteShortcut(key("j", { ctrlKey: true }), false), null);
+  assert.equal(paletteShortcut(key("/"), true), "search");
+  assert.equal(paletteShortcut(key("/"), false), "search");
+  // Some layouts require Shift to type a slash.
+  assert.equal(paletteShortcut(key("/", { shiftKey: true }), true), "search");
+  for (const modifier of ["metaKey", "ctrlKey", "altKey"]) {
+    assert.equal(paletteShortcut(key("/", { [modifier]: true }), true), null);
+  }
+  assert.equal(paletteShortcut(key("/", { isComposing: true }), true), null);
+  assert.equal(paletteShortcut(key("/", { defaultPrevented: true }), true), null);
+  assert.equal(paletteShortcut(key("k", { metaKey: true, isComposing: true }), true), null);
+  // Non-Latin layouts use physical K; Latin layouts use their typed letter.
+  assert.equal(paletteShortcut(key("л", { code: "KeyK", metaKey: true }), true), "agent");
+  assert.equal(paletteShortcut(key("о", { code: "KeyJ", metaKey: true }), true), null);
+  assert.equal(paletteShortcut(key("h", { code: "KeyK", metaKey: true }), true), null);
+  assert.equal(paletteShortcut(key("k", { code: "KeyC", metaKey: true }), true), "agent");
   assert.equal(isMacPlatform("MacIntel"), true);
   assert.equal(isMacPlatform("iPhone"), true);
   assert.equal(isMacPlatform("Win32"), false);
+});
+
+test("slash target guard excludes editable fields and terminal input", () => {
+  assert.equal(searchShortcutAllowed(null), true);
+  assert.equal(searchShortcutAllowed({}), true);
+  assert.equal(searchShortcutAllowed({ closest: () => null }), true);
+  for (const field of ["input", "textarea", "select", "contenteditable", "xterm"]) {
+    assert.equal(searchShortcutAllowed({ closest: (selector) => {
+      assert.match(selector, new RegExp(field));
+      return {};
+    } }), false);
+  }
 });

@@ -1,24 +1,14 @@
-import type { Metadata } from "next";
-import { portalViews } from "@/lib/session-routes";
+import { notFound } from "next/navigation";
 
-/**
- * The home (`/`) and the fixed view paths are prerendered at build time, so they are static like
- * the separate home page used to be. `{ view: [] }` is the optional catch-all's root; the build
- * treats a missing or undefined optional param the same way. Thread ids (`/threads/<id>`) and memory
- * entities (`/memory/<id>`, `/memory/curation/...`) cannot be enumerated: `dynamicParams` stays at
- * its default (`true`), so those render on demand instead of 404ing.
- */
+export const metadata = { title: "Palace" };
+
 export function generateStaticParams(): { view: string[] }[] {
-  return [{ view: [] }, ...portalViews.filter((view) => view !== "chat").map((view) => ({ view: [view] }))];
+  return [{ view: [] }];
 }
 
-/** The Palace page is titled "Palace" from the first byte; the shell keeps the title current as the URL changes in place. */
-export async function generateMetadata({ params }: { params: Promise<{ view?: string[] }> }): Promise<Metadata> {
+/** Home opens Palace. Non-session screens and Agent have no standalone routes. */
+export default async function PortalRoute({ params }: { params: Promise<{ view?: string[] }> }) {
   const { view } = await params;
-  return view?.length === 1 && view[0] === "palace" ? { title: "Palace" } : {};
-}
-
-/** Portal's home and views (`/`, `/threads/<id>`, `/watches`, ...); the layout renders the app and reads the route from the URL. */
-export default function PortalRoute() {
+  if (view?.length) notFound();
   return null;
 }

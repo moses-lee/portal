@@ -23,18 +23,16 @@ const worktreeProject = (id, fields = {}) => ({
 });
 
 /**
- * Fake deps over plain arrays: `state` holds the sessions, projects, tracked rows (with `trackedAt`
- * by session id, default 0), open terminals, dirty projects, projects whose `git status` fails,
- * worktree roots by project id (default the project's path), and what the sweep did (untracked,
- * removed, removals as groups of ids, activity). `remove(projects, recheck)` replaces the removal.
+ * Fake deps over plain arrays: `state` holds sessions, projects, open terminals, dirty projects,
+ * projects whose `git status` fails, worktree roots, and sweep removals and activity. `remove(projects, recheck)` replaces the removal.
  */
 function fakeSweep({
-  sessions = [], projects = [], tracked = [], trackedAt = {}, terminals = [], dirty = [], statusFails = [], roots = {},
-  untrackAfterHours = 48, removeAfterHours = 72, remove,
+  sessions = [], projects = [], terminals = [], dirty = [], statusFails = [], roots = {},
+  removeAfterHours = 72, remove,
 } = {}) {
   const state = {
-    sessions, projects, tracked: [...tracked], trackedAt, terminals: new Set(terminals), dirty: new Set(dirty), statusFails: new Set(statusFails), roots,
-    settings: { untrackAfterHours, removeAfterHours }, untracked: [], removed: [], removals: [], activity: [], errors: [], keptWrites: [],
+    sessions, projects, terminals: new Set(terminals), dirty: new Set(dirty), statusFails: new Set(statusFails), roots,
+    settings: { removeAfterHours }, removed: [], removals: [], activity: [], errors: [], keptWrites: [],
   };
   const deps = {
     now: () => NOW,
@@ -45,16 +43,6 @@ function fakeSweep({
       async setKeptReason(id, reason) {
         state.keptWrites.push([id, reason]);
         state.projects = state.projects.map((project) => project.id === id ? { ...project, keptReason: reason } : project);
-      },
-    },
-    tracked: {
-      list: async () => state.tracked.map((sessionId) => ({ sessionId, trackedAt: state.trackedAt[sessionId] ?? 0, trackedBy: "portal" })),
-      async untrack(sessionId, by, context) {
-        if (!state.tracked.includes(sessionId)) return false;
-        state.tracked = state.tracked.filter((id) => id !== sessionId);
-        state.untracked.push({ sessionId, by, reason: context?.reason });
-        state.untrackActors = [...(state.untrackActors ?? []), context?.actor];
-        return true;
       },
     },
     hasOpenTerminal: (sessionId) => state.terminals.has(sessionId),
@@ -75,40 +63,6 @@ function fakeSweep({
 }
 
 const session = (id, projectId, idleSince) => ({ id, projectId, idleSince });
-
-test("pass 1 untracks tracked sessions idle past the setting, never busy ones, with the reason", async () => {
-  const { deps, state } = fakeSweep({
-    sessions: [session("old", "p", ago(49)), session("recent", "p", ago(47)), session("busy", "p", null), session("untracked", "p", ago(100))],
-    tracked: ["old", "recent", "busy", "gone"],
-  });
-  const result = await runLifecycleSweep(deps);
-  assert.deepEqual(result, { untracked: 1, removed: 0, kept: 0 });
-  assert.deepEqual(state.untracked, [{ sessionId: "old", by: "portal", reason: "idle for 48h" }]);
-  assert.deepEqual(state.tracked, ["recent", "busy", "gone"]);
-
-  // A lowered setting takes effect on the next sweep.
-  state.settings.untrackAfterHours = 1;
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 1, removed: 0, kept: 0 });
-  assert.deepEqual(state.untracked.at(-1), { sessionId: "recent", by: "portal", reason: "idle for 1h" });
-  assert.deepEqual(state.tracked, ["busy", "gone"]);
-  // The sweep's untracks are Portal's own housekeeping, logged as the system.
-  assert.deepEqual(state.untrackActors, ["system", "system"]);
-});
-
-test("pass 1 counts the untrack clock from when the session was tracked, if later than its idle clock", async () => {
-  const { deps, state } = fakeSweep({
-    sessions: [session("old-tracked-late", "p", ago(500)), session("old-tracked-early", "p", ago(500))],
-    tracked: ["old-tracked-late", "old-tracked-early"],
-    trackedAt: { "old-tracked-late": ago(10), "old-tracked-early": ago(49) },
-  });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 1, removed: 0, kept: 0 });
-  assert.deepEqual(state.tracked, ["old-tracked-late"]);
-});
-
-test("pass 1 is skipped without the tracked service", async () => {
-  const { deps } = fakeSweep({ sessions: [session("old", "p", ago(100))], tracked: ["old"] });
-  assert.deepEqual(await runLifecycleSweep({ ...deps, tracked: null }), { untracked: 0, removed: 0, kept: 0 });
-});
 
 test("pass 2 skips non-worktree, pinned, not idle, open-terminal, and not yet due projects; an open terminal is the kept reason", async () => {
   const { deps, state } = fakeSweep({
@@ -136,7 +90,7 @@ test("pass 2 skips non-worktree, pinned, not idle, open-terminal, and not yet du
   const result = await runLifecycleSweep(deps);
   // "empty" has no sessions, so its clock is its creation time, long past.
   assert.deepEqual(state.removed, ["due", "empty"]);
-  assert.deepEqual(result, { untracked: 0, removed: 2, kept: 1 });
+  assert.deepEqual(result, { removed: 2, kept: 1 });
   // Only the open terminal holds "terminal", so the sidebar says so.
   assert.deepEqual(state.keptWrites, [["terminal", OPEN_TERMINAL_REASON]]);
   assert.deepEqual(state.activity.map((entry) => [entry.kind, entry.refs.projectId]), [
@@ -147,19 +101,19 @@ test("pass 2 skips non-worktree, pinned, not idle, open-terminal, and not yet du
 
   // The terminal closes: the project goes on the next sweep.
   state.terminals.clear();
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 1, kept: 0 });
   assert.deepEqual(state.removed, ["due", "empty", "terminal"]);
 });
 
 test("a lowered removal setting brings a project due sooner", async () => {
   const { deps, state } = fakeSweep({ projects: [worktreeProject("p")], sessions: [session("s", "p", ago(2))], removeAfterHours: 1 });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 1, kept: 0 });
   assert.deepEqual(state.removed, ["p"]);
 });
 
 test("a dirty tree keeps the project with a reason, logged once across sweeps; clean later removes it", async () => {
   const { deps, state } = fakeSweep({ projects: [worktreeProject("p")], sessions: [session("s", "p", ago(100))], dirty: ["p"] });
-  for (let i = 0; i < 3; i++) assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 1 });
+  for (let i = 0; i < 3; i++) assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 1 });
   assert.equal(state.projects[0].keptReason, DIRTY_REASON);
   assert.deepEqual(state.keptWrites, [["p", DIRTY_REASON]]);
   assert.deepEqual(state.activity.map((entry) => entry.kind), ["worktree.kept"]);
@@ -167,7 +121,7 @@ test("a dirty tree keeps the project with a reason, logged once across sweeps; c
   assert.deepEqual(state.removed, []);
 
   state.dirty.clear();
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 1, kept: 0 });
   assert.deepEqual(state.removed, ["p"]);
   assert.deepEqual(state.activity.map((entry) => entry.kind), ["worktree.kept", "worktree.removed_idle"]);
 });
@@ -189,7 +143,7 @@ test("git refusing records its message as the kept reason and the sweep carries 
       return { branchDeleted: true };
     },
   });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 1, kept: 1 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 1, kept: 1 });
   assert.equal(state.projects.find((p) => p.id === "raced").keptReason, "fatal: contains modified or untracked files, use --force to delete it");
   assert.deepEqual(state.removed, ["ok"]);
   assert.deepEqual(state.activity.map((entry) => [entry.kind, entry.refs.projectId]), [["worktree.kept", "raced"], ["worktree.removed_idle", "ok"]]);
@@ -220,7 +174,7 @@ test("the sweeper runs 60 s after start, then every 5 minutes, and never two swe
   assert.deepEqual(timers.map((h) => [h.kind, h.ms]), [["timeout", 60_000], ["interval", 300_000]]);
   while (!release) await new Promise((resolve) => setImmediate(resolve));
   release();
-  assert.deepEqual(await first, { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual(await first, { removed: 1, kept: 0 });
   assert.equal(removals, 1);
 
   await sweeper.dispose();
@@ -230,7 +184,7 @@ test("the sweeper runs 60 s after start, then every 5 minutes, and never two swe
 
 test("a failed git status keeps the project rather than counting as clean", async () => {
   const { deps, state } = fakeSweep({ projects: [worktreeProject("p")], sessions: [session("s", "p", ago(100))], statusFails: ["p"] });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 1 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 1 });
   assert.equal(state.projects[0].keptReason, STATUS_FAILED_REASON);
   assert.deepEqual(state.removals, []);
 });
@@ -240,7 +194,7 @@ test("a restore restarts the idle clock: the project's clock is the later of its
     projects: [worktreeProject("restored", { revivedAt: ago(1) }), worktreeProject("long-ago", { revivedAt: ago(100) })],
     sessions: [session("a", "restored", ago(500)), session("b", "long-ago", ago(500))],
   });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 1, kept: 0 });
   assert.deepEqual(state.removed, ["long-ago"]);
 });
 
@@ -255,7 +209,7 @@ test("projects in one worktree folder are judged together: one held keeps all, a
     sessions: [session("a", "root", ago(500)), session("b", "sub", ago(500))],
   });
   // The pinned root holds the folder; the idle subfolder project says why it stays.
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 1 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 1 });
   assert.deepEqual(state.removals, []);
   assert.deepEqual(state.keptWrites, [["sub", "shares its worktree with x, which is pinned"]]);
   assert.equal(state.projects.find((p) => p.id === "root").keptReason, null);
@@ -263,12 +217,12 @@ test("projects in one worktree folder are judged together: one held keeps all, a
   // A busy root holds it too.
   state.projects = state.projects.map((p) => p.id === "root" ? { ...p, pinnedAt: null } : p);
   state.sessions = [session("a", "root", null), session("b", "sub", ago(500))];
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 1 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 1 });
   assert.equal(state.projects.find((p) => p.id === "sub").keptReason, "shares its worktree with x, which is in use");
 
   // Both idle: one removal for the folder, the root project first, both logged.
   state.sessions = [session("a", "root", ago(100)), session("b", "sub", ago(500))];
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 2, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 2, kept: 0 });
   assert.deepEqual(state.removals, [["root", "sub"]]);
   assert.deepEqual(state.activity.filter((e) => e.kind === "worktree.removed_idle").map((e) => e.refs.projectId), ["root", "sub"]);
 });
@@ -278,7 +232,7 @@ test("a plain project inside a worktree folder holds it", async () => {
     projects: [worktreeProject("wt", { path: "/wt/x" }), { ...worktreeProject("plain", { path: "/wt/x/docs", name: "docs" }), worktree: undefined }],
     sessions: [session("a", "wt", ago(500))],
   });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 1 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 1 });
   assert.equal(state.projects[0].keptReason, "shares its worktree with docs, which is not a worktree project");
 });
 
@@ -291,7 +245,7 @@ test("the sweep judges each project again on live data before removing it", asyn
     state.sessions = [session("s", "p", null)];
     return false;
   };
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 0 });
   assert.deepEqual(state.removals, []);
 
   // Pinned meanwhile.
@@ -300,7 +254,7 @@ test("the sweep judges each project again on live data before removing it", asyn
     state.projects = state.projects.map((p) => ({ ...p, pinnedAt: NOW }));
     return false;
   };
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 0 });
   assert.deepEqual(state.removals, []);
 });
 
@@ -314,7 +268,7 @@ test("the recheck hook cancels a removal after the pre-delete script when the pr
       return { branchDeleted: false };
     },
   });
-  assert.deepEqual(await runLifecycleSweep(deps), { untracked: 0, removed: 0, kept: 0 });
+  assert.deepEqual(await runLifecycleSweep(deps), { removed: 0, kept: 0 });
   assert.deepEqual(state.activity, []);
   assert.equal(state.projects[0].keptReason, null);
   assert.deepEqual(state.errors, []);
@@ -352,7 +306,7 @@ test("a failed removal that is not a dirty tree is not retried until the clock m
     remove: async () => { attempts++; throw new Error(long); },
   });
   const failedAt = new Map();
-  for (let i = 0; i < 3; i++) assert.deepEqual(await runLifecycleSweep(deps, { failedAt }), { untracked: 0, removed: 0, kept: 1 });
+  for (let i = 0; i < 3; i++) assert.deepEqual(await runLifecycleSweep(deps, { failedAt }), { removed: 0, kept: 1 });
   assert.equal(attempts, 1);
   const reason = state.projects[0].keptReason;
   assert.equal(reason, long.split("\n")[0].slice(0, 200));
@@ -384,15 +338,15 @@ test("an aborted sweep stops before the next project, and dispose does not wait 
   const disposed = sweeper.dispose();
   release();
   await disposed;
-  assert.deepEqual(await running, { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual(await running, { removed: 1, kept: 0 });
   assert.deepEqual(state.removed, ["a"]);
   assert.deepEqual(state.removals, [["a"]]);
 
   // A signal aborted up front sweeps nothing, not even pass 1.
   const controller = new AbortController();
   controller.abort();
-  const fresh = fakeSweep({ projects: [worktreeProject("c")], sessions: [session("sc", "c", ago(100))], tracked: ["sc"] });
-  assert.deepEqual(await runLifecycleSweep(fresh.deps, { signal: controller.signal }), { untracked: 0, removed: 0, kept: 0 });
+  const fresh = fakeSweep({ projects: [worktreeProject("c")], sessions: [session("sc", "c", ago(100))] });
+  assert.deepEqual(await runLifecycleSweep(fresh.deps, { signal: controller.signal }), { removed: 0, kept: 0 });
   assert.deepEqual(fresh.state.removals, []);
 });
 
@@ -424,13 +378,13 @@ function sessionRecord(id, projectId, idleSince) {
   };
 }
 
-test("POST /api/lifecycle/sweep untracks through the tracked service and logs to Activity; cross-origin is refused", async (t) => {
+test("POST /api/lifecycle/sweep leaves idle sessions intact; cross-origin is refused", async (t) => {
   const database = await temporaryDatabase(t);
   const store = createPgSessionStore({ db: database.db });
   const now = Date.now();
   await store.putSession(sessionRecord("s1", "p1", now - 49 * HOUR));
   await store.putSession(sessionRecord("s2", "p1", null));
-  // The tracked service names sessions (and checks they exist) through the orchestrator's deps.
+  // Idle sessions themselves are preserved; the sweep only removes due worktrees.
   const { deps } = fakeDeps({ sessions: [sessionMeta({ id: "s1", title: "Session s1" }), sessionMeta({ id: "s2", title: "Session s2" })] });
   const model = new MockLanguageModelV3({});
   const app = await buildApp({
@@ -440,19 +394,14 @@ test("POST /api/lifecycle/sweep untracks through the tracked service and logs to
   t.after(() => app.close());
   const ctx = appContext(app);
   await ctx.orchestrator.ready;
-  for (const id of ["s1", "s2"]) await ctx.orchestrator.hub.tracked.track(id, "user");
 
   const refused = await app.inject({ method: "POST", url: "/api/lifecycle/sweep", headers: { origin: "http://evil.example" } });
   assert.equal(refused.statusCode, 403);
 
   const swept = await app.inject({ method: "POST", url: "/api/lifecycle/sweep" });
   assert.equal(swept.statusCode, 200, swept.body);
-  assert.deepEqual(swept.json(), { untracked: 1, removed: 0, kept: 0 });
-  assert.deepEqual((await ctx.orchestrator.hub.tracked.list()).map((row) => row.sessionId), ["s2"]);
-  const [entry] = await ctx.orchestrator.hub.activity.list({ kind: "session.untracked" });
-  assert.equal(entry.summary, `Untracked "Session s1": idle for 48h`);
-  assert.equal(entry.actor, "system");
-  assert.deepEqual(entry.detail, { trackedBy: "portal", reason: "idle for 48h" });
+  assert.deepEqual(swept.json(), { removed: 0, kept: 0 });
+  assert.deepEqual((await store.listSessions()).map((session) => session.id).sort(), ["s1", "s2"]);
 });
 
 test("the live sweep keeps a dirty worktree, then removes it clean through the shared removal path", async (t) => {
@@ -475,18 +424,18 @@ test("the live sweep keeps a dirty worktree, then removes it clean through the s
   const wt = created.json().project;
 
   // Not due yet: created moments ago.
-  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { untracked: 0, removed: 0, kept: 0 });
+  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { removed: 0, kept: 0 });
 
   now += 73 * HOUR;
   writeFileSync(path.join(wt.path, "scratch.txt"), "work in progress\n");
-  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { untracked: 0, removed: 0, kept: 1 });
+  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { removed: 0, kept: 1 });
   const listed = (await call("GET", "/api/projects")).json().projects;
   assert.equal(listed.find((p) => p.id === wt.id).keptReason, DIRTY_REASON);
   // The parent checkout is not a worktree project and is never touched.
   assert.equal(listed.find((p) => p.id === parent.id).keptReason, null);
 
   rmSync(path.join(wt.path, "scratch.txt"));
-  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { untracked: 0, removed: 1, kept: 0 });
+  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { removed: 1, kept: 0 });
   assert.equal(existsSync(wt.path), false);
   assert.deepEqual((await call("GET", "/api/projects")).json().projects.map((p) => p.id), [parent.id]);
   // The branch never moved off origin/main, so it counts as merged and goes with the folder.
@@ -523,13 +472,13 @@ test("the live sweep keeps a shared worktree while its root project is pinned, t
 
   now += 73 * HOUR;
   // The idle subfolder project would take the pinned root's folder with it: both stay.
-  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { untracked: 0, removed: 0, kept: 1 });
+  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { removed: 0, kept: 1 });
   assert.equal(existsSync(wtRoot.path), true);
   const listed = (await call("GET", "/api/projects")).json().projects;
   assert.equal(listed.find((p) => p.id === wtWeb.id).keptReason, "shares its worktree with feat/x, which is pinned");
 
   assert.equal((await call("PATCH", `/api/projects/${wtRoot.id}`, { pinned: false })).statusCode, 200);
-  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { untracked: 0, removed: 2, kept: 0 });
+  assert.deepEqual((await call("POST", "/api/lifecycle/sweep")).json(), { removed: 2, kept: 0 });
   assert.equal(existsSync(wtRoot.path), false);
   assert.deepEqual((await call("GET", "/api/projects")).json().projects.map((p) => p.id).sort(), [parent.id, parentWeb.id].sort());
 });

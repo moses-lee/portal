@@ -2,7 +2,7 @@ import type { Item, ItemKind } from "@portal/contracts/orchestrator";
 
 /**
  * Item kinds nothing creates any more (2026-09-29): the session states they raised show live in the
- * tracked-sessions panel instead. Old rows keep them; they never need the user's attention.
+ * workspace instead. Old rows keep them; they never need the user's attention.
  */
 export const retiredItemKinds: ReadonlySet<ItemKind> = new Set<ItemKind>([
   "session_finished",

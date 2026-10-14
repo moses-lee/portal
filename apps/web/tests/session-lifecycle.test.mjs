@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   countdownText,
   projectIdleClock,
-  untrackCountdown,
   worktreeRetention,
 } from "../src/lib/session-lifecycle.ts";
 
@@ -25,30 +24,6 @@ test("coarse countdowns keep only the largest unit", () => {
   assert.equal(countdownText(2 * DAY + 23 * HOUR, { coarse: true }), "2d");
   assert.equal(countdownText(5 * HOUR + 20 * MIN, { coarse: true }), "5h");
   assert.equal(countdownText(12 * MIN, { coarse: true }), "12m");
-});
-
-test("a finished tracked session untracks untrackAfterHours after it went idle", () => {
-  const now = 1_000 * DAY;
-  // Idle for 20h 30m of 48h: 27h 30m left.
-  assert.equal(untrackCountdown({ idleSince: now - 20 * HOUR - 30 * MIN }, 48, now), "untracks in 1d 3h");
-  assert.equal(untrackCountdown({ idleSince: now - 47 * HOUR - 30 * MIN }, 48, now), "untracks in 30m");
-  // Past due: the next sweep takes it.
-  assert.equal(untrackCountdown({ idleSince: now - 50 * HOUR }, 48, now), "untracks soon");
-  // The setting moves the clock.
-  assert.equal(untrackCountdown({ idleSince: now }, 1, now), "untracks in 1h");
-  // No clock while it is doing anything (or before the server reports one).
-  assert.equal(untrackCountdown({ idleSince: null }, 48, now), null);
-  assert.equal(untrackCountdown({}, 48, now), null);
-});
-
-test("tracking an old finished session starts its untrack clock when it was tracked", () => {
-  const now = 1_000 * DAY;
-  // Idle for 5 days, tracked an hour ago: 47h left, not "soon".
-  assert.equal(untrackCountdown({ idleSince: now - 5 * DAY }, 48, now, now - HOUR), "untracks in 1d 23h");
-  // Tracked before it went idle: the idle clock wins.
-  assert.equal(untrackCountdown({ idleSince: now - 20 * HOUR - 30 * MIN }, 48, now, now - 3 * DAY), "untracks in 1d 3h");
-  // Still no clock while it is not idle.
-  assert.equal(untrackCountdown({ idleSince: null }, 48, now, now), null);
 });
 
 const worktree = { parentId: "parent", branch: "feat" };

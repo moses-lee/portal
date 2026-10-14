@@ -150,11 +150,12 @@ test("closing a pane shrinks its split, then collapses it; closing the last pane
   ]);
   // The session itself is untouched.
   expect(fixture.requests.some((request) => request.method === "DELETE" && request.path.startsWith("/api/sessions/"))).toBe(false);
-  // The last pane: the tab goes, and an empty workspace is the start page without a strip.
+  // The last pane: the tab goes, and an empty workspace keeps the strip and its new-tab button.
   await paneOf(page, "p1").getByRole("button", { name: "Pane options" }).click();
   await page.getByRole("menuitem", { name: "Close pane" }).click();
   await expect(page).toHaveURL(/\/new$/);
-  await expect(strip(page)).toHaveCount(0);
+  await expect(strip(page)).toBeVisible();
+  await expect(strip(page).getByRole("tab")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
 });
 

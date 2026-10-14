@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { firstTitle, secondTitle, setupPortal, thirdTitle } from "./fixtures";
+import { firstTitle, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 
 /**
- * Global search (docs/SEARCH.md): the sidebar button and ⌘K / Ctrl+K open it; sessions and projects
+ * Global search (docs/SEARCH.md): the slash shortcut opens it; sessions and projects
  * match on the client, message hits and PR-linked sessions come from a mocked `GET /api/search`.
  */
 
@@ -12,11 +12,15 @@ const group = (page: Page, name: string) => dialog(page).getByRole("group", { na
 const strip = (page: Page) => page.getByRole("tablist", { name: "Workspace tabs" });
 /** The sidebar's shortcut hint renders only once the page has hydrated, and the shortcut listener with it. */
 const hydrated = (page: Page) => expect(page.getByText(/^(⌘K|Ctrl K)$/)).toBeVisible();
+const openSearch = async (page: Page) => {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("/");
+};
 
-test("the sidebar button opens search; esc closes it; the empty query lists recent sessions", async ({ page }) => {
+test("slash opens search; esc closes it; the empty query lists recent sessions", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await openSearch(page);
   await expect(input(page)).toBeFocused();
   const recent = group(page, "Recent sessions");
   await expect(recent.getByRole("option")).toHaveCount(3);
@@ -27,23 +31,21 @@ test("the sidebar button opens search; esc closes it; the empty query lists rece
   await expect(dialog(page)).toHaveCount(0);
 });
 
-test("⌘K / Ctrl+K toggles search, even from the composer", async ({ page }) => {
+test("slash stays in a focused composer and opens search after focus leaves it", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/sessions/s1");
   await expect(page).toHaveURL(/\/tabs\/w2$/);
   const composer = page.getByLabel("Message Claude Code", { exact: true });
   await hydrated(page);
   await composer.click();
-  // Focus in a textarea, which would otherwise take the key.
-  await expect(composer).toBeFocused();
-  expect(await composer.evaluate((element) => element.tagName)).toBe("TEXTAREA");
-  await page.keyboard.press("ControlOrMeta+k");
-  await expect(input(page)).toBeFocused();
-  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.press("/");
+  await expect(composer).toHaveValue("/");
   await expect(dialog(page)).toHaveCount(0);
-  // Nothing reached the composer, and focus went back to it.
-  await expect(composer).toHaveValue("");
-  await expect(composer).toBeFocused();
+  await openSearch(page);
+  await expect(input(page)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(composer).toHaveValue("/");
 });
 
 test("a query lists projects, sessions (with PR hits), and messages from the server", async ({ page }) => {
@@ -63,7 +65,7 @@ test("a query lists projects, sessions (with PR hits), and messages from the ser
   });
   await page.goto("/");
   await hydrated(page);
-  await page.keyboard.press("ControlOrMeta+k");
+  await openSearch(page);
   // Typed faster than the debounce: one request, for the whole word.
   await input(page).pressSequentially("chat", { delay: 30 });
   await expect(group(page, "Projects").getByRole("option")).toHaveText([/improve-chat-experience/]);
@@ -88,7 +90,7 @@ test("a failing search route counts as no hits; local matches still show", async
   await page.route("**/api/search**", (route) => route.fulfill({ status: 500, body: "boom" }));
   await page.goto("/");
   await hydrated(page);
-  await page.keyboard.press("ControlOrMeta+k");
+  await openSearch(page);
   await input(page).fill("investigate");
   await expect(group(page, "Sessions").getByRole("option")).toHaveText([/Investigate long session/]);
   await expect(group(page, "Messages")).toHaveCount(0);
@@ -98,7 +100,7 @@ test("arrow down and enter open a session, which then leads the Recent section",
   await setupPortal(page);
   await page.goto("/");
   await hydrated(page);
-  await page.keyboard.press("ControlOrMeta+k");
+  await openSearch(page);
   await input(page).fill("chat");
   // The project row is selected first; one step down is the first session.
   await expect(group(page, "Projects").getByRole("option").first()).toHaveAttribute("aria-selected", "true");
@@ -109,7 +111,7 @@ test("arrow down and enter open a session, which then leads the Recent section",
   await expect(page).toHaveURL(/\/tabs\/w2$/);
   await expect(strip(page).getByRole("tab", { name: firstTitle })).toHaveAttribute("aria-selected", "true");
   // Reopened: the session is under Recent, and arrow up wraps to the last row.
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await openSearch(page);
   await expect(group(page, "Recent").getByRole("option")).toHaveText([new RegExp(firstTitle)]);
   await page.keyboard.press("ArrowUp");
   await expect(group(page, "Recent sessions").getByRole("option").last()).toHaveAttribute("aria-selected", "true");
@@ -118,18 +120,17 @@ test("arrow down and enter open a session, which then leads the Recent section",
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("the sidebar sheet's Search button closes the sheet and opens search as a bottom sheet", async ({ page }) => {
+  test("slash opens search as a bottom sheet", async ({ page }) => {
     await setupPortal(page);
-    await page.goto("/");
-    await page.getByRole("button", { name: "Toggle sidebar" }).click();
-    const sidebar = page.getByRole("dialog", { name: "Your workspace" });
-    await sidebar.getByRole("button", { name: "Search", exact: true }).click();
-    await expect(sidebar).toHaveCount(0);
+    await page.goto("/sessions/s1");
+    await expect(page).toHaveURL(tabUrl);
+    await openSearch(page);
     await expect(input(page)).toBeFocused();
     await input(page).fill("investigate");
     await group(page, "Sessions").getByRole("option", { name: secondTitle }).click();
     await expect(dialog(page)).toHaveCount(0);
-    await expect(page).toHaveURL(/\/tabs\/w2$/);
+    await expect(page).toHaveURL(tabUrl);
+    await expect(page.locator('[data-pane][data-session="s2"]')).toBeVisible();
   });
 });
 
@@ -149,7 +150,7 @@ test("a pending query shows neither the last query's PR hits nor an empty state"
   });
   await page.goto("/");
   await hydrated(page);
-  await page.keyboard.press("ControlOrMeta+k");
+  await openSearch(page);
   await input(page).fill("42");
   await expect(group(page, "Sessions").getByRole("option", { name: thirdTitle })).toContainText("PR #42");
   await input(page).fill("423");
@@ -161,17 +162,17 @@ test("a pending query shows neither the last query's PR hits nor an empty state"
   await expect(dialog(page)).toContainText("No results for “423”");
 });
 
-test("⌘K / Ctrl+K and ⌘J / Ctrl+J do nothing while Settings is open", async ({ page }) => {
+test("slash and command-K do nothing while Settings is open", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   await hydrated(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog", { name: "Settings" });
   await expect(settings).toBeVisible();
+  await openSearch(page);
   await page.keyboard.press("ControlOrMeta+k");
-  await page.keyboard.press("ControlOrMeta+j");
   await page.waitForTimeout(200);
   await expect(dialog(page)).toHaveCount(0);
-  await expect(page.locator("[data-search-dialog]")).toHaveCount(0);
+  await expect(page.locator("[data-search-dialog], [data-agent-dialog]")).toHaveCount(0);
   await expect(settings).toBeVisible();
 });

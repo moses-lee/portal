@@ -6,9 +6,8 @@ import type { AgentActivity } from "@/lib/agent-activity";
 import { usePortalEvents, usePortalLive } from "@/components/portal/PortalLive";
 import { useSessions } from "@/components/SessionsProvider";
 import { useMediaQuery } from "@/components/useMediaQuery";
-import { useWorkspaceActions } from "@/components/workspace/useWorkspaceActions";
-import { pushPath } from "@/lib/navigation";
-import { isPortalPath, portalPath, portalPathKeepingPanel, type PortalView } from "@/lib/session-routes";
+import { requestAppNavigation } from "@/lib/surface-navigation";
+import { portalPath, sessionPath, type PortalView } from "@/lib/session-routes";
 import type { RoomCensus } from "@portal/contracts/room";
 import { LAYOUT_VERSION, latitudeForTimeZone } from "@portal/shared/room";
 import {
@@ -219,9 +218,9 @@ function zoneLatitude(): number {
   }
 }
 
-/** The Portal view a room object opens: the tracked panel's session comes along on Portal pages. */
+/** A room object requests a page overlay or the Agent popup without navigating away. */
 function openView(view: PortalView) {
-  pushPath(isPortalPath(window.location.pathname) ? portalPathKeepingPanel(view, window.location.search) : portalPath(view));
+  requestAppNavigation(portalPath(view));
 }
 
 /**
@@ -266,10 +265,9 @@ export default function RoomBackground({ activity, palace = false }: { activity:
   const style = sky ? ({ "--room-sky-top": sky.zenith, "--room-sky-horizon": sky.horizon } as CSSProperties) : undefined;
 
   // The live objects (docs/PALACE.md, Objects).
-  const { sessions, tracked } = useSessions();
+  const { sessions } = useSessions();
   const { status, approvals, intents, requestApproval } = usePortalLive();
-  const trackedIds = useMemo(() => new Set(tracked.map((entry) => entry.sessionId)), [tracked]);
-  const crowd = useMemo(() => placeRobots(sessions, trackedIds), [sessions, trackedIds]);
+  const crowd = useMemo(() => placeRobots(sessions), [sessions]);
   const busy = status?.busy ?? false;
   /** When Portal last stopped answering (the lamp goes off at night an hour after); the page load counts as a start. */
   const [idleSince, setIdleSince] = useState<number | null>(() => Date.now());
@@ -331,7 +329,6 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     [],
   );
 
-  const { openSession } = useWorkspaceActions();
   const { openProject } = host;
   const approvalsRef = useRef(approvals);
   useLayoutEffect(() => {
@@ -341,10 +338,10 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     (target: RoomTarget) => {
       switch (target.kind) {
         case "robot":
-          return void openSession(target.id);
+          return requestAppNavigation(sessionPath(target.id));
         case "book":
           // A purged session's book goes nowhere: its card says so.
-          if (!target.id.startsWith("purged:")) void openSession(target.id);
+          if (!target.id.startsWith("purged:")) requestAppNavigation(sessionPath(target.id));
           return;
         case "mail":
           return openView("attention");
@@ -369,7 +366,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
           return;
       }
     },
-    [openSession, openProject, requestApproval],
+    [openProject, requestApproval],
   );
   const palaceRef = useRef(palace);
   useLayoutEffect(() => {

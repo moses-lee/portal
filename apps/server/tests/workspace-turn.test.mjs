@@ -48,13 +48,13 @@ test("a chat turn's prompt ends with what the user is looking at: the session an
   assert.deepEqual(inTab.turn.view, { sessionId: REVIEW, tabId, paneId }, "the tools see the view through the turn");
   for (const name of WORKSPACE_TOOLS) assert.ok(inTab.tools[name], `${name} is offered`);
   assert.match(inTab.system, /Workspace:\n- The workspace is where the user is working/, "the guidance");
-  assert.match(inTab.system, /Tracked sessions: none\.\nWorkspace tabs:\n- "Review auth \+ First" \[[0-9a-f]{8}\]: 17329ac6 \(idle\), 5e0f1b2c \(working\)\n/, "the World section lists the tabs after the tracked sessions");
+  assert.match(inTab.system, /Workspace tabs:\n- "Review auth \+ First" \[[0-9a-f]{8}\]: 17329ac6 \(idle\), 5e0f1b2c \(working\)\n/, "the World section lists the workspace tabs");
 
   const page = await prepareTurn(hub, chatTurn({ sessionId: null, tabId: null, paneId: null }));
   assert.match(page.system, /\n\nView \(from the device[^\n]*\):\nYou are looking at: the Portal page, no session\.$/);
 
-  const tracked = await prepareTurn(hub, chatTurn({ sessionId: UNTITLED, tabId: null, paneId: null }));
-  assert.match(tracked.system, /\nYou are looking at: session 7a7a7a7a \(Untitled\)\.$/, "the tracked panel names no tab, and an untitled session reads Untitled");
+  const standalone = await prepareTurn(hub, chatTurn({ sessionId: UNTITLED, tabId: null, paneId: null }));
+  assert.match(standalone.system, /\nYou are looking at: session 7a7a7a7a \(Untitled\)\.$/, "a standalone session names no tab, and an untitled session reads Untitled");
 
   const gone = await prepareTurn(hub, chatTurn({ sessionId: "deadbeef-0000-4000-8000-000000000000", tabId: "nope", paneId: null }));
   assert.match(gone.system, /\nYou are looking at: session deadbeef \(no longer exists\)\.$/);

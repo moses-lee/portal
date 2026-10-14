@@ -1,7 +1,6 @@
 /**
- * The lifecycle sweep's clocks as the web shows them (docs/SESSION-LIFECYCLE.md, rules 1 and 2):
- * when a finished tracked session is untracked, and when an idle worktree project is removed or why
- * it is kept. Pure, so the node test runner can load it. The server decides; these only predict.
+ * When an idle worktree project is removed or why it is kept (docs/SESSION-LIFECYCLE.md).
+ * Pure, so the node test runner can load it. The server decides; these only predict.
  */
 import type { Project, SessionSummary } from "./types.ts";
 
@@ -30,22 +29,6 @@ export function countdownText(ms: number, { coarse = false }: { coarse?: boolean
 function inText(ms: number, coarse: boolean): string {
   const text = countdownText(ms, { coarse });
   return text === "soon" ? text : `in ${text}`;
-}
-
-/**
- * The finished tracked row's subtitle, "untracks in 1d 3h", from `max(idleSince, trackedAt) +
- * untrackAfterHours`: tracking an old finished session gives it the full window from the moment it
- * was tracked. Null when the session is not idle (no clock is running).
- */
-export function untrackCountdown(
-  session: { idleSince?: number | null },
-  untrackAfterHours: number,
-  now: number,
-  trackedAt: number | null = null,
-): string | null {
-  if (session.idleSince == null) return null;
-  const clock = Math.max(session.idleSince, trackedAt ?? 0);
-  return `untracks ${inText(clock + untrackAfterHours * HOUR - now, false)}`;
 }
 
 /** The fields of a project the worktree clock reads. */

@@ -15,7 +15,6 @@ import { registerApprovalRoutes } from "./approvals/routes.ts";
 import { registerJobRoutes } from "./jobs/routes.ts";
 import { registerMemoryRoutes } from "./memory/routes.ts";
 import { parseItemPatch } from "./store.ts";
-import { registerTrackedRoutes } from "./tracked/routes.ts";
 import type { Item, OrchestratorEvent, OrchestratorMessage } from "./types.ts";
 import { MAIN_THREAD_ID, MAX_BULK_ITEMS } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
@@ -256,7 +255,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `threads`, `approvals`, `intents`, `tracked`, `workspace`, and `room` (left out when the room cannot be read), then forwards every runtime event as
+   * `items`, `threads`, `approvals`, `intents`, `workspace`, and `room` (left out when the room cannot be read), then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter cadence of jobs that have an idle one.
    */
@@ -265,9 +264,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
     // The browser shows open and snoozed items only; resolved ones stay in the store for the agent.
-    const [status, items, threads, approvals, intents, tracked, workspace, room] = await Promise.all([
+    const [status, items, threads, approvals, intents, workspace, room] = await Promise.all([
       runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.listThreads(), runtime.hub.approvals.pending(),
-      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.tracked.list(), runtime.hub.workspace.read(),
+      runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.workspace.read(),
       // The room is decoration: a census that cannot count opens the stream without it (the next push brings it).
       ctx.room.state().catch((err: unknown) => {
         ctx.log.warn(`Room: could not build the state for the portal stream (${err instanceof Error ? err.message : String(err)}).`);
@@ -276,7 +275,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     ]);
     const opening: OrchestratorEvent[] = [
       { type: "status", status }, { type: "items", items }, { type: "threads", threads },
-      { type: "approvals", approvals }, { type: "intents", intents }, { type: "tracked", sessions: tracked }, { type: "workspace", workspace },
+      { type: "approvals", approvals }, { type: "intents", intents }, { type: "workspace", workspace },
       ...(room ? [{ type: "room" as const, state: room }] : []),
     ];
     const stream = openEventStream(req, reply);
@@ -295,5 +294,4 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
   registerWorldRoutes(app, ctx);
   registerMemoryRoutes(app, ctx);
   registerApprovalRoutes(app, ctx);
-  registerTrackedRoutes(app, ctx);
 }

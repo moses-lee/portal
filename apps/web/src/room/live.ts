@@ -65,7 +65,6 @@ export type RobotSpec = {
   title: string;
   agentId: string;
   agentName: string;
-  tracked: boolean;
 };
 
 export type RobotCrowd = {
@@ -82,7 +81,7 @@ export type RobotCrowd = {
  * placed (approval ones by the door, in order; the rest at the bench, in a slot from the session
  * id's hash so a newcomer never moves another), and the rest queue by the door.
  */
-export function placeRobots(sessions: readonly RobotSession[], tracked: ReadonlySet<string> = new Set()): RobotCrowd {
+export function placeRobots(sessions: readonly RobotSession[]): RobotCrowd {
   const active = sessions
     .map((session) => ({ session, state: robotStateFor(session) }))
     .filter((entry): entry is { session: RobotSession; state: RobotState } => entry.state !== null)
@@ -101,7 +100,6 @@ export function placeRobots(sessions: readonly RobotSession[], tracked: Readonly
     title: session.title || "New conversation",
     agentId: session.agentId,
     agentName: session.agentName,
-    tracked: tracked.has(session.id),
   });
   const robots = placed.map(({ session, state }) =>
     state === "approval" ? spec(session, state, "door", door++) : spec(session, state, "bench", benchSlots.get(session.id) ?? 0),
@@ -288,7 +286,6 @@ export function describeObject(target: RoomTarget, data: RoomLiveData): RoomCard
       if (!robot) return null;
       const lines = [`${robotStateLabels[robot.state]} · ${robot.agentName}`];
       if (robot.place === "queue") lines.push("Queued by the door: the room holds eight");
-      if (robot.tracked) lines.push("Tracked (the scarf)");
       lines.push(robotsLabel(data.crowd.total));
       return card(robot.title, "A session's robot", lines, "the session");
     }
