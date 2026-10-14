@@ -50,13 +50,13 @@ test("a robot stands for every session connecting, working, in the background, w
 const session = (id, state, createdAt) => ({ id, title: `Session ${id}`, agentId: "claude", agentName: "Claude Code", createdAt, ...inState[state] });
 
 test("approval robots stand by the door, the rest at the bench, and finished sessions have none", () => {
-  const crowd = placeRobots([session("a", "working", 1), session("b", "approval", 2), session("c", "finished", 3), session("d", "hung", 4)], new Set(["d"]));
+  const crowd = placeRobots([session("a", "working", 1), session("b", "approval", 2), session("c", "finished", 3), session("d", "hung", 4)]);
   assert.deepEqual(
-    crowd.robots.map(({ id, state, place, tracked }) => ({ id, state, place, tracked })),
+    crowd.robots.map(({ id, state, place }) => ({ id, state, place })),
     [
-      { id: "a", state: "working", place: "bench", tracked: false },
-      { id: "b", state: "approval", place: "door", tracked: false },
-      { id: "d", state: "hung", place: "bench", tracked: true },
+      { id: "a", state: "working", place: "bench" },
+      { id: "b", state: "approval", place: "door" },
+      { id: "d", state: "hung", place: "bench" },
     ],
   );
   assert.equal(crowd.total, 3);
@@ -64,7 +64,7 @@ test("approval robots stand by the door, the rest at the bench, and finished ses
   // Bench slots are distinct, and a newcomer does not move anyone already at the bench.
   const slots = crowd.robots.filter((robot) => robot.place === "bench").map((robot) => robot.slot);
   assert.equal(new Set(slots).size, slots.length);
-  const later = placeRobots([session("a", "working", 1), session("b", "approval", 2), session("d", "hung", 4), session("e", "working", 5)], new Set(["d"]));
+  const later = placeRobots([session("a", "working", 1), session("b", "approval", 2), session("d", "hung", 4), session("e", "working", 5)]);
   for (const robot of crowd.robots) assert.equal(later.robots.find((each) => each.id === robot.id).slot, robot.slot);
 });
 

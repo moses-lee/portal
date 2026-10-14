@@ -1,16 +1,6 @@
-/**
- * Browser routes. Portal, the orchestrator, is the home: `/` is its main thread, `/threads/<id>` one
- * of the side threads it opened, and `/attention`, `/watches`, `/activity`, `/memory[/<entityId>]`, `/system` its
- * views, `/palace` the room alone; `/memory/curation[/<runId>]` is memory curation: its runs, or one run's digest and diff.
- * `/tabs/<tabId>` is a workspace tab (docs/WORKSPACE.md), `?pane=<paneId>` the focused pane of a split.
- * `/new` (the start page) and `/sessions/<id>` are **resolvers**: the shell focuses the tab holding a
- * start-page pane or that session, opening one when none does, then rewrites the URL to the tab
- * path; old links keep working. `/terminal` is the standalone terminal page (shells that belong to
- * no session).
- *
- * Any Portal path may carry `?session=<id>`: the session the tracked-sessions panel shows beside the
- * view. Switching Portal views keeps it; leaving Portal (a tab, the terminal, `/new`) drops it.
- */
+/** Workspace URLs. Non-session surfaces live only in local UI state. The Portal helpers below
+ * encode destinations in stored model replies; those strings are dispatched as UI actions and
+ * are not public browser routes. */
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const TERMINAL_PATH = /^\/terminal\/?$/;
@@ -113,7 +103,7 @@ export function inAppLinkPath(href: string, origin: string | null): string | nul
     pathname = url.pathname;
     search = url.search;
   }
-  if (!isTabPath(pathname) && sessionIdFromPath(pathname) === null) return null;
+  if (!isTabPath(pathname) && sessionIdFromPath(pathname) === null && !isSurfaceLinkPath(pathname)) return null;
   return `${pathname}${isTabPath(pathname) ? search : ""}`;
 }
 
@@ -127,36 +117,19 @@ export function isWorkspacePath(pathname: string): boolean {
   return isTabPath(pathname) || isResolverPath(pathname);
 }
 
-/** Every path that is not a workspace path or the terminal is Portal's: a view, or the main thread. */
+/** The only non-workspace browser page is home (Palace). */
 export function isPortalPath(pathname: string): boolean {
-  return !isWorkspacePath(pathname) && !isTerminalPath(pathname);
+  return pathname === "/";
 }
 
 export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system" | "palace";
 export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system", "palace"];
 
 /** Where a Portal path points; unknown paths land on the main thread. */
-export type PortalLocation = (
+export type PortalLocation =
   | { view: "chat"; threadId: string }
-  /** `runId` present: the curation pane (null lists the runs, an id shows one). */
   | { view: "memory"; entityId: string | null; runId?: string | null }
-  | { view: "attention" | "watches" | "activity" | "system" | "palace" }
-) & {
-  /** The session the tracked panel shows (`?session=`); absent or null when it shows its list. */
-  session?: string | null;
-};
-
-const PANEL_SESSION_PARAM = "session";
-
-/** The panel's session from a query string (`?session=<id>`, with or without the `?`); null when absent or empty. */
-export function panelSessionFromSearch(search: string): string | null {
-  return new URLSearchParams(search).get(PANEL_SESSION_PARAM) || null;
-}
-
-/** `pathname` with the panel's session set (an id) or cleared (null); other query params are not kept. */
-export function withPanelSession(pathname: string, sessionId: string | null): string {
-  return sessionId ? `${pathname}?${new URLSearchParams({ [PANEL_SESSION_PARAM]: sessionId })}` : pathname;
-}
+  | { view: "attention" | "watches" | "activity" | "system" | "palace" };
 
 function decodeSegment(segment: string): string | null {
   try {
@@ -166,11 +139,9 @@ function decodeSegment(segment: string): string | null {
   }
 }
 
-/** Where a Portal path points; `search` (the query string) adds the panel's session when it names one. */
-export function portalLocation(pathname: string, search = ""): PortalLocation {
-  const location = routeOf(pathname);
-  const session = panelSessionFromSearch(search);
-  return session ? { ...location, session } : location;
+/** Decode an internal surface destination. These are actions, not browser pages. */
+export function portalLocation(pathname: string): PortalLocation {
+  return routeOf(pathname);
 }
 
 function routeOf(pathname: string): PortalLocation {
@@ -188,22 +159,9 @@ function routeOf(pathname: string): PortalLocation {
   return { view: "chat", threadId: "main" };
 }
 
-/**
- * The path for a view, a thread (the main thread is the home, `/`), a memory entity, or a curation
- * run; with `?session=` when the location names the panel's session.
- */
+/** Encode a destination for stored replies and the surface dispatcher. */
 export function portalPath(to: PortalLocation | PortalView = "chat"): string {
-  const path = routePath(to);
-  return typeof to === "string" ? path : withPanelSession(path, to.session ?? null);
-}
-
-/**
- * `portalPath(to)`, keeping the panel's session named by `search` (the current query string) unless
- * `to` says otherwise (`session` set, or null to close it). Switching Portal views goes through this.
- */
-export function portalPathKeepingPanel(to: PortalLocation | PortalView, search: string): string {
-  const location = typeof to === "string" ? viewLocation(to) : to;
-  return portalPath(location.session !== undefined ? location : { ...location, session: panelSessionFromSearch(search) });
+  return routePath(to);
 }
 
 /** A view's root: Chat is the main thread, Memory the list. */
@@ -222,4 +180,9 @@ function routePath(to: PortalLocation | PortalView): string {
     default:
       return `/${location.view}`;
   }
+}
+
+/** Destinations supported in stored Agent replies and item bodies; these never become browser routes. */
+export function isSurfaceLinkPath(pathname: string): boolean {
+  return /^(?:\/|\/(?:attention|watches|activity|system|palace|terminal)\/?|\/threads\/[^/]+\/?|\/memory(?:\/[^/]+|\/curation(?:\/[^/]+)?)?\/?)$/.test(pathname);
 }

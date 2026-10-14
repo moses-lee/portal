@@ -19,6 +19,12 @@ import {
 import Sidebar from "./Sidebar";
 import type { InitialSend, StartPaneProps } from "./SessionPane";
 import TerminalPage from "./TerminalPage";
+import RemovedProjects from "./RemovedProjects";
+import PalaceView from "@/room/PalaceView";
+import IconButton from "./IconButton";
+import { PanelLeft } from "lucide-react";
+import { APP_NAVIGATION_EVENT } from "@/lib/surface-navigation";
+import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import PortalPage from "./PortalPage";
 import WorkspaceView from "./workspace/WorkspaceView";
 import { useWorkspaceActions } from "./workspace/useWorkspaceActions";
@@ -54,6 +60,7 @@ import { sessionDisplayTitle } from "@/lib/session-title";
 import {
   isMacPlatform,
   paletteShortcut,
+  searchShortcutAllowed,
   parseRecents,
   pruneRecents,
   RECENTS_KEY,
@@ -62,12 +69,12 @@ import {
   type RecentItem,
 } from "@/lib/search";
 import {
-  isPortalPath,
   isTerminalPath,
   portalLocation,
-  portalPathKeepingPanel,
+  sessionIdFromPath,
+  type PortalLocation,
+  type WorkspaceRoute,
   sessionPath,
-  terminalPath,
   workspaceRoute,
   type PortalView,
 } from "@/lib/session-routes";
@@ -87,6 +94,8 @@ const GithubInspector = dynamic(() => import("./GithubInspector"));
 const SettingsDialog = dynamic(() => import("./SettingsDialog"));
 const ApprovalsDialog = dynamic(() => import("./portal/ApprovalsDialog"));
 const SearchDialog = dynamic(() => import("./SearchDialog"));
+const AgentDialog = dynamic(() => import("./AgentDialog"));
+type PageSurface = Exclude<PortalLocation, { view: "chat" }> | { view: "terminal" } | { view: "removed" };
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -123,7 +132,7 @@ export default function Chat() {
   );
 }
 
-/** The app shell: sidebar, project selection, and the workspace (or Portal, or the terminal) named by the URL. */
+/** The app shell keeps the workspace mounted under in-memory pages and dialogs. */
 /**
  * The room behind Portal and the workspace (docs/PALACE.md), mounted once by the shell so moving
  * between a Portal page and a session keeps the canvas: Portal's activity on its pages, the focused
@@ -136,22 +145,55 @@ function ShellRoom({ portal, palace, workspaceActivity }: { portal: boolean; pal
 
 function ChatShell() {
   const pathname = usePathname();
-  /**
-   * The workspace route from the URL: a tab (its pane comes from the query, read by the view), or a
-   * resolver (`/new`, `/sessions/<id>`) the view settles; null on Portal and the terminal.
-   */
+  const [palette, setPalette] = useState<PaletteTab | null>(null);
+  const [showSidebar, setShowSidebar] = useState(false);
+
   const route = useMemo(() => workspaceRoute(pathname ?? "/"), [pathname]);
-  const { workspace, focus, apply, keyOf } = useWorkspace();
+  // Page surfaces never navigate: the same workspace, including its local state, stays underneath.
+  const [retainedRoute, setRetainedRoute] = useState<WorkspaceRoute>(route ?? { kind: "start" });
+  if (route && route !== retainedRoute) setRetainedRoute(route);
+  const [surface, setSurface] = useState<PageSurface | null>(() => route ? null : { view: "palace" });
+  useEffect(() => {
+    // Browser Back/Forward is explicit navigation. Background resolver URL repairs leave pages open.
+    const onPopState = () => setSurface(workspaceRoute(window.location.pathname) ? null : { view: "palace" });
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  const { workspace, focus, apply, keyOf, setCovered } = useWorkspace();
   const actions = useWorkspaceActions();
-  /** The focused pane's session (decision 27): the sidebar's highlight, the GitHub inspector's session, the title. */
   const active = focus.sessionId;
-  /** The standalone terminal page: no session, no start page. */
-  const terminalOpen = isTerminalPath(pathname ?? "/");
-  /** A start page is on screen: the focused pane is one, or `/new` is resolving. */
-  const onStartPage = route?.kind === "start" || (focus.pane !== null && focus.pane.sessionId === null);
-  /** Portal, the orchestrator: the home (`/`) and its views, outside every project and session. */
-  const portalOpen = isPortalPath(pathname ?? "/");
-  const portalView: PortalView | null = portalOpen ? portalLocation(pathname ?? "/").view : null;
+  const terminalOpen = surface?.view === "terminal";
+  const portalView: PortalView | null = surface && surface.view !== "terminal" && surface.view !== "removed" ? surface.view : null;
+  const portalOpen = surface !== null;
+  const onStartPage = !surface && (route?.kind === "start" || (focus.pane !== null && focus.pane.sessionId === null));
+  useEffect(() => setCovered(surface !== null), [surface, setCovered]);
+  const surfaceOpener = useRef<HTMLElement | null>(null);
+  const surfaceOverPalace = useRef(false);
+  const openSurface = (next: PageSurface) => {
+    if (next.view === "palace") surfaceOverPalace.current = false;
+    else if (!surface || surface.view === "palace") {
+      surfaceOverPalace.current = surface?.view === "palace";
+      surfaceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    setSurface(next);
+    setPalette(null);
+    setShowSidebar(false);
+  };
+  const closeSurface = useStableCallback(() => {
+    setSurface(surfaceOverPalace.current ? { view: "palace" } : null);
+    requestAnimationFrame(() => surfaceOpener.current?.isConnected && surfaceOpener.current.focus());
+  });
+  useEffect(() => {
+    if (!surface || surface.view === "palace") return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector(":is([role=dialog], [role=alertdialog])[data-state=open]")) return;
+      event.preventDefault();
+      closeSurface();
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [surface, closeSurface]);
   /** The focused pane's agent, as the workspace reports it, for the room. */
   const [workspaceActivity, setWorkspaceActivity] = useState<AgentActivity>("idle");
   const {
@@ -238,34 +280,29 @@ function ChatShell() {
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection | null>(null);
   useOpenSettingsRequests((section) => {
+    setPalette(null);
     setSettingsSection(section);
     setShowSettings(true);
   });
-  /** The search dialog's open tab (Search or Portal), null while it is closed. */
-  const [palette, setPalette] = useState<PaletteTab | null>(null);
+  /** Search and Agent are separate dialogs; at most one opens at a time. */
+  const [agentThreadId, setAgentThreadId] = useState(MAIN_THREAD_ID);
   /** What search opened, newest first, per device; the dialog's Recent section. */
   const [searchRecents, setSearchRecents] = usePreference(RECENTS_KEY, "[]");
-  /**
-   * ⌘K and ⌘J (Ctrl+K and Ctrl+J off Apple platforms) open the dialog on Search and on Portal from
-   * anywhere, a focused composer or terminal included: caught at the document in the capture phase,
-   * before xterm or a textarea sees them. The open tab's own key closes the dialog; the other one
-   * switches to its tab. Another open dialog (settings, approvals, a sheet) keeps them, and keeps the keys.
-   */
+  /** Capture Agent's shortcut even in composers and terminals; slash belongs to Search only outside editors. */
   useEffect(() => {
     const mac = isMacPlatform(navigator.platform);
     const onKeyDown = (event: KeyboardEvent) => {
       const tab = paletteShortcut(event, mac);
-      if (!tab) return;
+      if (!tab || (tab === "search" && !searchShortcutAllowed(event.target))) return;
       // Held keys repeat; toggling on each would flicker the dialog. Still keep them from the page.
       if (event.repeat) {
         event.preventDefault();
         return;
       }
-      const paletteOpen = !!document.querySelector("[data-search-dialog][data-state=open]");
       const otherOpen = !!document.querySelector(
-        ":is([role=dialog], [role=alertdialog])[data-state=open]:not([data-search-dialog])",
+        ":is([role=dialog], [role=alertdialog])[data-state=open]:not([data-palette-dialog])",
       );
-      if (!paletteOpen && otherOpen) return;
+      if (otherOpen) return;
       event.preventDefault();
       event.stopPropagation();
       setPalette((current) => (current === tab ? null : tab));
@@ -273,7 +310,6 @@ function ChatShell() {
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, []);
-  const [showSidebar, setShowSidebar] = useState(false);
   /** The button that opened the sidebar sheet or the GitHub inspector sheet; focus returns there when it closes. */
   const sidebarOpener = useRef<HTMLElement | null>(null);
   const githubOpener = useRef<HTMLElement | null>(null);
@@ -374,6 +410,8 @@ function ChatShell() {
 
   /** Open a session (decision 8): focus its pane if it is open anywhere, else a new tab; the URL drives the rest. */
   const selectSession = (sessionId: string) => {
+    setSurface(null);
+    setPalette(null);
     void actions.openSession(sessionId);
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
@@ -438,6 +476,8 @@ function ChatShell() {
       refetchSessions().catch(() => sessionsRef.current),
     ]);
     selectProject(project.id);
+    setSurface(null);
+    setPalette(null);
     const newest = fetched
       .filter((s) => s.projectId === project.id)
       .sort(byRecentActivity)[0];
@@ -494,6 +534,8 @@ function ChatShell() {
 
   /** A project's "New conversation": a start-page tab with `projectId` selected so the worktree picker is available. */
   const startIn = (projectId: string) => {
+    setSurface(null);
+    setPalette(null);
     selectProject(projectId);
     void actions.openStartTab();
     setShowSidebar(false);
@@ -501,6 +543,8 @@ function ChatShell() {
 
   /** The Projects column's `+`: a start-page tab with no project chosen, since the button belongs to none. */
   const startFresh = () => {
+    setSurface(null);
+    setPalette(null);
     setChosenProjectId("");
     setWorktreePick(null);
     void actions.openStartTab();
@@ -513,23 +557,40 @@ function ChatShell() {
     selectProject(project.id);
   };
 
-  /** The sidebar's Terminal button: open the standalone terminal page. */
-  const openTerminal = () => {
-    if (!terminalOpen) pushPath(terminalPath());
-    setShowSidebar(false);
-  };
-
-  /**
-   * A Portal entry in the sidebar: open that view's root (Chat is the main thread, `/`). Compares
-   * paths, not views, so Chat from a side thread returns to the main thread and Memory from an
-   * entity returns to the list. The tracked panel's `?session=` stays open across Portal views; a
-   * session page, the terminal, and `/new` carry no query, so leaving Portal drops it.
-   */
+  const openTerminal = () => openSurface({ view: "terminal" });
   const openPortalView = (view: PortalView) => {
-    const path = portalPathKeepingPanel(view, window.location.search);
-    if (path !== `${window.location.pathname}${window.location.search}`) pushPath(path);
-    setShowSidebar(false);
+    if (view === "chat") {
+      setAgentThreadId(MAIN_THREAD_ID);
+      setPalette("agent");
+      setShowSidebar(false);
+    } else openSurface(view === "memory" ? { view, entityId: null } : { view });
   };
+  // Legacy paths remain a link format inside stored replies, but never become page URLs.
+  const navigateSurface = useStableCallback((path: string) => {
+    const destination = new URL(path, window.location.origin);
+    if (destination.origin !== window.location.origin) return;
+    const sessionId = sessionIdFromPath(destination.pathname);
+    if (sessionId) { selectSession(sessionId); return; }
+    if (workspaceRoute(destination.pathname)) {
+      setSurface(null);
+      setPalette(null);
+      pushPath(`${destination.pathname}${destination.search}`);
+      return;
+    }
+    if (isTerminalPath(destination.pathname)) { openTerminal(); return; }
+    const location = portalLocation(destination.pathname);
+    if (location.view === "chat") {
+      setAgentThreadId(location.threadId);
+      setPalette("agent");
+      setShowSidebar(false);
+    } else openSurface(location);
+  });
+
+  useEffect(() => {
+    const onNavigate = (event: Event) => navigateSurface((event as CustomEvent<string>).detail);
+    window.addEventListener(APP_NAVIGATION_EVENT, onNavigate);
+    return () => window.removeEventListener(APP_NAVIGATION_EVENT, onNavigate);
+  }, [navigateSurface]);
 
   /** The sidebar toggle: collapse or expand on desktop, the sheet on mobile (focus returns to `opener` when it closes). */
   const toggleSidebar = (opener?: HTMLElement | null) => {
@@ -729,7 +790,7 @@ function ChatShell() {
     [workspace, active],
   );
   // Decision: the document title is the focused session's display title, else "Palace" on the Palace page, else "Portal".
-  const activeTitle = activeSession ? sessionDisplayTitle(activeSession.title) : portalView === "palace" ? "Palace" : null;
+  const activeTitle = surface ? surface.view === "palace" ? "Palace" : surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : activeSession ? sessionDisplayTitle(activeSession.title) : null;
   useEffect(() => {
     document.title = activeTitle ?? "Portal";
   }, [activeTitle]);
@@ -790,10 +851,14 @@ function ChatShell() {
   // every list-stream event, so an inline arrow here would re-render every row each time.
   const sidebarSelect = useStableCallback((id: string) => selectSession(id));
   const sidebarOpenInTab = useStableCallback((id: string) => {
+    setSurface(null);
+    setPalette(null);
     void actions.moveToNewTab(id);
     setShowSidebar(false);
   });
   const sidebarOpenBeside = useStableCallback((id: string) => {
+    setSurface(null);
+    setPalette(null);
     void actions.openBeside(id);
     setShowSidebar(false);
   });
@@ -860,6 +925,8 @@ function ChatShell() {
           onReorderPinned={sidebarReorderPinned}
           onOpenSettings={sidebarOpenSettings}
           onOpenSearch={sidebarOpenSearch}
+          onOpenAgent={() => { setShowSidebar(false); setPalette("agent"); }}
+          onOpenRemoved={() => openSurface({ view: "removed" })}
           onRenameProject={sidebarRename}
           onRemoveProject={sidebarRemove}
           removedProjects={removedProjects}
@@ -887,61 +954,42 @@ function ChatShell() {
           }}
         />
         <SearchDialog
-          tab={palette}
-          onTabChange={setPalette}
+          open={palette === "search"}
+          onClose={() => setPalette(null)}
           sessions={sessions}
           projects={orderedProjects}
           onOpenSession={searchOpenSession}
           onOpenProject={searchOpenProject}
         />
-        {(portalOpen || route) && <ShellRoom portal={portalOpen} palace={portalView === "palace"} workspaceActivity={workspaceActivity} />}
-        {portalOpen ? (
-          <PortalPage
-            pathname={pathname ?? "/"}
-            onNavigate={pushPath}
-            onOpenSidebar={toggleSidebar}
-            onOpenSession={sidebarSelect}
-          />
-        ) : terminalOpen ? (
-          <TerminalPage onOpenSidebar={toggleSidebar} />
-        ) : route ? (
-          /* The view reads `?pane=` with useSearchParams, which needs a boundary on the prerendered `/new`; the data is client-side anyway. */
-          <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
-            <WorkspaceView
-              route={route}
-              start={start}
-              onOpenSidebar={toggleSidebar}
-              showGithub={showGithub}
-              onToggleGithub={toggleGithub}
-              initialSend={initialSend}
-              onInitialSendHandled={initialSendHandled}
-              onSessionDeleted={sessionDeleted}
-              onRoomActivity={setWorkspaceActivity}
-            />
-          </Suspense>
-        ) : null}
-        {showGithub && !terminalOpen && !portalOpen && (
-          <GithubInspector
-            open={showGithub}
-            onClose={() => setGithubPreference("false")}
-            projectId={githubProjectId}
-            projectRemoved={githubProjectRemoved}
-            session={activeSession}
-            onGitAction={startGitAction}
-            returnFocus={githubOpener}
-          />
-        )}
-        <ApprovalsDialog
-          onNavigate={(path) => {
-            // Its links are Portal paths; the tracked panel's session stays open across them.
-            pushPath(
-              isPortalPath(path)
-                ? portalPathKeepingPanel(portalLocation(path), window.location.search)
-                : path,
-            );
-            setShowSidebar(false);
-          }}
-        />
+        <AgentDialog open={palette === "agent"} onClose={() => setPalette(null)} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} />
+        <ShellRoom portal={portalOpen} palace={portalView === "palace"} workspaceActivity={workspaceActivity} />
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <div data-workspace-layer inert={surface !== null} aria-hidden={surface !== null || undefined} className={`flex min-h-0 min-w-0 flex-1 ${surface ? "invisible pointer-events-none" : ""}`}>
+            <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
+              <WorkspaceView
+                route={route ?? retainedRoute}
+                start={start}
+                onOpenSidebar={toggleSidebar}
+                showGithub={showGithub}
+                onToggleGithub={toggleGithub}
+                initialSend={initialSend}
+                onInitialSendHandled={initialSendHandled}
+                onSessionDeleted={sessionDeleted}
+                onRoomActivity={setWorkspaceActivity}
+              />
+            </Suspense>
+            {showGithub && <GithubInspector open={showGithub && !surface} onClose={() => setGithubPreference("false")} projectId={githubProjectId} projectRemoved={githubProjectRemoved} session={activeSession} onGitAction={startGitAction} returnFocus={githubOpener} />}
+          </div>
+          {surface?.view === "palace" ? <div data-palace-surface className="absolute inset-0 flex flex-col">
+            <header data-palace-header className="workspace-header !border-transparent">
+              <IconButton label="Toggle sidebar" onClick={(event) => toggleSidebar(event.currentTarget)} className="text-muted-foreground"><PanelLeft className="size-4" /></IconButton>
+            </header>
+            <PalaceView />
+          </div> : surface ? <div data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background/95">
+            {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} />}
+          </div> : null}
+        </div>
+        <ApprovalsDialog onNavigate={navigateSurface} />
       </div>
     </RoomHostProvider>
   );

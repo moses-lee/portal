@@ -24,7 +24,7 @@ import {
 import { daySections, formatDateTime } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
-import { panelSessionFromSearch } from "@/lib/session-routes";
+import { threadDraftKey } from "@/lib/orchestrator/drafts";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
@@ -89,10 +89,6 @@ class Acknowledgement {
     return waiting !== null;
   }
 }
-
-/** Drafts and prompt history per thread; the main thread keeps the keys it had before side threads existed. */
-export const threadDraftKey = (threadId: string) =>
-  threadId === MAIN_THREAD_ID ? "portal:orchestrator" : `portal:orchestrator:${threadId}`;
 
 /** What a side thread is about, above its messages: title, when Portal opened it, and its scope. */
 function ThreadIntro({ thread, onOpenWatches }: { thread: Thread; onOpenWatches: () => void }) {
@@ -166,6 +162,7 @@ export default function PortalThread({
   visible,
   handlers,
   onOpenWatches,
+  onNavigate,
 }: {
   threadId: string;
   /** Null until the thread list arrives, or for a thread the server does not know. */
@@ -174,14 +171,14 @@ export default function PortalThread({
   /** What the rows link to; only a curation run's digest line uses it. */
   handlers: Pick<ItemCardHandlers, "onOpenCurationRun">;
   onOpenWatches: () => void;
+  /** Open an internal reply link in the shell's current workspace or surface. */
+  onNavigate?: (path: string) => void;
 }) {
   const live = usePortalLive();
   const { status } = live;
   const { focus } = useWorkspace();
   /** The view at send time (stable, so the transport memoised on the routes sees the latest focus). */
   const currentView = useStableCallback((): WorkspaceView => {
-    const panelSession = panelSessionFromSearch(window.location.search);
-    if (panelSession) return { sessionId: panelSession, tabId: null, paneId: null };
     return { sessionId: focus.sessionId, tabId: focus.tabId, paneId: focus.paneId };
   });
   const routes = useMemo(() => threadRoutes(threadId), [threadId]);
@@ -191,7 +188,7 @@ export default function PortalThread({
     () =>
       new DefaultChatTransport<OrchestratorMessage>({
         api: routes.messages,
-        // Decision 16: what this device is looking at goes with the message (the tracked panel's open session, else the focused pane).
+        // Decision 16: what this device is looking at goes with the message.
         prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1), view: currentView() } }),
         fetch: async (input, init) => {
           const response = await fetch(input, init);
@@ -394,7 +391,11 @@ export default function PortalThread({
           : null;
 
   return (
-    <div hidden={!visible} className="flex min-h-0 flex-1 flex-col" data-thread={threadId}>
+    <div
+      hidden={!visible}
+      className="flex min-h-0 flex-1 flex-col"
+      data-thread={threadId}
+    >
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={80}>
         <MessageScroller className="flex-1">
           <MessageScrollerViewport
@@ -470,6 +471,7 @@ export default function PortalThread({
                       day={day}
                       onOpenCurationRun={canOpenCurationRun ? openCurationRun : undefined}
                       onLoadToolIO={loadToolIO}
+                      onNavigate={onNavigate}
                     />
                   </MessageScrollerItem>
                 );

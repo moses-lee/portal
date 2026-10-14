@@ -18,7 +18,7 @@ function worldSession(overrides = {}) {
 
 function world(overrides = {}) {
   return {
-    at: T0, login: "moses-lee", projects: [], repos: [], sessions: [], terminals: [], pulls: [], intents: [], jobs: [], items: [], tracked: [], errors: [],
+    at: T0, login: "moses-lee", projects: [], repos: [], sessions: [], terminals: [], pulls: [], intents: [], jobs: [], items: [], errors: [],
     snapshot: { at: T0, sessions: {}, pulls: {}, worktrees: {}, missingProjects: [] }, ...overrides,
   };
 }
@@ -126,39 +126,7 @@ test("projects without a GitHub repo are listed apart, and an empty world still 
   const input = world({ projects: [worldProject({ id: "p9", name: "notes" }), worldProject({ id: "p8", name: "gone", missing: true })] });
   const text = renderWorld(input);
   assert.match(text, /- no GitHub repo: notes \[p9\], gone \[p8\] \(missing\)/);
-  assert.deepEqual(renderWorld(world()).split("\n").slice(1), ["Tracked sessions: none."], "the header and the tracked placeholder only");
-});
-
-test("the Tracked sessions section lists every tracked session, oldest tracked first, with its state and age, before the other sessions", () => {
-  const input = world({
-    projects: [worldProject()],
-    sessions: [
-      worldSession({ id: "busy-0001", title: "Bazel run", activity: "working", liveness: "busy", status: "running tool: bazel test for 45m", lastActiveAt: T0 - 50 * MIN }),
-      worldSession({ id: "done-0001", title: "Review #12", liveness: "idle", status: "idle", lastActiveAt: T0 - 3 * 60 * MIN }),
-      worldSession({ id: "dead-0001", title: "Lost one", liveness: "dead", status: "dead: the agent process is gone", link: "offline", lastActiveAt: T0 - 2 * MIN }),
-      worldSession({ id: "free-0001", title: "Untracked work", activity: "working", liveness: "busy", status: "working for 2m", lastActiveAt: T0 - MIN }),
-    ],
-    tracked: ["done-0001", "busy-0001", "dead-0001", "gone-0001-new"],
-  });
-  const text = renderWorld(input);
-  const lines = text.split("\n");
-  const start = lines.indexOf("Tracked sessions:");
-  assert.ok(start > 0, text);
-  assert.deepEqual(lines.slice(start + 1, start + 5), [
-    '- "Review #12" [done-000] in app [p1] · Claude Code · idle, turn ended, waiting on a reply · last prompt 3h ago',
-    '- "Bazel run" [busy-000] in app [p1] · Claude Code · running tool: bazel test for 45m · last prompt 50m ago',
-    '- "Lost one" [dead-000] in app [p1] · Claude Code · dead: the agent process is gone · last prompt 2m ago',
-    "- session gone-000 (not in this build yet; get_session has it)",
-  ]);
-  assert.ok(text.indexOf("Tracked sessions:") < text.indexOf("Sessions needing you or working:"));
-  assert.equal(text.split('"Bazel run"').length, 2, "a tracked session is shown once");
-  assert.match(text, /Sessions needing you or working:\n- "Untracked work"/);
-  assert.doesNotMatch(text, /Tracked sessions: none/);
-});
-
-test("a world stored before the tracked set existed renders as tracking nothing", () => {
-  const { tracked: _tracked, ...old } = world();
-  assert.match(renderWorld(old), /Tracked sessions: none\./);
+  assert.deepEqual(renderWorld(world()).split("\n").slice(1), [], "the header only");
 });
 
 test("session lines say what the agent is doing, from its liveness; stalls come first and the last prompt is named as such", () => {
@@ -209,7 +177,7 @@ test("a scope stored with an id prefix still finds its rows in focus, and a miss
   assert.equal(text.split('"Review auth"').length, 2, "shown once, in focus");
 });
 
-test("the Workspace tabs section follows the tracked sessions: one line per tab with its name and panes by short id and state, capped at 8", () => {
+test("the Workspace tabs section lists one line per tab with its name and panes by short id and state, capped at 8", () => {
   const pane = (id, sessionId = null) => ({ kind: "pane", id, sessionId });
   const tab = (id, root, title = null) => ({ id, title, titleSource: title ? "user" : null, createdAt: T0, root });
   const sessions = [
@@ -217,7 +185,7 @@ test("the Workspace tabs section follows the tracked sessions: one line per tab 
     worldSession({ id: "5e0f1b2c-7d3e-4a1b-8c2d-000000000002", title: "First", activity: "working", liveness: "busy", status: "running tests" }),
     worldSession({ id: "5e0f9d8e-1a2b-4c3d-9e8f-000000000003", title: null, activity: "waiting" }),
   ];
-  const input = world({ projects: [worldProject()], sessions, tracked: ["17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01"] });
+  const input = world({ projects: [worldProject()], sessions });
   const split = { kind: "split", id: "split-1", direction: "row", sizes: [50, 50], children: [pane("pa", sessions[0].id), { kind: "split", id: "split-2", direction: "column", sizes: [50, 50], children: [pane("pb", sessions[1].id), pane("pc")] }] };
   const tabs = [
     tab("tab-aaaa-1111", split, "Auth work"),
@@ -231,7 +199,6 @@ test("the Workspace tabs section follows the tracked sessions: one line per tab 
     assert.ok(index >= 0, `${needle} in:\n${text}`);
     return index;
   };
-  assert.ok(at("Tracked sessions:") < at("Workspace tabs:"));
   assert.ok(at("Workspace tabs:") < at("Repos and their Portal projects"));
   assert.match(text, /Workspace tabs:\n- "Auth work" \[tab-aaaa\]: 17329ac6 \(idle\), 5e0f1b2c \(busy\), new session\n- "Untitled" \[tab-bbbb\]: 5e0f9d8e \(waiting\)\n- "Untitled" \[tab-cccc\]: deadbeef \(unknown\)\n- "New session" \[tab-more\]: new session\n/);
   assert.equal(text.match(/^- "New session"/gm).length, 5, "8 tabs shown in all");

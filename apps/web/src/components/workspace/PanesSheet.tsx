@@ -4,7 +4,7 @@ import { Plus, X } from "lucide-react";
 import type { PaneNode } from "@portal/contracts/workspace";
 import IconButton from "../IconButton";
 import ResponsiveDialog from "../ResponsiveDialog";
-import { TrackedStateBadge } from "../tracked/parts";
+import SessionStateBadge from "../SessionStateBadge";
 import { Button } from "@/components/ui/button";
 import { sessionStateLabels, type SessionState } from "@/lib/session-state";
 import type { SessionSummary } from "@/lib/types";
@@ -93,7 +93,7 @@ export default function PanesSheet({
                     </span>
                   )}
                 </span>
-                {state !== null && <TrackedStateBadge state={state} />}
+                {state !== null && <SessionStateBadge state={state} />}
               </button>
               <IconButton label={`Close pane ${title}`} size="icon-sm" onClick={() => onClose(pane.id)} className="shrink-0 text-muted-foreground">
                 <X />

@@ -1,282 +1,85 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { LoaderCircle, PanelLeft } from "lucide-react";
+import { LoaderCircle, PanelLeft, X } from "lucide-react";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import ResponsiveDialog from "./ResponsiveDialog";
-import PortalStatusLine from "./portal/PortalStatusLine";
-import PortalThread, { threadDraftKey } from "./portal/PortalThread";
-import ThreadSwitcher from "./portal/ThreadSwitcher";
-import TrackedPanel, { TrackedPanelFromUrl, setPanelSession, type TrackedPanelProps } from "./tracked/TrackedPanel";
-import { TrackedToggle, trackedTitle } from "./tracked/parts";
-import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
+import { threadDraftKey } from "@/lib/orchestrator/drafts";
+import { usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
-import PalaceView from "@/room/PalaceView";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
-import { portalLocation, portalPathKeepingPanel, type PortalLocation, type PortalView } from "@/lib/session-routes";
-import type { SessionSummary } from "@/lib/types";
+import { portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
 
-/** Focus a thread's composer, caret at the end, once the frame with its newest draft has rendered. */
-function focusComposer(draftKey: string) {
-  requestAnimationFrame(() => {
-    const textarea = document.querySelector<HTMLTextAreaElement>(`[data-draft-key="${CSS.escape(draftKey)}"] textarea`);
-    if (!textarea) return;
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-  });
-}
-
-/** Stands in for a view while its chunk loads: the views mount only when opened. */
 function ViewLoading() {
-  return (
-    <div className="flex flex-1 items-center justify-center text-muted-foreground">
-      <LoaderCircle className="size-4 animate-spin" />
-    </div>
-  );
+  return <div className="flex flex-1 items-center justify-center text-muted-foreground"><LoaderCircle className="size-4 animate-spin" /></div>;
 }
-
-/**
- * The views other than Chat load on demand so they stay off the home's (`/`) bundle: Chat is where
- * the app lands, and these unmount when left anyway. Their `PortalLinks` import is type-only.
- */
 const AttentionView = dynamic(() => import("./portal/AttentionView"), { loading: ViewLoading });
 const WatchesView = dynamic(() => import("./portal/WatchesView"), { loading: ViewLoading });
 const ActivityView = dynamic(() => import("./portal/ActivityView"), { loading: ViewLoading });
 const MemoryView = dynamic(() => import("./portal/MemoryView"), { loading: ViewLoading });
 const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewLoading });
 
-/**
- * Portal's pages: the orchestrator is the app's home. Chat (`/`) holds the main thread and the side
- * threads Portal opened (each its own conversation), and carries the live status line;
- * Needs you the items waiting on the user, Watches the intents (watches), upcoming jobs, and recent runs, Activity the audit log, Memory the curated
- * records, System what the model is shown (CORE.md, the world) plus approval grants, and Palace
- * the room alone (docs/PALACE.md). The sidebar switches between them and the URL says which, so
- * reloads and links land in place. The room (mounted by the shell, `Chat`) sits behind every view and follows the real sun.
- */
-export default function PortalPage({
-  pathname,
-  onNavigate,
-  onOpenSidebar,
-  onOpenSession,
-}: {
-  pathname: string;
-  /** Change the URL within the app (no server round trip). */
+/** A page over the mounted workspace. Its location is local UI state, never the browser URL. */
+export default function PortalPage({ location, onNavigate, onOpenSidebar, onOpenSession, onClose }: {
+  location: Exclude<PortalLocation, { view: "chat" }>;
   onNavigate: (path: string) => void;
-  /** Open the sidebar; the opener is where focus returns when its sheet closes. */
   onOpenSidebar: (opener?: HTMLElement | null) => void;
-  /** Navigate to a session's full page, the way the sidebar does (the tracked panel's "Open full page"). */
   onOpenSession: (sessionId: string) => void;
+  onClose: () => void;
 }) {
-  const live = usePortalLive();
-  const { status, threads, putItem, requestApproval, items } = live;
-  const location = useMemo(() => portalLocation(pathname), [pathname]);
+  const { putItem, requestApproval, items, error } = usePortalLive();
   const view = location.view;
-  /** Switch views; the tracked panel's `?session=` comes along unless `to` sets its own. */
-  const go = useCallback(
-    (to: PortalLocation | PortalView) => onNavigate(portalPathKeepingPanel(to, window.location.search)),
-    [onNavigate],
-  );
-  const currentThread = location.view === "chat" ? location.threadId : null;
-  /** The thread the chat view shows: the one in the URL, else the last one shown. */
-  const [lastThread, setLastThread] = useState(currentThread ?? MAIN_THREAD_ID);
-  if (currentThread !== null && currentThread !== lastThread) setLastThread(currentThread);
-  const shownThread = currentThread ?? lastThread;
-  /** Threads opened this visit stay mounted (hidden) so a reply keeps streaming in the background. */
-  const [visited, setVisited] = useState<string[]>([shownThread]);
-  if (!visited.includes(shownThread)) setVisited([...visited, shownThread]);
-  const [unread, setUnread] = useState<ReadonlySet<string>>(new Set());
-  if (currentThread !== null && unread.has(currentThread)) {
-    const next = new Set(unread);
-    next.delete(currentThread);
-    setUnread(next);
-  }
-  usePortalEvents((event) => {
-    if (event.type !== "messages") return;
-    const id = event.threadId ?? MAIN_THREAD_ID;
-    if (id === currentThread) return;
-    setUnread((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-  });
-
-  /** Item actions, thread mentions, and view links open a session in the tracked panel; its "Open full page" navigates. */
-  const openInPanel = useCallback((sessionId: string) => setPanelSession(sessionId), []);
-  const handlers: Omit<ItemCardHandlers, "onAsk"> = useMemo(
-    () => ({
-      onOpenSession: openInPanel,
-      onPatched: putItem,
-      onReviewApproval: requestApproval,
-      onOpenMemory: () => go("memory"),
-      onOpenCurationRun: (runId: string) => go({ view: "memory", entityId: null, runId }),
-    }),
-    [openInPanel, putItem, requestApproval, go],
-  );
-  /** Outside a conversation (the Needs-you page, an item dialog), "Ask Portal" drafts into the main thread and goes there. */
-  const askInMain = useCallback(
-    (text: string) => {
-      const key = threadDraftKey(MAIN_THREAD_ID);
-      const current = readDraft(key);
-      if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
-      go({ view: "chat", threadId: MAIN_THREAD_ID });
-    },
-    [go],
-  );
-  const pageHandlers: ItemCardHandlers = useMemo(() => ({ ...handlers, onAsk: askInMain }), [handlers, askInMain]);
-  /** An item opened from a link (Activity, Watches): its card in a dialog. */
+  const go = useCallback((to: PortalLocation | PortalView) => onNavigate(portalPath(to)), [onNavigate]);
+  const handlers = useMemo<Omit<ItemCardHandlers, "onAsk">>(() => ({
+    onOpenSession,
+    onPatched: putItem,
+    onReviewApproval: requestApproval,
+    onOpenMemory: () => go("memory"),
+    onOpenCurationRun: (runId) => go({ view: "memory", entityId: null, runId }),
+  }), [onOpenSession, putItem, requestApproval, go]);
+  const askInMain = useCallback((text: string) => {
+    const key = threadDraftKey(MAIN_THREAD_ID);
+    const current = readDraft(key);
+    if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
+    go({ view: "chat", threadId: MAIN_THREAD_ID });
+  }, [go]);
+  const pageHandlers = useMemo<ItemCardHandlers>(() => ({ ...handlers, onAsk: askInMain }), [handlers, askInMain]);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const openItem = items.find((item) => item.id === openItemId) ?? null;
-  const dialogHandlers: ItemCardHandlers = useMemo(
-    () => ({
-      ...pageHandlers,
-      // The panel opens beside the view; the dialog would cover it.
-      onOpenSession: (sessionId: string) => {
-        setOpenItemId(null);
-        openInPanel(sessionId);
-      },
-      onAsk: (text: string) => {
-        setOpenItemId(null);
-        askInMain(text);
-      },
-    }),
-    [pageHandlers, askInMain, openInPanel],
-  );
-  const links = useMemo(
-    () => ({
-      openThread: (threadId: string) => go({ view: "chat", threadId }),
-      openItem: (itemId: string) => setOpenItemId(itemId),
-      openSession: openInPanel,
-      openWatches: () => go("watches"),
-      openEntity: (entityId: string) => go({ view: "memory", entityId }),
-      openCurationRun: (runId: string | null) => go({ view: "memory", entityId: null, runId }),
-      openApproval: requestApproval,
-    }),
-    [go, openInPanel, requestApproval],
-  );
+  const dialogHandlers = useMemo<ItemCardHandlers>(() => ({
+    ...pageHandlers,
+    onOpenSession: (id) => { setOpenItemId(null); onOpenSession(id); },
+    onAsk: (text) => { setOpenItemId(null); askInMain(text); },
+  }), [pageHandlers, askInMain, onOpenSession]);
+  const links = useMemo<PortalLinks>(() => ({
+    openThread: (threadId) => go({ view: "chat", threadId }),
+    openItem: setOpenItemId,
+    openSession: onOpenSession,
+    openWatches: () => go("watches"),
+    openEntity: (entityId) => go({ view: "memory", entityId }),
+    openCurationRun: (runId) => go({ view: "memory", entityId: null, runId }),
+    openApproval: requestApproval,
+  }), [go, onOpenSession, requestApproval]);
 
-  /** Below 1280 px the tracked list is a sheet, opened from the header. */
-  const [trackedSheetOpen, setTrackedSheetOpen] = useState(false);
-  /** The composer to focus once the chat view shows (after "Ask Portal about this" switched to it). */
-  const pendingFocus = useRef<string | null>(null);
-  /**
-   * "Ask Portal about this": prefill the current thread's composer (the last one shown, when another
-   * view is open, which then switches to it) with `About session <id> (<title>): ` and focus it.
-   */
-  const askPortalAbout = useCallback(
-    (session: SessionSummary) => {
-      const key = threadDraftKey(shownThread);
-      const text = `About session ${session.id} (${trackedTitle(session)}): `;
-      const current = readDraft(key);
-      if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
-      if (view === "chat") focusComposer(key);
-      else {
-        pendingFocus.current = key;
-        go({ view: "chat", threadId: shownThread });
-      }
-    },
-    [shownThread, view, go],
-  );
-  useEffect(() => {
-    const key = pendingFocus.current;
-    if (!key || view !== "chat") return;
-    pendingFocus.current = null;
-    focusComposer(key);
-  }, [view]);
-  const trackedProps: TrackedPanelProps = {
-    sheetOpen: trackedSheetOpen,
-    onSheetOpenChange: setTrackedSheetOpen,
-    onOpenFullPage: onOpenSession,
-    onAskPortal: askPortalAbout,
-  };
-
-  const threadExists = shownThread === MAIN_THREAD_ID || threads.some((thread) => thread.id === shownThread);
-  /** The Palace page shows nothing but the room: a bare header with the sidebar toggle, no title, status, tracked panel or composer. */
-  const palace = view === "palace";
-
-  return (
-    <>
-      <main className="flex min-w-0 flex-1 flex-col">
-        {palace ? (
-          <header data-palace-header className="workspace-header !border-transparent">
-            <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
-              <PanelLeft className="size-4" />
-            </IconButton>
-          </header>
-        ) : (
-        <header className="workspace-header !items-start max-sm:!items-center">
-          <IconButton id="sidebar-toggle" label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground">
-            <PanelLeft className="size-4" />
-          </IconButton>
-          <div className="min-w-0 flex-1 pt-1.5 max-sm:pt-0">
-            <h1 className="text-[13px] font-medium leading-snug tracking-[-.01em]">{viewMeta[view].title}</h1>
-            {view === "chat" && <PortalStatusLine onOpenThread={links.openThread} />}
-          </div>
-          <TrackedToggle
-            id="tracked-toggle"
-            expanded={trackedSheetOpen}
-            controls={trackedSheetOpen ? "tracked-sheet" : undefined}
-            onClick={() => setTrackedSheetOpen(true)}
-            className="xl:hidden"
-          />
-        </header>
-        )}
-        {live.error && (
-          <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
-            {live.error}
-          </p>
-        )}
-        <section hidden={view !== "chat"} aria-label="Chat" className="flex min-h-0 flex-1 flex-col">
-          <ThreadSwitcher current={shownThread} unread={unread} onSelect={links.openThread} />
-          {!threadExists && threads.length > 0 && (
-            <p role="alert" className="mx-auto w-full max-w-[840px] px-7 pt-4 text-sm text-destructive">
-              Portal has no thread with the id “{shownThread}”.
-            </p>
-          )}
-          {/* Hidden threads stay mounted only while a turn streams into them; the rest reload their newest page when shown again. */}
-          {visited
-            .filter((threadId) => threadId === shownThread || (status?.busyThreads ?? []).includes(threadId))
-            .map((threadId) => (
-            <PortalThread
-              key={threadId}
-              threadId={threadId}
-              thread={threads.find((thread) => thread.id === threadId) ?? null}
-              visible={view === "chat" && threadId === shownThread}
-              handlers={handlers}
-              onOpenWatches={links.openWatches}
-            />
-          ))}
-        </section>
-        {view === "attention" && <AttentionView links={links} handlers={pageHandlers} />}
-        {view === "watches" && <WatchesView links={links} />}
-        {view === "activity" && <ActivityView links={links} />}
-        {view === "memory" && (
-          <MemoryView
-            entityId={location.view === "memory" ? location.entityId : null}
-            runId={location.view === "memory" ? location.runId : undefined}
-            onSelectEntity={(id) => go({ view: "memory", entityId: id })}
-            onSelectRun={links.openCurationRun}
-            links={links}
-          />
-        )}
-        {view === "system" && <SystemView links={links} />}
-        {palace && <PalaceView />}
-        <ResponsiveDialog
-          open={openItem !== null}
-          onOpenChange={(open) => !open && setOpenItemId(null)}
-          title="Item"
-          description="An action item Portal raised."
-        >
-          {openItem && <PortalItemCard item={openItem} {...dialogHandlers} />}
-        </ResponsiveDialog>
-      </main>
-      {/* The panel reads `?session=` through useSearchParams, which needs a boundary on these prerendered routes; the fallback is the list, so the server HTML already has the panel. */}
-      {!palace && (
-        <Suspense fallback={<TrackedPanel {...trackedProps} selected={null} />}>
-          <TrackedPanelFromUrl {...trackedProps} />
-        </Suspense>
-      )}
-    </>
-  );
+  return <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <header className="workspace-header">
+      <IconButton label="Toggle sidebar" onClick={(event) => onOpenSidebar(event.currentTarget)} className="text-muted-foreground"><PanelLeft className="size-4" /></IconButton>
+      <h1 className="min-w-0 flex-1 text-[13px] font-medium">{viewMeta[view].title}</h1>
+      <IconButton label="Close page" onClick={onClose} className="text-muted-foreground"><X className="size-4" /></IconButton>
+    </header>
+    {error && <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">{error}</p>}
+    {view === "attention" && <AttentionView links={links} handlers={pageHandlers} />}
+    {view === "watches" && <WatchesView links={links} />}
+    {view === "activity" && <ActivityView links={links} />}
+    {view === "memory" && <MemoryView entityId={location.entityId} runId={location.runId} onSelectEntity={(entityId) => go({ view: "memory", entityId })} onSelectRun={links.openCurationRun} links={links} />}
+    {view === "system" && <SystemView links={links} />}
+    <ResponsiveDialog open={openItem !== null} onOpenChange={(open) => !open && setOpenItemId(null)} title="Item" description="An action item Portal raised.">
+      {openItem && <PortalItemCard item={openItem} {...dialogHandlers} />}
+    </ResponsiveDialog>
+  </main>;
 }
 
 /** What views hand to links in their rows: threads, items, sessions, watches, memory, and approvals. */

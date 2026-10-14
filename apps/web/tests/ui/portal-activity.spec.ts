@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { emitPortal, portalItem, setupPortal } from "./fixtures";
+import { openPage, showPage } from "./surfaces";
+import { emitPortal, portalItem, setupPortal, tabUrl } from "./fixtures";
 import { activityEntries, mainThread, octoEntity, reviewThread } from "./orchestrator-fixtures";
 
 test("Activity shows the log newest first with its links, and filters by kind prefix", async ({ page }, info) => {
@@ -10,7 +11,7 @@ test("Activity shows the log newest first with its links, and filters by kind pr
   page.on("request", (request) => {
     if (request.url().includes("/api/portal/activity")) searches.push(new URL(request.url()).search);
   });
-  await page.goto("/activity");
+  await openPage(page, "activity");
   const log = page.getByRole("list", { name: "Activity log" });
   const rows = log.getByRole("listitem");
   await expect(rows).toHaveCount(3);
@@ -34,7 +35,7 @@ test("live entries are prepended when they match the filter, and Load older page
   page.on("request", (request) => {
     if (request.url().includes("/api/portal/activity")) urls.push(new URL(request.url()).search);
   });
-  await page.goto("/activity");
+  await openPage(page, "activity");
   const rows = page.getByRole("list", { name: "Activity log" }).getByRole("listitem");
   await expect(rows).toHaveCount(50);
   await page.getByRole("button", { name: "Load older" }).click();
@@ -64,7 +65,7 @@ test("activity links open the thread, the item, the session, and memory", async 
   await setupPortal(page, {
     portal: { threads: [mainThread, reviewThread], activity: activityEntries(), entities: [octoEntity] },
   });
-  await page.goto("/activity");
+  await openPage(page, "activity");
   const rows = page.getByRole("list", { name: "Activity log" }).getByRole("listitem");
 
   await rows.nth(2).getByRole("button", { name: "Item" }).click();
@@ -74,15 +75,20 @@ test("activity links open the thread, the item, the session, and memory", async 
   await expect(dialog).toHaveCount(0);
 
   await rows.nth(0).getByRole("button", { name: "Memory record" }).click();
-  await expect(page).toHaveURL(/\/memory\/e-octo$/);
-  await page.goBack();
-  await expect(page).toHaveURL(/\/activity$/);
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("region", { name: "octocat", exact: true })).toBeVisible();
+  await showPage(page, "activity");
 
   await rows.nth(1).getByRole("button", { name: reviewThread.title }).click();
-  await expect(page).toHaveURL(/\/threads\/t-review$/);
-  await page.goBack();
+  const agent = page.getByRole("dialog", { name: "Agent", exact: true });
+  await expect(agent).toBeVisible();
+  await expect(agent.getByRole("tab", { name: reviewThread.title, exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL("/");
+  await agent.getByRole("button", { name: "Close Agent" }).click();
 
-  // A session opens in the tracked panel beside the view.
+  // A session link dismisses the page and opens the room in a workspace tab.
   await rows.nth(2).getByRole("button", { name: "Session" }).click();
-  await expect(page).toHaveURL(/\/activity\?session=s1$/);
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Activity", level: 1 })).toBeHidden();
 });

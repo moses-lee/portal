@@ -20,10 +20,6 @@ import type {
   SessionListEvent,
   SessionSummary,
 } from "@/lib/types";
-import type { TrackedSession } from "@/lib/orchestrator/types";
-import { usePortalEvents } from "./portal/PortalLive";
-
-export type { TrackedSession };
 
 export type Sessions = {
   /** The agent registry (`GET /api/agents`). */
@@ -32,8 +28,6 @@ export type Sessions = {
   defaultAgentId: string;
   /** Every session's list entry, kept current by the list stream. */
   sessions: SessionSummary[];
-  /** The tracked set, as the portal stream pushes it; empty until known. */
-  tracked: TrackedSession[];
   /** True until the first agents and sessions load settles. */
   loading: boolean;
   /** Why that load failed; the list stream stays closed while it is set. */
@@ -50,10 +44,6 @@ export type Sessions = {
   historyCache: HistoryCache;
   /** The one stream every session view's events arrive on (see `@/lib/session-stream-hub`). */
   sessionStreams: SessionStreamHub;
-  /** `PUT /api/portal/tracked/:id`; rejects with the server's message. */
-  track: (id: string) => Promise<void>;
-  /** `DELETE /api/portal/tracked/:id`; rejects with the server's message. */
-  untrack: (id: string) => Promise<void>;
   /**
    * `PATCH /api/sessions/:id {title}`: shows the new title at once, keeps the server's answer, and
    * puts the old title back (rejecting with the server's message) when it refuses.
@@ -74,8 +64,6 @@ async function fetchHistoryPage(id: string): Promise<EventPage | null> {
   return (await r.json()) as EventPage;
 }
 
-const trackedUrl = (id: string) => `/api/portal/tracked/${encodeURIComponent(id)}`;
-
 async function failure(r: Response, fallback: string): Promise<Error> {
   const j = (await r.json().catch(() => ({}))) as { error?: string };
   return new Error(j.error ?? fallback);
@@ -83,9 +71,7 @@ async function failure(r: Response, fallback: string): Promise<Error> {
 
 /**
  * The session list for the whole app: the agents registry, every session's list entry (loaded once,
- * then followed over `/api/sessions/stream`), the history cache session views share, and the tracked
- * set (loaded once, then followed over the portal stream's `tracked` event). Needs a
- * `PortalLiveProvider` above it.
+ * then followed over `/api/sessions/stream`) and the history cache session views share.
  */
 export function SessionsProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -98,11 +84,6 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
-  const [tracked, setTracked] = useState<TrackedSession[]>([]);
-  /** Set once the stream has delivered the set: a slower REST read must not overwrite it then. Local edits do not set it. */
-  const trackedFromStreamRef = useRef(false);
-  /** Sessions untracked here before any full set arrived; the REST read skips them. */
-  const untrackedEarly = useRef(new Set<string>());
   const [historyCache] = useState(() => createHistoryCache(fetchHistoryPage));
   const [sessionStreams] = useState(() => createSessionStreamHub());
   useEffect(() => () => sessionStreams.close(), [sessionStreams]);
@@ -205,35 +186,6 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     };
   }, [loading, loadError, refetchSessions, historyCache]);
 
-  // The tracked set: one REST read so it does not wait for the stream, which then keeps it current.
-  // A stream delivery that got here first is the fresher copy. A track/untrack answered before the
-  // read is applied on top of it. A server without the route yet answers 404; the set then stays
-  // empty until the stream says otherwise.
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/portal/tracked", { signal: controller.signal })
-      .then(async (r) => {
-        if (!r.ok) return;
-        const { sessions: fetched } = (await r.json()) as { sessions: TrackedSession[] };
-        if (controller.signal.aborted || trackedFromStreamRef.current) return;
-        setTracked((prev) => [
-          ...fetched.filter(
-            (t) =>
-              !prev.some((p) => p.sessionId === t.sessionId) &&
-              !untrackedEarly.current.has(t.sessionId),
-          ),
-          ...prev,
-        ]);
-      })
-      .catch(() => {});
-    return () => controller.abort();
-  }, []);
-  usePortalEvents((event) => {
-    if (event.type !== "tracked") return;
-    trackedFromStreamRef.current = true;
-    setTracked(event.sessions);
-  });
-
   const updateSession = useCallback(
     (id: string, patch: Partial<SessionSummary>) => {
       setSessions((prev) =>
@@ -250,26 +202,6 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   }, []);
   const removeSession = useCallback((id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
-  }, []);
-
-  const track = useCallback(async (id: string) => {
-    const r = await fetch(trackedUrl(id), { method: "PUT" });
-    if (!r.ok) throw await failure(r, "Could not track the session. Try again.");
-    const { session } = (await r.json()) as { session: TrackedSession };
-    // The stream confirms with the full set; apply the answer now so the toggle does not lag.
-    untrackedEarly.current.delete(id);
-    setTracked((prev) => [
-      ...prev.filter((t) => t.sessionId !== session.sessionId),
-      session,
-    ]);
-  }, []);
-  const untrack = useCallback(async (id: string) => {
-    const r = await fetch(trackedUrl(id), { method: "DELETE" });
-    if (!r.ok && r.status !== 404)
-      throw await failure(r, "Could not untrack the session. Try again.");
-    // Until the set is known, remember the removal so the REST read does not bring the row back.
-    if (!trackedFromStreamRef.current) untrackedEarly.current.add(id);
-    setTracked((prev) => prev.filter((t) => t.sessionId !== id));
   }, []);
 
   const renameSession = useCallback(async (id: string, title: string) => {
@@ -316,7 +248,6 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       agents,
       defaultAgentId,
       sessions,
-      tracked,
       loading,
       loadError,
       updateSession,
@@ -325,11 +256,9 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       refetchSessions,
       historyCache,
       sessionStreams,
-      track,
-      untrack,
       renameSession,
     }),
-    [agents, defaultAgentId, sessions, tracked, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, sessionStreams, track, untrack, renameSession],
+    [agents, defaultAgentId, sessions, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, sessionStreams, renameSession],
   );
   return <SessionsContext.Provider value={value}>{children}</SessionsContext.Provider>;
 }

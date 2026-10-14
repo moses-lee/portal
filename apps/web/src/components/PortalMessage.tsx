@@ -166,6 +166,7 @@ const PortalMessage = memo(function PortalMessage({
   day,
   onOpenCurationRun,
   onLoadToolIO,
+  onNavigate,
 }: {
   message: OrchestratorMessage;
   /** True while this message is still arriving. */
@@ -176,6 +177,7 @@ const PortalMessage = memo(function PortalMessage({
   onOpenCurationRun?: (runId: string) => void;
   /** Asked for the whole message when a tool row of a paged message (tool traffic left out) is opened. */
   onLoadToolIO?: (messageId: string) => void;
+  onNavigate?: (path: string) => void;
 }) {
   const at = message.metadata?.at ?? 0;
   if (message.role === "user") {
@@ -217,7 +219,7 @@ const PortalMessage = memo(function PortalMessage({
         </div>
         {message.parts.map((part, index) => {
           if (part.type === "text")
-            return part.text ? <PortalMarkdown key={index} text={part.text} /> : null;
+            return part.text ? <PortalMarkdown key={index} text={part.text} onNavigate={onNavigate} /> : null;
           if (part.type === "reasoning")
             return part.text ? (
               <Reasoning

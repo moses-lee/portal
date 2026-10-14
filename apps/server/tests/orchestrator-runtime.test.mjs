@@ -353,7 +353,7 @@ test("cancel() aborts the running chat turn and releases busy", async (t) => {
 });
 
 test("performAction runs start_session and send_prompt server-side once approved and refuses browser actions", async (t) => {
-  const { runtime, store, state } = setup(t, { projects: [project()], sessions: [sessionMeta()] });
+  const { runtime, store, state, events } = setup(t, { projects: [project()], sessions: [sessionMeta()] });
   const item = await store.createItem({
     kind: "custom", title: "t", body: "", links: {}, fingerprint: "custom:x",
     actions: [
@@ -371,8 +371,8 @@ test("performAction runs start_session and send_prompt server-side once approved
   assert.deepEqual(approved.result, { sessionId: "s2" });
   assert.deepEqual(state.created.map((session) => [session.projectId, session.agentId]), [["p1", "codex"]]);
   assert.deepEqual(state.prompts, [{ id: "s2", text: "Look into it" }]);
-  // Portal started it from its card, so it is tracked.
-  assert.deepEqual(await runtime.hub.tracked.list(), [{ sessionId: "s2", trackedAt: T0, trackedBy: "portal" }]);
+  assert.deepEqual((await runtime.hub.workspace.read()).tabs.map((tab) => tab.root.sessionId), ["s2"]);
+  assert.equal(events.filter((event) => event.type === "workspace").length, 1, "one background workspace event, no navigation event");
 
   // send_prompt has no grant yet; approving it once sends the prompt.
   const prompt = await runtime.performAction(item.id, 1);
@@ -434,16 +434,16 @@ test("a chat turn starts with the common tools and loads a group with use_tools 
     if (group.always) continue;
     for (const tool of group.tools) assert.ok(!first.has(tool), `${tool} (${name}) is not offered up front`);
   }
-  // The tracked and workspace groups are always offered: their tools from the first step, and neither is one use_tools loads.
-  for (const name of [...TOOL_GROUPS.tracked.tools, ...TOOL_GROUPS.workspace.tools]) assert.ok(first.has(name) && second.has(name), `${name} is offered from the start`);
+  // The workspace tools are offered from the first step and are not loaded through use_tools.
+  for (const name of TOOL_GROUPS.workspace.tools) assert.ok(first.has(name) && second.has(name), `${name} is offered from the start`);
   for (const name of [...TOOL_GROUPS.items.tools, ...TOOL_GROUPS.memory.tools]) assert.ok(second.has(name) && third.has(name), `${name} stays loaded`);
   assert.ok(!second.has("delete_session"), "groups not asked for stay out");
   const system = model.doStreamCalls[0].prompt.find((message) => message.role === "system").content;
   assert.match(system, /use_tools\(\{ groups \}\)/);
   assert.match(system, /- items: change Needs-you items \(create_item, /);
   assert.doesNotMatch(system, /- tracked: |- workspace: /, "the always-on groups are not listed as loadable");
-  assert.match(system, /Tracked sessions:\n- The tracked list/, "the tracked guidance");
-  assert.match(system, /Tracked sessions: none\./, "the world's tracked section");
+  assert.doesNotMatch(system, /Tracked sessions|track_session|untrack_session/, "retired tracking is absent from model instructions");
+  for (const name of ["track_session", "untrack_session", "list_tracked_sessions"]) assert.ok(!first.has(name), `${name} is retired`);
   const [assistant] = (await runtime.hub.store.readMessages()).filter((message) => message.role === "assistant");
   const dismiss = assistant.parts.find((part) => part.type === "tool-dismiss_item");
   assert.match(JSON.stringify(dismiss.output), /Unknown item/, "the loaded tool ran");

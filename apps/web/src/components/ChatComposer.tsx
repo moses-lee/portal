@@ -76,7 +76,7 @@ export default function ChatComposer({
   describedBy?: string;
   /** Recall this conversation's earlier prompts with Up/Down (see `@/lib/prompt-history`). */
   historyKey?: string;
-  /** The command palette's element id; two composers on one page (a Portal thread and the tracked panel) need different ones. */
+  /** The command palette's element id; multiple session and Agent composers need different ones. */
   paletteId?: string;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);

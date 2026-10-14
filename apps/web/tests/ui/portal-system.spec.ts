@@ -1,10 +1,14 @@
 import { expect, test } from "@playwright/test";
+import { openPage } from "./surfaces";
 import { emitPortal, setupPortal } from "./fixtures";
-import { coreDocument, grants, worldResponse } from "./orchestrator-fixtures";
+import { orchestratorFixtureTime, coreDocument, grants, worldResponse } from "./orchestrator-fixtures";
+
+// Fixture timestamps are created at module load; the full suite may reach this file minutes later.
+test.beforeEach(async ({ page }) => { await page.clock.setFixedTime(orchestratorFixtureTime); });
 
 test("System shows CORE.md and the world exactly as the model sees them, with readable tables", async ({ page }, info) => {
   const fixture = await setupPortal(page, { portal: { grants } });
-  await page.goto("/system");
+  await openPage(page, "system");
   const view = page.getByRole("region", { name: "System" });
   await expect(view.getByLabel("CORE.md contents")).toHaveText(coreDocument.text);
   await expect(view.getByText(/64 tokens · generated 5 min ago/)).toBeVisible();
@@ -38,7 +42,7 @@ test("System shows CORE.md and the world exactly as the model sees them, with re
 
 test("approval grants in force are listed and revocable", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: { grants } });
-  await page.goto("/system");
+  await openPage(page, "system");
   const view = page.getByRole("region", { name: "System" });
   // The revoked grant is not listed.
   const grant = view.getByRole("listitem", { name: "Grant for remove_worktree" });

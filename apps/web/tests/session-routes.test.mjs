@@ -4,15 +4,12 @@ import {
   isPortalPath,
   isStartPath,
   isTerminalPath,
-  panelSessionFromSearch,
   portalLocation,
   portalPath,
-  portalPathKeepingPanel,
   sessionIdFromPath,
   sessionPath,
   startPath,
   terminalPath,
-  withPanelSession,
 } from "../src/lib/session-routes.ts";
 
 test("session paths round-trip", () => {
@@ -27,7 +24,7 @@ test("session paths round-trip", () => {
   assert.equal(sessionIdFromPath("/sessions/%E0%A4%A"), null);
 });
 
-test("the terminal page has its own path and is neither a session nor Portal", () => {
+test("terminal destinations are internal surface actions, not workspace URLs", () => {
   assert.equal(terminalPath(), "/terminal");
   assert.equal(isTerminalPath("/terminal"), true);
   assert.equal(isTerminalPath("/terminal/"), true);
@@ -39,7 +36,7 @@ test("the terminal page has its own path and is neither a session nor Portal", (
   assert.equal(isPortalPath("/terminal"), false);
 });
 
-test("the start page is /new; sessions, the terminal, and /new are the only paths that are not Portal's", () => {
+test("home is the only non-workspace browser page", () => {
   assert.equal(startPath(), "/new");
   assert.equal(isStartPath("/new"), true);
   assert.equal(isStartPath("/new/"), true);
@@ -48,16 +45,16 @@ test("the start page is /new; sessions, the terminal, and /new are the only path
   assert.equal(isPortalPath("/new"), false);
   assert.equal(isPortalPath("/sessions/abc"), false);
   assert.equal(isPortalPath("/"), true);
-  assert.equal(isPortalPath("/watches"), true);
-  assert.equal(isPortalPath("/attention"), true);
-  assert.equal(isPortalPath("/threads/t1"), true);
-  assert.equal(isPortalPath("/memory/curation/run-1"), true);
-  // Anything unknown is Portal's too, and lands on the main thread.
-  assert.equal(isPortalPath("/whatever"), true);
+  assert.equal(isPortalPath("/watches"), false);
+  assert.equal(isPortalPath("/attention"), false);
+  assert.equal(isPortalPath("/threads/t1"), false);
+  assert.equal(isPortalPath("/memory/curation/run-1"), false);
+  // Unknown browser paths do not represent Portal pages. The internal decoder retains the legacy fallback for stored destinations.
+  assert.equal(isPortalPath("/whatever"), false);
   assert.deepEqual(portalLocation("/whatever"), { view: "chat", threadId: "main" });
 });
 
-test("Portal locations and paths round-trip, with the main thread at /", () => {
+test("stored surface destinations round-trip, including main and side threads", () => {
   assert.deepEqual(portalLocation("/"), { view: "chat", threadId: "main" });
   assert.equal(portalPath(), "/");
   assert.equal(portalPath("chat"), "/");
@@ -81,34 +78,6 @@ test("Portal locations and paths round-trip, with the main thread at /", () => {
   assert.deepEqual(portalLocation("/memory/curation"), { view: "memory", entityId: null, runId: null });
   assert.equal(portalPath({ view: "memory", entityId: null, runId: "r1" }), "/memory/curation/r1");
   assert.deepEqual(portalLocation("/memory/curation/r1"), { view: "memory", entityId: null, runId: "r1" });
-});
-
-test("the tracked panel's session rides along as ?session= on any Portal path", () => {
-  assert.equal(panelSessionFromSearch(""), null);
-  assert.equal(panelSessionFromSearch("?session="), null);
-  assert.equal(panelSessionFromSearch("?session=a%20b"), "a b");
-  assert.equal(panelSessionFromSearch("session=s1&x=1"), "s1");
-  assert.equal(withPanelSession("/watches", "a b/c"), "/watches?session=a+b%2Fc");
-  assert.equal(withPanelSession("/watches", null), "/watches");
-  assert.equal(panelSessionFromSearch(withPanelSession("/", "a b/c").slice(1)), "a b/c");
-
-  // Without a query the locations are as before; with one they carry the session.
-  assert.deepEqual(portalLocation("/watches", ""), { view: "watches" });
-  assert.deepEqual(portalLocation("/watches", "?session=s1"), { view: "watches", session: "s1" });
-  assert.deepEqual(portalLocation("/threads/t1", "?session=s1"), { view: "chat", threadId: "t1", session: "s1" });
-  assert.equal(portalPath({ view: "chat", threadId: "main", session: "s1" }), "/?session=s1");
-  assert.equal(portalPath({ view: "memory", entityId: "e1", session: "s1" }), "/memory/e1?session=s1");
-  assert.equal(portalPath({ view: "watches", session: null }), "/watches");
-  const location = portalLocation("/memory/curation/r1", "?session=s1");
-  assert.equal(portalPath(location), "/memory/curation/r1?session=s1");
-
-  // Switching views keeps the panel's session unless the target sets its own.
-  assert.equal(portalPathKeepingPanel("watches", "?session=s1"), "/watches?session=s1");
-  assert.equal(portalPathKeepingPanel("chat", "?session=s1"), "/?session=s1");
-  assert.equal(portalPathKeepingPanel("memory", ""), "/memory");
-  assert.equal(portalPathKeepingPanel({ view: "chat", threadId: "t1" }, "?session=s1"), "/threads/t1?session=s1");
-  assert.equal(portalPathKeepingPanel({ view: "watches", session: "s2" }, "?session=s1"), "/watches?session=s2");
-  assert.equal(portalPathKeepingPanel({ view: "watches", session: null }, "?session=s1"), "/watches");
 });
 
 test("tab paths carry the tab id and, in a split, the focused pane; /new and /sessions are resolvers, not Portal", async () => {
@@ -143,7 +112,7 @@ test("tab paths carry the tab id and, in a split, the focused pane; /new and /se
   assert.equal(workspaceRoute("/watches"), null);
 });
 
-test("links in Portal replies to tabs and sessions are in-app paths; everything else is not", async () => {
+test("links in Agent replies dispatch workspace and surface destinations locally", async () => {
   const { inAppLinkPath } = await import("../src/lib/session-routes.ts");
   const origin = "https://portal.example";
   assert.equal(inAppLinkPath("/tabs/t1", origin), "/tabs/t1");
@@ -155,8 +124,8 @@ test("links in Portal replies to tabs and sessions are in-app paths; everything 
   assert.equal(inAppLinkPath("https://portal.example/sessions/s1", origin), "/sessions/s1");
   assert.equal(inAppLinkPath("https://elsewhere.example/tabs/t1", origin), null);
   assert.equal(inAppLinkPath("https://github.com/x/y/pull/1", origin), null);
-  assert.equal(inAppLinkPath("/watches", origin), null);
-  assert.equal(inAppLinkPath("/", origin), null);
+  assert.equal(inAppLinkPath("/watches", origin), "/watches");
+  assert.equal(inAppLinkPath("/", origin), "/");
   assert.equal(inAppLinkPath("mailto:x@y.z", origin), null);
   assert.equal(inAppLinkPath("not a url", origin), null);
   // No origin known yet (server rendering): paths still qualify, URLs do not.

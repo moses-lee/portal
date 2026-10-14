@@ -131,16 +131,10 @@ const sectionMeta: Record<
   },
 };
 
-/** The sessions section's two clocks, in hours. */
-type SessionsField = "untrackAfterHours" | "removeAfterHours";
-const sessionsFields: readonly SessionsField[] = ["untrackAfterHours", "removeAfterHours"];
+/** The sessions section's worktree retention clock, in hours. */
+type SessionsField = "removeAfterHours";
+const sessionsFields: readonly SessionsField[] = ["removeAfterHours"];
 const sessionsFieldMeta: Record<SessionsField, { label: string; description: string; default: number }> = {
-  untrackAfterHours: {
-    label: "Untrack a finished session after … hours",
-    description:
-      "A tracked session leaves the tracked list this long after it last did anything. Untracking hides nothing and deletes nothing.",
-    default: defaultSettings.sessions.tracked.untrackAfterHours,
-  },
   removeAfterHours: {
     label: "Remove an idle worktree after … hours",
     description:
@@ -150,9 +144,7 @@ const sessionsFieldMeta: Record<SessionsField, { label: string; description: str
 };
 
 function sessionsValue(settings: Settings, field: SessionsField): number {
-  return field === "untrackAfterHours"
-    ? settings.sessions.tracked.untrackAfterHours
-    : settings.sessions.worktrees.removeAfterHours;
+  return settings.sessions.worktrees[field];
 }
 
 /** The section shown when nothing asked for one and none is remembered. */
@@ -641,10 +633,7 @@ export default function SettingsDialog({
       clearSessionsDraft(field);
       return;
     }
-    const patch: SettingsPatch["sessions"] =
-      field === "untrackAfterHours"
-        ? { tracked: { untrackAfterHours: hours } }
-        : { worktrees: { removeAfterHours: hours } };
+    const patch: SettingsPatch["sessions"] = { worktrees: { removeAfterHours: hours } };
     const ok = await run(
       field,
       () => update({ sessions: patch }),

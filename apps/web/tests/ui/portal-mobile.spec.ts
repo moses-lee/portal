@@ -5,13 +5,14 @@ import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
 
 test.use({ viewport: { width: 390, height: 844 } });
 
-test("Search and Settings sit at the foot of the phone sidebar, with no lighting control", async ({ page }) => {
+test("Agent and Search stay at the top of the phone sidebar, with Settings at the foot", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Toggle sidebar" }).click();
   const sidebar = page.getByRole("dialog", { name: "Your workspace" });
   await expect(sidebar.getByRole("button", { name: "Settings", exact: true })).toBeInViewport();
-  await expect(sidebar.getByRole("button", { name: /^Search/ })).toBeInViewport();
+  await expect(sidebar.getByRole("button", { name: "Search", exact: true })).toBeInViewport();
+  await expect(sidebar.getByRole("button", { name: /^Agent/ })).toBeInViewport();
   await expect(sidebar.getByRole("group", { name: "Room mode" })).toHaveCount(0);
   await expect(page.locator(".room-scene")).toHaveAttribute("data-scene", /^(day|night)$/);
 });
@@ -35,11 +36,14 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
     await nav.getByRole("button", { name: view, exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Your workspace" })).toHaveCount(0);
   };
-  await expect(page.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  await page.getByRole("dialog", { name: "Your workspace" }).getByRole("button", { name: /^Agent/ }).click();
+  await expect(page.getByRole("dialog", { name: "Agent" })).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Threads" })).toBeVisible();
   const noHorizontalScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-chat.png") });
+  await page.keyboard.press("Escape");
 
   // The Needs-you page has no entry: the foyer card in the sheet opens it.
   await page.getByRole("button", { name: "Toggle sidebar" }).click();
@@ -91,6 +95,26 @@ test.describe("on a touch screen", () => {
 test.describe("the workspace on a phone", () => {
   /** One tab of its own, then a split of two: three panes flat (docs/WORKSPACE.md, decision 18). */
   const threePanes = () => workspaceOf([tab("t1", pane("p1", "s1")), tab("t2", split("x1", "row", [pane("p2", "s2"), pane("p3", "s3")]))]);
+
+  test("a page covers the pane bar and closing it reveals the same mobile pane and draft", async ({ page }) => {
+    await setupPortal(page, { workspace: threePanes() });
+    await page.goto("/tabs/t1");
+    const bar = page.getByRole("group", { name: "Panes" });
+    const input = page.getByRole("combobox", { name: "Message Claude Code" });
+    await input.fill("A draft beneath the page");
+    await expect(bar).toBeVisible();
+    await page.getByRole("button", { name: "Toggle sidebar" }).click();
+    await page.getByRole("dialog", { name: "Your workspace" }).getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Watches", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Watches", level: 1 })).toBeVisible();
+    await expect(bar).toBeHidden();
+    await expect(input).toBeHidden();
+    await expect(page).toHaveURL("/tabs/t1");
+    await page.getByRole("button", { name: "Close page", exact: true }).click();
+    await expect(bar).toBeVisible();
+    await expect(bar.locator("[data-pane-counter]")).toHaveText("1 of 3");
+    await expect(input).toHaveValue("A draft beneath the page");
+    await expect(page).toHaveURL("/tabs/t1");
+  });
 
   test("the pane bar counts the flat list; chevrons and a swipe switch panes; the sheet lists, closes and opens them", async ({ page }) => {
     const fixture = await setupPortal(page, { workspace: threePanes() });

@@ -1,14 +1,15 @@
 "use client";
 
-import { memo, useSyncExternalStore, type ComponentProps } from "react";
+import { createContext, memo, useContext, useSyncExternalStore, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import CodeBlock from "./CodeBlock";
-import { pushPath } from "@/lib/navigation";
+import { requestAppNavigation } from "@/lib/surface-navigation";
 import { inAppLinkPath } from "@/lib/session-routes";
 
 const noSubscription = () => () => {};
+const NavigationContext = createContext(requestAppNavigation);
 
 /** The page's origin, read outside render: null on the server and during hydration, the browser's after. */
 function useOrigin(): string | null {
@@ -20,12 +21,13 @@ function useOrigin(): string | null {
 }
 
 /**
- * Links to tabs (`/tabs/<id>`) and sessions (`/sessions/<id>`) in a reply navigate in place, the way the
- * app's own links do (the session path resolves to its tab); everything else opens in a new browser tab.
+ * Internal reply links open their workspace tab, page overlay, or Agent thread in place;
+ * external destinations open in a new browser tab.
  * Paths are recognised without the origin; a full URL on this origin once the browser has said what it is.
  */
 function MarkdownLink({ children, href, ...props }: ComponentProps<"a">) {
   const origin = useOrigin();
+  const navigate = useContext(NavigationContext);
   const inApp = href ? inAppLinkPath(href, origin) : null;
   if (inApp)
     return (
@@ -35,7 +37,7 @@ function MarkdownLink({ children, href, ...props }: ComponentProps<"a">) {
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault();
-          pushPath(inApp);
+          navigate(inApp);
         }}
       >
         {children}
@@ -75,20 +77,25 @@ const compactClassName = [
 const PortalMarkdown = memo(function PortalMarkdown({
   text,
   compact = false,
+  onNavigate,
 }: {
   text: string;
   compact?: boolean;
+  /** A conversation can dismiss its popup before the shell opens an internal destination. */
+  onNavigate?: (path: string) => void;
 }) {
   return (
-    <div className={compact ? `conversation-markdown ${compactClassName}` : "conversation-markdown"}>
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={components}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
+    <NavigationContext value={onNavigate ?? requestAppNavigation}>
+      <div className={compact ? `conversation-markdown ${compactClassName}` : "conversation-markdown"}>
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={components}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    </NavigationContext>
   );
 });
 

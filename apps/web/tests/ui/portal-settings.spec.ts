@@ -1,13 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { setupPortal } from "./fixtures";
+import { showSettings } from "./surfaces";
 
 test("settings pick a chat model and a bookkeeping model; a provider change resets that role's model", async ({ page }, info) => {
   const fixture = await setupPortal(page);
   await page.goto("/");
-  await page.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "orchestrator" } })),
-  );
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = await showSettings(page, "Talk to Portal");
   await expect(dialog.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
   const chatModel = dialog.getByRole("textbox", { name: "Chat model" });
   const bookkeepingModel = dialog.getByRole("textbox", { name: "Bookkeeping model" });
@@ -37,10 +35,7 @@ test("settings pick a chat model and a bookkeeping model; a provider change rese
 test("the review-session toggle saves on change and reports it", async ({ page }) => {
   const fixture = await setupPortal(page);
   await page.goto("/");
-  await page.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "orchestrator" } })),
-  );
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const dialog = await showSettings(page, "Talk to Portal");
   const toggle = dialog.getByRole("switch", { name: "Answer read-only permission requests in review sessions" });
   await expect(toggle).toBeChecked();
   await toggle.click();

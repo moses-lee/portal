@@ -16,6 +16,31 @@ import {
 import { buildGitActionPrompt } from "../../src/lib/git-action-prompt";
 import { defaultSettings } from "../../src/lib/settings";
 import type { StoredEvent } from "../../src/lib/types";
+import { pane, tab, workspaceOf } from "./workspace-fixtures";
+
+test("one sidebar contains the foyer, recent rooms, navigation and projects while its controls stay fixed", async ({ page }) => {
+  await setupPortal(page, { sessions: manySessions() });
+  await page.goto("/new");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const nav = sidebar.getByRole("navigation", { name: "Portal", exact: true });
+  await expect(nav.getByRole("button")).toHaveText(["Palace", "Watches", "Activity", "Memory", "System", "Terminal"]);
+  await expect(sidebar.getByText("Your foyer", { exact: true })).toBeVisible();
+  await expect(sidebar.getByRole("heading", { name: "Recent rooms" })).toBeVisible();
+  await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Back to Portal" })).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "Projects", exact: true })).toHaveCount(0);
+
+  const agent = sidebar.getByRole("button", { name: /^Agent/ });
+  const settings = sidebar.getByRole("button", { name: "Settings", exact: true });
+  const agentY = (await agent.boundingBox())!.y;
+  const settingsY = (await settings.boundingBox())!.y;
+  await sidebar.getByRole("button", { name: "Removed", exact: true }).scrollIntoViewIfNeeded();
+  expect((await agent.boundingBox())!.y).toBe(agentY);
+  expect((await settings.boundingBox())!.y).toBe(settingsY);
+  await expect(agent).toBeInViewport();
+  await expect(settings).toBeInViewport();
+  await expect(sidebar.getByRole("button", { name: "Search", exact: true })).toBeInViewport();
+});
 
 test("long titles retain space and GitHub loads only when opened", async ({
   page,
@@ -788,8 +813,7 @@ test("settings sections live in a sidebar, the last one viewed is remembered, an
 }, info) => {
   await setupPortal(page);
   await page.goto("/sessions/s1");
-  // Settings sits with Portal's entries; a session opens the sidebar on Projects.
-  await page.getByRole("button", { name: "Back to Portal" }).click();
+  // Settings remains available beneath the unified sidebar.
   const openSettings = () =>
     page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
@@ -937,49 +961,29 @@ test("source control actions draft a prompt on the start page without creating a
   ).toHaveLength(0);
 });
 
-test("the sidebar opens a standalone terminal page with its own URL", async ({
-  page,
-}) => {
+test("the sidebar opens Terminal above the workspace without changing its URL", async ({ page }) => {
   await setupPortal(page);
-  // No PTY behind the fixtures: the tab stays connecting instead of being closed as unknown.
   await page.routeWebSocket("**/api/shell/socket**", () => {});
   await page.goto("/sessions/s1");
-  // A session opens the sidebar on Projects; Terminal sits with Portal's entries one step back.
-  await page.getByRole("button", { name: "Back to Portal" }).click();
-  const terminalButton = page.getByRole("button", {
-    name: "Terminal",
-    exact: true,
-  });
-  await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const terminalButton = sidebar.getByRole("button", { name: "Terminal", exact: true });
+  await expect(page.getByRole("tablist", { name: "Workspace tabs" })).toBeVisible();
+  await expect(page).toHaveURL(tabUrl);
+  const workspaceUrl = page.url();
   await terminalButton.click();
-  await expect(page).toHaveURL(/\/terminal$/);
+  await expect(page).toHaveURL(workspaceUrl);
   await expect(terminalButton).toHaveAttribute("aria-current", "page");
-  await expect(
-    page.getByRole("heading", { name: "Terminal", level: 1 }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Terminal 1" })).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: "Connecting…" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Hide terminal" })).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: /GitHub inspector/ }),
-  ).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: "First message" })).toHaveCount(0);
-  // Portal's column shows no session rows, so none can read as open.
-  await expect(
-    page.getByRole("button", { name: firstTitle, exact: true }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("tablist", { name: "Workspace tabs" })).toBeHidden();
+  await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
 
-  // The page survives a reload and leaves via the sidebar's Projects section.
-  await page.reload();
-  await expect(page).toHaveURL(/\/terminal$/);
-  await expect(page.getByRole("tab", { name: "Terminal 1" })).toBeVisible();
-  await page.getByRole("button", { name: "Projects", exact: true }).click();
-  await page
-    .getByRole("button", { name: "New conversation in portal", exact: true })
-    .click();
-  await expect(page).toHaveURL(tabUrl);
-  await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
-  await page.getByRole("button", { name: "Back to Portal" }).click();
+  // Choosing a room closes the overlay and reveals the same tab.
+  await sidebar.getByRole("button", { name: firstTitle, exact: true }).click();
+  await expect(page).toHaveURL(workspaceUrl);
+  await expect(page.getByRole("tablist", { name: "Workspace tabs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeHidden();
   await expect(terminalButton).not.toHaveAttribute("aria-current", "page");
 });
 
@@ -997,9 +1001,9 @@ test("the Removed view lists removed projects, restores one, and opens its conve
   await expect(sidebar.getByText("Removed projects")).toHaveCount(0);
 
   await sidebar.getByRole("button", { name: "Removed", exact: true }).click();
-  const view = sidebar.getByRole("region", { name: "Removed projects" });
+  const view = page.getByRole("region", { name: "Removed projects" });
   await expect(view).toBeVisible();
-  await expect(workspace).toBeHidden();
+  await expect(workspace).toBeVisible();
   const row = view.getByRole("listitem", { name: "feat/old-branch" });
   await expect(row.getByText("portal · feat/old-branch")).toBeVisible();
   await expect(row.getByText("2 conversations · removed 2h ago")).toBeVisible();
@@ -1024,6 +1028,26 @@ test("the Removed view lists removed projects, restores one, and opens its conve
   ).toHaveAttribute("aria-current", "page");
 });
 
+test("restoring a project dismisses Removed when its conversation is already the current tab", async ({ page }) => {
+  const oldProject = { ...worktree, ...removedProject };
+  await setupPortal(page, {
+    sessions: [makeSession("s9", "Finish the old branch", "codex", oldProject)],
+    removed: [removedProject],
+    workspace: workspaceOf([tab("t-removed", pane("p-removed", "s9"))]),
+  });
+  await page.goto("/tabs/t-removed");
+  const input = page.getByRole("combobox", { name: "Message Codex" });
+  await input.fill("Continue from this draft");
+  await page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: "Removed", exact: true }).click();
+  const overlay = page.getByRole("region", { name: "Removed projects" });
+  await expect(overlay).toBeVisible();
+  await overlay.getByRole("listitem", { name: removedProject.name }).getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(overlay).toHaveCount(0);
+  await expect(page).toHaveURL("/tabs/t-removed");
+  await expect(input).toHaveValue("Continue from this draft");
+  await expect(page.getByRole("tablist", { name: "Workspace tabs" }).getByRole("tab")).toHaveCount(1);
+});
+
 test("the Removed view explains unrestorable rows and deletes their conversations after confirming", async ({
   page,
 }) => {
@@ -1043,7 +1067,7 @@ test("the Removed view explains unrestorable rows and deletes their conversation
   await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   await sidebar.getByRole("button", { name: "Removed", exact: true }).click();
-  const view = sidebar.getByRole("region", { name: "Removed projects" });
+  const view = page.getByRole("region", { name: "Removed projects" });
   const row = view.getByRole("listitem", { name: "old-tools" });
   await expect(row.getByText("The project folder is missing.")).toBeVisible();
   await expect(row.getByRole("button", { name: "Restore" })).toHaveCount(0);
@@ -1064,7 +1088,7 @@ test("the Removed view explains unrestorable rows and deletes their conversation
     ),
   ).toHaveLength(1);
 
-  await view.getByRole("button", { name: "Back to projects" }).click();
+  await view.getByRole("button", { name: "Close removed projects" }).click();
   await expect(
     sidebar.getByRole("navigation", { name: "Projects and sessions" }),
   ).toBeVisible();

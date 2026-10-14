@@ -32,7 +32,7 @@ export interface AppContext {
   lastUsed: LastUsedStore;
   terminals: TerminalsService;
   orchestrator: OrchestratorService;
-  /** The lifecycle sweep (idle untracking, idle worktree removal); runs with or without the orchestrator. */
+  /** The lifecycle sweep (idle worktree removal); runs with or without the orchestrator. */
   lifecycle: LifecycleSweeper;
   /** Fills the search index for logs written before it existed; runs once after boot. */
   searchBackfill: MessageBackfill;

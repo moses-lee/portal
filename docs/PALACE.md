@@ -1,5 +1,8 @@
 # Palace: the room behind Portal
 
+Current UI (2026-10-14): Palace is home (`/`) and a local sidebar action, with no separate `/palace` route. Non-session pages cover the content beside the sidebar; Agent is popup-only. Tracked sessions and robot scarves have been removed. The historical design notes below describe earlier layouts where stated.
+
+
 Date: 2026-10-08. Status: **plan agreed with Moses on 2026-10-08; all five phases built on branch `background` by 2026-10-09 (section As built), not merged. Revision 2 (a camera the user cannot move, the sketch before the room) agreed in outline on 2026-10-09; its step 1, the camera, step 2, the sketch and the loading changes, and step 3, the snapshot, built on 2026-10-09 (As built, Revision 2, steps 1 to 3); the review's fixes (step 4) made on 2026-10-09 (As built, Revision 2, review fixes). Revision 3 (the camera fixed on desktop: no panel moves it) agreed and built on 2026-10-09 (section Revision 3; As built, Revision 3). Revision 4 (the phone strip removed, and with it the view offset) agreed and built on 2026-10-09 (section Revision 4; As built, Revision 4).** Still owed: the Safari timeline on an M1 and an iPhone 13. Research behind it: `docs/PALACE-RESEARCH.md`.
 
 ## Why

@@ -3,8 +3,6 @@ import test from "node:test";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { TOOL_GROUPS } from "../src/orchestrator/tools/groups.ts";
 import { READ_ONLY_TOOLS, createTools } from "../src/orchestrator/tools/index.ts";
-import { createTrackedService } from "../src/orchestrator/tracked/service.ts";
-import { createMemoryTrackedStore } from "../src/orchestrator/tracked/store.ts";
 import { shapeOf, workspaceTools } from "../src/orchestrator/workspace/tools.ts";
 import { describeView, parseView } from "../src/orchestrator/workspace/view.ts";
 import { createWorkspaceService } from "../src/workspace/service.ts";
@@ -19,7 +17,7 @@ const FIRST = "5e0f1b2c-7d3e-4a1b-8c2d-000000000002";
 const SECOND = "5e0f9d8e-1a2b-4c3d-9e8f-000000000003";
 const PORTAL = "9b1d4e7a-5c6d-4e7f-8a9b-00000000000p";
 
-/** The tool context a chat turn builds, over a fake hub with the real tracked and workspace services on memory stores. */
+/** The tool context a chat turn builds, over a fake hub with the real workspace service on memory stores. */
 function setup({ interactive = true, view = null } = {}) {
   const store = createMemoryOrchestratorStore();
   const { deps, state } = fakeDeps({
@@ -35,10 +33,9 @@ function setup({ interactive = true, view = null } = {}) {
   const hub = {
     deps, timers: { now: () => T0 }, emit: (event) => events.push(event),
     activity: { log: async (entry) => { activity.push(entry); } },
-    world: { current: async () => ({ tracked: [] }), trackedChanged: () => {} },
+    world: { current: async () => ({}) },
     jobs: {}, memory: {},
   };
-  hub.tracked = createTrackedService(hub, createMemoryTrackedStore({ sessionExists: (id) => state.sessions.some((meta) => meta.id === id) }));
   const workspaceStore = createMemoryWorkspaceStore();
   hub.workspace = createWorkspaceService(hub, workspaceStore);
   const ctx = {
@@ -149,7 +146,7 @@ test("open_in_workspace beside a session splits its pane on the given edge; get_
   ctx.turn.view = { sessionId: null, tabId: null, paneId: null };
   assert.equal((await run(tools.get_workspace, {})).lookingAt.text, "the Portal page, no session.");
   ctx.turn.view = { sessionId: REVIEW, tabId: null, paneId: null };
-  assert.equal((await run(tools.get_workspace, {})).lookingAt.text, "session 17329ac6 (Review auth).", "the tracked panel names no tab");
+  assert.equal((await run(tools.get_workspace, {})).lookingAt.text, "session 17329ac6 (Review auth).", "a session without a workspace location names no tab");
 });
 
 test("arrange_tab builds a preset in a new tab or rebuilds one by id prefix, naming it as Portal; sessions open elsewhere move", async () => {

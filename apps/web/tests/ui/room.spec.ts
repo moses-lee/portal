@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { firstTitle, makeSession, milestone, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
+import { showSettings } from "./surfaces";
 import { boxCorners, framePose, frameSpec, projectPoint } from "../../src/room/layout";
 
 /** The scene's summary for tests (docs/PALACE.md, Tests): `{ scene, weather, renderer, source, still }`. */
@@ -198,12 +199,12 @@ test("the Palace page is the room alone: a sidebar entry, no header text, no tra
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Portal", exact: true });
   const labels = (await nav.getByRole("button").allInnerTexts()).map((text) => text.trim());
-  expect(labels.indexOf("Palace")).toBe(labels.indexOf("System") + 1);
+  expect(labels[0]).toBe("Palace");
   await nav.getByRole("button", { name: "Palace", exact: true }).click();
-  await expect(page).toHaveURL(/\/palace$/);
+  await expect(page).toHaveURL(/\/$/);
   await expect(page).toHaveTitle("Palace");
   await expect(nav.getByRole("button", { name: "Palace", exact: true })).toHaveAttribute("aria-current", "page");
-  const main = page.getByRole("main");
+  const main = page.locator("[data-palace-surface]");
   await expect(main.locator("header")).toHaveText("");
   await expect(main.getByRole("heading")).toHaveCount(0);
   await expect(main.getByRole("button", { name: "Toggle sidebar" })).toBeVisible();
@@ -214,7 +215,7 @@ test("the Palace page is the room alone: a sidebar entry, no header text, no tra
   // A direct load lands there too.
   await page.reload();
   await expect(page).toHaveTitle("Palace");
-  await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
+  await expect(page.locator("[data-palace-surface]").getByRole("heading")).toHaveCount(0);
 });
 
 /** A CSS colour's alpha (0..1), resolved by the browser through a 2D canvas so any syntax (oklch, hex, rgb) works. */
@@ -230,7 +231,7 @@ const backdropOf = (locator: Locator) => locator.evaluate((node) => getComputedS
 test("panels over the room are frosted by the canvas, not CSS, while an open dialog keeps its CSS blur", async ({ page }, info) => {
   await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 16, 0, 0)) });
   await setupPortal(page, { webgl: true });
-  await page.goto("/");
+  await page.goto("/sessions/s1");
   const sidebar = page.locator(".sidebar-shell");
   const composer = page.locator(".composer");
   await expect(sidebar).toHaveClass(/\bfrost-subtle\b/);
@@ -253,7 +254,7 @@ test("under reduced transparency the panels are solid and the room draws no fros
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-transparency", value: "reduce" }] });
   await setupPortal(page, { webgl: true });
-  await page.goto("/");
+  await page.goto("/sessions/s1");
   const sidebar = page.locator(".sidebar-shell");
   const composer = page.locator(".composer");
   await expect(composer).toBeVisible();
@@ -269,7 +270,7 @@ test("under reduced motion the canvas draws a still, and draws again only when t
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 16, 0, 0)) });
   await setupPortal(page, { webgl: true, sessions: [approvalSession, finishedSession] });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   await expect.poll(async () => (await summary(scene)).still).toBe(true);
   await pointOf(scene, "robot:s1");
@@ -301,7 +302,7 @@ test("under reduced motion the sketch is drawn at once", async ({ page }) => {
 
 test("without WebGL the frost panels keep their tint over the sketch", async ({ page }) => {
   await setupPortal(page);
-  await page.goto("/");
+  await page.goto("/sessions/s1");
   const composer = page.locator(".composer");
   await expect(composer).toBeVisible();
   const alpha = await alphaOf(composer);
@@ -337,7 +338,7 @@ const live = async (room: Locator) => (await summary(room)) as unknown as LiveSu
 
 /** Where the canvas last drew an object (CSS pixels), once it has reported it. */
 async function pointOf(room: Locator, key: string): Promise<[number, number]> {
-  await expect.poll(async () => (await live(room)).points?.[key] ?? null).not.toBeNull();
+  await expect.poll(async () => (await live(room)).points?.[key] ?? null, { timeout: 20_000 }).not.toBeNull();
   return (await live(room)).points![key];
 }
 
@@ -355,7 +356,7 @@ test("live objects: a session waiting on approval puts its robot by the door, an
       },
     },
   });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   await expect.poll(async () => (await live(scene)).robots).toEqual([
     { id: "s1", state: "approval", place: "door" },
@@ -384,12 +385,13 @@ test("live objects: a session waiting on approval puts its robot by the door, an
   await expect(tooltip).toContainText("12 in the tray and a pile of 3 more");
   await expect(tooltip).toContainText("Click to open Needs you");
   await page.mouse.click(mx, my);
-  await expect(page).toHaveURL(/\/attention$/);
+  await expect(page.getByRole("heading", {name: "Needs your attention", level: 1})).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test("a robot's hover card names its session; on the Palace page a click makes it wave, then its card opens the session", async ({ page }, info) => {
   await setupPortal(page, { webgl: true, sessions: [approvalSession, workingSession, finishedSession] });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   const [x, y] = await pointOf(scene, "robot:s1");
   await page.mouse.move(x, y);
@@ -414,7 +416,7 @@ test("a robot's hover card names its session; on the Palace page a click makes i
 
 test("a drag and a wheel on the Palace page leave the camera where it is", async ({ page }) => {
   await setupPortal(page, { webgl: true });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   const camera = async () => (await live(scene)).camera ?? null;
   // Read once the canvas has drawn, so the report is the settled one.
@@ -441,7 +443,7 @@ test("a drag and a wheel on the Palace page leave the camera where it is", async
  */
 async function expectFittedFrame(page: Page) {
   await setupPortal(page, { webgl: true });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   await expect(scene).toHaveAttribute("data-drawn", "", { timeout: 20_000 });
   await expect.poll(async () => (await live(scene)).camera ?? null).not.toBeNull();
@@ -556,7 +558,7 @@ test("accumulated objects: thirty sessions fill two shelf rows on the tall bookc
     },
   );
   await setupPortal(page, { webgl: true, room });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   await expect.poll(async () => (await growth(scene)).books).toEqual({ total: 30, drawn: 30, rows: 2, boxed: 0, purged: 27 });
   const now = await growth(scene);
@@ -579,7 +581,7 @@ test("accumulated objects: thirty sessions fill two shelf rows on the tall bookc
 test("a milestone that arrives over the stream is delivered in a crate, then its furniture stays", async ({ page }, info) => {
   const base = roomState({}, { census: { sessionsEver: 24 } });
   const fixture = await setupPortal(page, { webgl: true, room: base });
-  await page.goto("/palace");
+  await page.goto("/");
   const scene = page.locator(".room-scene");
   await expect.poll(async () => (await growth(scene)).books?.rows).toBe(1);
   // The canvas is up and has drawn, so the milestone arrives over the stream rather than with its first state.
@@ -595,7 +597,7 @@ test("the Settings dialog's Room section shows the location and weather, and Ref
   const refreshed = roomState({ code: 61, condition: "rain", temperature: 12 }, { environment: { latitude: 51.5072, longitude: -0.1276, source: "ip", timezone: "Europe/London" } });
   const fixture = await setupPortal(page, { roomRefresh: refreshed });
   await page.goto("/");
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "room" } })));
+  await showSettings(page, "Room");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByRole("heading", { name: "Room" })).toBeVisible();
   const location = dialog.locator("[data-room-location]");
@@ -620,7 +622,7 @@ test("when the room cannot be loaded the Settings dialog says it is unavailable,
   const fixture = await setupPortal(page, { roomUnavailable: true });
   await page.goto("/");
   await expect.poll(() => fixture.requests.filter((request) => request.path === "/api/room" && request.method === "GET").length).toBeGreaterThan(0);
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("portal:open-settings", { detail: { section: "room" } })));
+  await showSettings(page, "Room");
   const dialog = page.getByRole("dialog", { name: "Settings" });
   const location = dialog.locator("[data-room-location]");
   const weather = dialog.locator("[data-room-weather]");

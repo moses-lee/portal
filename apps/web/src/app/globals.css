@@ -340,7 +340,7 @@
   background: #8eb6ed;
   animation: status-breathe 1.8s ease-in-out infinite;
 }
-/* The sidebar's dot goes by `sessionState` (data-state), the same states the tracked badge shows. */
+/* The sidebar's dot goes by `sessionState` (data-state), the same states the pane sheet badge shows. */
 [data-state="working"] > .status-dot {
   background: #2fe36b;
   box-shadow: 0 0 9px #2fe36b99;

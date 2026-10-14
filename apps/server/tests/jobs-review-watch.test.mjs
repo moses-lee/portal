@@ -69,13 +69,14 @@ test("a review goal waits without a model call, then summarizes the reviews into
       textStep("One PR needs changes, the other is ready."),
     ],
   }));
-  // setup_pr_reviews tracks the review sessions; reporting their findings untracks them.
-  await h.hub.tracked.track("s1", "portal");
-  await h.hub.tracked.track("s2", "portal");
+  // Agent-created review tabs remain available after findings are reported.
+  await h.hub.workspace.apply({ op: "open", sessionId: "s1" }, "portal");
+  await h.hub.workspace.apply({ op: "open", sessionId: "s2" }, "portal");
+  const reviewTabs = await h.hub.workspace.read();
   const { intent, job } = await reviewGoal(h);
   await h.timers.advance(POLL_MS);
   await flush();
-  assert.equal((await h.hub.tracked.list()).length, 2, "still tracked while a review works");
+  assert.deepEqual(await h.hub.workspace.read(), reviewTabs, "tabs remain while a review works");
   let [run] = await h.jobs.listRuns({ jobId: job.id });
   assert.equal(run.status, "succeeded");
   assert.match(run.summary, /Waiting for 1 of 2 review session/);
@@ -119,9 +120,7 @@ test("a review goal waits without a model call, then summarizes the reviews into
   const note = (await h.store.readMessages()).at(-1);
   assert.equal(note.parts[0].text, run.summary, "the thread gets the same sentence, not a list");
   assert.deepEqual(note.metadata.itemIds.sort(), items.map((item) => item.id).sort());
-  assert.deepEqual(await h.hub.tracked.list(), [], "both review sessions left the tracked list");
-  const untracked = (await h.hub.activity.list()).filter((entry) => entry.kind === "session.untracked");
-  assert.deepEqual(untracked.map((entry) => [entry.refs.sessionId, entry.detail.reason, entry.refs.runId]).sort(), [["s1", "review reported", run.id], ["s2", "review reported", run.id]]);
+  assert.deepEqual(await h.hub.workspace.read(), reviewTabs, "reporting findings preserves the review tabs");
 });
 
 test("a review that ended without a report still gets an item saying so, and a deleted session counts as ended", async (t) => {
@@ -130,17 +129,9 @@ test("a review that ended without a report still gets an item saying so, and a d
     sessions, events: { s1: transcript("half done", { open: true }) },
     doGenerate: [textStep("Neither review finished.")],
   }));
-  // A failure to untrack costs only the untrack: the findings are still reported and the goal ends.
-  h.hub.tracked.untrack = async () => { throw new Error("db down"); };
-  const errors = [];
-  const original = console.error;
-  console.error = (line) => errors.push(String(line));
-  t.after(() => { console.error = original; });
   const { intent } = await reviewGoal(h);
   await h.timers.advance(POLL_MS);
   await flush();
-  console.error = original;
-  assert.ok(errors.some((line) => /Could not untrack review session s1: db down/.test(line)), errors.join("\n"));
   const items = (await h.store.listItems()).filter((item) => item.kind === "review_findings");
   assert.deepEqual(items.map((item) => item.title).sort(), ["Review of acme/app#1: review incomplete", "Review of acme/app#2: review incomplete"]);
   assert.match(items.find((item) => item.links.pull.number === 1).body, /did not finish: the turn stopped without finishing/);
@@ -175,7 +166,7 @@ test("reviewWatchOf keeps only well-formed sessions, and findingsItem caps the b
   assert.equal(item.fingerprint, "review_findings:acme/app#1:s1");
 });
 
-test("a review waiting for a permission raises no item (the tracked list shows it live); the check says so and keeps waiting", async (t) => {
+test("a review waiting for a permission raises no item (the workspace shows it live); the check says so and keeps waiting", async (t) => {
   const sessions = [sessionMeta({ id: "s1", awaitingPermission: true, busy: true }), sessionMeta({ id: "s2", busy: true })];
   const h = await started(jobsHarness(t, { sessions, events: { s1: [], s2: [] } }));
   const { job } = await reviewGoal(h);

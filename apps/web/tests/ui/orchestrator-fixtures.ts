@@ -21,7 +21,8 @@ import type {
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
 
-const now = Date.now();
+export const orchestratorFixtureTime = Date.now();
+const now = orchestratorFixtureTime;
 const min = 60_000;
 const scope = (extra: Partial<Scope> = {}): Scope => ({
   projectIds: [],
@@ -424,7 +425,6 @@ export const worldResponse: WorldResponse = {
         lastActiveAt: now - min,
       },
     ],
-    tracked: [],
     terminals: [],
     pulls: [
       {

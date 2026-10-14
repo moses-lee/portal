@@ -113,6 +113,13 @@
       "when": 1791486842275,
       "tag": "0015_pin_order",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791966375843,
+      "tag": "0016_remove_tracked_sessions",
+      "breakpoints": true
     }
   ]
 }

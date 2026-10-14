@@ -17,20 +17,17 @@ export type Settings = {
   orchestrator: OrchestratorSettings;
   /** User scripts run before certain actions; see scripts.ts. */
   scripts: ScriptsSettings;
-  /** Session lifecycle: when the sweep untracks idle sessions and removes idle worktrees (docs/SESSION-LIFECYCLE.md). */
+  /** Session lifecycle: when the sweep removes idle worktrees (docs/SESSION-LIFECYCLE.md). */
   sessions: SessionsSettings;
 };
 
-/** The lifecycle sweep's two clocks, in hours since the session (or worktree project) went idle. */
+/** The lifecycle sweep's clock, in hours since a worktree project went idle. */
 export type SessionsSettings = {
-  /** Rule 1: a tracked session is untracked this long after it goes idle. */
-  tracked: { untrackAfterHours: number };
-  /** Rule 2: a clean, unpinned worktree project is removed this long after it goes idle. */
+  /** A clean, unpinned worktree project is removed this long after it goes idle. */
   worktrees: { removeAfterHours: number };
 };
 
 export type SessionsSettingsPatch = {
-  tracked?: { untrackAfterHours?: number };
   worktrees?: { removeAfterHours?: number };
 };
 
@@ -63,19 +60,18 @@ export const orchestratorLimits = {
   hungAfterMinutes: 1440,
 } as const;
 
-/** Range limits for the sessions section; both clocks are whole hours from 1 to 30 days. */
+/** Range limits for the sessions section; the clock is whole hours from 1 to 30 days. */
 export const sessionsLimits = {
   minHours: 1,
   maxHours: 720,
 } as const;
 
-/** A lifecycle clock (`untrackAfterHours`, `removeAfterHours`): a whole number of hours within `sessionsLimits`. */
+/** A lifecycle clock: a whole number of hours within `sessionsLimits`. */
 export function isLifecycleHours(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= sessionsLimits.minHours && (value as number) <= sessionsLimits.maxHours;
 }
 
 export const defaultSessionsSettings: SessionsSettings = {
-  tracked: { untrackAfterHours: 48 },
   worktrees: { removeAfterHours: 72 },
 };
 
@@ -171,11 +167,8 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
 
 /** `base` sessions settings with the well-formed clocks of `given` laid on top; anything else leaves the base value. */
 function mergeSessions(base: SessionsSettings, given: SessionsSettingsPatch | undefined): SessionsSettings {
-  const next: SessionsSettings = { tracked: { ...base.tracked }, worktrees: { ...base.worktrees } };
+  const next: SessionsSettings = { worktrees: { ...base.worktrees } };
   if (!given || typeof given !== "object") return next;
-  if (given.tracked && typeof given.tracked === "object" && isLifecycleHours(given.tracked.untrackAfterHours)) {
-    next.tracked = { untrackAfterHours: given.tracked.untrackAfterHours };
-  }
   if (given.worktrees && typeof given.worktrees === "object" && isLifecycleHours(given.worktrees.removeAfterHours)) {
     next.worktrees = { removeAfterHours: given.worktrees.removeAfterHours };
   }
@@ -233,9 +226,6 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   if (scripts) result.scripts = scripts;
 
   const sessions: SessionsSettingsPatch = {};
-  if (settings.sessions.tracked.untrackAfterHours !== defaultSettings.sessions.tracked.untrackAfterHours) {
-    sessions.tracked = { untrackAfterHours: settings.sessions.tracked.untrackAfterHours };
-  }
   if (settings.sessions.worktrees.removeAfterHours !== defaultSettings.sessions.worktrees.removeAfterHours) {
     sessions.worktrees = { removeAfterHours: settings.sessions.worktrees.removeAfterHours };
   }

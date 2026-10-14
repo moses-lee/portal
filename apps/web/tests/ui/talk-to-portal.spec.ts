@@ -1,6 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal, tabUrl } from "./fixtures";
 import { approval } from "./orchestrator-fixtures";
+import { openPage } from "./surfaces";
 import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
 declare global {
@@ -9,63 +10,58 @@ declare global {
   }
 }
 
-test("Portal is the home: the sidebar's Chat entry opens / and is marked current", async ({
-  page,
-}) => {
+const agent = (page: Page) => page.getByRole("dialog", { name: "Agent", exact: true });
+const openAgent = async (page: Page) => {
+  if (page.viewportSize()!.width < 768) await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await expect(agent(page)).toBeVisible();
+};
+
+test("Palace is home and the unified sidebar opens Agent without a chat page", async ({ page }) => {
   await setupPortal(page);
-  // The start page opens the sidebar on Projects; Portal's entries sit one step back.
-  await page.goto("/new");
+  await page.goto("/");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
-  await sidebar.getByRole("button", { name: "Back to Portal" }).click();
   const nav = sidebar.getByRole("navigation", { name: "Portal", exact: true });
   await expect(sidebar.getByText("Your foyer")).toBeVisible();
   const recent = sidebar.getByRole("region", { name: "Recent rooms" });
   await expect(recent.getByRole("button", { name: new RegExp(firstTitle) })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: /1 item needs you/ })).toBeVisible();
-  // What needs you is on the foyer card above, not a Portal entry; Chat carries no badge.
-  await expect(nav.getByRole("button")).toHaveText(["Chat", "Watches", "Activity", "Memory", "System", "Palace", "Projects", "Terminal"]);
-  const button = nav.getByRole("button", { name: "Chat", exact: true });
-  await expect(button).not.toHaveAttribute("aria-current", "page");
-  await expect(nav.getByRole("button", { name: "Projects", exact: true })).toHaveAttribute("aria-current", "page");
-  await button.click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(button).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("heading", { name: "Talk to Portal" })).toBeVisible();
+  await expect(nav.getByRole("button")).toHaveText(["Palace", "Watches", "Activity", "Memory", "System", "Terminal"]);
+  await expect(nav.getByRole("button", { name: "Palace", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("textbox", { name: "Message Portal" })).toHaveCount(0);
+  await openAgent(page);
+  await expect(agent(page).getByRole("tablist", { name: "Threads" })).toHaveCount(0);
   // The status line: the server's words, then the next job counted down in the browser (the
   // fixture times it seven minutes out at setup; a slow run may have shaved one off).
   const line = page.getByTestId("portal-status-line");
   await expect(line).toContainText("Idle · next: Curate memory");
   await expect(line).toContainText(/· in [67] min/);
-  // The GitHub inspector belongs to sessions; Portal has none.
-  await expect(page.getByRole("button", { name: "Open GitHub inspector" })).toHaveCount(0);
-  // The other views drop the status line and take their own title.
+  await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await nav.getByRole("button", { name: "Watches", exact: true }).click();
-  await expect(page).toHaveURL(/\/watches$/);
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Watches", level: 1 })).toBeVisible();
   await expect(line).toHaveCount(0);
   // The brand is a home link.
   await sidebar.getByRole("button", { name: "Portal home" }).click();
   await expect(page).toHaveURL(/\/$/);
-  // Projects opens the projects column; a new conversation from there leaves Portal.
-  await nav.getByRole("button", { name: "Projects", exact: true }).click();
   await sidebar.getByRole("button", { name: "New conversation in portal", exact: true }).click();
   await expect(page).toHaveURL(tabUrl);
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();
-  await sidebar.getByRole("button", { name: "Back to Portal" }).click();
   await recent.getByRole("button", { name: new RegExp(firstTitle) }).click();
   await expect(page).toHaveURL(tabUrl);
   await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
 });
 
-test("without an API key the page asks for one and Add API key opens settings", async ({
+test("without an API key Agent asks for one and Add API key opens settings", async ({
   page,
 }) => {
   await setupPortal(page, {
     portal: { status: { ready: false, line: "Add an API key in Settings to start Portal." }, items: [] },
   });
   await page.goto("/");
+  await openAgent(page);
   await expect(page.getByTestId("portal-status-line")).toHaveText("Add an API key in Settings to start Portal.");
   await expect(
     page.getByText("Talk to Portal needs an API key for OpenAI."),
@@ -82,6 +78,7 @@ test("without an API key the page asks for one and Add API key opens settings", 
     { section: "orchestrator" },
   ]);
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  await expect(agent(page)).toHaveCount(0);
 });
 
 test("the thread renders replies, the tick label, and tool rows in prose; items live on the Needs-you page", async ({
@@ -89,6 +86,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
 }, info) => {
   const fixture = await setupPortal(page);
   await page.goto("/");
+  await openAgent(page);
   await expect(page.getByText("What needs me today?")).toBeVisible();
   await expect(
     page.getByText("Nothing yet. I will keep an eye on your pull requests."),
@@ -104,10 +102,10 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   await expect(page.getByRole("article")).toHaveCount(0);
   await page.screenshot({ animations: "disabled", path: info.outputPath("portal.png") });
 
-  const nav = page.getByRole("navigation", { name: "Portal", exact: true });
   const foyer = page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ });
+  await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await foyer.click();
-  await expect(page).toHaveURL(/\/attention$/);
+  await expect(page).toHaveURL(/\/$/);
   const card = page.getByRole("region", { name: "Needs your attention" }).getByRole("article", { name: portalItem.title });
   await expect(card).toBeVisible();
   await expect(card.getByText("Needs you", { exact: true })).toBeVisible();
@@ -134,12 +132,13 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
     (request) => request.path === "/api/portal/messages" && request.method === "POST",
   );
   expect(sent).toHaveLength(1);
-  // Beside it, what this device is looking at (docs/WORKSPACE.md, decision 16): nothing, on the Portal page.
+  // No session is focused beneath Palace, so the view context remains empty.
   expect(Object.keys(sent[0].body as object).sort()).toEqual(["message", "view"]);
   expect((sent[0].body as { message: { role: string } }).message.role).toBe("user");
   expect((sent[0].body as { view: unknown }).view).toEqual({ sessionId: null, tabId: null, paneId: null });
 
   // Resolve goes through PATCH and empties the page and the badge; the thread's messages are unchanged.
+  await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await foyer.click();
   await card.getByRole("button", { name: `More actions for ${portalItem.title}` }).click();
   await page.getByRole("menuitem", { name: "Resolve" }).click();
@@ -150,7 +149,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
     (request) => request.path === "/api/portal/items/i1" && request.method === "PATCH",
   );
   expect(patch?.body).toEqual({ status: "resolved", snoozedUntil: null });
-  await nav.getByRole("button", { name: "Chat", exact: true }).click();
+  await openAgent(page);
   await expect(log.getByText("What needs me today?")).toBeVisible();
   await expect(log.getByRole("article")).toHaveCount(0);
 });
@@ -161,10 +160,11 @@ test("a refused send keeps the text in the composer and shows the server's reaso
   const fixture = await setupPortal(page);
   fixture.failPortalSend("Portal is running a check. Try again in a moment.");
   await page.goto("/");
+  await openAgent(page);
   const input = page.getByRole("textbox", { name: "Message Portal" });
   await input.fill("Which PRs are waiting on me?");
   await input.press("Enter");
-  await expect(page.getByRole("main").getByRole("alert")).toContainText(
+  await expect(agent(page).getByRole("alert")).toContainText(
     "Portal is running a check. Try again in a moment.",
   );
   await expect(input).toHaveValue("Which PRs are waiting on me?");
@@ -185,7 +185,7 @@ test("a refused send keeps the text in the composer and shows the server's reaso
     page.getByText("Portal reply to: Which PRs are waiting on me?"),
   ).toBeVisible();
   await expect(input).toHaveValue("");
-  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+  await expect(agent(page).getByRole("alert")).toHaveCount(0);
 
   // Up recalls what the server took, once: the refused attempt is not a second history entry.
   await input.press("ArrowUp");
@@ -203,6 +203,7 @@ test("sending behaves as on a session page: the text stays, with Sending…, unt
   const fixture = await setupPortal(page);
   const release = fixture.holdSends("main");
   await page.goto("/");
+  await openAgent(page);
   const input = page.getByRole("textbox", { name: "Message Portal" });
   await input.fill("What changed overnight?");
   await input.press("Enter");
@@ -233,6 +234,7 @@ test("background work never blocks the composer; only this thread's own turn doe
     },
   });
   await page.goto("/");
+  await openAgent(page);
   await expect(page.getByTestId("portal-status-line")).toContainText("Checking example/portal#42…");
   const input = page.getByRole("textbox", { name: "Message Portal" });
   // A job is running, and the user can still talk.
@@ -245,6 +247,7 @@ test("background work never blocks the composer; only this thread's own turn doe
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
   await expect(page.getByText(/Portal is answering in this thread/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
+  await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ }).click();
   await page
     .getByRole("article", { name: portalItem.title })
@@ -268,6 +271,7 @@ test("a messages stream event refetches the thread and shows what was appended",
 }) => {
   const fixture = await setupPortal(page);
   await page.goto("/");
+  await openAgent(page);
   await expect(page.getByText("What needs me today?")).toBeVisible();
   const appended: OrchestratorMessage = {
     id: "m4",
@@ -287,21 +291,18 @@ test("a messages stream event refetches the thread and shows what was appended",
   expect(loads()).toBe(before + 1);
 });
 
-test("Open session opens the session in the tracked panel", async ({
+test("Open session dismisses the overlay and opens its workspace tab", async ({
   page,
 }) => {
   await setupPortal(page);
-  await page.goto("/attention");
+  await openPage(page, "attention");
   await page
     .getByRole("article", { name: portalItem.title })
     .getByRole("button", { name: "Open session" })
     .click();
-  await expect(page).toHaveURL(/\/attention\?session=s1$/);
-  await expect(
-    page
-      .getByRole("complementary", { name: "Tracked sessions" })
-      .getByRole("combobox", { name: "Message Claude Code" }),
-  ).toBeVisible();
+  await expect(page).toHaveURL(tabUrl);
+  await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Needs your attention", level: 1 })).toHaveCount(0);
 });
 
 test("the daytime room sits behind every Portal view and follows the user's turn and pending approvals", async ({
@@ -311,6 +312,7 @@ test("the daytime room sits behind every Portal view and follows the user's turn
   await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 14, 0, 0)) });
   await setupPortal(page);
   await page.goto("/");
+  await openAgent(page);
   const room = page.locator(".room-scene");
   await expect(room).toHaveAttribute("data-scene", "day");
   await expect(room).toHaveAttribute("data-activity", "idle");
@@ -326,8 +328,9 @@ test("the daytime room sits behind every Portal view and follows the user's turn
   await emitPortal(page, { type: "approvals", approvals: [approval] });
   await expect(room).toHaveAttribute("data-activity", "waiting");
   await page.getByRole("button", { name: "Decide later" }).click();
+  await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Watches", exact: true }).click();
-  await expect(page).toHaveURL(/\/watches$/);
+  await expect(page).toHaveURL(/\/$/);
   await expect(room).toHaveAttribute("data-activity", "waiting");
   await emitPortal(page, { type: "approvals", approvals: [] });
   await emitPortal(page, { type: "status", status: portalStatus });
@@ -350,6 +353,7 @@ test("a long line in a reply's code block scrolls inside the block, not the whol
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  await openAgent(page);
   const log = page.getByRole("log", { name: "Messages" });
   const block = log.locator(".code-block");
   await expect(block.getByText("Review this PR:")).toBeVisible();

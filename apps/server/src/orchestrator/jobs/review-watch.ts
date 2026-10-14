@@ -3,7 +3,7 @@
  * Each check reads the sessions' state; once every one has ended (its turn finished, or it failed
  * or went away), a summarizing helper turn reads the reviews and reports the findings of each PR
  * through `report_review`, each PR gets a `review_findings` Needs-you item linking the PR and its
- * session, each review session is untracked (its findings item carries it from there), one line
+ * session, its workspace tab stays open, one line
  * goes to the intent's thread, and the intent fires once and is done.
  */
 import type { Intent, JobRun } from "@portal/contracts/jobs";
@@ -239,7 +239,7 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
   const progress = new Map<string, SessionProgress>();
   for (const session of watch.sessions) progress.set(session.sessionId, await sessionProgress(hub.deps, session.sessionId));
   await core.store.updateIntent(intent.id, { lastCheckedAt: hub.timers.now() });
-  // A review waiting on a permission or hung raises no item: its session is tracked, and the tracked list shows those states live.
+  // A review waiting on a permission or hung raises no item: the workspace shows those states live.
   const open = watch.sessions.filter((session) => ["working", "waiting", "stalled"].includes(progress.get(session.sessionId)!.state));
   if (open.length) {
     const count = (state: SessionProgress["state"]) => open.filter((session) => progress.get(session.sessionId)!.state === state).length;
@@ -301,9 +301,6 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
       ? await hub.store.updateItem(existing.id, { kind: fields.kind, title: fields.title, body: fields.body, actions: fields.actions, links, status: "open" })
       : await hub.store.createItem({ ...fields, links });
     touched.add(item.id);
-    // Reported, so the session leaves the tracked list; the findings item carries it from here. A failure costs only that.
-    await hub.tracked.untrack(session.sessionId, "portal", { reason: "review reported", runId: run.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) })
-      .catch((err: unknown) => console.error(`Could not untrack review session ${session.sessionId}: ${err instanceof Error ? err.message : String(err)}`));
     const tally = counts(report.findings);
     verdicts.push(`#${session.pr} ${verdictLabel[report.verdict]}${tally ? ` (${tally})` : ""}`);
   }

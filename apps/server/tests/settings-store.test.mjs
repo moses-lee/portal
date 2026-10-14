@@ -380,19 +380,19 @@ for (const [name, make] of backends) {
   test(`${name}: sessions clocks are stored as overrides, reload in a fresh store, and are dropped when back at the default`, async (t) => {
     const { open, stored } = await make(t);
     const store = open();
-    const one = await store.patch({ sessions: { tracked: { untrackAfterHours: 1 } } });
-    assert.deepEqual(one.sessions, { tracked: { untrackAfterHours: 1 }, worktrees: { removeAfterHours: 72 } });
-    assert.deepEqual((await stored()).overrides, { sessions: { tracked: { untrackAfterHours: 1 } } });
+    const one = await store.patch({ sessions: { worktrees: { removeAfterHours: 1 } } });
+    assert.deepEqual(one.sessions, { worktrees: { removeAfterHours: 1 } });
+    assert.deepEqual((await stored()).overrides, { sessions: { worktrees: { removeAfterHours: 1 } } });
     assert.deepEqual(await open().read(), one);
 
     const both = await store.patch({ sessions: { worktrees: { removeAfterHours: 720 } } });
-    assert.deepEqual(both.sessions, { tracked: { untrackAfterHours: 1 }, worktrees: { removeAfterHours: 720 } });
+    assert.deepEqual(both.sessions, { worktrees: { removeAfterHours: 720 } });
     assert.deepEqual(await open().read(), both);
     // Another section's patch keeps them.
     assert.deepEqual((await store.patch({ gitActions: { prompts: { checks: "x" } } })).sessions, both.sessions);
     assert.deepEqual(await store.patch({ sessions: {} }), await store.read());
 
-    await store.patch({ gitActions: { prompts: { checks: "" } }, sessions: { tracked: { untrackAfterHours: 48 }, worktrees: { removeAfterHours: 72 } } });
+    await store.patch({ gitActions: { prompts: { checks: "" } }, sessions: { worktrees: { removeAfterHours: 72 } } });
     assert.deepEqual((await stored()).overrides, {});
     assert.deepEqual(await open().read(), defaultSettings);
   });
@@ -401,15 +401,13 @@ for (const [name, make] of backends) {
     const { open, stored } = await make(t);
     const store = open();
     for (const bad of [0, -1, 721, 1.5, "48", null, true]) {
-      await rejects400(store.patch({ sessions: { tracked: { untrackAfterHours: bad } } }), /sessions\.tracked\.untrackAfterHours must be a whole number of hours between 1 and 720/);
       await rejects400(store.patch({ sessions: { worktrees: { removeAfterHours: bad } } }), /sessions\.worktrees\.removeAfterHours must be a whole number of hours between 1 and 720/);
     }
     await rejects400(store.patch({ sessions: 5 }), /sessions must be an object/);
     await rejects400(store.patch({ sessions: [] }), /sessions must be an object/);
-    await rejects400(store.patch({ sessions: { tracked: 48 } }), /sessions\.tracked must be an object/);
     await rejects400(store.patch({ sessions: { worktrees: null } }), /sessions\.worktrees must be an object/);
-    // One bad clock rejects the whole patch, good clock included.
-    await rejects400(store.patch({ sessions: { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 0 } } }), /removeAfterHours/);
+    // A bad clock rejects the whole patch, other fields included.
+    await rejects400(store.patch({ gitActions: { prompts: { checks: "bad" } }, sessions: { worktrees: { removeAfterHours: 0 } } }), /removeAfterHours/);
     assert.equal((await stored()).written, false, "nothing written for rejected patches");
   });
 
@@ -540,7 +538,7 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
   });
   assert.ok(!("intervalMinutes" in settings.orchestrator) && !("idleIntervalMinutes" in settings.orchestrator), "the old tick intervals are dropped");
   assert.deepEqual(settings.scripts.preWorktreeDelete, { ...defaultScriptSettings, command: "make clean" });
-  assert.deepEqual(settings.sessions, { tracked: { untrackAfterHours: 48 }, worktrees: { removeAfterHours: 96 } }, "a bad clock falls back to its default");
+  assert.deepEqual(settings.sessions, { worktrees: { removeAfterHours: 96 } }, "retired tracking settings are discarded");
   assert.equal(await store.apiKey("openai"), null, "a key in the overrides row is never used");
 
   // The next change rewrites the row without the bad values.
@@ -565,13 +563,13 @@ test("postgres: an overrides row written before the sessions section existed rea
   assert.deepEqual(settings.sessions, defaultSettings.sessions);
   assert.equal(settings.orchestrator.model, "claude-x");
   // Changing a clock adds the section without disturbing the rest of the row.
-  await store.patch({ sessions: { tracked: { untrackAfterHours: 12 } } });
+  await store.patch({ sessions: { worktrees: { removeAfterHours: 12 } } });
   assert.deepEqual((await stored()).overrides, {
     gitActions: { prompts: { checks: "ok" } },
     orchestrator: { model: "claude-x" },
-    sessions: { tracked: { untrackAfterHours: 12 } },
+    sessions: { worktrees: { removeAfterHours: 12 } },
   });
-  assert.equal((await open().read()).sessions.tracked.untrackAfterHours, 12);
+  assert.equal((await open().read()).sessions.worktrees.removeAfterHours, 12);
 });
 
 test("postgres: an unusable server key fails every call with a clear error instead of reading as defaults", async (t) => {
@@ -654,9 +652,7 @@ test("parseSettingsFile (for the importer) gives up only on non-JSON and non-obj
   assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, scripts: { preWorktreeDelete: { command: 3, timeoutSeconds: 12 } } })), {
     scripts: { preWorktreeDelete: { timeoutSeconds: 12 } },
   });
-  assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 721 } } })), {
-    sessions: { tracked: { untrackAfterHours: 24 } },
-  });
+  assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 721 } } })), {});
   assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { tracked: "x", worktrees: { removeAfterHours: 2.5 } } })), {});
   assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, orchestrator: { reviews: { answerReadOnly: false }, stalls: { hungAfterMinutes: 30 } } })), {
     orchestrator: { reviews: { answerReadOnly: false }, stalls: { hungAfterMinutes: 30 } },

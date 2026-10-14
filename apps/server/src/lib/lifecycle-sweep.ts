@@ -1,12 +1,11 @@
 /**
- * The lifecycle sweep (docs/SESSION-LIFECYCLE.md, "Sweep"): rules 1 and 2 of the session lifecycle
+ * The lifecycle sweep (docs/SESSION-LIFECYCLE.md, "Sweep"): the idle-worktree session lifecycle
  * policy, run inside the server every 5 minutes whether or not a browser is open or the
  * orchestrator is enabled. It is owned by the app wiring next to the sessions service, not by the
  * orchestrator's job worker.
  *
- * Pass 1 untracks every tracked session idle for `sessions.tracked.untrackAfterHours`, counted from
- * the later of its idle clock and when it was tracked. Pass 2 removes every Portal-created worktree
- * project (`worktree` set, not pinned) whose sessions have all been idle for
+ * Removes every Portal-created worktree project (`worktree` set, not pinned) whose sessions have
+ * all been idle for
  * `sessions.worktrees.removeAfterHours` (counted from no earlier than its last restore) and none of
  * which has an open Portal terminal, through the same removal path as
  * `DELETE /api/projects/:id?worktree=delete`, unforced and keeping unmerged branches. Projects in
@@ -24,7 +23,6 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { ActivityInput } from "@portal/contracts/activity";
 import type { AppContext } from "../context.ts";
-import type { TrackedService } from "../orchestrator/tracked/service.ts";
 import { RemovalSkipped, liveProjectRemovalIo, removeProject } from "../projects/remove-worktree.ts";
 import { readGitInfo } from "./git-info.ts";
 import type { Project, WorktreeMeta } from "./types.ts";
@@ -47,8 +45,8 @@ type SweepSession = { id: string; projectId: string; idleSince: number | null };
 
 export type LifecycleSweepDeps = {
   now(): number;
-  /** The two clocks from `settings.sessions`, read at the start of every sweep. */
-  settings(): Promise<{ untrackAfterHours: number; removeAfterHours: number }>;
+  /** The worktree clock from `settings.sessions`, read at the start of every sweep. */
+  settings(): Promise<{ removeAfterHours: number }>;
   /** Every session's project and idle clock, as they are now. */
   sessions(): Promise<SweepSession[]>;
   projects: {
@@ -56,8 +54,6 @@ export type LifecycleSweepDeps = {
     list(): Promise<Project[]>;
     setKeptReason(id: string, reason: string | null): Promise<unknown>;
   };
-  /** The tracked sessions service; null when the orchestrator is not running (nothing is tracked then). */
-  tracked: Pick<TrackedService, "list" | "untrack"> | null;
   /** Whether the session has a Portal terminal open. */
   hasOpenTerminal(sessionId: string): boolean;
   /** The root of the worktree folder the project sits in, shared by every project in it; null when the folder is gone. */
@@ -77,8 +73,6 @@ export type LifecycleSweepDeps = {
 };
 
 export type LifecycleSweepResult = {
-  /** Tracked sessions untracked for being idle. */
-  untracked: number;
   /** Worktree projects removed for being idle. */
   removed: number;
   /** Due worktree projects kept (dirty tree, open terminal, a shared folder held, or git refused). */
@@ -139,34 +133,16 @@ const holdPhrase: Record<Hold | "plain", string> = {
 
 const within = (dir: string, root: string) => dir === root || dir.startsWith(root + path.sep);
 
-/** One sweep: pass 1 (tracked) then pass 2 (worktrees). Never throws for one bad row. */
+/** One idle-worktree sweep. Never throws for one bad row. */
 export async function runLifecycleSweep(
   deps: LifecycleSweepDeps,
   { now = deps.now(), signal, failedAt = new Map() }: LifecycleSweepOptions = {},
 ): Promise<LifecycleSweepResult> {
-  const { untrackAfterHours, removeAfterHours } = await deps.settings();
+  const { removeAfterHours } = await deps.settings();
   const sessions = await deps.sessions();
-  const result: LifecycleSweepResult = { untracked: 0, removed: 0, kept: 0 };
+  const result: LifecycleSweepResult = { removed: 0, kept: 0 };
 
-  // Pass 1: untrack sessions idle past the threshold, counted from no earlier than when they were
-  // tracked. A session that is doing anything has no clock.
-  if (deps.tracked) {
-    const idleSince = new Map(sessions.map((session) => [session.id, session.idleSince]));
-    const cutoff = now - untrackAfterHours * HOUR_MS;
-    const reason = `idle for ${hoursLabel(untrackAfterHours)}`;
-    for (const row of await deps.tracked.list()) {
-      if (signal?.aborted) return result;
-      const since = idleSince.get(row.sessionId);
-      if (since === null || since === undefined || Math.max(since, row.trackedAt) > cutoff) continue;
-      try {
-        if (await deps.tracked.untrack(row.sessionId, "portal", { reason, actor: "system" })) result.untracked++;
-      } catch (err) {
-        deps.logError(err, `Could not untrack idle session ${row.sessionId}`);
-      }
-    }
-  }
-
-  // Pass 2: remove idle worktree projects Portal created, one worktree folder at a time.
+  // Remove idle worktree projects Portal created, one worktree folder at a time.
   const cutoff = now - removeAfterHours * HOUR_MS;
   const byProject = byProjectOf(sessions);
   const listed = await deps.projects.list();
@@ -359,7 +335,7 @@ export function liveLifecycleSweepDeps(
     now: Date.now,
     async settings() {
       const { sessions } = await ctx.settings.read();
-      return { untrackAfterHours: sessions.tracked.untrackAfterHours, removeAfterHours: sessions.worktrees.removeAfterHours };
+      return { removeAfterHours: sessions.worktrees.removeAfterHours };
     },
     async sessions() {
       await ctx.sessions.ready;
@@ -371,9 +347,6 @@ export function liveLifecycleSweepDeps(
         return ctx.projects.list();
       },
       setKeptReason: (id, reason) => ctx.projects.setKeptReason(id, reason),
-    },
-    get tracked() {
-      return ctx.orchestrator?.hub.tracked ?? null;
     },
     hasOpenTerminal: (sessionId) => ctx.terminals.listBySession(sessionId).length > 0,
     async worktreeRoot(project) {

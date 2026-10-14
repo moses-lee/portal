@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openPage } from "./surfaces";
 import { emitPortal, setupPortal } from "./fixtures";
 import { globalEntity, memoryRecords, memoryRevisions, octoEntity, repoEntity } from "./orchestrator-fixtures";
 
@@ -13,7 +14,7 @@ test("the memory browser groups entities by type and shows each record with its 
   await setupPortal(page, { portal: portal() });
   await page.goto("/");
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Memory", exact: true }).click();
-  await expect(page).toHaveURL(/\/memory$/);
+  await expect(page).toHaveURL("/");
   const nav = page.getByRole("navigation", { name: "Memory" });
   // Contract order: global, people, repositories; each with its active-record total.
   const groups = nav.getByRole("group");
@@ -25,7 +26,7 @@ test("the memory browser groups entities by type and shows each record with its 
   await expect(nav.getByRole("button", { name: /Inbox/ })).toContainText("1");
 
   await nav.getByRole("button", { name: /example\/portal/ }).click();
-  await expect(page).toHaveURL(/\/memory\/e-repo$/);
+  await expect(page).toHaveURL("/");
   const pane = page.getByRole("region", { name: "example/portal" });
   await expect(pane.getByRole("heading", { name: "example/portal" })).toBeVisible();
   await expect(pane.getByText("The Portal monorepo.")).toBeVisible();
@@ -65,7 +66,7 @@ test("the memory browser groups entities by type and shows each record with its 
 
 test("the inbox approves and rejects proposed records", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/memory");
+  await openPage(page, "memory");
   const inbox = page.getByRole("region", { name: "Memory browser" });
   const proposed = inbox.getByRole("article", { name: /^merge-style/ });
   await expect(proposed).toContainText("Prefers squash merges.");
@@ -92,7 +93,8 @@ test("the inbox approves and rejects proposed records", async ({ page }) => {
 
 test("editing supersedes, forgetting archives with a reason, and a new record can be added", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: portal() });
-  await page.goto("/memory/e-global");
+  await openPage(page, "memory");
+  await page.getByRole("navigation", { name: "Memory" }).getByRole("button", { name: /Global/ }).click();
   const pane = page.getByRole("region", { name: "Global" });
   const style = pane.getByRole("article", { name: /^review-style/ });
   await expect(style.getByLabel("Pinned into CORE.md")).toBeVisible();
@@ -132,5 +134,6 @@ test("editing supersedes, forgetting archives with a reason, and a new record ca
 
   // The sidebar's Memory entry goes to the view's root, even from an entity (both are the Memory view).
   await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Memory", exact: true }).click();
-  await expect(page).toHaveURL(/\/memory$/);
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("navigation", { name: "Memory" })).toBeVisible();
 });

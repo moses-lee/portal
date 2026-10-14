@@ -215,18 +215,6 @@ test("Stop while editing hands the other prompts back and ends the edit; the edi
   await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeVisible();
 });
 
-test("the tracked panel's composer queues too", async ({ page }) => {
-  const fixture = await setupPortal(page, { portal: { tracked: [{ sessionId: "s2", trackedAt: 1, trackedBy: "user" }] } });
-  await page.goto("/?session=s2");
-  const composer = page.getByLabel("Message Codex", { exact: true });
-  await expect(composer).toBeVisible();
-  await page.evaluate(() => window.__portalEmit("/api/sessions/s2/stream", { busy: true, queue: [{ id: "q1", text: "queued in panel", queuedAt: 1, editing: false }] }, "meta", 100));
-  await expect(page.getByRole("region", { name: "Queued prompts" })).toContainText("queued in panel");
-  await composer.fill("one more");
-  await page.getByRole("button", { name: "Queue message", exact: true }).click();
-  await expect.poll(() => fixture.requests.filter((r) => r.path === "/api/sessions/s2/prompt").map((r) => r.body)).toEqual([{ text: "one more", queue: true }]);
-});
-
 test("editing a prompt that already went out restores nothing, so it never runs twice", async ({ page }) => {
   const fixture = await setupPortal(page, { queueEditMissing: true });
   await page.goto("/sessions/s1");

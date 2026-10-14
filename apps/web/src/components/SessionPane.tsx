@@ -116,31 +116,18 @@ export default function SessionPane({
   pane,
   onActivity,
 }: SessionPaneProps) {
-  const { historyCache, tracked, track, untrack, renameSession } = useSessions();
+  const { historyCache, renameSession } = useSessions();
   const uid = useId();
   const terminalPanelId = `${uid}-terminal`;
   const contextId = `${uid}-context`;
-  const isTracked = !!sessionId && tracked.some((entry) => entry.sessionId === sessionId);
-  const [trackError, setTrackError] = useState<string | null>(null);
-  const [trackPending, setTrackPending] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
-  const toggleTracked = () => {
-    if (!sessionId || trackPending) return;
-    setTrackPending(true);
-    setTrackError(null);
-    (isTracked ? untrack(sessionId) : track(sessionId))
-      .catch((error: unknown) =>
-        setTrackError(error instanceof Error ? error.message : "Could not change tracking. Try again."),
-      )
-      .finally(() => setTrackPending(false));
-  };
-  // The header's line under it reports failed track toggles and renames alike.
   const rename = (title: string) => {
     if (!sessionId) return;
-    setTrackError(null);
+    setRenameError(null);
     renameSession(sessionId, title).catch((error: unknown) =>
-      setTrackError(error instanceof Error ? error.message : "Could not rename the session. Try again."),
+      setRenameError(error instanceof Error ? error.message : "Could not rename the session. Try again."),
     );
   };
   const initialPending =
@@ -225,16 +212,13 @@ export default function SessionPane({
         onGithub={onToggleGithub}
         shellButton={shellButton}
         terminalPanelId={terminalPanelId}
-        tracked={isTracked}
-        trackPending={trackPending}
-        onToggleTrack={toggleTracked}
         renameFrom={session?.title ?? ""}
         onRename={session ? rename : undefined}
         pane={pane}
       />
-      {trackError && (
+      {renameError && (
         <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
-          {trackError}
+          {renameError}
         </p>
       )}
       {!sessionId ? (

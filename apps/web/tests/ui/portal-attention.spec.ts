@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { openPage } from "./surfaces";
 import { emitPortal, portalItem, setupPortal } from "./fixtures";
 import type { Item, ItemKind } from "../../src/lib/orchestrator/types";
 
@@ -30,20 +31,20 @@ test("the foyer card counts what waits and opens the page; no sidebar entry carr
   await setupPortal(page, { portal: { items } });
   await page.goto("/");
   const nav = navOf(page);
-  await expect(nav.getByRole("button")).toHaveText(["Chat", "Watches", "Activity", "Memory", "System", "Palace", "Projects", "Terminal"]);
-  await expect(nav.getByRole("button", { name: "Chat", exact: true })).toHaveText(/^Chat$/);
+  await expect(nav.getByRole("button")).toHaveText(["Palace", "Watches", "Activity", "Memory", "System", "Terminal"]);
+  await expect(nav.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0);
   const foyer = foyerOf(page);
   await expect(foyer).toContainText("4 items need you");
   await expect(foyer).not.toHaveAttribute("aria-current", "page");
-  // The chat shows no item cards at all.
+  // Palace shows no item cards.
   await expect(page.getByRole("article")).toHaveCount(0);
 
   await foyer.click();
-  await expect(page).toHaveURL(/\/attention$/);
+  await expect(page).toHaveURL("/");
   await expect(page.getByRole("heading", { name: "Needs your attention", level: 1 })).toBeVisible();
   await expect(foyer).toHaveAttribute("aria-current", "page");
   // No Portal entry is current: the page has none.
-  await expect(nav.getByRole("button", { name: "Chat", exact: true })).not.toHaveAttribute("aria-current", "page");
+  await expect(nav.locator('button[aria-current="page"]')).toHaveCount(0);
 });
 
 test("with nothing waiting the foyer card still opens the page", async ({ page }) => {
@@ -52,13 +53,13 @@ test("with nothing waiting the foyer card still opens the page", async ({ page }
   const foyer = foyerOf(page);
   await expect(foyer).toContainText("Everything is in place");
   await foyer.click();
-  await expect(page).toHaveURL(/\/attention$/);
+  await expect(page).toHaveURL("/");
   await expect(viewOf(page).getByText(/^Nothing needs you\./)).toBeVisible();
 });
 
 test("Needs you groups the items by kind, approvals first, newest first inside a group", async ({ page }, info) => {
   await setupPortal(page, { portal: { items } });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   await expect(page.getByRole("heading", { name: "Needs your attention", level: 1 })).toBeVisible();
   const view = viewOf(page);
   await expect(view.getByRole("heading", { level: 2 })).toHaveText([
@@ -80,7 +81,7 @@ test("Needs you groups the items by kind, approvals first, newest first inside a
 
 test("a group's Resolve asks once more, then resolves exactly that group in one request", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: { items } });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   const view = viewOf(page);
   const checks = view.getByRole("region", { name: /^Checks failing/ });
   await checks.getByRole("button", { name: "Resolve checks failing" }).click();
@@ -102,7 +103,7 @@ test("a group's Resolve asks once more, then resolves exactly that group in one 
 
 test("Dismiss all asks once more, then dismisses every item on the page and leaves the empty state", async ({ page }) => {
   const fixture = await setupPortal(page, { portal: { items } });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   const view = viewOf(page);
   await view.getByRole("button", { name: "Dismiss all" }).click();
   await expect(view.getByRole("button", { name: "Dismiss 4 items" })).toBeVisible();
@@ -129,7 +130,7 @@ test("items snoozed for later wait folded away and do not count; a lapsed snooze
     snoozedUntil: Date.now() - min,
   });
   await setupPortal(page, { portal: { items: [checks1, later, lapsed] } });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   const view = viewOf(page);
   await expect(foyerOf(page)).toContainText("2 items need you");
   await expect(view.getByRole("heading", { level: 2, name: /^Needs you/ })).toHaveText(/^Needs you\s*2$/);
@@ -147,7 +148,7 @@ test("items snoozed for later wait folded away and do not count; a lapsed snooze
 
 test("with nothing waiting the page says so and offers no bulk actions", async ({ page }) => {
   await setupPortal(page, { portal: { items: [] } });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   const view = viewOf(page);
   await expect(view.getByText(/^Nothing needs you\./)).toBeVisible();
   await expect(view.getByRole("button", { name: /^(Resolve|Dismiss)/ })).toHaveCount(0);
@@ -157,7 +158,7 @@ test("with nothing waiting the page says so and offers no bulk actions", async (
 
 test("an items event adds to the page and the foyer card live", async ({ page }) => {
   await setupPortal(page, { portal: { items: [checks1] } });
-  await page.goto("/attention");
+  await openPage(page, "attention");
   const view = viewOf(page);
   const badge = foyerOf(page);
   await expect(badge).toContainText("1 item needs you");

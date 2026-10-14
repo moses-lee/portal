@@ -38,7 +38,7 @@ export type ViewDescription = {
 /**
  * The view in words. `titleOf` answers a session's title, null for an untitled one, and undefined
  * for a session Portal no longer has. The tab clause is left out when the view names no tab
- * (the tracked panel) or a tab the workspace no longer holds.
+ * or a tab the workspace no longer holds.
  */
 export function describeView(view: WorkspaceView, workspace: Workspace | null, titleOf: (sessionId: string) => string | null | undefined): ViewDescription {
   if (view.sessionId === null) return { sessionId: null, title: null, tabId: null, tabName: null, paneId: null, text: "the Portal page, no session." };

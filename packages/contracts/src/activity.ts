@@ -22,13 +22,12 @@ export type ActivityActor = "user" | "agent" | "system";
  * intent.updated · intent.fired · intent.closed · thread.created · memory.remembered ·
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
- * approval.requested · approval.decided · approval.executed · world.refreshed · session.tracked ·
- * session.untracked · session.renamed · worktree.kept · worktree.removed_idle · workspace.opened ·
+ * approval.requested · approval.decided · approval.executed · world.refreshed ·
+ * session.renamed · worktree.kept · worktree.removed_idle · workspace.opened ·
  * workspace.closed · workspace.arranged · workspace.renamed · room.expanded
  *
- * `session.tracked` and `session.untracked` carry `refs.sessionId` and `detail.trackedBy` (who:
- * "user" or "portal"), plus `detail.reason` when one was given. `session.renamed` (the
- * orchestrator's `rename_session`) carries `refs.sessionId` and `detail.from`, `detail.to`.
+ * `session.renamed` (the orchestrator's `rename_session`) carries `refs.sessionId` and
+ * `detail.from`, `detail.to`.
  *
  * `worktree.kept` and `worktree.removed_idle` come from the lifecycle sweep (an idle worktree project
  * kept, with `detail.reason`, logged only when the reason changes; or removed, with `detail.branch`

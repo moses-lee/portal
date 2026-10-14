@@ -217,22 +217,29 @@ export function isMacPlatform(platform: string): boolean {
   return /mac|iphone|ipad|ipod/i.test(platform);
 }
 
-/** The tabs of the search dialog: Search, and Portal (the orchestrator's main thread). */
-export type PaletteTab = "search" | "portal";
+/** The two independent global dialogs. */
+export type PaletteTab = "search" | "agent";
 
 /**
- * Which tab a key press asks for: ⌘K (search) or ⌘J (Portal) on a Mac, Ctrl+K or Ctrl+J
- * elsewhere, with no other modifier; null for anything else. On a non-Latin layout (where `key`
- * is another script's letter) the physical key decides; a Latin one (Dvorak, AZERTY) goes by the
- * letter typed, so its own K and J keys are the shortcuts.
+ * ⌘K / Ctrl+K toggles Agent. An unmodified typed slash opens Search; its editable-target
+ * guard lives separately so the shell can inspect the actual DOM target.
+ * Non-Latin layouts fall back to the physical K key; Latin layouts use the typed letter.
  */
 export function paletteShortcut(
-  event: { key: string; code?: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean },
+  event: { key: string; code?: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; isComposing?: boolean; defaultPrevented?: boolean },
   platformIsMac: boolean,
 ): PaletteTab | null {
+  if (event.isComposing || event.defaultPrevented) return null;
+  if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) return "search";
   if (event.altKey || event.shiftKey) return null;
   if (!(platformIsMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return null;
   const typed = event.key.toLowerCase();
-  const letter = /^[a-z]$/.test(typed) ? typed : event.code === "KeyK" ? "k" : event.code === "KeyJ" ? "j" : null;
-  return letter === "k" ? "search" : letter === "j" ? "portal" : null;
+  const letter = /^[a-z]$/.test(typed) ? typed : event.code === "KeyK" ? "k" : null;
+  return letter === "k" ? "agent" : null;
+}
+
+/** Slash belongs to editable fields and terminal inputs while they have focus. */
+export function searchShortcutAllowed(target: EventTarget | null): boolean {
+  const element = target as Element | null;
+  return !element?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .xterm, [data-terminal]');
 }

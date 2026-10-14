@@ -4,13 +4,13 @@ Date: 2026-10-08. Status: built on branch `feat/search`, live-tested against a c
 
 ## Why
 
-Portal holds hundreds of sessions across many projects and worktrees. Finding the one that worked on a given pull request, or the one where a particular thing was said, meant scrolling the projects column. This adds a Raycast-style search dialog (sidebar button, ⌘K) that finds sessions and projects by name, branch, pull request, and conversation text.
+Portal holds hundreds of sessions across many projects and worktrees. Finding the one that worked on a given pull request, or the one where a particular thing was said, meant scrolling the projects column. This adds a Raycast-style search dialog (sidebar Search icon, /) that finds sessions and projects by name, branch, pull request, and conversation text.
 
 ## Decisions on record
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | Entry points | A Search button at the bottom left of the sidebar above Settings, with a `⌘K` hint. Cmd+K on Mac and Ctrl+K elsewhere toggle it, even while a composer or terminal has focus, unless another dialog is open. |
+| 1 | Entry points | A Search icon beside Agent at the top of the unified sidebar. `/` opens Search outside text fields, composers, and terminals; other dialogs keep their keyboard input. |
 | 2 | Look | Raycast-style: centered, anchored near the top, about 640 px wide, blurred backdrop, bare input, grouped rows with section headers, a footer hint bar. Arrow keys move, Enter opens, Esc closes. Bottom sheet below 640 px. |
 | 3 | Empty query | "Recent" (the last eight items opened from search) and "Recent sessions" (the six newest, the sidebar's recency rule). Recents are per device in localStorage. |
 | 4 | Result types | Sessions and projects only. Nothing links outside Portal; a pull request is a way to find the sessions that worked on it, never a result of its own. |
@@ -61,32 +61,20 @@ Contract: `packages/contracts/src/search.ts`.
 - `lib/search.ts`: pure query parsing, matching, ranking, merge of server PR hits, recents list. Unit tested.
 - `useSearch`: debounced (120 ms), aborting, cached call to the route; two-character minimum. While a query is pending it shows the previous answer only when the new query extends the old one, keeping only messages that still contain it and no PR hits; failed requests are not cached. `pending` keeps the empty state from flashing before the server answers.
 - `SearchDialog`: its chunk is split out like the settings dialog; the panel mounts only while open. Empty query shows Recent and Recent sessions; with a query, Projects (4), Sessions (8), Messages (8). Selection is tracked by row identity, so late server results do not move it. Desktop is its own Radix Dialog (the shared `ResponsiveDialog` forces a visible title); under 640 px a bottom Sheet.
-- `Chat.tsx` holds the open state and the capture-phase ⌘K/Ctrl+K listener (physical `KeyK` also counts, held keys are ignored, any other open dialog or popover disables it); a session result opens through the workspace's open-session action, a project result through the start tab. Recents drop entries whose session or project is gone.
+- `Chat.tsx` holds the open state and the capture-phase shortcut listener (`/` for Search outside editors; ⌘K/Ctrl+K for Agent, including composers and terminals; held keys are ignored and another open dialog disables it); a session result opens through the workspace's open-session action, a project result through the start tab. Recents drop entries whose session or project is gone.
 
-## Portal tab
+## Agent popup
 
-Date: 2026-10-09. Built on branch `orchestrator-on-search`.
+Updated 2026-10-14. Search and Agent are separate dialogs. Search keeps its result types, appearance, and keyboard selection; it has no conversation tab.
 
-The dialog has two tabs, Search and Portal. Portal is the orchestrator's main thread (history, composer, drafts), the same conversation as the Portal page's Chat, available over any page.
+- Agent opens from the sidebar's bot button or ⌘K (Ctrl+K outside Apple platforms). The same shortcut toggles it; ⌘J is retired. Opening either dialog replaces the other.
+- Agent is centered at about 60vw × 85dvh on desktop and fills the viewport on mobile. It includes live status and the existing conditional main/side/archived thread picker. There is no full-page orchestrator route.
+- Conversation instances stay mounted after dismissal so streaming replies, drafts, and transcript scroll survive reopening. The dialog's focus trap and scroll lock are released on dismissal.
+- Main and side threads keep their draft/history keys. Each message carries the focused workspace session/tab/pane, including while a page covers that workspace.
+- Session/tab links reveal the workspace; memory, watch, and thread links dispatch local overlay or Agent actions without changing the browser URL. Closing a response never cancels its server turn.
+- Search still excludes the orchestrator conversation from its searchable data.
 
-| # | Topic | Decision |
-|---|---|---|
-| 11 | Shortcuts | ⌘J (Ctrl+J off Apple platforms) opens the dialog on Portal; ⌘K keeps opening Search. The open tab's own key closes the dialog, the other key switches tabs. Both follow decision 1: caught before a composer or terminal, held keys ignored, nothing while another dialog is open. Ctrl+J is therefore taken from the terminal (line feed) off Mac. |
-| 12 | Threads | Main thread only. Portal can open side threads (`open_thread`), but the live instance had none on 2026-10-09; they stay on the Portal page. |
-| 13 | On the Portal page | ⌘J still opens the dialog there; the two views of the main thread share the draft and both pick up the other's messages through the stream. |
-| 14 | Size | One size for both tabs. The dialog grew by the tab strip's 40 px (640 × 520 px, at most 76 vh + 40 px) so the search panel keeps its 480 px; the bottom sheet on phones. |
-| 15 | Tab switching | The two shortcuts, a click on a tab, or Left/Right on the tab strip. |
-| 16 | Search scope | Portal's own conversation is not searchable from the Search tab. |
-
-How it works:
-
-- `paletteShortcut` (`lib/search.ts`) maps a key press to `"search"`, `"portal"` or null. A Latin layout goes by the letter typed (Dvorak's own J key); a non-Latin one by the physical key.
-- `Chat.tsx` holds the open tab (`null | "search" | "portal"`). `SearchDialog` keeps the last tab through the closing animation, mounts the Portal panel the first time its tab shows, and keeps both panels mounted (hidden) until it closes, so the query and a streaming reply survive a switch. The Portal panel's chunk (`PortalThread`, the chat SDK, markdown) loads on first use.
-- Each panel focuses its own field when shown (the search box, the composer with the caret at the end); the element the dialog was opened from is noted in a layout effect before that, and gets focus back on close.
-- What the user is looking at goes with each message as on the Portal page, so a question asked over a session is about that session.
-- An in-app link in a reply (a session, a tab) and a curation run's digest line close the dialog and navigate. Closing mid-reply loses nothing: the server keeps consuming the stream, and on reopen the thread shows Portal answering and loads the stored reply.
-
-Tests: web `tests/search.test.mjs` (the shortcut mapping, layouts); Playwright `tests/ui/search-portal.spec.ts` (⌘J over a session with the view sent along and focus returned, switching with state kept and the shared draft, a reply's link closing the dialog) and the settings suppression in `tests/ui/search.spec.ts` covering ⌘J.
+Tests: `tests/search.test.mjs`, `tests/ui/search.spec.ts`, `tests/ui/search-portal.spec.ts`, `tests/ui/portal-threads.spec.ts`, and `tests/ui/talk-to-portal.spec.ts`.
 
 ## Rollout
 
@@ -95,7 +83,7 @@ The live instance needs a restart for migration 0014; the backfill runs on its o
 ## As built
 
 - A PR that no source knows (not in the world, the change log, or an item) is still found when a session title names it, through the client's title substring match; the row then has no PR subtitle. Example on the clone: `2761`.
-- Ctrl+K on Linux and Windows is taken from the terminal and the composer by decision 1, so the shell's kill-to-end-of-line no longer reaches xterm.
+- Ctrl+K on Linux and Windows is taken from the terminal and the composer for Agent, so the shell's kill-to-end-of-line no longer reaches xterm.
 - Two-character queries have no trigram, so Postgres scans the table for them; at today's 4 MB of text that is still a few milliseconds. Route latency on the clone was 30–40 ms per query end to end.
 - Right at boot a live append can split a reply whose row the backfill has written but not committed; the text is still all indexed.
 - Sessions with no message rows are re-read in full on each boot until they have one. The message insert shares the event transaction, so a failing insert drops that event batch rather than letting the index drift.
