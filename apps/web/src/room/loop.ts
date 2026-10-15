@@ -4,6 +4,8 @@
  *
  * - 24 fps normally;
  * - 60 fps for ~300 ms after a scroll, so whatever sits over the room keeps up;
+ * - 60 fps while anything on the page carries `[data-room-motion]` and for 100 ms after (a panel
+ *   sliding over the room: docs/GLASS.md, Liquid glass → Loop), so its glass does not step;
  * - 6 fps while a CSS-blurred dialog is open (`[data-room-slow]`, or an open `dialog` or
  *   `[role=dialog]` carrying `.glass`): the browser is already blurring the page behind it;
  * - 12 fps under Low Power Mode, recognised by requestAnimationFrame itself arriving at ~30 Hz;
@@ -11,7 +13,8 @@
  * - under `prefers-reduced-motion` no loop at all: one still frame, refreshed once a minute and
  *   whenever the scene asks (`request()`).
  *
- * `targetFps` and `looksLowPower` are pure and unit-tested.
+ * The slow rules win over both boosts. `targetFps`, `motionUntil` and `looksLowPower` are pure and
+ * unit-tested.
  */
 
 export type LoopConditions = {
@@ -20,6 +23,8 @@ export type LoopConditions = {
   slow: boolean;
   /** Within ~300 ms of a scroll. */
   scrolling: boolean;
+  /** `[data-room-motion]` is on the page, or was within the last 100 ms. */
+  moving: boolean;
   lowPower: boolean;
 };
 
@@ -28,6 +33,9 @@ export const SCROLL_FPS = 60;
 export const SLOW_FPS = 6;
 export const LOW_POWER_FPS = 12;
 export const SCROLL_BOOST_MS = 300;
+export const MOTION_FPS = 60;
+/** How long the motion boost outlasts the last `[data-room-motion]`, so the animation's last frame is drawn. */
+export const MOTION_TAIL_MS = 100;
 /** The still frame's refresh under reduced motion: the sun moves once a minute. */
 export const STILL_REFRESH_MS = 60_000;
 
@@ -36,8 +44,20 @@ export function targetFps(conditions: LoopConditions): number {
   if (conditions.hidden) return 0;
   if (conditions.slow) return SLOW_FPS;
   if (conditions.lowPower) return LOW_POWER_FPS;
+  if (conditions.moving) return MOTION_FPS;
   if (conditions.scrolling) return SCROLL_FPS;
   return DEFAULT_FPS;
+}
+
+/**
+ * Until when the motion boost holds, given whether `[data-room-motion]` is on the page at `now` and
+ * the previous answer: for good while it is; from the moment it goes, `MOTION_TAIL_MS` more; after
+ * that the previous end stands. The boost is on while `now < motionUntil(...)`.
+ */
+export function motionUntil(present: boolean, previous: number, now: number): number {
+  if (present) return Infinity;
+  if (previous === Infinity) return now + MOTION_TAIL_MS;
+  return previous;
 }
 
 /** Samples of requestAnimationFrame intervals kept for the cadence check (about two seconds at 60 Hz). */
@@ -60,6 +80,8 @@ export function looksLowPower(intervals: ArrayLike<number>): boolean {
 
 const SLOW_SELECTOR = "[data-room-slow], dialog[open].glass, [role=dialog].glass";
 const SLOW_CHECK_MS = 250;
+export const MOTION_ATTRIBUTE = "data-room-motion";
+const MOTION_SELECTOR = `[${MOTION_ATTRIBUTE}]`;
 
 export type RoomLoop = {
   /** Render a frame soon even when the loop is still (reduced motion) or between frames. */
@@ -81,6 +103,7 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
   let ticks = 0;
   let lowPower = false;
   let scrollUntil = 0;
+  let moveUntil = 0;
   let slow = false;
   let slowCheckedAt = -Infinity;
   let requested = false;
@@ -125,8 +148,10 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
     if (time - slowCheckedAt >= SLOW_CHECK_MS) {
       slowCheckedAt = time;
       slow = document.querySelector(SLOW_SELECTOR) !== null;
+      // The observer below sees the attribute set or removed at once; an element mounted already carrying it is seen here.
+      checkMotion();
     }
-    const fps = targetFps({ hidden: document.hidden, slow, scrolling: time < scrollUntil, lowPower });
+    const fps = targetFps({ hidden: document.hidden, slow, scrolling: time < scrollUntil, moving: time < moveUntil, lowPower });
     // Half a millisecond of slack so a 24 fps cap on a 48 Hz cadence does not skip every other frame.
     if (fps > 0 && (requested || time - last >= 1000 / fps - 0.5)) {
       requested = false;
@@ -138,6 +163,12 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
   const onScroll = () => {
     scrollUntil = performance.now() + SCROLL_BOOST_MS;
   };
+  const checkMotion = () => {
+    moveUntil = motionUntil(document.querySelector(MOTION_SELECTOR) !== null, moveUntil, performance.now());
+  };
+  // Only the one attribute, so a streaming reply's mutations never wake it.
+  const motionObserver = new MutationObserver(checkMotion);
+  motionObserver.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: [MOTION_ATTRIBUTE] });
   const onVisibility = () => {
     if (document.hidden) {
       if (raf) cancelAnimationFrame(raf);
@@ -166,6 +197,7 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
       if (raf) cancelAnimationFrame(raf);
       document.removeEventListener("scroll", onScroll, { capture: true });
       document.removeEventListener("visibilitychange", onVisibility);
+      motionObserver.disconnect();
     },
   };
 }

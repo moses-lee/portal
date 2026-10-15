@@ -1,7 +1,8 @@
 /**
  * Where the frost goes (docs/PALACE.md, Web → Frost): every `.frost` and `.frost-subtle` element on
- * the page, as rounded rectangles in the canvas's drawing-buffer pixels with Y pointing up, written
- * into the instance buffer the mask pass draws.
+ * the page, and every `.liquid` one (docs/GLASS.md, Liquid glass; it carries one of those too), as
+ * rounded rectangles in the canvas's drawing-buffer pixels with Y pointing up, written into the
+ * instance buffer the mask and lens passes draw.
  *
  * The maths (`parseRadius`, `frostQuad`) is pure and unit-tested. `collectFrost` is browser only:
  * it queries the panels once per rendered frame and reads their boxes then (they move with every
@@ -32,8 +33,11 @@ export type FrostQuad = {
 /** Drawing-buffer pixels added around each panel, so the edge's antialiasing (one mask texel, two pixels) is not cut off. */
 export const EDGE = 2;
 
-/** Floats per panel in the instance buffer: shape (cx, cy, half width, half height), quad (x0, y0, x1, y1), radius. */
-export const FLOATS_PER_PANEL = 9;
+/**
+ * Floats per panel in the instance buffer: shape (cx, cy, half width, half height), quad (x0, y0, x1, y1), radius,
+ * and `liquid` (1 for a `.liquid` panel, which the lens pass draws too; 0 otherwise).
+ */
+export const FLOATS_PER_PANEL = 10;
 
 /**
  * A computed `border-radius` corner (`"12px"`, `"50%"`, `"8px 4px"`, or Tailwind's
@@ -113,12 +117,17 @@ export function intersect(a: Box, b: Box, out?: Box): Box {
 // ---------------------------------------------------------------------------------------------
 
 export const FROST_SELECTOR = ".frost, .frost-subtle";
+/** Liquid glass (docs/GLASS.md, Liquid glass): used alongside `.frost` or `.frost-subtle`, and frosted even without them. */
+export const LIQUID_CLASS = "liquid";
+const PANEL_SELECTOR = `${FROST_SELECTOR}, .${LIQUID_CLASS}`;
 
 /**
  * What is read once per panel: its radius as computed (empty when stale), that radius in CSS pixels
- * for the panel's size then (a resize marks it stale), and the ancestors whose overflow clips it.
+ * for the panel's size then (a resize marks it stale), whether it is liquid, and the ancestors whose
+ * overflow clips it. A liquid panel has none: one sliding out under a clipping ancestor keeps its rim
+ * (only the canvas cuts it).
  */
-type Panel = { radius: string; pixels: number; clips: Element[] };
+type Panel = { radius: string; pixels: number; liquid: boolean; clips: Element[] };
 
 const panels = new Map<Element, Panel>();
 /** Reused every frame: the panels seen, the clipping ancestors' boxes (and which were measured this frame), the clip and the quad. */
@@ -175,30 +184,33 @@ function read(element: Element, box: { width: number; height: number }): Panel {
     const { resize, mutation } = observers();
     resize.observe(element);
     mutation.observe(element, { attributes: true, attributeFilter: ["class", "style"] });
-    panel = { radius: "", pixels: 0, clips: [] };
+    panel = { radius: "", pixels: 0, liquid: false, clips: [] };
     panels.set(element, panel);
   }
   if (!panel.radius) {
     // Never empty once read, so a panel is read once per change.
     panel.radius = getComputedStyle(element).borderTopLeftRadius || "0px";
     panel.pixels = parseRadius(panel.radius, box.width, box.height);
-    panel.clips = clippingAncestors(element);
+    panel.liquid = element.classList.contains(LIQUID_CLASS);
+    panel.clips = panel.liquid ? [] : clippingAncestors(element);
   }
   return panel;
 }
 
-/** A growable instance buffer: `FLOATS_PER_PANEL` floats per panel. */
-export type FrostBuffer = { data: Float32Array };
+/** A growable instance buffer: `FLOATS_PER_PANEL` floats per panel, and how many of the last frame's panels were liquid. */
+export type FrostBuffer = { data: Float32Array; liquid: number };
 
 /**
- * Writes every visible frosted panel into `buffer` (growing it when needed) and returns how many
- * there are; 0 means the frame needs no frost at all. Under `prefers-reduced-transparency` the
- * panels are solid and nothing is drawn; while `suspendFrost` holds, nothing either.
+ * Writes every visible frosted panel into `buffer` (growing it when needed), counts the liquid ones
+ * in `buffer.liquid`, and returns how many there are; 0 means the frame needs no frost at all.
+ * Under `prefers-reduced-transparency` the panels are solid and nothing is drawn, liquid glass
+ * included; while `suspendFrost` holds, nothing either.
  */
 export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
+  buffer.liquid = 0;
   if (suspended) return 0;
   reducedTransparency ??= window.matchMedia("(prefers-reduced-transparency: reduce)");
-  const elements = reducedTransparency.matches ? [] : document.querySelectorAll(FROST_SELECTOR);
+  const elements = reducedTransparency.matches ? [] : document.querySelectorAll(PANEL_SELECTOR);
   seen.clear();
   measured.clear();
   let count = 0;
@@ -250,6 +262,8 @@ export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
     data[at + 6] = quad.x1;
     data[at + 7] = quad.y1;
     data[at + 8] = quad.radius;
+    data[at + 9] = panel.liquid ? 1 : 0;
+    if (panel.liquid) buffer.liquid += 1;
     count += 1;
   }
   // Panels that left the page stop being observed; ancestors no panel is clipped by any more are forgotten.

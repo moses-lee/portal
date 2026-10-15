@@ -14,7 +14,7 @@ import {
   readLayout,
   registerStage,
 } from "../src/room/layout.ts";
-import { looksLowPower, targetFps, CADENCE_SAMPLES } from "../src/room/loop.ts";
+import { looksLowPower, motionUntil, targetFps, CADENCE_SAMPLES, MOTION_TAIL_MS } from "../src/room/loop.ts";
 
 const DEGREE = Math.PI / 180;
 
@@ -133,12 +133,40 @@ test("projectPoint agrees with a three.js camera placed as Camera.tsx places it"
 });
 
 test("the loop's rate follows visibility, dialogs, power and scrolling", () => {
-  const base = { hidden: false, slow: false, scrolling: false, lowPower: false };
+  const base = { hidden: false, slow: false, scrolling: false, moving: false, lowPower: false };
   assert.equal(targetFps(base), 24);
   assert.equal(targetFps({ ...base, scrolling: true }), 60);
   assert.equal(targetFps({ ...base, slow: true, scrolling: true }), 6);
   assert.equal(targetFps({ ...base, lowPower: true }), 12);
   assert.equal(targetFps({ ...base, hidden: true, scrolling: true }), 0);
+});
+
+test("a panel in motion boosts the loop to 60 fps, under the same slow rules as a scroll", () => {
+  const base = { hidden: false, slow: false, scrolling: false, moving: false, lowPower: false };
+  assert.equal(targetFps({ ...base, moving: true }), 60);
+  assert.equal(targetFps({ ...base, moving: true, slow: true }), 6);
+  assert.equal(targetFps({ ...base, moving: true, lowPower: true }), 12);
+  assert.equal(targetFps({ ...base, moving: true, hidden: true }), 0);
+});
+
+test("the motion boost lasts while [data-room-motion] is on the page and 100 ms after", () => {
+  assert.equal(MOTION_TAIL_MS, 100);
+  // Never set: no boost.
+  let until = motionUntil(false, 0, 1000);
+  assert.ok(!(1000 < until));
+  // Set at 1000: on for good, however long the animation runs.
+  until = motionUntil(true, until, 1000);
+  assert.ok(5000 < until);
+  until = motionUntil(true, until, 1320);
+  // Removed at 1320: the tail runs to 1420, and later checks do not push it on.
+  until = motionUntil(false, until, 1320);
+  assert.equal(until, 1420);
+  assert.ok(1419 < until);
+  until = motionUntil(false, until, 1400);
+  assert.equal(until, 1420);
+  assert.ok(!(1420 < until));
+  // Set again inside the tail: on for good again.
+  assert.equal(motionUntil(true, until, 1410), Infinity);
 });
 
 test("Low Power Mode is a ~30 Hz animation-frame cadence over a full window", () => {

@@ -6,6 +6,7 @@ import { Color, type DirectionalLight, type HemisphereLight } from "three";
 import { kelvinToRgb, sunRamp } from "@portal/shared/room";
 import { useMediaQuery } from "@/components/useMediaQuery";
 import { directionFrom, skyColours, sunThrough, type RoomCondition, type SunClock } from "../sun";
+import { setGlassLight } from "../frost/light";
 import { thunderFlash } from "./Weather";
 
 const DEGREE = Math.PI / 180;
@@ -62,6 +63,11 @@ export default function Sun({ clock, condition }: { clock: SunClock; condition: 
     }
     get().gl.shadowMap.needsUpdate = true;
   }, [get, x, y, z, mapSize]);
+
+  // The liquid glass's rim highlight follows this light (docs/GLASS.md, Sun direction on screen).
+  useEffect(() => {
+    setGlassLight([x, y, z], intensity / KEY, ramp.moon);
+  }, [x, y, z, intensity, ramp.moon]);
 
   useFrame(() => {
     if (hemisphere.current) hemisphere.current.intensity = fill + thunderFlash() * 1.5;
