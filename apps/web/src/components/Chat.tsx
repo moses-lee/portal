@@ -962,7 +962,8 @@ function ChatShell() {
         />
         <AgentDialog open={palette === "agent"} onClose={() => setPalette(null)} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} />
         <ShellRoom portal={portalOpen} palace={portalView === "palace"} workspaceActivity={workspaceActivity} />
-        <div className="relative flex min-h-0 min-w-0 flex-1">
+        {/* The centre panel (docs/GLASS.md, Floating panels): a rounded clip, not frosted; page overlays fill it. */}
+        <div data-shell-centre className="shell-centre relative flex min-h-0 min-w-0 flex-1">
           <div data-workspace-layer inert={surface !== null} aria-hidden={surface !== null || undefined} className={`flex min-h-0 min-w-0 flex-1 ${surface ? "invisible pointer-events-none" : ""}`}>
             <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
               <WorkspaceView
@@ -977,7 +978,6 @@ function ChatShell() {
                 onRoomActivity={setWorkspaceActivity}
               />
             </Suspense>
-            {showGithub && <GithubInspector open={showGithub && !surface} onClose={() => setGithubPreference("false")} projectId={githubProjectId} projectRemoved={githubProjectRemoved} session={activeSession} onGitAction={startGitAction} returnFocus={githubOpener} />}
           </div>
           {surface?.view === "palace" ? <div data-palace-surface className="absolute inset-0 flex flex-col">
             <header data-palace-header className="workspace-header !border-transparent">
@@ -988,6 +988,8 @@ function ChatShell() {
             {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} />}
           </div> : null}
         </div>
+        {/* The shell's third panel, beside the centre rather than in it; hidden under a page overlay as before. */}
+        {showGithub && <GithubInspector open={showGithub && !surface} onClose={() => setGithubPreference("false")} projectId={githubProjectId} projectRemoved={githubProjectRemoved} session={activeSession} onGitAction={startGitAction} returnFocus={githubOpener} />}
         <ApprovalsDialog onNavigate={navigateSurface} />
       </div>
     </RoomHostProvider>

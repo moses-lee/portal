@@ -59,6 +59,7 @@ export default function GithubInspector({
       >
         <SheetContent
           id="github-inspector"
+          liquid
           className="!w-[min(380px,92vw)] gap-0 p-4"
           showCloseButton={false}
           onCloseAutoFocus={(event) => {
@@ -81,7 +82,7 @@ export default function GithubInspector({
     <aside
       id="github-inspector"
       aria-label="GitHub inspector"
-      className="frost-subtle flex w-[340px] shrink-0 flex-col border-l border-white/5 px-4 py-4 animate-in fade-in slide-in-from-right-2 duration-200"
+      className="shell-panel frost-subtle liquid relative flex w-[340px] shrink-0 flex-col px-4 py-4 animate-in fade-in slide-in-from-right-2 duration-200"
     >
       {panel}
     </aside>

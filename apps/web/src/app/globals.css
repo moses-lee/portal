@@ -124,6 +124,27 @@
   isolation: isolate;
   overflow: hidden;
 }
+/*
+ * Floating panels (docs/GLASS.md): from 768 px the sidebar, the centre and the inspector sit inset
+ * from the window with the room in the gaps between them. On a phone the centre stays full-bleed and
+ * only the sheets float.
+ */
+.shell-panel {
+  border: 1px solid #eee1ca1f;
+  border-radius: 18px;
+}
+@media (min-width: 768px) {
+  .portal-shell {
+    padding: 10px;
+    gap: 10px;
+  }
+  /* Not frosted (decision 16): a rounded clip over the veiled room; the tab strip, panes and page overlays inside it. */
+  .shell-centre {
+    border: 1px solid #eee1ca1f;
+    border-radius: 18px;
+    overflow: hidden;
+  }
+}
 .glass {
   background: #292722dd;
   border: 1px solid #eee1ca20;
@@ -149,6 +170,36 @@
 }
 .frost-subtle {
   background: #25231fc9;
+}
+/*
+ * Liquid glass (docs/GLASS.md, Liquid glass): the floating sidebar, inspector, sheets and Palace
+ * mode's logo. The room bends at their rims inside the frost pass; here, a lower tint so more of the
+ * room shows, and a 1 px rim lighter at the top so the edge reads without WebGL too (over the sketch).
+ */
+.liquid {
+  background: #25231f80;
+  /* The rim below is the border; a real one would sit outside it. */
+  border-width: 0;
+  box-shadow:
+    inset 0 1px 0 #ffffff0a,
+    0 12px 40px #0000001f;
+}
+.liquid::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, #ffffff1f, #ffffff08);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  pointer-events: none;
 }
 .agent-logo {
   display: inline-block;
@@ -276,7 +327,6 @@
 .sidebar-shell {
   min-height: 0;
   flex-shrink: 0;
-  border-right: 1px solid var(--border);
 }
 .sidebar-content {
   display: flex;
@@ -740,6 +790,28 @@
   background: #0007;
   backdrop-filter: blur(6px);
 }
+/* A liquid sheet's overlay keeps the dim and drops the CSS blur: the room's frost blurs under the sheet instead. */
+[data-slot="sheet-overlay"][data-liquid] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* Liquid sheets float (docs/GLASS.md, Phones): inset 8 px from the window, rounded, with the rim all round. */
+/*
+ * Unlike the sidebar and the inspector, a sheet sits over the centre's text, which the room's frost
+ * does not blur: it keeps a stronger tint so that text does not read through it.
+ */
+[data-slot="sheet-content"].liquid {
+  background: #25231fd9;
+  height: auto;
+  border-width: 0;
+  border-radius: 22px;
+}
+[data-slot="sheet-content"].liquid[data-side="left"] {
+  inset: max(8px, env(safe-area-inset-top)) auto max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
+[data-slot="sheet-content"].liquid[data-side="right"] {
+  inset: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) auto;
+}
 
 @media (max-width: 767px) {
   .workspace-header {
@@ -791,7 +863,9 @@
 @media (prefers-reduced-transparency: reduce) {
   .glass,
   .frost,
-  .frost-subtle {
+  .frost-subtle,
+  .liquid,
+  [data-slot="sheet-content"].liquid {
     background: var(--card);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;

@@ -390,6 +390,7 @@ export default function Sidebar(props: SidebarProps) {
       >
         <SheetContent
           side="left"
+          liquid
           showCloseButton={false}
           className="!w-[min(320px,88vw)] gap-0 p-0"
           onCloseAutoFocus={(event) => {
@@ -411,7 +412,7 @@ export default function Sidebar(props: SidebarProps) {
   return (
     <aside
       aria-label="Workspace sidebar"
-      className="sidebar-shell frost-subtle relative"
+      className="sidebar-shell shell-panel frost-subtle liquid relative"
       style={{ width }}
     >
       <SidebarContent {...props} />
@@ -423,13 +424,15 @@ export default function Sidebar(props: SidebarProps) {
         aria-valuemax={400}
         aria-valuenow={width}
         tabIndex={0}
-        className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none hover:bg-white/5 focus-visible:bg-white/10"
+        // In the gap beside the panel, not over its rim.
+        className="absolute inset-y-0 -right-[9px] z-20 w-2 cursor-col-resize touch-none rounded-full hover:bg-white/5 focus-visible:bg-white/10"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
+          // The panel's width is measured from its own left edge (the shell's padding is left of it).
           if (e.currentTarget.hasPointerCapture(e.pointerId))
-            setDragWidth(Math.max(240, Math.min(400, e.clientX)));
+            setDragWidth(Math.max(240, Math.min(400, e.clientX - e.currentTarget.parentElement!.getBoundingClientRect().left)));
         }}
         onPointerUp={(e) => {
           e.currentTarget.releasePointerCapture(e.pointerId);
