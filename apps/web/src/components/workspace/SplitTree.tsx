@@ -104,7 +104,7 @@ function SplitGroup({
           {index > 0 && (
             <Separator
               aria-label={row ? "Resize panes side by side" : "Resize stacked panes"}
-              className={`shrink-0 bg-white/5 transition-colors hover:bg-indigo-300/30 focus-visible:bg-indigo-300/30 ${row ? "w-1.5" : "h-1.5"}`}
+              className={`shrink-0 bg-white/5 transition-colors hover:bg-accent-line focus-visible:bg-accent-line ${row ? "w-1.5" : "h-1.5"}`}
             />
           )}
           <Panel id={keyOf(child.id)} minSize="10%" className="flex h-full min-h-0 min-w-0 flex-col">
@@ -144,7 +144,7 @@ function PaneFrame({
       data-focused={(multi && focused) || undefined}
       onPointerDownCapture={focus}
       onFocusCapture={focus}
-      className={`flex min-h-0 min-w-0 flex-1 flex-col ${multi && focused ? "ring-1 ring-inset ring-indigo-400/60" : ""}`}
+      className={`flex min-h-0 min-w-0 flex-1 flex-col ${multi && focused ? "ring-1 ring-inset ring-accent-line" : ""}`}
     >
       {children}
     </div>

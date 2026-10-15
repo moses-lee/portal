@@ -118,7 +118,7 @@ export default function Picker<Row>({
           aria-controls={open ? listboxId : undefined}
           disabled={disabled}
           onClick={toggle}
-          className={`flex w-full min-w-0 items-center gap-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-left text-sm outline-none focus:border-indigo-500 disabled:opacity-50 ${triggerClassName}`}
+          className={`flex w-full min-w-0 items-center gap-2 rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-left text-sm outline-none focus:border-accent-line disabled:opacity-50 ${triggerClassName}`}
         >
           {trigger}
           <span aria-hidden="true" className="ml-auto shrink-0 text-zinc-500">▾</span>
@@ -144,7 +144,7 @@ export default function Picker<Row>({
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
-                className="w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-xs outline-none focus:border-indigo-500"
+                className="w-full rounded border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-xs outline-none focus:border-accent-line"
               />
             </div>
             {status && <div role="status" className="space-y-0.5 px-3">{status}</div>}

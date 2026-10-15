@@ -26,7 +26,7 @@ export function mountShell(element: HTMLDivElement, { terminalId, canFocus = () 
   const terminal = new Terminal({
     cursorBlink: true, fontSize: 13, fontFamily: "Menlo, Monaco, Consolas, monospace",
     scrollback: 2000, allowProposedApi: true, screenReaderMode: true,
-    theme: { background: "#09090b", foreground: "#e4e4e7", cursor: "#a5b4fc", selectionBackground: "#3f3f46" },
+    theme: { background: "#09090b", foreground: "#e4e4e7", cursor: "#e8d7b9", selectionBackground: "#3f3f46" },
   });
   const fit = new FitAddon();
   terminal.loadAddon(fit);

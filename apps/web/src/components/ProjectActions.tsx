@@ -18,7 +18,7 @@ export function RenameField({
   inputRef,
   ariaLabel = "Project name",
   maxLength,
-  className = "my-1 w-full rounded border border-indigo-500 bg-zinc-900 px-2 py-1 text-xs outline-none",
+  className = "my-1 w-full rounded border border-accent-line bg-zinc-900 px-2 py-1 text-xs outline-none",
 }: {
   initial: string;
   onCommit: (name: string) => void;
@@ -157,7 +157,7 @@ export function RemoveConfirm({
               checked={deleteWorktree}
               disabled={busy}
               onChange={(e) => setDeleteWorktree(e.target.checked)}
-              className="accent-indigo-500"
+              className="accent-primary"
             />
             Also delete the worktree folder
           </label>

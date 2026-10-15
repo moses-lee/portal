@@ -34,6 +34,11 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-bubble: var(--bubble);
+  --color-bubble-border: var(--bubble-border);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+  --color-link: var(--link);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -66,6 +71,12 @@
   --sidebar-accent-foreground: var(--foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+  /* Warm accents (docs/GLASS.md): the user bubble, active rows and hover fills, focus lines, links. */
+  --bubble: #e8d7b917;
+  --bubble-border: #e8d7b91f;
+  --accent-soft: #e8d7b90d;
+  --accent-line: #dec49840;
+  --link: #e6c792;
 }
 
 @layer base {
@@ -288,8 +299,8 @@
   background: #ffffff04;
 }
 .sidebar-row[data-active="true"] {
-  background: #c3cfff0b;
-  border-color: #c3cfff12;
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
   box-shadow: inset 0 1px #ffffff05;
 }
 .sidebar-title {
@@ -398,15 +409,15 @@
   position: absolute;
   inset: 3px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #dfe4ff, #8f9cf0 60%, #6b6fd8);
-  box-shadow: 0 0 10px #9aa4f088;
+  background: radial-gradient(circle at 35% 30%, #fff4e0, #e8c890 60%, #c6935a);
+  box-shadow: 0 0 10px #e8c89088;
   animation: ind-orb-core 2.4s ease-in-out infinite;
 }
 .ind-orb i {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid #a8b6f6;
+  border: 1px solid #ecd3a6;
   opacity: 0;
   animation: ind-orb-ping 2.4s ease-out infinite;
 }
@@ -477,7 +488,7 @@
 .conversation-markdown {
   font-size: 15px;
   line-height: 1.8;
-  color: #d7dce7;
+  color: #ece4d6;
   overflow-wrap: anywhere;
 }
 .conversation-markdown > :first-child {
@@ -523,10 +534,10 @@
   margin: 5px 0;
 }
 .conversation-markdown li::marker {
-  color: #747f98;
+  color: #9a9080;
 }
 .conversation-markdown a {
-  color: #b8c7f5;
+  color: var(--link);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -538,7 +549,7 @@
   padding: 2px 5px;
 }
 .conversation-markdown blockquote {
-  border-left: 2px solid #93a1ce55;
+  border-left: 2px solid #dec49855;
   padding-left: 16px;
   color: var(--muted-foreground);
 }
@@ -591,11 +602,11 @@
     box-shadow 160ms;
 }
 .composer:focus-within {
-  border-color: #b1c0ff38;
+  border-color: var(--accent-line);
   box-shadow:
     inset 0 1px #ffffff0d,
     0 16px 48px #0003,
-    0 0 0 3px #b1c0ff04;
+    0 0 0 3px var(--accent-soft);
 }
 .composer textarea {
   min-height: 70px;
@@ -613,8 +624,8 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: #e4e8f5;
-  color: #232a3f;
+  background: var(--primary);
+  color: var(--primary-foreground);
   box-shadow: 0 2px 8px #0002;
   transition:
     transform 140ms,

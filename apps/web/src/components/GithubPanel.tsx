@@ -108,7 +108,7 @@ function GitActionButton({
             aria-describedby={`github-${kind}-status`}
             disabled={!available}
             onClick={() => onGitAction?.(kind, summary)}
-            className="inline-flex min-h-8 items-center justify-center rounded-md border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-zinc-200 transition-colors hover:border-white/20 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-transparent disabled:text-zinc-600"
+            className="inline-flex min-h-8 items-center justify-center rounded-md border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-zinc-200 transition-colors hover:border-white/20 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-transparent disabled:text-zinc-600"
           >
             {kind === "review" ? "Summarize" : "Investigate"}
           </button>
@@ -134,7 +134,7 @@ function PullBlock({ pull }: { pull: PullSummary }) {
           target="_blank"
           rel="noreferrer"
           title={`${pull.title} (opens on GitHub)`}
-          className="min-w-0 flex-1 break-words pt-0.5 text-sm font-medium leading-5 text-zinc-200 underline-offset-4 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+          className="min-w-0 flex-1 break-words pt-0.5 text-sm font-medium leading-5 text-zinc-200 underline-offset-4 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {pull.title}
         </a>
@@ -306,7 +306,7 @@ function ConflictsRow({
               aria-expanded={open}
               aria-controls="github-conflict-files"
               aria-label={`Conflicts with ${conflicts.base}: ${status}`}
-              className="w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 hover:[&>span:first-child]:text-white"
+              className="w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:[&>span:first-child]:text-white"
             >
               {content}
             </button>
@@ -420,7 +420,7 @@ function ChecksRow({
               aria-expanded={open}
               aria-controls="github-check-details"
               aria-label={`Checks: ${status}`}
-              className="w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 hover:[&>span:first-child]:text-white"
+              className="w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:[&>span:first-child]:text-white"
             >
               {content}
             </button>
@@ -492,7 +492,7 @@ function getCommitChips(
       key: "head",
       text: "HEAD",
       title: "The checked-out commit",
-      className: "bg-indigo-900/60 text-indigo-200",
+      className: "bg-primary/15 text-primary",
     });
   if (row.remoteHead)
     chips.push({
@@ -541,7 +541,7 @@ function CommitItem({
   const chips = getCommitChips(row, summary.upstream, baseName);
   const title = `${row.sha}\n${row.author}\n${new Date(row.committedAt).toISOString()}`;
   const dot = row.head
-    ? "bg-indigo-500"
+    ? "bg-primary"
     : row.base
       ? "border-2 border-zinc-400 bg-zinc-950"
       : "border border-zinc-600 bg-zinc-950";
@@ -700,7 +700,7 @@ function UpstreamStatus({
                 disabled={pulling}
                 aria-label={`Pull ${summary.behind} ${summary.behind === 1 ? "commit" : "commits"}`}
                 title="Pull incoming commits with git pull --ff-only"
-                className="inline-flex min-h-7 items-center gap-1 rounded border border-white/10 px-2 text-zinc-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:opacity-50"
+                className="inline-flex min-h-7 items-center gap-1 rounded border border-white/10 px-2 text-zinc-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
               >
                 <ArrowDown aria-hidden="true" className="size-3" />
                 {pulling ? "Pulling…" : "Pull"}

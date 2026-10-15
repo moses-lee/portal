@@ -262,7 +262,7 @@ const TabItem = memo(function TabItem({ tab, title, cells, selected, unread, onl
               initial={tab.title ?? ""}
               ariaLabel="Tab name"
               maxLength={WORKSPACE_TAB_TITLE_MAX}
-              className="my-0.5 w-full rounded border border-indigo-500 bg-zinc-900 px-2 py-0.5 text-xs outline-none"
+              className="my-0.5 w-full rounded border border-accent-line bg-zinc-900 px-2 py-0.5 text-xs outline-none"
               onCancel={() => setRenaming(false)}
               onCommit={(next) => {
                 setRenaming(false);

@@ -324,7 +324,7 @@ export default function SessionPane({
           {showShell && (
             <Separator
               aria-label="Resize terminal panel"
-              className="h-1.5 shrink-0 bg-white/5 transition-colors hover:bg-indigo-300/30 focus-visible:bg-indigo-300/30"
+              className="h-1.5 shrink-0 bg-white/5 transition-colors hover:bg-accent-line focus-visible:bg-accent-line"
             />
           )}
           {showShell && (
