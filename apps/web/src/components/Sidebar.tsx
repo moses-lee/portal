@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import {
   ArrowUpRight,
   Bot,
@@ -31,6 +31,7 @@ import type { PortalView } from "@/lib/session-routes";
 import { isMacPlatform, newestSessions } from "@/lib/search";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import type { PinMap } from "@/lib/pins";
+import { holdRoomMotion } from "@/lib/room-motion";
 import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, RemovedProjectSummary, SessionSummary } from "@/lib/types";
 
@@ -371,8 +372,57 @@ function SidebarContent(props: SidebarProps) {
   );
 }
 
+/** The desktop sidebar's collapse and expand (docs/GLASS.md, Sidebar collapse); `globals.css` has the same duration. */
+const SLIDE_MS = 220;
+
+/**
+ * Whether the collapsible sidebar is mounted, and whether it is shown (expanded), for an `open`
+ * that changes. Closing keeps it mounted while it slides out and unmounts it after, keeping its
+ * React work out of the tree as before; opening mounts it collapsed and expands it two frames
+ * later, so the transition runs. Under reduced motion both happen at once. While it slides, the
+ * room's loop draws at full rate (`holdRoomMotion`) and terminals wait for the end to refit.
+ */
+function useSidebarSlide(open: boolean, instant: boolean) {
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(open);
+  // Derived during render, so a change is one render, not an effect pass.
+  if (open && !mounted) setMounted(true);
+  if (!open && shown) setShown(false);
+  if (instant && !open && mounted) setMounted(false);
+  if (instant && open && !shown) setShown(true);
+  useEffect(() => {
+    if (!open || shown) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setShown(true));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, shown]);
+  const openRef = useRef(open);
+  useEffect(() => {
+    openRef.current = open;
+  });
+  const previous = useRef(shown);
+  useEffect(() => {
+    if (previous.current === shown) return;
+    previous.current = shown;
+    if (instant) return;
+    const release = holdRoomMotion();
+    const timer = setTimeout(() => {
+      release();
+      if (!shown && !openRef.current) setMounted(false);
+    }, SLIDE_MS);
+    return () => {
+      clearTimeout(timer);
+      release();
+    };
+  }, [shown, instant]);
+  return { mounted, shown };
+}
+
 export default function Sidebar(props: SidebarProps) {
   const desktop = useMediaQuery("(min-width: 768px)", true);
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const { mounted, shown } = useSidebarSlide(props.desktopOpen, reducedMotion);
   const [storedWidth, storeWidth] = usePreference(
     "portal.sidebar.width",
     "280",
@@ -408,10 +458,19 @@ export default function Sidebar(props: SidebarProps) {
         </SheetContent>
       </Sheet>
     );
-  if (!props.desktopOpen) return null;
+  if (!mounted) return null;
   return (
+    // The slot animates its width (the panel's and the gap's) while the panel slides out or in.
+    <div
+      className="sidebar-slot"
+      data-shown={shown ? "" : undefined}
+      data-resizing={dragWidth !== null ? "" : undefined}
+      style={{ width: shown ? width + 10 : 0 }}
+    >
     <aside
       aria-label="Workspace sidebar"
+      aria-hidden={!shown || undefined}
+      inert={!shown}
       className="sidebar-shell shell-panel frost-subtle liquid relative"
       style={{ width }}
     >
@@ -462,5 +521,6 @@ export default function Sidebar(props: SidebarProps) {
         }}
       />
     </aside>
+    </div>
   );
 }

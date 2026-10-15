@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { io } from "socket.io-client";
+import { roomMotionHeld } from "./room-motion";
 import type { ShellCommand, ShellEvent, ShellState } from "./shell-types";
 
 export type ShellViewState = {
@@ -123,9 +124,10 @@ export function mountShell(element: HTMLDivElement, { terminalId, canFocus = () 
     if (cols !== view.shell.cols || rows !== view.shell.rows) enqueue({ action: "resize", id: view.shell.id, cols, rows });
   }
 
+  /** Debounced; while a shell animation runs (the sidebar sliding, docs/GLASS.md) it waits for the end, so the PTY is resized once. */
   function scheduleResize() {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(resize, 100);
+    resizeTimer = setTimeout(() => (roomMotionHeld() ? scheduleResize() : resize()), 100);
   }
 
   async function start() {

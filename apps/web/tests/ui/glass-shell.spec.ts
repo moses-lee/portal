@@ -59,3 +59,56 @@ test.describe("on a phone", () => {
     await page.screenshot({ path: info.outputPath("phone-sheet.png") });
   });
 });
+
+/** Records every change of the root's `data-room-motion` (the room loop's motion boost) from now on, as "on"/"off". */
+const recordMotion = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => {
+    const seen: string[] = [];
+    (window as unknown as { __motion: string[] }).__motion = seen;
+    new MutationObserver(() => seen.push(document.documentElement.hasAttribute("data-room-motion") ? "on" : "off")).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-room-motion"],
+    });
+  });
+const motionSeen = (page: import("@playwright/test").Page) => page.evaluate(() => (window as unknown as { __motion: string[] }).__motion);
+
+test("the sidebar slides out and back in, boosting the room while it moves, and ends in the right state", async ({ page }) => {
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  const centre = page.locator("[data-shell-centre]");
+  await expect(sidebar).toBeVisible();
+  const width = (await sidebar.boundingBox())!.width;
+  await recordMotion(page);
+  await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+  // Still mounted while it slides.
+  expect(await page.locator(".sidebar-shell").count()).toBe(1);
+  await expect(page.locator(".sidebar-shell")).toHaveCount(0);
+  await expect.poll(async () => (await centre.boundingBox())!.x).toBe(10);
+  await expect(page.locator("html")).not.toHaveAttribute("data-room-motion");
+  expect(await motionSeen(page)).toEqual(["on", "off"]);
+
+  await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
+  await expect(sidebar).toBeVisible();
+  await expect.poll(async () => (await centre.boundingBox())!.x).toBe(10 + width + 10);
+  expect((await sidebar.boundingBox())!.x).toBe(10);
+  await expect(page.locator("html")).not.toHaveAttribute("data-room-motion");
+  expect(await motionSeen(page)).toEqual(["on", "off", "on", "off"]);
+});
+
+test("under reduced motion the sidebar collapses and expands at once", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setupPortal(page);
+  await page.goto("/sessions/s1");
+  const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
+  await expect(sidebar).toBeVisible();
+  await recordMotion(page);
+  await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+  // Gone in the click's own render, with no slide and no boost.
+  expect(await page.locator(".sidebar-shell").count()).toBe(0);
+  expect((await page.locator("[data-shell-centre]").boundingBox())!.x).toBe(10);
+  await page.getByRole("button", { name: "Toggle sidebar" }).first().click();
+  expect(await page.locator(".sidebar-shell").count()).toBe(1);
+  expect((await sidebar.boundingBox())!.x).toBe(10);
+  expect(await motionSeen(page)).toEqual([]);
+});
