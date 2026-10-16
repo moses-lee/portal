@@ -10,12 +10,19 @@
  *   `[role=dialog]` carrying `.glass`): the browser is already blurring the page behind it;
  * - 12 fps under Low Power Mode, recognised by requestAnimationFrame itself arriving at ~30 Hz;
  * - nothing while the document is hidden;
- * - under `prefers-reduced-motion` no loop at all: one still frame, refreshed once a minute and
- *   whenever the scene asks (`request()`).
+ * - under `prefers-reduced-motion` no loop at all: one still frame, refreshed once a minute,
+ *   whenever the scene or the shell asks (`request()`, `requestRoomFrame()`), when
+ *   `[data-room-motion]` comes or goes (and once more `MOTION_TAIL_MS` after it goes), and when the
+ *   frosted panels moved, faded, came or went (polled every `STILL_POLL_MS`), so no stale glass is
+ *   left where a panel was.
  *
  * The slow rules win over both boosts. `targetFps`, `motionUntil` and `looksLowPower` are pure and
  * unit-tested.
  */
+
+import { frostChanged, MOTION_ATTRIBUTE } from "./frost/registry.ts";
+
+export { MOTION_ATTRIBUTE };
 
 export type LoopConditions = {
   hidden: boolean;
@@ -38,6 +45,8 @@ export const MOTION_FPS = 60;
 export const MOTION_TAIL_MS = 100;
 /** The still frame's refresh under reduced motion: the sun moves once a minute. */
 export const STILL_REFRESH_MS = 60_000;
+/** Under reduced motion, how often the still frame checks whether the frosted panels changed under it. */
+export const STILL_POLL_MS = 250;
 
 /** The frame rate for the current conditions; 0 stops rendering. */
 export function targetFps(conditions: LoopConditions): number {
@@ -80,7 +89,6 @@ export function looksLowPower(intervals: ArrayLike<number>): boolean {
 
 const SLOW_SELECTOR = "[data-room-slow], dialog[open].glass, [role=dialog].glass";
 const SLOW_CHECK_MS = 250;
-export const MOTION_ATTRIBUTE = "data-room-motion";
 const MOTION_SELECTOR = `[${MOTION_ATTRIBUTE}]`;
 
 export type RoomLoop = {
@@ -91,9 +99,13 @@ export type RoomLoop = {
 
 /**
  * Starts driving `render(timestamp)` (R3F's `advance`). Browser only. `reducedMotion` picks the
- * still mode for the loop's lifetime; restart the loop when it changes.
+ * still mode for the loop's lifetime; restart the loop when it changes. `panelsChanged` is the
+ * still mode's poll (the frost registry's `frostChanged` unless given).
  */
-export function startRoomLoop(render: (timestamp: number) => void, options: { reducedMotion: boolean }): RoomLoop {
+export function startRoomLoop(
+  render: (timestamp: number) => void,
+  options: { reducedMotion: boolean; panelsChanged?: () => boolean },
+): RoomLoop {
   let stopped = false;
   let raf = 0;
   let last = -Infinity;
@@ -117,8 +129,20 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
   };
 
   if (options.reducedMotion) {
+    const panelsChanged = options.panelsChanged ?? frostChanged;
     renderOnce();
     const timer = setInterval(renderOnce, STILL_REFRESH_MS);
+    const poll = setInterval(() => {
+      if (!document.hidden && panelsChanged()) renderOnce();
+    }, STILL_POLL_MS);
+    let tail: ReturnType<typeof setTimeout> | undefined;
+    // A panel collapsing or a sheet closing at once still holds the attribute: draw as it starts and as it ends.
+    const motionObserver = new MutationObserver(() => {
+      renderOnce();
+      clearTimeout(tail);
+      if (document.querySelector(MOTION_SELECTOR) === null) tail = setTimeout(renderOnce, MOTION_TAIL_MS);
+    });
+    motionObserver.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: [MOTION_ATTRIBUTE] });
     const onVisibility = () => {
       if (!document.hidden) renderOnce();
     };
@@ -128,7 +152,10 @@ export function startRoomLoop(render: (timestamp: number) => void, options: { re
       stop: () => {
         stopped = true;
         clearInterval(timer);
+        clearInterval(poll);
+        clearTimeout(tail);
         if (raf) cancelAnimationFrame(raf);
+        motionObserver.disconnect();
         document.removeEventListener("visibilitychange", onVisibility);
       },
     };
@@ -209,7 +236,11 @@ export function setCurrentLoop(loop: RoomLoop | null) {
   current = loop;
 }
 
-/** Render a frame soon: needed under reduced motion, where nothing draws unless asked. */
+/**
+ * Render a frame soon: needed under reduced motion, where nothing draws unless asked (the shell
+ * calls it after an instant collapse; holding `data-room-motion` around the change does the same).
+ * A no-op while no room canvas is mounted. Browser only.
+ */
 export function requestRoomFrame() {
   current?.request();
 }

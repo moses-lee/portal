@@ -14,7 +14,7 @@ import {
   readLayout,
   registerStage,
 } from "../src/room/layout.ts";
-import { looksLowPower, motionUntil, targetFps, CADENCE_SAMPLES, MOTION_TAIL_MS } from "../src/room/loop.ts";
+import { looksLowPower, motionUntil, startRoomLoop, targetFps, CADENCE_SAMPLES, MOTION_TAIL_MS, STILL_POLL_MS } from "../src/room/loop.ts";
 
 const DEGREE = Math.PI / 180;
 
@@ -204,5 +204,86 @@ test("the registry's viewport is the room's fixed element, the size the canvas t
     delete globalThis.document;
     delete globalThis.ResizeObserver;
     delete globalThis.requestAnimationFrame;
+  }
+});
+
+test("under reduced motion the still frame redraws when [data-room-motion] comes and goes, and when the panels change", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let frames = [];
+  let observer = null;
+  let motion = false;
+  const globals = {
+    requestAnimationFrame: (callback) => frames.push(callback),
+    cancelAnimationFrame: () => {},
+    MutationObserver: class {
+      constructor(callback) {
+        observer = callback;
+      }
+      observe() {}
+      disconnect() {
+        observer = null;
+      }
+    },
+    document: {
+      hidden: false,
+      documentElement: {},
+      addEventListener() {},
+      removeEventListener() {},
+      querySelector: () => (motion ? {} : null),
+    },
+  };
+  const previous = {};
+  for (const [name, value] of Object.entries(globals)) {
+    previous[name] = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  }
+  /** Runs the pending animation frame, if any. */
+  const flush = () => {
+    const pending = frames;
+    frames = [];
+    for (const callback of pending) callback(0);
+  };
+  let rendered = 0;
+  let changed = false;
+  const loop = startRoomLoop(() => (rendered += 1), { reducedMotion: true, panelsChanged: () => changed });
+  try {
+    flush();
+    assert.equal(rendered, 1, "the first still frame");
+    // Nothing changed: the poll draws nothing.
+    t.mock.timers.tick(STILL_POLL_MS * 4);
+    flush();
+    assert.equal(rendered, 1);
+
+    // The shell holds the attribute around an instant collapse: a frame as it comes, one as it goes, and one after the tail.
+    motion = true;
+    observer();
+    flush();
+    assert.equal(rendered, 2);
+    motion = false;
+    observer();
+    flush();
+    assert.equal(rendered, 3);
+    t.mock.timers.tick(MOTION_TAIL_MS);
+    flush();
+    assert.equal(rendered, 4);
+
+    // A panel moved under the still frame (a sheet closed without the attribute): the poll catches it.
+    changed = true;
+    t.mock.timers.tick(STILL_POLL_MS);
+    flush();
+    assert.equal(rendered, 5);
+    changed = false;
+
+    // And anyone may ask.
+    loop.request();
+    flush();
+    assert.equal(rendered, 6);
+  } finally {
+    loop.stop();
+    assert.equal(observer, null, "stopping disconnects the observer");
+    for (const [name, descriptor] of Object.entries(previous)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
   }
 });

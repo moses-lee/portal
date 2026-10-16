@@ -56,8 +56,9 @@ const REFERENCE_DPR = 1.5;
 
 /**
  * Liquid glass (docs/GLASS.md, Liquid glass), in CSS pixels: the bevel's width inside a liquid
- * panel's edge, the most the room is shifted outwards at its rim (the subtle setting), the fringe's
- * extra shift for red and blue, and the rim highlight's width.
+ * panel's edge, the most the room is shifted outwards at its rim (the subtle setting; it falls off
+ * inwards with the bevel's slope, to none at its inner edge), the fringe's extra shift for red and
+ * blue, and the rim highlight's width.
  */
 export const BEVEL_PX = 18;
 export const LENS_SHIFT_PX = 8;
@@ -68,9 +69,17 @@ export const HIGHLIGHT = 0.55;
 /** Warm white from the sun, cool white from the moon (sRGB, 0..1). */
 const SUN_WHITE = new Color(1, 0.945, 0.863);
 const MOON_WHITE = new Color(0.85, 0.9, 1);
-/** The targets' empty values, as written (the targets have no colour space, so three converts nothing). */
+/**
+ * The targets' empty values, as written (the targets have no colour space, so three converts nothing).
+ * The lens's is cleared with alpha 1: three premultiplies the clear colour by its alpha (the context's
+ * `premultipliedAlpha`), so alpha 0 would clear the direction to (0, 0), that is (-1, -1).
+ */
 const BLACK = new Color(0, 0, 0);
 const LENS_EMPTY = new Color(0.5, 0.5, 0);
+const LENS_EMPTY_ALPHA = 1;
+
+/** The lens target's distance range in canvas pixels: the rim and a lens texel either side, four times over (steps of ~1/15 px). */
+export const lensRange = (rim: number, texelSize: number) => 4 * (rim + texelSize);
 
 const pass = (fragmentShader: string, uniforms: Record<string, IUniform>) =>
   new ShaderMaterial({ vertexShader: fullscreenVertex, fragmentShader, uniforms, depthTest: false, depthWrite: false });
@@ -107,7 +116,7 @@ const texel = (uniform: IUniform, renderTarget: WebGLRenderTarget, spread = 1) =
  * 2. a 4 × 4 box downsample to a quarter of the size;
  * 3. three dual-Kawase passes: down to an eighth, down to a sixteenth, up to an eighth;
  * 4. the frosted panels as rounded rectangles into a half-size R8 mask;
- * 5. the liquid panels alone into a half-size RGBA8 lens target (direction, bevel amount, rim);
+ * 5. the liquid panels alone into a half-size RGBA8 lens target (direction and opacity, bevel amount, distance to the edge);
  * 6. a composite to the screen: the last Kawase upsample, tone mapping, saturation for the blurred
  *    copy, and the sharp scene and the copy mixed by the mask; in a liquid panel's bevel the copy is
  *    read bent outwards with a colour fringe, and the rim gets a highlight lit from the sun.
@@ -146,6 +155,8 @@ class FrostPipeline {
     uFringe: { value: new Vector2() },
     uSun: { value: new Vector2(0, 1) },
     uHighlight: { value: new Color(0, 0, 0) },
+    uRange: { value: 1 },
+    uRim: { value: RIM_PX },
   });
 
   private readonly buffer: FrostBuffer = { data: new Float32Array(32 * FLOATS_PER_PANEL), liquid: 0 };
@@ -161,11 +172,11 @@ class FrostPipeline {
   });
   private maskMesh: Mesh<InstancedBufferGeometry, ShaderMaterial>;
   private readonly maskScene = new Scene();
-  /** Written, not blended: liquid panels never overlap, and A is the rim's coverage, not an opacity. */
+  /** Written, not blended: liquid panels never overlap, and A is a distance, not an opacity. */
   private readonly lensMaterial = new ShaderMaterial({
     vertexShader: lensVertex,
     fragmentShader: lensFragment,
-    uniforms: { uResolution: { value: new Vector2() }, uTexelSize: { value: 2 }, uBevel: { value: BEVEL_PX }, uRim: { value: RIM_PX } },
+    uniforms: { uResolution: { value: new Vector2() }, uTexelSize: { value: 2 }, uBevel: { value: BEVEL_PX }, uRange: { value: 1 } },
     blending: NoBlending,
     depthTest: false,
     depthWrite: false,
@@ -217,6 +228,7 @@ class FrostPipeline {
     geometry.setAttribute("aQuad", new InterleavedBufferAttribute(instances, 4, 4));
     geometry.setAttribute("aRadius", new InterleavedBufferAttribute(instances, 1, 8));
     geometry.setAttribute("aLiquid", new InterleavedBufferAttribute(instances, 1, 9));
+    geometry.setAttribute("aOpacity", new InterleavedBufferAttribute(instances, 1, 10));
     geometry.instanceCount = 0;
     return { geometry, instances };
   }
@@ -323,7 +335,7 @@ class FrostPipeline {
       (lens.uResolution.value as Vector2).set(width, height);
       lens.uTexelSize.value = width / this.lens.width;
       lens.uBevel.value = BEVEL_PX * dpr;
-      lens.uRim.value = RIM_PX * dpr;
+      lens.uRange.value = lensRange(RIM_PX * dpr, width / this.lens.width);
       this.withClearColour(this.lens, () => {
         renderer.setRenderTarget(this.lens);
         renderer.render(this.lensScene, this.camera);
@@ -337,14 +349,15 @@ class FrostPipeline {
 
   /**
    * Runs `draw` with the clear colour set to `target`'s empty value, then puts the renderer's back:
-   * transparent black for the mask; for the lens, a 0.5-centred zero direction, so the bilinear taps
-   * at a panel's rim fade the direction instead of bending it.
+   * black for the mask; for the lens, a 0.5-centred zero direction, no lens, and a distance far
+   * outside (A = 1, which also keeps three's premultiplication from zeroing the direction).
    */
   private withClearColour(output: WebGLRenderTarget, draw: () => void) {
     const renderer = this.renderer;
     renderer.getClearColor(this.clearColor);
     const clearAlpha = renderer.getClearAlpha();
-    renderer.setClearColor(output === this.lens ? LENS_EMPTY : BLACK, 0);
+    if (output === this.lens) renderer.setClearColor(LENS_EMPTY, LENS_EMPTY_ALPHA);
+    else renderer.setClearColor(BLACK, 0);
     draw();
     renderer.setClearColor(this.clearColor, clearAlpha);
   }
@@ -373,6 +386,8 @@ class FrostPipeline {
       const height = this.scene.height;
       (uniforms.uShift.value as Vector2).set((LENS_SHIFT_PX * dpr) / width, (LENS_SHIFT_PX * dpr) / height);
       (uniforms.uFringe.value as Vector2).set((FRINGE_PX * dpr) / width, (FRINGE_PX * dpr) / height);
+      uniforms.uRange.value = this.lensMaterial.uniforms.uRange.value;
+      uniforms.uRim.value = RIM_PX * dpr;
       // The light's room-space direction in the camera's view space: X right, Y up, as the canvas's pixels are here.
       const sun = this.sun.set(glassLight.x, glassLight.y, glassLight.z).transformDirection(camera.matrixWorldInverse);
       const length = Math.hypot(sun.x, sun.y);
