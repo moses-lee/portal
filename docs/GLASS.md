@@ -1,6 +1,6 @@
 # Glass shell: floating panels, liquid glass, Palace mode, warm accents
 
-Date: 2026-10-15. Status: **spec written for Moses's review; nothing built.** Branch `glass-shell`.
+Date: 2026-10-15. Status: **built and merged to main 2026-10-15** (see As built at the end). Branch `glass-shell`.
 
 Four changes to the shell around the workspace:
 
@@ -260,3 +260,40 @@ Each step is its own commit on `glass-shell`.
 ## For review
 
 Decisions 16 (centre not frosted), 17 (phone centre full-bleed) and 18 (violet state colours kept) are my calls. All the other values (10 px gap, 18 px radius, 50% tint, 8 px lens, the durations, the warm hex values) are starting points to tune live.
+
+## As built
+
+Built 2026-10-15 by subagents in the order above, then reviewed by two fresh agents (WebGL pipeline; shell, Palace mode and accents) whose findings were all fixed (34dabef, 2f2536b). Deviations from the text above:
+
+- **Glass**
+  - The lens target is cleared with alpha 1. Its alpha holds the signed edge distance, because three premultiplies the clear colour.
+  - The rim highlight is computed at full resolution in the composite, not in the lens target.
+  - Displacement follows the squircle's slope: 8 px at the rim, about 3 px at 5 px in, 0 at 18 px. It is added to the blurred interior as a difference, so there is no seam.
+  - Each panel carries an effective opacity (its own times its ancestors'), which scales the mask, lens and rim. A panel inside a fading centre therefore fades with it. The instance buffer holds 11 floats per panel.
+  - The lens draw uses no blending plus a discard outside the shape. Liquid panels must not overlap.
+  - Under reduced motion the still frame redraws when `data-room-motion` changes or when the panels move or fade (checked every 250 ms).
+- **Motion**
+  - `data-room-motion` is held on `<html>` through counted holds in `lib/room-motion.ts`. Each hold is released automatically after 2 s.
+  - Radix sheet fades hold it too, and an `animationcancel` releases it.
+- **Panels**
+  - The phone sheets are tinted at about 85%, not 50%, because they sit over chat text.
+  - Liquid panels draw their rim inside the edge instead of using a border.
+  - The pinned logo only becomes liquid once the sidebar has gone.
+- **Palace mode**
+  - The shell attribute is `data-palace-mode`; `data-palace` was taken.
+  - The Esc rule (`palaceEscapeToggles`, `lib/palace-mode.ts`) reads what was open at key-down. It also skips during a dnd-kit drag (`data-dragging`), during IME composition, and while a room hover card is shown. Only text-like inputs block it.
+  - Focus returns to the control that entered Palace mode. Failing that, it goes to the sidebar's room button, then the focused pane's composer.
+  - Changes to the sidebar before hydration are instant, so a stored-collapsed sidebar doesn't slide out on load.
+- **Home**
+  - `/` is a resolver path like `/new`. With tabs open it focuses or opens a start tab and rewrites the URL, rather than staying `/`.
+  - The Agent main thread's internal link is now `/threads/main`, so `/` can mean Palace mode in stored links.
+- **Accents**
+  - The sky spinners and dots, the non-status violet badges (a new `warm` badge tone) and the navy code and tool backgrounds also went warm.
+  - Status tones stay (the sky Running/Active badges, the violet Merged badge, the violet background state).
+  - The focused-pane ring is `ring-ring/60`.
+  - Keyboard focus rings use `ring-ring`.
+  - The highlight.js theme is unchanged.
+- **Not done**
+  - GPU timings in Chrome and Safari.
+  - A real-phone look.
+  - The glass trails the DOM by about a frame during slides, visible in a still capture.
