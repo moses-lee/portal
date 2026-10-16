@@ -176,6 +176,25 @@ function ChatShell() {
   const desktop = useMediaQuery("(min-width: 768px)", true);
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const palaceMs = reducedMotion ? PALACE_MS.reduced : desktop ? PALACE_MS.desktop : PALACE_MS.phone;
+  /** The focused pane, for where focus lands after leaving Palace mode (set below, once the workspace is read). */
+  const focusedPaneId = useRef<string | null>(null);
+  /**
+   * Where focus goes on leaving Palace mode when what entered it is gone (or something navigated):
+   * the focused pane's composer on desktop when `composerFirst`, else the sidebar's logo (the "Show
+   * the room" button, back in place), else the composer, else the first sidebar toggle.
+   */
+  const workspaceFocusTarget = (composerFirst: boolean): HTMLElement | null => {
+    const pane = focusedPaneId.current;
+    const composer = window.matchMedia("(min-width: 768px)").matches
+      ? (pane ? document.querySelector<HTMLElement>(`[data-pane="${CSS.escape(pane)}"] textarea:not(:disabled)`) : null) ??
+        document.querySelector<HTMLElement>("[data-workspace-layer] textarea:not(:disabled)")
+      : null;
+    const logo = document.querySelector<HTMLElement>('.sidebar-slot[data-shown] button[aria-label="Show the room"]');
+    const order = composerFirst ? [composer, logo] : [logo, composer];
+    return order.find((element) => element?.isConnected) ?? document.getElementById("sidebar-toggle");
+  };
+  /** Leaving with nothing to restore: focus is on the pinned logo, which goes once the exit has run. */
+  const placeFocusAfterExit = useRef(false);
   /** Leave Palace mode; `restoreFocus` when the user asked to (not when something navigated). */
   const leavePalace = useStableCallback((restoreFocus: boolean) => {
     if (!palace) return;
@@ -184,7 +203,8 @@ function ChatShell() {
     const opener = palaceOpener.current;
     palaceOpener.current = null;
     // The panels are inert until this render commits; focus once they are not.
-    if (restoreFocus) requestAnimationFrame(() => (opener?.isConnected ? opener : document.getElementById("sidebar-toggle"))?.focus());
+    if (restoreFocus) requestAnimationFrame(() => (opener?.isConnected ? opener : workspaceFocusTarget(false))?.focus());
+    else placeFocusAfterExit.current = true;
   });
   useEffect(() => {
     if (palaceSettled) return;
@@ -199,6 +219,14 @@ function ChatShell() {
     };
   }, [palace, palaceSettled, palaceMs]);
   useEffect(() => {
+    // After a navigation out of Palace mode (a room object, a link): the pinned logo has just gone with
+    // focus on it; the workspace the navigation opened takes it, unless something already did.
+    if (palace || !palaceSettled || !placeFocusAfterExit.current) return;
+    placeFocusAfterExit.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) workspaceFocusTarget(true)?.focus({ preventScroll: true });
+  });
+  useEffect(() => {
     // Browser Back/Forward is explicit navigation. Background resolver URL repairs leave pages open.
     const onPopState = () => {
       setSurface(null);
@@ -211,11 +239,14 @@ function ChatShell() {
    * Enter Palace mode: the sheet, the Agent and Search dialogs and any page overlay close; focus goes
    * to the pinned logo, the only control left outside the room.
    */
-  const enterPalace = () => {
+  const enterPalace = (opener?: HTMLElement | null) => {
     if (palace) return;
+    placeFocusAfterExit.current = false;
+    // The control that entered it (the sidebar's logo, which slides away, or the sheet's, which goes):
+    // focus comes back to it if it is still there. A click in Safari does not focus the button, so
+    // the caller passes it; otherwise whatever had focus.
     const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
-    // The sidebar's own logo (it slides away): focus comes back to it.
-    palaceOpener.current = focused;
+    palaceOpener.current = opener ?? focused;
     setPalace(true);
     setPalaceSettled(false);
     setSurface(null);
@@ -226,7 +257,7 @@ function ChatShell() {
     if (palace) pinnedLogo.current?.focus({ preventScroll: true });
   }, [palace]);
   /** Esc enters and leaves Palace mode on desktop (`palaceEscapeToggles`), after every other handler has had the key. */
-  const togglePalace = useStableCallback(() => (palace ? leavePalace(true) : enterPalace()));
+  const togglePalace = useStableCallback(() => (palace ? leavePalace(true) : enterPalace(null)));
   useEffect(() => {
     let atStart: PalaceKeyState | null = null;
     // What was open when the key went down: a handler on the way may close a dialog before the key gets here.
@@ -249,6 +280,9 @@ function ChatShell() {
   }, [togglePalace]);
 
   const { workspace, focus, apply, keyOf, setCovered } = useWorkspace();
+  useEffect(() => {
+    focusedPaneId.current = focus.pane?.id ?? null;
+  });
   const actions = useWorkspaceActions();
   const active = focus.sessionId;
   const terminalOpen = surface?.view === "terminal";
@@ -660,7 +694,7 @@ function ChatShell() {
     const destination = new URL(path, window.location.origin);
     if (destination.origin !== window.location.origin) return;
     // `/` and `/palace` opened the Palace page; they enter Palace mode now. Anything else leaves it on the way.
-    if (isPalaceLinkPath(destination.pathname)) { enterPalace(); return; }
+    if (isPalaceLinkPath(destination.pathname)) { enterPalace(null); return; }
     leavePalace(false);
     const sessionId = sessionIdFromPath(destination.pathname);
     if (sessionId) { selectSession(sessionId); return; }

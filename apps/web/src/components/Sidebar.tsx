@@ -95,7 +95,7 @@ export type SidebarProps = {
   desktopOpen: boolean;
   onCollapse: () => void;
   /** The logo: enter Palace mode (docs/GLASS.md, Palace mode). */
-  onShowRoom: () => void;
+  onShowRoom: (opener: HTMLElement) => void;
   /** Palace mode has finished sliding the desktop sidebar out: hidden and inert until it comes back. */
   away: boolean;
 };
@@ -296,7 +296,7 @@ function SidebarContent(props: SidebarProps) {
         <button
           type="button"
           aria-label="Show the room"
-          onClick={props.onShowRoom}
+          onClick={(event) => props.onShowRoom(event.currentTarget)}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left"
         >
           <PortalMark />
@@ -383,10 +383,20 @@ const SLIDE_MS = 220;
  * Whether the collapsible sidebar is mounted, and whether it is shown (expanded), for an `open`
  * that changes. Closing keeps it mounted while it slides out and unmounts it after, keeping its
  * React work out of the tree as before; opening mounts it collapsed and expands it two frames
- * later, so the transition runs. Under reduced motion both happen at once. While it slides, the
- * room's loop draws at full rate (`holdRoomMotion`) and terminals wait for the end to refit.
+ * later, so the transition runs. Under reduced motion both happen at once, and so does any change
+ * before the page has settled from hydration (the stored preference replacing the server's
+ * default must not slide). While it slides, the room's loop draws at full rate (`holdRoomMotion`)
+ * and terminals wait for the end to refit.
  */
-function useSidebarSlide(open: boolean, instant: boolean) {
+function useSidebarSlide(open: boolean, reducedMotion: boolean) {
+  // False through hydration and the store re-renders that follow it (they run in its passive
+  // effects, before the next frame); true from the first frame after.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const instant = reducedMotion || !settled;
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(open);
   // Derived during render, so a change is one render, not an effect pass.
@@ -401,20 +411,21 @@ function useSidebarSlide(open: boolean, instant: boolean) {
     });
     return () => cancelAnimationFrame(frame);
   }, [open, shown]);
-  const openRef = useRef(open);
+  // Unmount once closed for the length of the slide, whether or not it had got as far as expanding
+  // (an expand undone within its two frames never changes `shown`); reopening cancels it.
   useEffect(() => {
-    openRef.current = open;
-  });
+    if (open || !mounted) return;
+    const timer = setTimeout(() => setMounted(false), SLIDE_MS);
+    return () => clearTimeout(timer);
+  }, [open, mounted]);
   const previous = useRef(shown);
   useEffect(() => {
     if (previous.current === shown) return;
     previous.current = shown;
-    if (instant) return;
     const release = holdRoomMotion();
-    const timer = setTimeout(() => {
-      release();
-      if (!shown && !openRef.current) setMounted(false);
-    }, SLIDE_MS);
+    // An instant change holds for a frame only: under reduced motion the room's still frame redraws
+    // when the boost comes and goes (`room/loop.ts`), so no glass is left where the panel was.
+    const timer = setTimeout(release, instant ? 16 : SLIDE_MS);
     return () => {
       clearTimeout(timer);
       release();

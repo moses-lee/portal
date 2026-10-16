@@ -51,9 +51,9 @@ export default function ThreadSwitcher({
         }`}
       >
         {busy.has(thread.id) ? (
-          <LoaderCircle className="size-3 shrink-0 animate-spin text-sky-300" aria-label="Answering" />
+          <LoaderCircle className="size-3 shrink-0 animate-spin text-primary" aria-label="Answering" />
         ) : unread.has(thread.id) && !selected ? (
-          <span className="size-1.5 shrink-0 rounded-full bg-sky-300" aria-label="New messages" />
+          <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="New messages" />
         ) : null}
         <span className="truncate">{label}</span>
       </button>

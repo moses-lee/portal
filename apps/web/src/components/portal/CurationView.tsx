@@ -23,7 +23,7 @@ const statusMeta: Record<RunStatus, { label: string; tone: Tone }> = {
 const RUN_PAGE = 20;
 
 function StatusIcon({ status }: { status: RunStatus }) {
-  if (status === "running") return <LoaderCircle className="size-3.5 animate-spin text-sky-300" />;
+  if (status === "running") return <LoaderCircle className="size-3.5 animate-spin text-primary" />;
   if (status === "succeeded") return <CircleCheck className="size-3.5 text-emerald-300" />;
   if (status === "failed") return <CircleAlert className="size-3.5 text-rose-300" />;
   return <CircleSlash className="size-3.5 text-muted-foreground" />;

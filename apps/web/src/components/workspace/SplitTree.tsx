@@ -144,7 +144,7 @@ function PaneFrame({
       data-focused={(multi && focused) || undefined}
       onPointerDownCapture={focus}
       onFocusCapture={focus}
-      className={`flex min-h-0 min-w-0 flex-1 flex-col ${multi && focused ? "ring-1 ring-inset ring-accent-line" : ""}`}
+      className={`flex min-h-0 min-w-0 flex-1 flex-col ${multi && focused ? "ring-1 ring-inset ring-ring/60" : ""}`}
     >
       {children}
     </div>

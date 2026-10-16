@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { palaceEscapeToggles, POPUP_SELECTOR } from "../src/lib/palace-mode.ts";
+import { EDITABLE_SELECTOR, palaceEscapeToggles, POPUP_SELECTOR } from "../src/lib/palace-mode.ts";
 
 /** A plain Escape on `target`. */
 const escape = (target = null, extra = {}) => ({
@@ -50,9 +50,32 @@ test("a terminal keeps the key", () => {
 });
 
 test("a text field keeps the key while it holds text; an empty one does not", () => {
-  const editable = /input, textarea, \[contenteditable\]/;
+  const editable = /textarea, \[contenteditable\]/;
   assert.equal(palaceEscapeToggles(escape(inside(editable, { value: "draft" })), desktop), false);
   assert.equal(palaceEscapeToggles(escape(inside(editable, { value: "" })), desktop), true);
   assert.equal(palaceEscapeToggles(escape(inside(editable, { textContent: "note" })), desktop), false);
   assert.equal(palaceEscapeToggles(escape(inside(editable, { textContent: "" })), desktop), true);
+});
+
+test("an IME composing keeps the key", () => {
+  assert.equal(palaceEscapeToggles(escape(null, { isComposing: true }), desktop), false);
+  // Safari reports the composition's Esc as keyCode 229 with isComposing false.
+  assert.equal(palaceEscapeToggles(escape(null, { keyCode: 229 }), desktop), false);
+  assert.equal(palaceEscapeToggles(escape(null, { keyCode: 27 }), desktop), true);
+});
+
+test("a pointer drag under way keeps the key", () => {
+  assert.equal(palaceEscapeToggles(escape(), { ...desktop, dragging: true }), false);
+});
+
+test("a room card counts as a popup, hovered or pinned", () => {
+  assert.match(POPUP_SELECTOR, /(^|, )\[data-room-card\]($|,)/);
+});
+
+test("only text-like fields keep the key: checkboxes, radios and ranges do not", () => {
+  for (const kind of ["text", "search", "url", "email", "password", "tel", "number"]) assert.match(EDITABLE_SELECTOR, new RegExp(`\\[type=${kind}\\]`), kind);
+  assert.match(EDITABLE_SELECTOR, /input:is\(:not\(\[type\]\)/);
+  for (const kind of ["checkbox", "radio", "range", "button"]) assert.doesNotMatch(EDITABLE_SELECTOR, new RegExp(kind), kind);
+  assert.match(EDITABLE_SELECTOR, /textarea/);
+  assert.match(EDITABLE_SELECTOR, /\[contenteditable\]/);
 });

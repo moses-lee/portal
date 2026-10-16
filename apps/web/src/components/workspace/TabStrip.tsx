@@ -26,6 +26,7 @@ import { RenameField } from "../ProjectActions";
 import { ContextActions, MenuItem, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger } from "../ActionMenu";
 import type { SessionState } from "@/lib/session-state";
 import { neighbourTab, presetLabels, sameCells, tabCells, type IconCellState } from "@/lib/workspace";
+import { markDragging } from "@/lib/palace-mode";
 
 export type TabStripProps = {
   tabs: Tab[];
@@ -91,12 +92,15 @@ export default function TabStrip({ tabs, focusedTabId, unread, titleOf, stateOf,
   const ids = useMemo(() => tabs.map((tab) => tab.id), [tabs]);
   const onDragEnd = useCallback(
     ({ active, over }: DragEndEvent) => {
+      markDragging(false);
       if (!over || active.id === over.id) return;
       const index = tabs.findIndex((tab) => tab.id === over.id);
       if (index >= 0) onMove(String(active.id), index);
     },
     [tabs, onMove],
   );
+  // A drag cut short by unmounting never ends or cancels.
+  useEffect(() => () => markDragging(false), []);
   const announcements = useMemo<Announcements>(() => {
     const name = (id: string | number) => {
       const tab = tabs.find((candidate) => candidate.id === id);
@@ -116,6 +120,9 @@ export default function TabStrip({ tabs, focusedTabId, unread, titleOf, stateOf,
       collisionDetection={closestCenter}
       modifiers={[alongStrip]}
       onDragEnd={onDragEnd}
+      // Palace mode's Esc stands aside while a drag is under way: the mouse sensor's cancel leaves the key unclaimed.
+      onDragStart={() => markDragging(true)}
+      onDragCancel={() => markDragging(false)}
       accessibility={{
         announcements,
         screenReaderInstructions: { draggable: "To move a tab, press Space, use the left and right arrow keys, then press Space again to drop it or Escape to cancel." },

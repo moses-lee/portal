@@ -734,7 +734,7 @@
 .code-block {
   overflow: hidden;
   border: 1px solid var(--border);
-  background: #0e111bc7;
+  background: #1b1916c7;
   border-radius: 12px;
   margin: 16px 0;
 }
@@ -869,7 +869,7 @@
 .tool-details {
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #12151e80;
+  background: #211f1b80;
 }
 .tool-details [data-slot="collapsible-content"] {
   overflow: hidden;
@@ -954,10 +954,11 @@
    * veil than the desktop's over the 3D room, strongest at the top where the header and the first
    * lines sit.
    */
-  .room-scene:not([data-view="palace"])::after {
+  /* Not scoped off Palace mode: the veil's opacity fades it there, as on desktop. */
+  .room-scene::after {
     background: linear-gradient(180deg, #15171378 0, #15171370 50%, #15171363 100%);
   }
-  .room-scene[data-scene="night"]:not([data-view="palace"])::after {
+  .room-scene[data-scene="night"]::after {
     background: linear-gradient(180deg, #110f0c63 0, #110f0c5c 50%, #110f0c4d 100%);
   }
   button[data-size="icon"] {
