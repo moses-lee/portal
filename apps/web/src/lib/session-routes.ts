@@ -4,7 +4,9 @@
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const TERMINAL_PATH = /^\/terminal\/?$/;
-const START_PATH = /^\/new\/?$/;
+/** `/new`, and home: `/` opens the start page too (docs/GLASS.md, Home). */
+const START_PATH = /^\/(?:new\/?)?$/;
+const PALACE_LINK_PATH = /^\/(?:palace\/?)?$/;
 const TAB_PATH = /^\/tabs\/([^/]+)\/?$/;
 const PANE_PARAM = "pane";
 
@@ -30,7 +32,7 @@ export function terminalPath(): string {
   return "/terminal";
 }
 
-/** The start page: a new conversation in a project. */
+/** The start page: a new conversation in a project, at `/new` or home (`/`). */
 export function isStartPath(pathname: string): boolean {
   return START_PATH.test(pathname);
 }
@@ -60,8 +62,8 @@ export function tabFromPath(pathname: string, search = ""): { tabId: string; pan
 
 /**
  * Where a workspace path points: a tab (the focused pane is the query's business, read by the view),
- * or one of the two resolvers, the start page (`/new`) and a session (`/sessions/<id>`). Null for
- * Portal and the terminal.
+ * or one of the two resolvers, the start page (`/new` or `/`) and a session (`/sessions/<id>`). Null
+ * for the stored Portal destinations and the terminal.
  */
 export type WorkspaceRoute =
   | { kind: "tab"; tabId: string }
@@ -107,7 +109,7 @@ export function inAppLinkPath(href: string, origin: string | null): string | nul
   return `${pathname}${isTabPath(pathname) ? search : ""}`;
 }
 
-/** `/sessions/<id>` and `/new`: paths the shell rewrites to a tab path once the workspace has loaded. */
+/** `/sessions/<id>`, `/new` and `/`: paths the shell rewrites to a tab path once the workspace has loaded (`/` stays while it is empty). */
 export function isResolverPath(pathname: string): boolean {
   return isStartPath(pathname) || sessionIdFromPath(pathname) !== null;
 }
@@ -117,19 +119,14 @@ export function isWorkspacePath(pathname: string): boolean {
   return isTabPath(pathname) || isResolverPath(pathname);
 }
 
-/** The only non-workspace browser page is home (Palace). */
-export function isPortalPath(pathname: string): boolean {
-  return pathname === "/";
-}
-
-export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system" | "palace";
-export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system", "palace"];
+export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system";
+export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system"];
 
 /** Where a Portal path points; unknown paths land on the main thread. */
 export type PortalLocation =
   | { view: "chat"; threadId: string }
   | { view: "memory"; entityId: string | null; runId?: string | null }
-  | { view: "attention" | "watches" | "activity" | "system" | "palace" };
+  | { view: "attention" | "watches" | "activity" | "system" };
 
 function decodeSegment(segment: string): string | null {
   try {
@@ -155,7 +152,7 @@ function routeOf(pathname: string): PortalLocation {
     return { view: "memory", entityId: null, runId: segments[2] ? decodeSegment(segments[2]) : null };
   }
   if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
-  if ((head === "attention" || head === "watches" || head === "activity" || head === "system" || head === "palace") && segments.length === 1) return { view: head };
+  if ((head === "attention" || head === "watches" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
   return { view: "chat", threadId: "main" };
 }
 
@@ -173,13 +170,22 @@ function routePath(to: PortalLocation | PortalView): string {
   const location = typeof to === "string" ? viewLocation(to) : to;
   switch (location.view) {
     case "chat":
-      return location.threadId === "main" ? "/" : `/threads/${encodeURIComponent(location.threadId)}`;
+      // Not `/`: in stored links that is Palace mode now.
+      return `/threads/${encodeURIComponent(location.threadId)}`;
     case "memory":
       if (location.runId !== undefined) return location.runId ? `/memory/curation/${encodeURIComponent(location.runId)}` : "/memory/curation";
       return location.entityId ? `/memory/${encodeURIComponent(location.entityId)}` : "/memory";
     default:
       return `/${location.view}`;
   }
+}
+
+/**
+ * `/` and `/palace` in a stored Agent reply or item body: they opened the Palace page, which became
+ * Palace mode (docs/GLASS.md, Home), so the link enters it.
+ */
+export function isPalaceLinkPath(pathname: string): boolean {
+  return PALACE_LINK_PATH.test(pathname);
 }
 
 /** Destinations supported in stored Agent replies and item bodies; these never become browser routes. */

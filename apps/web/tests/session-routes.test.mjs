@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  isPortalPath,
+  isPalaceLinkPath,
   isStartPath,
   isTerminalPath,
   portalLocation,
@@ -33,39 +33,45 @@ test("terminal destinations are internal surface actions, not workspace URLs", (
   assert.equal(isTerminalPath("/terminal/extra"), false);
   assert.equal(isTerminalPath("/sessions/terminal"), false);
   assert.equal(sessionIdFromPath("/terminal"), null);
-  assert.equal(isPortalPath("/terminal"), false);
 });
 
-test("home is the only non-workspace browser page", () => {
+test("home is the start page (docs/GLASS.md, Home)", () => {
   assert.equal(startPath(), "/new");
   assert.equal(isStartPath("/new"), true);
   assert.equal(isStartPath("/new/"), true);
+  assert.equal(isStartPath("/"), true);
   assert.equal(isStartPath("/news"), false);
   assert.equal(isStartPath("/new/extra"), false);
-  assert.equal(isPortalPath("/new"), false);
-  assert.equal(isPortalPath("/sessions/abc"), false);
-  assert.equal(isPortalPath("/"), true);
-  assert.equal(isPortalPath("/watches"), false);
-  assert.equal(isPortalPath("/attention"), false);
-  assert.equal(isPortalPath("/threads/t1"), false);
-  assert.equal(isPortalPath("/memory/curation/run-1"), false);
+  assert.equal(isStartPath("/watches"), false);
   // Unknown browser paths do not represent Portal pages. The internal decoder retains the legacy fallback for stored destinations.
-  assert.equal(isPortalPath("/whatever"), false);
+  assert.equal(isStartPath("/whatever"), false);
   assert.deepEqual(portalLocation("/whatever"), { view: "chat", threadId: "main" });
 });
 
+test("stored / and /palace links enter Palace mode; nothing else does", async () => {
+  const { inAppLinkPath, isSurfaceLinkPath } = await import("../src/lib/session-routes.ts");
+  for (const path of ["/", "/palace", "/palace/"]) {
+    assert.equal(isPalaceLinkPath(path), true, path);
+    assert.equal(isSurfaceLinkPath(path), true, path);
+    assert.equal(inAppLinkPath(path, "https://portal.example"), path);
+  }
+  for (const path of ["/new", "/palace/extra", "/palaces", "/threads/main", "/watches", "/sessions/s1"]) assert.equal(isPalaceLinkPath(path), false, path);
+  // The main thread's destination is no longer `/`, which would now enter Palace mode.
+  assert.equal(portalPath("chat"), "/threads/main");
+  assert.notEqual(isPalaceLinkPath(portalPath()), true);
+});
+
 test("stored surface destinations round-trip, including main and side threads", () => {
-  assert.deepEqual(portalLocation("/"), { view: "chat", threadId: "main" });
-  assert.equal(portalPath(), "/");
-  assert.equal(portalPath("chat"), "/");
-  assert.equal(portalPath({ view: "chat", threadId: "main" }), "/");
+  assert.equal(portalPath(), "/threads/main");
+  assert.equal(portalPath({ view: "chat", threadId: "main" }), "/threads/main");
+  assert.deepEqual(portalLocation("/threads/main"), { view: "chat", threadId: "main" });
   assert.equal(portalPath({ view: "chat", threadId: "t 1" }), "/threads/t%201");
   assert.deepEqual(portalLocation("/threads/t%201"), { view: "chat", threadId: "t 1" });
   assert.deepEqual(portalLocation("/threads/t1/extra"), { view: "chat", threadId: "main" });
   // Watches were Goals until 2026-10-04; the old path is gone and lands on the main thread like any unknown one.
   assert.deepEqual(portalLocation("/goals"), { view: "chat", threadId: "main" });
   assert.equal(portalPath("watches"), "/watches");
-  for (const view of ["attention", "watches", "activity", "system", "palace"]) {
+  for (const view of ["attention", "watches", "activity", "system"]) {
     assert.equal(portalPath(view), `/${view}`);
     assert.deepEqual(portalLocation(`/${view}`), { view });
     assert.deepEqual(portalLocation(`/${view}/extra`), { view: "chat", threadId: "main" });
@@ -94,20 +100,21 @@ test("tab paths carry the tab id and, in a split, the focused pane; /new and /se
   assert.equal(tabFromPath("/tabs/%E0%A4%A", ""), null);
   assert.equal(isTabPath("/tabs/t1"), true);
   assert.equal(isTabPath("/tabsx/t1"), false);
-  assert.equal(isPortalPath("/tabs/t1"), false);
   assert.equal(isWorkspacePath("/tabs/t1"), true);
   assert.equal(isWorkspacePath("/sessions/s1"), true);
   assert.equal(isWorkspacePath("/new"), true);
   assert.equal(isWorkspacePath("/terminal"), false);
-  assert.equal(isWorkspacePath("/"), false);
+  assert.equal(isWorkspacePath("/"), true);
   assert.equal(isResolverPath("/sessions/s1"), true);
   assert.equal(isResolverPath("/new"), true);
+  assert.equal(isResolverPath("/"), true);
   assert.equal(isResolverPath("/tabs/t1"), false);
   // The route names the tab alone; the focused pane is the query's business, read by the view.
   assert.deepEqual(workspaceRoute("/tabs/t1"), { kind: "tab", tabId: "t1" });
   assert.deepEqual(workspaceRoute("/new"), { kind: "start" });
   assert.deepEqual(workspaceRoute("/sessions/s%201"), { kind: "session", sessionId: "s 1" });
-  assert.equal(workspaceRoute("/"), null);
+  assert.deepEqual(workspaceRoute("/"), { kind: "start" });
+  assert.equal(workspaceRoute("/palace"), null);
   assert.equal(workspaceRoute("/terminal"), null);
   assert.equal(workspaceRoute("/watches"), null);
 });

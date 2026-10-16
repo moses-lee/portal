@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { firstTitle, setupPortal } from "./fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
-import { showPage } from "./surfaces";
+import { enterPalace, showPage } from "./surfaces";
 
 // Overlays must preserve the actual workspace instances, not recreate the same route on close.
 test("pages cover tabs while preserving split panes, drafts, terminal state, and URL", async ({ page }) => {
@@ -38,15 +38,17 @@ test("pages cover tabs while preserving split panes, drafts, terminal state, and
   expect(fixture.requests.filter((request) => request.path === "/api/sessions/s2/events")).toHaveLength(reads);
 });
 
-test("closing a page opened over Palace reveals Palace without changing the workspace", async ({ page }) => {
+test("a page opened from Palace mode leaves it, and closing the page shows the workspace as it was", async ({ page }) => {
   await setupPortal(page, { workspace: workspaceOf([tab("t1", pane("p1", "s1"))]) });
-  await page.goto("/");
-  await expect(page.locator("[data-palace-surface]")).toBeVisible();
-  await showPage(page, "watches");
+  await page.goto("/tabs/t1");
+  await enterPalace(page);
+  // What a room object (the mail tray) asks for.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("portal:navigate", { detail: "/attention" })));
+  await expect(page.getByRole("heading", { name: "Needs your attention", level: 1 })).toBeVisible();
+  await expect(page.locator(".portal-shell")).not.toHaveAttribute("data-palace-mode");
   await page.getByRole("button", { name: "Close page", exact: true }).click();
-  await expect(page.locator("[data-palace-surface]")).toBeVisible();
-  await expect(page.getByRole("tablist", { name: "Workspace tabs" })).toBeHidden();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("tab", { name: firstTitle, exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/tabs\/t1$/);
 });
 
 test("a covered focused tab accrues unread updates until the page closes", async ({ page }) => {

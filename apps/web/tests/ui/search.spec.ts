@@ -20,6 +20,7 @@ const openSearch = async (page: Page) => {
 test("slash opens search; esc closes it; the empty query lists recent sessions", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
+  await hydrated(page);
   await openSearch(page);
   await expect(input(page)).toBeFocused();
   const recent = group(page, "Recent sessions");

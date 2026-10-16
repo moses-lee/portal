@@ -60,7 +60,7 @@ export type SidebarProps = {
   onTerminal: () => void;
   /** True while the standalone terminal page is open. */
   terminalActive: boolean;
-  /** Open one of Portal's views (Chat is the home, `/`). */
+  /** Open one of Portal's views (Chat is the Agent popup). */
   onPortalView: (view: PortalView) => void;
   /** The Portal view on screen, or null while a session, the start page, or the terminal is open. */
   portalView: PortalView | null;
@@ -94,6 +94,10 @@ export type SidebarProps = {
   onClose: () => void;
   desktopOpen: boolean;
   onCollapse: () => void;
+  /** The logo: enter Palace mode (docs/GLASS.md, Palace mode). */
+  onShowRoom: () => void;
+  /** Palace mode has finished sliding the desktop sidebar out: hidden and inert until it comes back. */
+  away: boolean;
 };
 
 const PortalViewEntries = memo(function PortalViewEntries({
@@ -291,8 +295,8 @@ function SidebarContent(props: SidebarProps) {
       <div className="mb-3 flex shrink-0 items-center gap-2 px-2">
         <button
           type="button"
-          aria-label="Portal home"
-          onClick={() => onPortalView("palace")}
+          aria-label="Show the room"
+          onClick={props.onShowRoom}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left"
         >
           <PortalMark />
@@ -445,6 +449,8 @@ export default function Sidebar(props: SidebarProps) {
           className="!w-[min(320px,88vw)] gap-0 p-0"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
+            // Palace mode's pinned logo has focus when the sheet's logo entered it.
+            if (document.querySelector('[data-palace-logo="in"]')) return;
             // The opener may be gone (its pane closed, its tab unmounted): then the first toggle on the page.
             const opener = props.returnFocus?.current;
             (opener?.isConnected ? opener : document.getElementById("sidebar-toggle"))?.focus();
@@ -463,6 +469,7 @@ export default function Sidebar(props: SidebarProps) {
     // The slot animates its width (the panel's and the gap's) while the panel slides out or in.
     <div
       className="sidebar-slot"
+      inert={props.away}
       data-shown={shown ? "" : undefined}
       data-resizing={dragWidth !== null ? "" : undefined}
       style={{ width: shown ? width + 10 : 0 }}

@@ -319,9 +319,12 @@
 .room-scene[data-scene="night"]::after {
   background: #110f0c2b;
 }
-/* The Palace page has no text over the room: no veil. */
+/* Palace mode has no text over the room: the veil fades out with the panels (docs/GLASS.md, Animation). */
+.room-scene::after {
+  transition: opacity 320ms ease-in-out;
+}
 .room-scene[data-view="palace"]::after {
-  background: none;
+  opacity: 0;
 }
 
 .sidebar-shell {
@@ -339,7 +342,9 @@
   flex-shrink: 0;
   min-height: 0;
   margin-right: -10px;
-  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition:
+    width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 320ms ease-in-out;
 }
 .sidebar-slot[data-resizing] {
   transition: none;
@@ -352,6 +357,91 @@
 .sidebar-slot:not([data-shown]) > .sidebar-shell {
   transform: translateX(calc(-100% - 10px));
   opacity: 0;
+}
+/*
+ * Palace mode (docs/GLASS.md, Palace mode → Animation): transforms and opacity only, so nothing
+ * reflows. The sidebar and the inspector slide out past the window's edges, the centre fades and
+ * shrinks a little from 40 ms in, and comes back from 80 ms in. Once out (`away`) they are hidden
+ * as well as inert, which also keeps them out of the room's frost.
+ */
+.shell-inspector {
+  transition: transform 320ms ease-in-out;
+}
+.shell-centre {
+  transition:
+    opacity 240ms ease 80ms,
+    transform 240ms ease 80ms;
+}
+.portal-shell[data-palace-mode] .sidebar-slot {
+  transform: translateX(calc(-100% - 10px));
+}
+.portal-shell[data-palace-mode] .shell-inspector {
+  transform: translateX(calc(100% + 10px));
+}
+.portal-shell[data-palace-mode] .shell-centre {
+  opacity: 0;
+  transform: scale(0.985);
+  transition-delay: 40ms;
+}
+.portal-shell[data-palace-mode="away"] :is(.sidebar-slot, .shell-inspector, .shell-centre) {
+  visibility: hidden;
+}
+/* The way back, pinned where the sidebar's logo was; it fades in over the last 120 ms of the exit and out over the first 80 ms of the return. */
+.palace-logo {
+  position: fixed;
+  z-index: 30;
+  top: 26px;
+  left: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  animation: palace-logo-in 120ms ease-out 200ms both;
+}
+.palace-logo[data-palace-logo="out"] {
+  pointer-events: none;
+  animation: palace-logo-out 80ms ease-in both;
+}
+@keyframes palace-logo-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes palace-logo-out {
+  to {
+    opacity: 0;
+  }
+}
+/* On a phone the sheet closes with its own slide first, then the centre fades, then the logo comes. */
+@media (max-width: 767px) {
+  .portal-shell[data-palace-mode] .shell-centre {
+    transition-delay: 200ms;
+  }
+  .palace-logo {
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    animation-delay: 440ms;
+  }
+}
+/* Reduced motion: 120 ms crossfades, no transforms (and the sidebar's collapse stays instant: no width transition). */
+@media (prefers-reduced-motion: reduce) {
+  .portal-shell :is(.sidebar-slot, .shell-inspector, .shell-centre) {
+    transition: opacity 120ms ease !important;
+  }
+  .portal-shell[data-palace-mode] :is(.sidebar-slot, .shell-inspector, .shell-centre) {
+    transform: none;
+    opacity: 0;
+  }
+  .room-scene::after {
+    transition-duration: 120ms !important;
+  }
+  .palace-logo,
+  .palace-logo[data-palace-logo="out"] {
+    animation-duration: 120ms !important;
+    animation-delay: 0s !important;
+  }
 }
 .sidebar-content {
   display: flex;

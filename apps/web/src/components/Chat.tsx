@@ -21,9 +21,10 @@ import type { InitialSend, StartPaneProps } from "./SessionPane";
 import TerminalPage from "./TerminalPage";
 import RemovedProjects from "./RemovedProjects";
 import PalaceView from "@/room/PalaceView";
-import IconButton from "./IconButton";
-import { PanelLeft } from "lucide-react";
+import PortalMark from "./PortalMark";
 import { APP_NAVIGATION_EVENT } from "@/lib/surface-navigation";
+import { palaceEscapeToggles, palaceKeyState, type PalaceKeyState } from "@/lib/palace-mode";
+import { holdRoomMotion } from "@/lib/room-motion";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import PortalPage from "./PortalPage";
 import WorkspaceView from "./workspace/WorkspaceView";
@@ -69,6 +70,7 @@ import {
   type RecentItem,
 } from "@/lib/search";
 import {
+  isPalaceLinkPath,
   isTerminalPath,
   portalLocation,
   sessionIdFromPath,
@@ -132,11 +134,18 @@ export default function Chat() {
   );
 }
 
-/** The app shell keeps the workspace mounted under in-memory pages and dialogs. */
+/**
+ * How long Palace mode's animations take (docs/GLASS.md, Palace mode → Animation), as `globals.css`
+ * times them: on desktop the panels slide for 320 ms; on a phone the sheet closes first and the
+ * pinned logo fades in after the centre; under reduced motion, 120 ms crossfades.
+ */
+const PALACE_MS = { desktop: 320, phone: 560, reduced: 120 } as const;
+
 /**
  * The room behind Portal and the workspace (docs/PALACE.md), mounted once by the shell so moving
- * between a Portal page and a session keeps the canvas: Portal's activity on its pages, the focused
- * pane's agent in the workspace, and the Palace page's flag (no veil, and a clicked robot waves).
+ * between a Portal page and a session keeps the canvas: Portal's activity on its pages and in Palace
+ * mode, the focused pane's agent in the workspace, and Palace mode's flag (no veil, and a clicked
+ * robot waves).
  */
 function ShellRoom({ portal, palace, workspaceActivity }: { portal: boolean; palace: boolean; workspaceActivity: AgentActivity }) {
   const { status, approvals } = usePortalLive();
@@ -152,13 +161,93 @@ function ChatShell() {
   // Page surfaces never navigate: the same workspace, including its local state, stays underneath.
   const [retainedRoute, setRetainedRoute] = useState<WorkspaceRoute>(route ?? { kind: "start" });
   if (route && route !== retainedRoute) setRetainedRoute(route);
-  const [surface, setSurface] = useState<PageSurface | null>(() => route ? null : { view: "palace" });
+  const [surface, setSurface] = useState<PageSurface | null>(null);
+  /**
+   * Palace mode (docs/GLASS.md): the panels leave and the room is all there is. Not stored and not in
+   * the URL; a reload starts out of it. `palaceSettled` is false while its animation runs either way;
+   * once it has gone out, the panels are hidden and inert (`away`).
+   */
+  const [palace, setPalace] = useState(false);
+  const [palaceSettled, setPalaceSettled] = useState(true);
+  const away = palace && palaceSettled;
+  /** What had focus before Palace mode; it gets it back on leaving with the pinned logo or Esc. */
+  const palaceOpener = useRef<HTMLElement | null>(null);
+  const pinnedLogo = useRef<HTMLButtonElement>(null);
+  const desktop = useMediaQuery("(min-width: 768px)", true);
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const palaceMs = reducedMotion ? PALACE_MS.reduced : desktop ? PALACE_MS.desktop : PALACE_MS.phone;
+  /** Leave Palace mode; `restoreFocus` when the user asked to (not when something navigated). */
+  const leavePalace = useStableCallback((restoreFocus: boolean) => {
+    if (!palace) return;
+    setPalace(false);
+    setPalaceSettled(false);
+    const opener = palaceOpener.current;
+    palaceOpener.current = null;
+    // The panels are inert until this render commits; focus once they are not.
+    if (restoreFocus) requestAnimationFrame(() => (opener?.isConnected ? opener : document.getElementById("sidebar-toggle"))?.focus());
+  });
+  useEffect(() => {
+    if (palaceSettled) return;
+    const release = holdRoomMotion();
+    const timer = setTimeout(() => {
+      release();
+      setPalaceSettled(true);
+    }, palaceMs);
+    return () => {
+      clearTimeout(timer);
+      release();
+    };
+  }, [palace, palaceSettled, palaceMs]);
   useEffect(() => {
     // Browser Back/Forward is explicit navigation. Background resolver URL repairs leave pages open.
-    const onPopState = () => setSurface(workspaceRoute(window.location.pathname) ? null : { view: "palace" });
+    const onPopState = () => {
+      setSurface(null);
+      leavePalace(false);
+    };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [leavePalace]);
+  /**
+   * Enter Palace mode: the sheet, the Agent and Search dialogs and any page overlay close; focus goes
+   * to the pinned logo, the only control left outside the room.
+   */
+  const enterPalace = () => {
+    if (palace) return;
+    const focused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    // The sidebar's own logo (it slides away): focus comes back to it.
+    palaceOpener.current = focused;
+    setPalace(true);
+    setPalaceSettled(false);
+    setSurface(null);
+    setPalette(null);
+    setShowSidebar(false);
+  };
+  useEffect(() => {
+    if (palace) pinnedLogo.current?.focus({ preventScroll: true });
+  }, [palace]);
+  /** Esc enters and leaves Palace mode on desktop (`palaceEscapeToggles`), after every other handler has had the key. */
+  const togglePalace = useStableCallback(() => (palace ? leavePalace(true) : enterPalace()));
+  useEffect(() => {
+    let atStart: PalaceKeyState | null = null;
+    // What was open when the key went down: a handler on the way may close a dialog before the key gets here.
+    const onKeyDownCapture = (event: KeyboardEvent) => {
+      atStart = event.key === "Escape" ? palaceKeyState(window.matchMedia("(min-width: 768px)").matches) : null;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      const state = atStart;
+      atStart = null;
+      if (!state || !palaceEscapeToggles(event, state)) return;
+      event.preventDefault();
+      togglePalace();
+    };
+    window.addEventListener("keydown", onKeyDownCapture, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDownCapture, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [togglePalace]);
+
   const { workspace, focus, apply, keyOf, setCovered } = useWorkspace();
   const actions = useWorkspaceActions();
   const active = focus.sessionId;
@@ -168,23 +257,19 @@ function ChatShell() {
   const onStartPage = !surface && (route?.kind === "start" || (focus.pane !== null && focus.pane.sessionId === null));
   useEffect(() => setCovered(surface !== null), [surface, setCovered]);
   const surfaceOpener = useRef<HTMLElement | null>(null);
-  const surfaceOverPalace = useRef(false);
   const openSurface = (next: PageSurface) => {
-    if (next.view === "palace") surfaceOverPalace.current = false;
-    else if (!surface || surface.view === "palace") {
-      surfaceOverPalace.current = surface?.view === "palace";
-      surfaceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    }
+    if (!surface) surfaceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSurface(next);
     setPalette(null);
     setShowSidebar(false);
+    leavePalace(false);
   };
   const closeSurface = useStableCallback(() => {
-    setSurface(surfaceOverPalace.current ? { view: "palace" } : null);
+    setSurface(null);
     requestAnimationFrame(() => surfaceOpener.current?.isConnected && surfaceOpener.current.focus());
   });
   useEffect(() => {
-    if (!surface || surface.view === "palace") return;
+    if (!surface) return;
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (document.querySelector(":is([role=dialog], [role=alertdialog])[data-state=open]")) return;
@@ -268,8 +353,11 @@ function ChatShell() {
     () => pinnedFirst(orderProjectsByActivity(projects, sessions), projectPins, projectPinOrder),
     [projects, sessions, projectPins, projectPinOrder],
   );
-  /** The project picked this page load: "" for none (the sidebar's "New conversation"), null to fall back to the remembered/newest one. */
-  const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
+  /**
+   * The project picked this page load: "" for none (the sidebar's "New conversation", and home: `/`
+   * opens the start page with nothing picked, docs/GLASS.md), null to fall back to the remembered/newest one.
+   */
+  const [chosenProjectId, setChosenProjectId] = useState<string | null>(() => (pathname === "/" ? "" : null));
   /** The start page's worktree choice, tied to the project it was made for so a project change resets it. */
   const [worktreePick, setWorktreePick] = useState<{
     projectId: string;
@@ -313,7 +401,6 @@ function ChatShell() {
   /** The button that opened the sidebar sheet or the GitHub inspector sheet; focus returns there when it closes. */
   const sidebarOpener = useRef<HTMLElement | null>(null);
   const githubOpener = useRef<HTMLElement | null>(null);
-  const desktop = useMediaQuery("(min-width: 768px)", true);
   const [sidebarPreference, setSidebarPreference] = usePreference(
     "portal.sidebar.open",
     "true",
@@ -411,6 +498,7 @@ function ChatShell() {
   const selectSession = (sessionId: string) => {
     setSurface(null);
     setPalette(null);
+    leavePalace(false);
     void actions.openSession(sessionId);
     // The session's project becomes the default for the next new session.
     const projectId = sessions.find((s) => s.id === sessionId)?.projectId;
@@ -477,6 +565,7 @@ function ChatShell() {
     selectProject(project.id);
     setSurface(null);
     setPalette(null);
+    leavePalace(false);
     const newest = fetched
       .filter((s) => s.projectId === project.id)
       .sort(byRecentActivity)[0];
@@ -535,6 +624,7 @@ function ChatShell() {
   const startIn = (projectId: string) => {
     setSurface(null);
     setPalette(null);
+    leavePalace(false);
     selectProject(projectId);
     void actions.openStartTab();
     setShowSidebar(false);
@@ -544,6 +634,7 @@ function ChatShell() {
   const startFresh = () => {
     setSurface(null);
     setPalette(null);
+    leavePalace(false);
     setChosenProjectId("");
     setWorktreePick(null);
     void actions.openStartTab();
@@ -568,6 +659,9 @@ function ChatShell() {
   const navigateSurface = useStableCallback((path: string) => {
     const destination = new URL(path, window.location.origin);
     if (destination.origin !== window.location.origin) return;
+    // `/` and `/palace` opened the Palace page; they enter Palace mode now. Anything else leaves it on the way.
+    if (isPalaceLinkPath(destination.pathname)) { enterPalace(); return; }
+    leavePalace(false);
     const sessionId = sessionIdFromPath(destination.pathname);
     if (sessionId) { selectSession(sessionId); return; }
     if (workspaceRoute(destination.pathname)) {
@@ -788,8 +882,8 @@ function ChatShell() {
     () => new Set(allPanes(workspace).flatMap(({ pane }) => (pane.sessionId === null || pane.sessionId === active ? [] : [pane.sessionId]))),
     [workspace, active],
   );
-  // Decision: the document title is the focused session's display title, else "Palace" on the Palace page, else "Portal".
-  const activeTitle = surface ? surface.view === "palace" ? "Palace" : surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : activeSession ? sessionDisplayTitle(activeSession.title) : null;
+  // Decision: the document title is the page overlay's, else the focused session's display title, else "Portal".
+  const activeTitle = surface ? surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : activeSession ? sessionDisplayTitle(activeSession.title) : null;
   useEffect(() => {
     document.title = activeTitle ?? "Portal";
   }, [activeTitle]);
@@ -852,12 +946,14 @@ function ChatShell() {
   const sidebarOpenInTab = useStableCallback((id: string) => {
     setSurface(null);
     setPalette(null);
+    leavePalace(false);
     void actions.moveToNewTab(id);
     setShowSidebar(false);
   });
   const sidebarOpenBeside = useStableCallback((id: string) => {
     setSurface(null);
     setPalette(null);
+    leavePalace(false);
     void actions.openBeside(id);
     setShowSidebar(false);
   });
@@ -897,13 +993,14 @@ function ChatShell() {
   const sidebarTerminal = useStableCallback(openTerminal);
   const sidebarPortalView = useStableCallback(openPortalView);
   const sidebarCollapse = useStableCallback(() => setSidebarPreference("false"));
+  const sidebarShowRoom = useStableCallback(enterPalace);
   /** The room's frames open their project the way the sidebar's project entries do: a start page with it picked. */
   const roomOpenProject = useStableCallback(startIn);
   const roomHost = useMemo(() => ({ projects, openProject: roomOpenProject }), [projects, roomOpenProject]);
 
   return (
     <RoomHostProvider value={roomHost}>
-      <div className="portal-shell">
+      <div className="portal-shell" data-palace-mode={palace ? (away ? "away" : "") : undefined}>
         <Sidebar
           projects={orderedProjects}
           projectPins={projectPins}
@@ -942,6 +1039,8 @@ function ChatShell() {
           projectsActive={route !== null}
           desktopOpen={sidebarPreference === "true"}
           onCollapse={sidebarCollapse}
+          onShowRoom={sidebarShowRoom}
+          away={away}
         />
         <SettingsDialog
           open={showSettings}
@@ -961,9 +1060,9 @@ function ChatShell() {
           onOpenProject={searchOpenProject}
         />
         <AgentDialog open={palette === "agent"} onClose={() => setPalette(null)} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} />
-        <ShellRoom portal={portalOpen} palace={portalView === "palace"} workspaceActivity={workspaceActivity} />
+        <ShellRoom portal={portalOpen || palace} palace={palace} workspaceActivity={workspaceActivity} />
         {/* The centre panel (docs/GLASS.md, Floating panels): a rounded clip, not frosted; page overlays fill it. */}
-        <div data-shell-centre className="shell-centre relative flex min-h-0 min-w-0 flex-1">
+        <div data-shell-centre inert={away} className="shell-centre relative flex min-h-0 min-w-0 flex-1">
           <div data-workspace-layer inert={surface !== null} aria-hidden={surface !== null || undefined} className={`flex min-h-0 min-w-0 flex-1 ${surface ? "invisible pointer-events-none" : ""}`}>
             <Suspense fallback={<main className="flex min-w-0 flex-1 flex-col" />}>
               <WorkspaceView
@@ -979,17 +1078,32 @@ function ChatShell() {
               />
             </Suspense>
           </div>
-          {surface?.view === "palace" ? <div data-palace-surface className="absolute inset-0 flex flex-col">
-            <header data-palace-header className="workspace-header !border-transparent">
-              <IconButton label="Toggle sidebar" onClick={(event) => toggleSidebar(event.currentTarget)} className="text-muted-foreground"><PanelLeft className="size-4" /></IconButton>
-            </header>
-            <PalaceView />
-          </div> : surface ? <div data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background/95">
+          {surface ? <div data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background/95">
             {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} />}
           </div> : null}
         </div>
         {/* The shell's third panel, beside the centre rather than in it; hidden under a page overlay as before. */}
-        {showGithub && <GithubInspector open={showGithub && !surface} onClose={() => setGithubPreference("false")} projectId={githubProjectId} projectRemoved={githubProjectRemoved} session={activeSession} onGitAction={startGitAction} returnFocus={githubOpener} />}
+        {showGithub && <GithubInspector open={showGithub && !surface} onClose={() => setGithubPreference("false")} projectId={githubProjectId} projectRemoved={githubProjectRemoved} session={activeSession} onGitAction={startGitAction} returnFocus={githubOpener} away={away} />}
+        {palace && (
+          // The room, see-through for its hover cards and clicks (`room/pointer.ts`) while the panels are out.
+          <div data-palace-layer className="fixed inset-0 z-20 flex">
+            <PalaceView />
+          </div>
+        )}
+        {(palace || !palaceSettled) && (
+          // The pinned logo (docs/GLASS.md, Palace mode): where the sidebar's was, the way back. Liquid
+          // only once the sidebar has gone, since liquid panels must not overlap.
+          <button
+            ref={pinnedLogo}
+            type="button"
+            aria-label="Back to workspace"
+            data-palace-logo={palace ? "in" : "out"}
+            onClick={() => leavePalace(true)}
+            className={`palace-logo frost-subtle${away ? " liquid" : ""}`}
+          >
+            <PortalMark />
+          </button>
+        )}
         <ApprovalsDialog onNavigate={navigateSurface} />
       </div>
     </RoomHostProvider>

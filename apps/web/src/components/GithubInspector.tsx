@@ -20,8 +20,11 @@ export default function GithubInspector({
   session,
   onGitAction,
   returnFocus,
+  away = false,
 }: {
   open: boolean;
+  /** Palace mode has finished sliding the panel out: hidden and inert until it comes back. */
+  away?: boolean;
   onClose: () => void;
   projectId: string | null;
   projectRemoved: boolean;
@@ -82,7 +85,8 @@ export default function GithubInspector({
     <aside
       id="github-inspector"
       aria-label="GitHub inspector"
-      className="shell-panel frost-subtle liquid relative flex w-[340px] shrink-0 flex-col px-4 py-4 animate-in fade-in slide-in-from-right-2 duration-200"
+      inert={away}
+      className="shell-inspector shell-panel frost-subtle liquid relative flex w-[340px] shrink-0 flex-col px-4 py-4 animate-in fade-in slide-in-from-right-2 duration-200"
     >
       {panel}
     </aside>
