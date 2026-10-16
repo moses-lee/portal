@@ -14,7 +14,7 @@ import {
   readLayout,
   registerStage,
 } from "../src/room/layout.ts";
-import { looksLowPower, targetFps, CADENCE_SAMPLES } from "../src/room/loop.ts";
+import { looksLowPower, motionUntil, startRoomLoop, targetFps, CADENCE_SAMPLES, MOTION_TAIL_MS, STILL_POLL_MS } from "../src/room/loop.ts";
 
 const DEGREE = Math.PI / 180;
 
@@ -133,12 +133,40 @@ test("projectPoint agrees with a three.js camera placed as Camera.tsx places it"
 });
 
 test("the loop's rate follows visibility, dialogs, power and scrolling", () => {
-  const base = { hidden: false, slow: false, scrolling: false, lowPower: false };
+  const base = { hidden: false, slow: false, scrolling: false, moving: false, lowPower: false };
   assert.equal(targetFps(base), 24);
   assert.equal(targetFps({ ...base, scrolling: true }), 60);
   assert.equal(targetFps({ ...base, slow: true, scrolling: true }), 6);
   assert.equal(targetFps({ ...base, lowPower: true }), 12);
   assert.equal(targetFps({ ...base, hidden: true, scrolling: true }), 0);
+});
+
+test("a panel in motion boosts the loop to 60 fps, under the same slow rules as a scroll", () => {
+  const base = { hidden: false, slow: false, scrolling: false, moving: false, lowPower: false };
+  assert.equal(targetFps({ ...base, moving: true }), 60);
+  assert.equal(targetFps({ ...base, moving: true, slow: true }), 6);
+  assert.equal(targetFps({ ...base, moving: true, lowPower: true }), 12);
+  assert.equal(targetFps({ ...base, moving: true, hidden: true }), 0);
+});
+
+test("the motion boost lasts while [data-room-motion] is on the page and 100 ms after", () => {
+  assert.equal(MOTION_TAIL_MS, 100);
+  // Never set: no boost.
+  let until = motionUntil(false, 0, 1000);
+  assert.ok(!(1000 < until));
+  // Set at 1000: on for good, however long the animation runs.
+  until = motionUntil(true, until, 1000);
+  assert.ok(5000 < until);
+  until = motionUntil(true, until, 1320);
+  // Removed at 1320: the tail runs to 1420, and later checks do not push it on.
+  until = motionUntil(false, until, 1320);
+  assert.equal(until, 1420);
+  assert.ok(1419 < until);
+  until = motionUntil(false, until, 1400);
+  assert.equal(until, 1420);
+  assert.ok(!(1420 < until));
+  // Set again inside the tail: on for good again.
+  assert.equal(motionUntil(true, until, 1410), Infinity);
 });
 
 test("Low Power Mode is a ~30 Hz animation-frame cadence over a full window", () => {
@@ -176,5 +204,86 @@ test("the registry's viewport is the room's fixed element, the size the canvas t
     delete globalThis.document;
     delete globalThis.ResizeObserver;
     delete globalThis.requestAnimationFrame;
+  }
+});
+
+test("under reduced motion the still frame redraws when [data-room-motion] comes and goes, and when the panels change", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let frames = [];
+  let observer = null;
+  let motion = false;
+  const globals = {
+    requestAnimationFrame: (callback) => frames.push(callback),
+    cancelAnimationFrame: () => {},
+    MutationObserver: class {
+      constructor(callback) {
+        observer = callback;
+      }
+      observe() {}
+      disconnect() {
+        observer = null;
+      }
+    },
+    document: {
+      hidden: false,
+      documentElement: {},
+      addEventListener() {},
+      removeEventListener() {},
+      querySelector: () => (motion ? {} : null),
+    },
+  };
+  const previous = {};
+  for (const [name, value] of Object.entries(globals)) {
+    previous[name] = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  }
+  /** Runs the pending animation frame, if any. */
+  const flush = () => {
+    const pending = frames;
+    frames = [];
+    for (const callback of pending) callback(0);
+  };
+  let rendered = 0;
+  let changed = false;
+  const loop = startRoomLoop(() => (rendered += 1), { reducedMotion: true, panelsChanged: () => changed });
+  try {
+    flush();
+    assert.equal(rendered, 1, "the first still frame");
+    // Nothing changed: the poll draws nothing.
+    t.mock.timers.tick(STILL_POLL_MS * 4);
+    flush();
+    assert.equal(rendered, 1);
+
+    // The shell holds the attribute around an instant collapse: a frame as it comes, one as it goes, and one after the tail.
+    motion = true;
+    observer();
+    flush();
+    assert.equal(rendered, 2);
+    motion = false;
+    observer();
+    flush();
+    assert.equal(rendered, 3);
+    t.mock.timers.tick(MOTION_TAIL_MS);
+    flush();
+    assert.equal(rendered, 4);
+
+    // A panel moved under the still frame (a sheet closed without the attribute): the poll catches it.
+    changed = true;
+    t.mock.timers.tick(STILL_POLL_MS);
+    flush();
+    assert.equal(rendered, 5);
+    changed = false;
+
+    // And anyone may ask.
+    loop.request();
+    flush();
+    assert.equal(rendered, 6);
+  } finally {
+    loop.stop();
+    assert.equal(observer, null, "stopping disconnects the observer");
+    for (const [name, descriptor] of Object.entries(previous)) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
   }
 });

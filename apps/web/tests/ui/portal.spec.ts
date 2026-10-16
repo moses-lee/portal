@@ -23,7 +23,7 @@ test("one sidebar contains the foyer, recent rooms, navigation and projects whil
   await page.goto("/new");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
   const nav = sidebar.getByRole("navigation", { name: "Portal", exact: true });
-  await expect(nav.getByRole("button")).toHaveText(["Palace", "Watches", "Activity", "Memory", "System", "Terminal"]);
+  await expect(nav.getByRole("button")).toHaveText(["Watches", "Activity", "Memory", "System", "Terminal"]);
   await expect(sidebar.getByText("Your foyer", { exact: true })).toBeVisible();
   await expect(sidebar.getByRole("heading", { name: "Recent rooms" })).toBeVisible();
   await expect(sidebar.getByRole("navigation", { name: "Projects and sessions" })).toBeVisible();

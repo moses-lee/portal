@@ -248,7 +248,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false, pa
             const selected = t.id === tabs.activeId;
             const name = labelOf(tabs, t.id);
             return (
-              <div key={t.id} className={`flex shrink-0 items-center rounded border ${selected ? "border-indigo-500 bg-indigo-950 text-indigo-100" : "border-zinc-800 text-zinc-300 hover:bg-zinc-900"}`}>
+              <div key={t.id} className={`flex shrink-0 items-center rounded border ${selected ? "border-accent-line bg-accent-soft text-foreground" : "border-zinc-800 text-zinc-300 hover:bg-zinc-900"}`}>
                 <button
                   type="button"
                   role="tab"
@@ -257,7 +257,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false, pa
                   aria-controls={`${baseId}-tabpanel-${t.id}`}
                   tabIndex={selected ? 0 : -1}
                   onClick={() => setTabs((prev) => activate(prev, t.id))}
-                  className="px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400"
+                  className="px-2 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {name}
                 </button>
@@ -293,7 +293,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false, pa
           <span className="truncate font-mono" title={activeView?.shell?.cwd}>{activeView?.shell?.displayCwd}</span>
           <span role="status" className="ml-auto shrink-0">{statusText(activeView)}</span>
           {activeView?.connected && activeView.shell?.status !== "running" && (
-            <button onClick={() => clients.current.get(active.id)?.start()} className="shrink-0 rounded bg-indigo-600 px-2 py-1 text-white hover:bg-indigo-500">
+            <button onClick={() => clients.current.get(active.id)?.start()} className="shrink-0 rounded bg-primary px-2 py-1 text-primary-foreground hover:bg-primary/90">
               Start new shell
             </button>
           )}
@@ -321,7 +321,7 @@ export default function TerminalPanel({ endpoint, onHide, autoCreate = false, pa
               type="button"
               onClick={() => void newTab()}
               disabled={creating}
-              className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+              className="rounded bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
             >
               {creating ? "Creating…" : "New terminal"}
             </button>

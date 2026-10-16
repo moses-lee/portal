@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { firstTitle, makeSession, milestone, roomState, secondTitle, setupPortal, tabUrl, thirdTitle } from "./fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
-import { showSettings } from "./surfaces";
+import { enterPalace, showSettings } from "./surfaces";
 import { boxCorners, framePose, frameSpec, projectPoint } from "../../src/room/layout";
 
 /** The scene's summary for tests (docs/PALACE.md, Tests): `{ scene, weather, renderer, source, still }`. */
@@ -194,28 +194,28 @@ test("a second visit shows the last frame before the room draws", async ({ page 
   await expect(room).not.toHaveAttribute("data-placeholder");
 });
 
-test("the Palace page is the room alone: a sidebar entry, no header text, no tracked panel, no composer", async ({ page }, info) => {
+test("Palace mode is the room alone: no sidebar entry, no veil, nothing but the pinned logo; a reload starts out of it", async ({ page }, info) => {
   await setupPortal(page, { webgl: true });
-  await page.goto("/");
+  await page.goto("/sessions/s1");
   const nav = page.getByRole("navigation", { name: "Portal", exact: true });
-  const labels = (await nav.getByRole("button").allInnerTexts()).map((text) => text.trim());
-  expect(labels[0]).toBe("Palace");
-  await nav.getByRole("button", { name: "Palace", exact: true }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page).toHaveTitle("Palace");
-  await expect(nav.getByRole("button", { name: "Palace", exact: true })).toHaveAttribute("aria-current", "page");
-  const main = page.locator("[data-palace-surface]");
-  await expect(main.locator("header")).toHaveText("");
-  await expect(main.getByRole("heading")).toHaveCount(0);
-  await expect(main.getByRole("button", { name: "Toggle sidebar" })).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Tracked sessions" })).toHaveCount(0);
+  await expect(nav.getByRole("button", { name: "Palace", exact: true })).toHaveCount(0);
+  const scene = page.locator(".room-scene");
+  await expect(scene).not.toHaveAttribute("data-view");
+  await enterPalace(page);
+  await expect(scene).toHaveAttribute("data-view", "palace");
+  await expect.poll(() => scene.evaluate((node) => getComputedStyle(node, "::after").opacity)).toBe("0");
+  // Only the pinned logo is left outside the room.
+  await expect(page.getByRole("heading")).toHaveCount(0);
   await expect(page.getByRole("combobox")).toHaveCount(0);
-  await expect(page.locator(".room-scene")).toHaveAttribute("data-scene", /^(day|night)$/);
+  await expect(page.getByRole("button")).toHaveText([""]);
+  await expect(page.getByRole("button", { name: "Back to workspace" })).toBeVisible();
+  await expect(page.locator("[data-palace]")).toBeVisible();
+  await expect(scene).toHaveAttribute("data-scene", /^(day|night)$/);
   await page.screenshot({ path: info.outputPath("palace.png") });
-  // A direct load lands there too.
   await page.reload();
-  await expect(page).toHaveTitle("Palace");
-  await expect(page.locator("[data-palace-surface]").getByRole("heading")).toHaveCount(0);
+  await expect(page.locator(".composer")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to workspace" })).toHaveCount(0);
+  await expect(scene).not.toHaveAttribute("data-view");
 });
 
 /** A CSS colour's alpha (0..1), resolved by the browser through a 2D canvas so any syntax (oklch, hex, rgb) works. */
@@ -314,7 +314,7 @@ test("without WebGL the frost panels keep their tint over the sketch", async ({ 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("the Palace page frames the room's hero box, centred and filling the pad", async ({ page }, info) => {
+  test("the room frames its hero box, centred and filling the pad", async ({ page }, info) => {
     await expectFittedFrame(page);
     await page.screenshot({ path: info.outputPath("palace-fitted-phone.png") });
   });
@@ -389,9 +389,10 @@ test("live objects: a session waiting on approval puts its robot by the door, an
   await expect(page).toHaveURL(/\/$/);
 });
 
-test("a robot's hover card names its session; on the Palace page a click makes it wave, then its card opens the session", async ({ page }, info) => {
+test("a robot's hover card names its session; in Palace mode a click makes it wave, then its card opens the session and leaves", async ({ page }, info) => {
   await setupPortal(page, { webgl: true, sessions: [approvalSession, workingSession, finishedSession] });
   await page.goto("/");
+  await enterPalace(page);
   const scene = page.locator(".room-scene");
   const [x, y] = await pointOf(scene, "robot:s1");
   await page.mouse.move(x, y);
@@ -412,11 +413,14 @@ test("a robot's hover card names its session; on the Palace page a click makes i
   await card.getByRole("button", { name: "Open the session" }).click();
   await expect(page).toHaveURL(tabUrl);
   await expect(page.locator('[data-pane][data-session="s1"]')).toBeVisible();
+  await expect(page.locator(".portal-shell")).not.toHaveAttribute("data-palace-mode");
+  await expect(page.getByRole("button", { name: "Back to workspace" })).toHaveCount(0);
 });
 
-test("a drag and a wheel on the Palace page leave the camera where it is", async ({ page }) => {
+test("a drag and a wheel in Palace mode leave the camera where it is", async ({ page }) => {
   await setupPortal(page, { webgl: true });
   await page.goto("/");
+  await enterPalace(page);
   const scene = page.locator(".room-scene");
   const camera = async () => (await live(scene)).camera ?? null;
   // Read once the canvas has drawn, so the report is the settled one.
@@ -437,7 +441,7 @@ test("a drag and a wheel on the Palace page leave the camera where it is", async
 });
 
 /**
- * The hero box on the Palace page: where the pure fit (`layout.ts`) puts it (nothing else moves
+ * The room's hero box: where the pure fit (`layout.ts`) puts it (nothing else moves
  * the room, Revisions 3 and 4); down the screen it is centred and inside the pad (the landscape
  * aim moves the frame across only).
  */
@@ -484,7 +488,7 @@ test.describe("at 1440 × 900 on the session page", () => {
 
 test.describe("at 1440 × 900", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
-  test("the Palace page frames the room's hero box where the fitted, aimed pose puts it", async ({ page }, info) => {
+  test("the room frames its hero box where the fitted, aimed pose puts it", async ({ page }, info) => {
     await expectFittedFrame(page);
     await page.screenshot({ path: info.outputPath("palace-fitted.png") });
   });
@@ -559,6 +563,7 @@ test("accumulated objects: thirty sessions fill two shelf rows on the tall bookc
   );
   await setupPortal(page, { webgl: true, room });
   await page.goto("/");
+  await enterPalace(page);
   const scene = page.locator(".room-scene");
   await expect.poll(async () => (await growth(scene)).books).toEqual({ total: 30, drawn: 30, rows: 2, boxed: 0, purged: 27 });
   const now = await growth(scene);

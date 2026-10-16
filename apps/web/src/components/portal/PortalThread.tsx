@@ -135,7 +135,7 @@ function ThreadIntro({ thread, onOpenWatches }: { thread: Thread; onOpenWatches:
             <button
               type="button"
               onClick={onOpenWatches}
-              className="inline-flex items-center gap-1 rounded-full bg-sky-300/10 px-2 text-[11px] leading-5 text-sky-200 hover:bg-sky-300/15"
+              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 text-[11px] leading-5 text-primary hover:bg-primary/15"
             >
               <Target className="size-3" />
               View watch

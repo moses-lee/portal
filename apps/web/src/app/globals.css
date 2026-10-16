@@ -34,6 +34,11 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-bubble: var(--bubble);
+  --color-bubble-border: var(--bubble-border);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+  --color-link: var(--link);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -66,6 +71,12 @@
   --sidebar-accent-foreground: var(--foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+  /* Warm accents (docs/GLASS.md): the user bubble, active rows and hover fills, focus lines, links. */
+  --bubble: #e8d7b917;
+  --bubble-border: #e8d7b91f;
+  --accent-soft: #e8d7b90d;
+  --accent-line: #dec49840;
+  --link: #e6c792;
 }
 
 @layer base {
@@ -113,6 +124,27 @@
   isolation: isolate;
   overflow: hidden;
 }
+/*
+ * Floating panels (docs/GLASS.md): from 768 px the sidebar, the centre and the inspector sit inset
+ * from the window with the room in the gaps between them. On a phone the centre stays full-bleed and
+ * only the sheets float.
+ */
+.shell-panel {
+  border: 1px solid #eee1ca1f;
+  border-radius: 18px;
+}
+@media (min-width: 768px) {
+  .portal-shell {
+    padding: 10px;
+    gap: 10px;
+  }
+  /* Not frosted (decision 16): a rounded clip over the veiled room; the tab strip, panes and page overlays inside it. */
+  .shell-centre {
+    border: 1px solid #eee1ca1f;
+    border-radius: 18px;
+    overflow: hidden;
+  }
+}
 .glass {
   background: #292722dd;
   border: 1px solid #eee1ca20;
@@ -138,6 +170,36 @@
 }
 .frost-subtle {
   background: #25231fc9;
+}
+/*
+ * Liquid glass (docs/GLASS.md, Liquid glass): the floating sidebar, inspector, sheets and Palace
+ * mode's logo. The room bends at their rims inside the frost pass; here, a lower tint so more of the
+ * room shows, and a 1 px rim lighter at the top so the edge reads without WebGL too (over the sketch).
+ */
+.liquid {
+  background: #25231f80;
+  /* The rim below is the border; a real one would sit outside it. */
+  border-width: 0;
+  box-shadow:
+    inset 0 1px 0 #ffffff0a,
+    0 12px 40px #0000001f;
+}
+.liquid::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, #ffffff1f, #ffffff08);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  pointer-events: none;
 }
 .agent-logo {
   display: inline-block;
@@ -257,15 +319,129 @@
 .room-scene[data-scene="night"]::after {
   background: #110f0c2b;
 }
-/* The Palace page has no text over the room: no veil. */
+/* Palace mode has no text over the room: the veil fades out with the panels (docs/GLASS.md, Animation). */
+.room-scene::after {
+  transition: opacity 320ms ease-in-out;
+}
 .room-scene[data-view="palace"]::after {
-  background: none;
+  opacity: 0;
 }
 
 .sidebar-shell {
   min-height: 0;
   flex-shrink: 0;
-  border-right: 1px solid var(--border);
+}
+/*
+ * The desktop sidebar's collapse (docs/GLASS.md, Sidebar collapse): the slot's width goes from the
+ * panel's plus the gap to 0 while the panel slides left by as much and fades, so the centre's edge
+ * keeps its 10 px from the panel as it reflows. The negative margin takes back the shell's gap,
+ * which the slot carries itself. Reduced motion: no transition (the global rule).
+ */
+.sidebar-slot {
+  display: flex;
+  flex-shrink: 0;
+  min-height: 0;
+  margin-right: -10px;
+  transition:
+    width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 320ms ease-in-out;
+}
+.sidebar-slot[data-resizing] {
+  transition: none;
+}
+.sidebar-slot > .sidebar-shell {
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sidebar-slot:not([data-shown]) > .sidebar-shell {
+  transform: translateX(calc(-100% - 10px));
+  opacity: 0;
+}
+/*
+ * Palace mode (docs/GLASS.md, Palace mode → Animation): transforms and opacity only, so nothing
+ * reflows. The sidebar and the inspector slide out past the window's edges, the centre fades and
+ * shrinks a little from 40 ms in, and comes back from 80 ms in. Once out (`away`) they are hidden
+ * as well as inert, which also keeps them out of the room's frost.
+ */
+.shell-inspector {
+  transition: transform 320ms ease-in-out;
+}
+.shell-centre {
+  transition:
+    opacity 240ms ease 80ms,
+    transform 240ms ease 80ms;
+}
+.portal-shell[data-palace-mode] .sidebar-slot {
+  transform: translateX(calc(-100% - 10px));
+}
+.portal-shell[data-palace-mode] .shell-inspector {
+  transform: translateX(calc(100% + 10px));
+}
+.portal-shell[data-palace-mode] .shell-centre {
+  opacity: 0;
+  transform: scale(0.985);
+  transition-delay: 40ms;
+}
+.portal-shell[data-palace-mode="away"] :is(.sidebar-slot, .shell-inspector, .shell-centre) {
+  visibility: hidden;
+}
+/* The way back, pinned where the sidebar's logo was; it fades in over the last 120 ms of the exit and out over the first 80 ms of the return. */
+.palace-logo {
+  position: fixed;
+  z-index: 30;
+  top: 26px;
+  left: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  animation: palace-logo-in 120ms ease-out 200ms both;
+}
+.palace-logo[data-palace-logo="out"] {
+  pointer-events: none;
+  animation: palace-logo-out 80ms ease-in both;
+}
+@keyframes palace-logo-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes palace-logo-out {
+  to {
+    opacity: 0;
+  }
+}
+/* On a phone the sheet closes with its own slide first, then the centre fades, then the logo comes. */
+@media (max-width: 767px) {
+  .portal-shell[data-palace-mode] .shell-centre {
+    transition-delay: 200ms;
+  }
+  .palace-logo {
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    animation-delay: 440ms;
+  }
+}
+/* Reduced motion: 120 ms crossfades, no transforms (and the sidebar's collapse stays instant: no width transition). */
+@media (prefers-reduced-motion: reduce) {
+  .portal-shell :is(.sidebar-slot, .shell-inspector, .shell-centre) {
+    transition: opacity 120ms ease !important;
+  }
+  .portal-shell[data-palace-mode] :is(.sidebar-slot, .shell-inspector, .shell-centre) {
+    transform: none;
+    opacity: 0;
+  }
+  .room-scene::after {
+    transition-duration: 120ms !important;
+  }
+  .palace-logo,
+  .palace-logo[data-palace-logo="out"] {
+    animation-duration: 120ms !important;
+    animation-delay: 0s !important;
+  }
 }
 .sidebar-content {
   display: flex;
@@ -288,8 +464,8 @@
   background: #ffffff04;
 }
 .sidebar-row[data-active="true"] {
-  background: #c3cfff0b;
-  border-color: #c3cfff12;
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
   box-shadow: inset 0 1px #ffffff05;
 }
 .sidebar-title {
@@ -398,15 +574,15 @@
   position: absolute;
   inset: 3px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #dfe4ff, #8f9cf0 60%, #6b6fd8);
-  box-shadow: 0 0 10px #9aa4f088;
+  background: radial-gradient(circle at 35% 30%, #fff4e0, #e8c890 60%, #c6935a);
+  box-shadow: 0 0 10px #e8c89088;
   animation: ind-orb-core 2.4s ease-in-out infinite;
 }
 .ind-orb i {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid #a8b6f6;
+  border: 1px solid #ecd3a6;
   opacity: 0;
   animation: ind-orb-ping 2.4s ease-out infinite;
 }
@@ -477,7 +653,7 @@
 .conversation-markdown {
   font-size: 15px;
   line-height: 1.8;
-  color: #d7dce7;
+  color: #ece4d6;
   overflow-wrap: anywhere;
 }
 .conversation-markdown > :first-child {
@@ -523,10 +699,10 @@
   margin: 5px 0;
 }
 .conversation-markdown li::marker {
-  color: #747f98;
+  color: #9a9080;
 }
 .conversation-markdown a {
-  color: #b8c7f5;
+  color: var(--link);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -538,7 +714,7 @@
   padding: 2px 5px;
 }
 .conversation-markdown blockquote {
-  border-left: 2px solid #93a1ce55;
+  border-left: 2px solid #dec49855;
   padding-left: 16px;
   color: var(--muted-foreground);
 }
@@ -558,7 +734,7 @@
 .code-block {
   overflow: hidden;
   border: 1px solid var(--border);
-  background: #0e111bc7;
+  background: #1b1916c7;
   border-radius: 12px;
   margin: 16px 0;
 }
@@ -591,11 +767,11 @@
     box-shadow 160ms;
 }
 .composer:focus-within {
-  border-color: #b1c0ff38;
+  border-color: var(--accent-line);
   box-shadow:
     inset 0 1px #ffffff0d,
     0 16px 48px #0003,
-    0 0 0 3px #b1c0ff04;
+    0 0 0 3px var(--accent-soft);
 }
 .composer textarea {
   min-height: 70px;
@@ -613,8 +789,8 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: #e4e8f5;
-  color: #232a3f;
+  background: var(--primary);
+  color: var(--primary-foreground);
   box-shadow: 0 2px 8px #0002;
   transition:
     transform 140ms,
@@ -693,7 +869,7 @@
 .tool-details {
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #12151e80;
+  background: #211f1b80;
 }
 .tool-details [data-slot="collapsible-content"] {
   overflow: hidden;
@@ -729,6 +905,28 @@
   background: #0007;
   backdrop-filter: blur(6px);
 }
+/* A liquid sheet's overlay keeps the dim and drops the CSS blur: the room's frost blurs under the sheet instead. */
+[data-slot="sheet-overlay"][data-liquid] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* Liquid sheets float (docs/GLASS.md, Phones): inset 8 px from the window, rounded, with the rim all round. */
+/*
+ * Unlike the sidebar and the inspector, a sheet sits over the centre's text, which the room's frost
+ * does not blur: it keeps a stronger tint so that text does not read through it.
+ */
+[data-slot="sheet-content"].liquid {
+  background: #25231fd9;
+  height: auto;
+  border-width: 0;
+  border-radius: 22px;
+}
+[data-slot="sheet-content"].liquid[data-side="left"] {
+  inset: max(8px, env(safe-area-inset-top)) auto max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
+[data-slot="sheet-content"].liquid[data-side="right"] {
+  inset: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) auto;
+}
 
 @media (max-width: 767px) {
   .workspace-header {
@@ -756,10 +954,11 @@
    * veil than the desktop's over the 3D room, strongest at the top where the header and the first
    * lines sit.
    */
-  .room-scene:not([data-view="palace"])::after {
+  /* Not scoped off Palace mode: the veil's opacity fades it there, as on desktop. */
+  .room-scene::after {
     background: linear-gradient(180deg, #15171378 0, #15171370 50%, #15171363 100%);
   }
-  .room-scene[data-scene="night"]:not([data-view="palace"])::after {
+  .room-scene[data-scene="night"]::after {
     background: linear-gradient(180deg, #110f0c63 0, #110f0c5c 50%, #110f0c4d 100%);
   }
   button[data-size="icon"] {
@@ -780,7 +979,9 @@
 @media (prefers-reduced-transparency: reduce) {
   .glass,
   .frost,
-  .frost-subtle {
+  .frost-subtle,
+  .liquid,
+  [data-slot="sheet-content"].liquid {
     background: var(--card);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;

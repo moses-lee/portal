@@ -20,7 +20,7 @@ import { portalPath } from "@/lib/session-routes";
 const riskMeta: Record<ApprovalRisk, { label: string; tone: Tone }> = {
   write: { label: "Writes", tone: "amber" },
   destructive: { label: "Destructive", tone: "rose" },
-  outbound: { label: "Leaves this machine", tone: "violet" },
+  outbound: { label: "Leaves this machine", tone: "warm" },
 };
 
 const originLabels: Record<Approval["origin"], string> = {

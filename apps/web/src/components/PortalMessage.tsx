@@ -185,7 +185,7 @@ const PortalMessage = memo(function PortalMessage({
       <Message align="end">
         <MessageContent className="gap-1.5">
           <Bubble variant="secondary" className="max-w-[90%]">
-            <BubbleContent className="!rounded-[20px] !border-white/5 !bg-[#252b3e]/70 !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
+            <BubbleContent className="!rounded-[20px] !border-bubble-border !bg-bubble !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
               {userText(message)}
             </BubbleContent>
           </Bubble>

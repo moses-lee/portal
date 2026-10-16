@@ -36,3 +36,10 @@ export async function showSettings(page: Page, section: string) {
   await dialog.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: section, exact: true }).click();
   return dialog;
 }
+
+/** Enter Palace mode with the sidebar's logo (docs/GLASS.md) and wait for the panels to have gone. */
+export async function enterPalace(page: Page) {
+  await page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: "Show the room" }).click();
+  await expect(page.getByRole("button", { name: "Back to workspace" })).toBeFocused();
+  await expect(page.locator(".portal-shell")).toHaveAttribute("data-palace-mode", "away");
+}

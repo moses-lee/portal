@@ -44,7 +44,7 @@ export default function PortalStatusLine({ onOpenThread }: { onOpenThread: (thre
               aria-label={`Status: ${line}${next ? ` · ${next}` : ""}. Show running work`}
               className="flex min-w-0 items-center gap-1.5 rounded-md text-left text-foreground/85 hover:text-foreground"
             >
-              <LoaderCircle className="size-3 shrink-0 animate-spin text-sky-300" />
+              <LoaderCircle className="size-3 shrink-0 animate-spin text-primary" />
               {text}
             </button>
           </PopoverTrigger>
@@ -55,7 +55,7 @@ export default function PortalStatusLine({ onOpenThread }: { onOpenThread: (thre
             <ul className="space-y-2">
               {runs.map((run) => (
                 <li key={run.id} className="flex items-start gap-2 text-xs">
-                  <Activity className="mt-0.5 size-3.5 shrink-0 text-sky-300" />
+                  <Activity className="mt-0.5 size-3.5 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate">{run.summary ?? runKindLabels[run.kind] ?? run.kind}</p>
                     <p className="text-[11px] text-muted-foreground">

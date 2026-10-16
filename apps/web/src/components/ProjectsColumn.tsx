@@ -74,6 +74,7 @@ import { relativeAge } from "@/lib/relative-age";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import { worktreeRetention } from "@/lib/session-lifecycle";
 import { defaultSettings } from "@/lib/settings";
+import { markDragging } from "@/lib/palace-mode";
 import type { PinMap } from "@/lib/pins";
 import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
@@ -506,6 +507,7 @@ const ProjectsColumn = memo(function ProjectsColumn({
   const pinnedIds = useMemo(() => projects.filter((project) => project.id in projectPins).map((project) => project.id), [projects, projectPins]);
   const onDragEnd = useCallback(
     ({ active, over }: DragEndEvent) => {
+      markDragging(false);
       if (!over || active.id === over.id) return;
       const from = pinnedIds.indexOf(String(active.id));
       const to = pinnedIds.indexOf(String(over.id));
@@ -517,6 +519,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
     },
     [pinnedIds, onReorderPinned],
   );
+  // A drag cut short by unmounting never ends or cancels.
+  useEffect(() => () => markDragging(false), []);
   const announcements = useMemo<Announcements>(() => {
     const name = (id: string | number) => projects.find((project) => project.id === id)?.name ?? "Project";
     const place = (id: string | number) => `position ${pinnedIds.indexOf(String(id)) + 1} of ${pinnedIds.length}`;
@@ -647,6 +651,9 @@ const ProjectsColumn = memo(function ProjectsColumn({
           collisionDetection={closestSlot}
           modifiers={[alongList]}
           onDragEnd={onDragEnd}
+          // Palace mode's Esc stands aside while a drag is under way: the mouse sensor's cancel leaves the key unclaimed.
+          onDragStart={() => markDragging(true)}
+          onDragCancel={() => markDragging(false)}
           accessibility={{
             announcements,
             screenReaderInstructions: { draggable: "To move a pinned project, press Space, use the up and down arrow keys, then press Space again to drop it or Escape to cancel." },

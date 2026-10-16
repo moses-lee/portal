@@ -1,14 +1,28 @@
 /**
  * Where the frost goes (docs/PALACE.md, Web → Frost): every `.frost` and `.frost-subtle` element on
- * the page, as rounded rectangles in the canvas's drawing-buffer pixels with Y pointing up, written
- * into the instance buffer the mask pass draws.
+ * the page, and every `.liquid` one (docs/GLASS.md, Liquid glass; it carries one of those too), as
+ * rounded rectangles in the canvas's drawing-buffer pixels with Y pointing up, written into the
+ * instance buffer the mask and lens passes draw.
  *
  * The maths (`parseRadius`, `frostQuad`) is pure and unit-tested. `collectFrost` is browser only:
  * it queries the panels once per rendered frame and reads their boxes then (they move with every
  * scroll), while each panel's corner radius and clipping ancestors are read once and kept until a
  * `ResizeObserver` or `MutationObserver` (class or style) says the panel changed. Per frame it
  * allocates nothing of its own: the boxes, the quad and the bookkeeping are reused.
+ *
+ * Each panel also gets an opacity: its own times every ancestor's, as the compositor fades it (the
+ * centre column fading out for Palace mode takes the composer's frost with it). The computed styles
+ * of the panel and its ancestors are kept (they are live), and the product is read again only while
+ * it can be changing: while `[data-room-motion]` is on the root and `OPACITY_TAIL_MS` after, while
+ * it is below 1, and every `OPACITY_REFRESH_MS` regardless. Otherwise the last value stands.
  */
+
+/**
+ * Set on the page while a panel slides or fades (docs/GLASS.md, Liquid glass → Loop; the shell's
+ * `lib/room-motion.ts`): the loop boosts for it and the registry reads opacities every frame.
+ */
+export const MOTION_ATTRIBUTE = "data-room-motion";
+
 
 export type Box = { left: number; top: number; width: number; height: number };
 
@@ -32,8 +46,31 @@ export type FrostQuad = {
 /** Drawing-buffer pixels added around each panel, so the edge's antialiasing (one mask texel, two pixels) is not cut off. */
 export const EDGE = 2;
 
-/** Floats per panel in the instance buffer: shape (cx, cy, half width, half height), quad (x0, y0, x1, y1), radius. */
-export const FLOATS_PER_PANEL = 9;
+/**
+ * Floats per panel in the instance buffer: shape (cx, cy, half width, half height), quad (x0, y0, x1, y1), radius,
+ * `liquid` (1 for a `.liquid` panel, which the lens pass draws too; 0 otherwise), and the panel's effective
+ * opacity (0..1), which scales its frost, lens and rim.
+ */
+export const FLOATS_PER_PANEL = 11;
+/** Panels fainter than this are not drawn at all. */
+export const MIN_OPACITY = 1 / 255;
+/** How long after `[data-room-motion]` goes the panels' opacities are still read every frame (a fade's last frames). */
+export const OPACITY_TAIL_MS = 200;
+/** Opacities are read again this often even with nothing moving, so a fade nobody announced settles within it. */
+export const OPACITY_REFRESH_MS = 500;
+
+/** Something with a computed opacity: a live `CSSStyleDeclaration`. */
+type OpacitySource = { opacity: string };
+
+/** The product of `styles`' opacities (an element's and its ancestors'), clamped to 0..1; unparsable ones count as 1. */
+export function effectiveOpacity(styles: readonly OpacitySource[]): number {
+  let product = 1;
+  for (let index = 0; index < styles.length; index += 1) {
+    const value = Number.parseFloat(styles[index].opacity);
+    if (Number.isFinite(value)) product *= Math.min(1, Math.max(0, value));
+  }
+  return product;
+}
 
 /**
  * A computed `border-radius` corner (`"12px"`, `"50%"`, `"8px 4px"`, or Tailwind's
@@ -113,12 +150,18 @@ export function intersect(a: Box, b: Box, out?: Box): Box {
 // ---------------------------------------------------------------------------------------------
 
 export const FROST_SELECTOR = ".frost, .frost-subtle";
+/** Liquid glass (docs/GLASS.md, Liquid glass): used alongside `.frost` or `.frost-subtle`, and frosted even without them. */
+export const LIQUID_CLASS = "liquid";
+const PANEL_SELECTOR = `${FROST_SELECTOR}, .${LIQUID_CLASS}`;
 
 /**
  * What is read once per panel: its radius as computed (empty when stale), that radius in CSS pixels
- * for the panel's size then (a resize marks it stale), and the ancestors whose overflow clips it.
+ * for the panel's size then (a resize marks it stale), whether it is liquid, and the ancestors whose
+ * overflow clips it. A liquid panel has none: one sliding out under a clipping ancestor keeps its rim
+ * (only the canvas cuts it). `styles` are the live computed styles of the panel and every ancestor,
+ * and `opacity` their opacities' product as last read.
  */
-type Panel = { radius: string; pixels: number; clips: Element[] };
+type Panel = { radius: string; pixels: number; liquid: boolean; clips: Element[]; styles: OpacitySource[]; opacity: number };
 
 const panels = new Map<Element, Panel>();
 /** Reused every frame: the panels seen, the clipping ancestors' boxes (and which were measured this frame), the clip and the quad. */
@@ -132,6 +175,9 @@ let mutationObserver: MutationObserver | null = null;
 let reducedTransparency: MediaQueryList | null = null;
 /** Set for the snapshot's frame (`snapshot.ts`): the registry reports no panels, so the frame has no blur. */
 let suspended = false;
+/** Until when every panel's opacity is read each frame (`[data-room-motion]` and its tail), and when they all last were. */
+let opacityLiveUntil = -Infinity;
+let opacityReadAt = -Infinity;
 
 /**
  * While set, `collectFrost` reports no panels and leaves its bookkeeping alone: the snapshot's
@@ -175,32 +221,82 @@ function read(element: Element, box: { width: number; height: number }): Panel {
     const { resize, mutation } = observers();
     resize.observe(element);
     mutation.observe(element, { attributes: true, attributeFilter: ["class", "style"] });
-    panel = { radius: "", pixels: 0, clips: [] };
+    panel = { radius: "", pixels: 0, liquid: false, clips: [], styles: [], opacity: 1 };
     panels.set(element, panel);
   }
   if (!panel.radius) {
     // Never empty once read, so a panel is read once per change.
     panel.radius = getComputedStyle(element).borderTopLeftRadius || "0px";
     panel.pixels = parseRadius(panel.radius, box.width, box.height);
-    panel.clips = clippingAncestors(element);
+    panel.liquid = element.classList.contains(LIQUID_CLASS);
+    panel.clips = panel.liquid ? [] : clippingAncestors(element);
+    panel.styles.length = 0;
+    for (let node: Element | null = element; node; node = node.parentElement) panel.styles.push(getComputedStyle(node));
+    panel.opacity = effectiveOpacity(panel.styles);
   }
   return panel;
 }
 
-/** A growable instance buffer: `FLOATS_PER_PANEL` floats per panel. */
-export type FrostBuffer = { data: Float32Array };
+/** Whether this frame reads every panel's opacity again (see the module's comment). */
+function opacitiesLive(now: number): boolean {
+  if (document.documentElement.hasAttribute(MOTION_ATTRIBUTE)) opacityLiveUntil = now + OPACITY_TAIL_MS;
+  if (now < opacityLiveUntil || now - opacityReadAt >= OPACITY_REFRESH_MS) {
+    opacityReadAt = now;
+    return true;
+  }
+  return false;
+}
+
+/** A growable instance buffer: `FLOATS_PER_PANEL` floats per panel, and how many of the last frame's panels were liquid. */
+export type FrostBuffer = { data: Float32Array; liquid: number };
 
 /**
- * Writes every visible frosted panel into `buffer` (growing it when needed) and returns how many
- * there are; 0 means the frame needs no frost at all. Under `prefers-reduced-transparency` the
- * panels are solid and nothing is drawn; while `suspendFrost` holds, nothing either.
+ * Writes every visible frosted panel into `buffer` (growing it when needed), counts the liquid ones
+ * in `buffer.liquid`, and returns how many there are; 0 means the frame needs no frost at all.
+ * Under `prefers-reduced-transparency` the panels are solid and nothing is drawn, liquid glass
+ * included; while `suspendFrost` holds, nothing either.
  */
 export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
+  const count = collect(space, buffer);
+  // The snapshot's frame (no frost) is not what the screen keeps showing.
+  if (suspended) return count;
+  drawn.hash = hashPanels(buffer.data, count);
+  drawn.known = true;
+  Object.assign(drawn.space, space);
+  return count;
+}
+
+/** What the last `collectFrost` drew: its panels, hashed, and the space they were in. */
+const drawn = { hash: 0, known: false, space: { left: 0, top: 0, width: 0, height: 0, bufferWidth: 0, bufferHeight: 0 } as FrostSpace };
+/** `frostChanged`'s own buffer, so the renderer's is never written outside a frame. */
+const probe: FrostBuffer = { data: new Float32Array(16 * FLOATS_PER_PANEL), liquid: 0 };
+
+/** The written panels as one number, to a 256th of a pixel (and of opacity). */
+function hashPanels(data: Float32Array, count: number): number {
+  let hash = count;
+  for (let index = 0; index < count * FLOATS_PER_PANEL; index += 1) hash = (Math.imul(hash, 31) + Math.round(data[index] * 256)) | 0;
+  return hash;
+}
+
+/**
+ * Whether the panels moved, appeared, went or faded since the last frame drew them: for the still
+ * frame under reduced motion (`loop.ts`), which polls it instead of rendering. False before the
+ * first frame and while `suspendFrost` holds. Browser only.
+ */
+export function frostChanged(): boolean {
+  if (!drawn.known || suspended) return false;
+  const count = collect(drawn.space, probe);
+  return hashPanels(probe.data, count) !== drawn.hash;
+}
+
+function collect(space: FrostSpace, buffer: FrostBuffer): number {
+  buffer.liquid = 0;
   if (suspended) return 0;
   reducedTransparency ??= window.matchMedia("(prefers-reduced-transparency: reduce)");
-  const elements = reducedTransparency.matches ? [] : document.querySelectorAll(FROST_SELECTOR);
+  const elements = reducedTransparency.matches ? [] : document.querySelectorAll(PANEL_SELECTOR);
   seen.clear();
   measured.clear();
+  const live = elements.length > 0 && opacitiesLive(performance.now());
   let count = 0;
   for (const element of elements) {
     seen.add(element);
@@ -208,6 +304,8 @@ export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
     const box = element.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) continue;
     const panel = read(element, box);
+    if (live || panel.opacity < 1) panel.opacity = effectiveOpacity(panel.styles);
+    if (panel.opacity < MIN_OPACITY) continue;
     let clip: Box | null = null;
     for (const ancestor of panel.clips) {
       let ancestorBox = clipBoxes.get(ancestor);
@@ -250,6 +348,9 @@ export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
     data[at + 6] = quad.x1;
     data[at + 7] = quad.y1;
     data[at + 8] = quad.radius;
+    data[at + 9] = panel.liquid ? 1 : 0;
+    data[at + 10] = panel.opacity;
+    if (panel.liquid) buffer.liquid += 1;
     count += 1;
   }
   // Panels that left the page stop being observed; ancestors no panel is clipped by any more are forgotten.
@@ -265,6 +366,9 @@ export function collectFrost(space: FrostSpace, buffer: FrostBuffer): number {
 /** Stops observing every panel (the canvas unmounted). */
 export function resetFrost() {
   panels.clear();
+  opacityLiveUntil = -Infinity;
+  opacityReadAt = -Infinity;
+  drawn.known = false;
   clipBoxes.clear();
   resizeObserver?.disconnect();
   mutationObserver?.disconnect();

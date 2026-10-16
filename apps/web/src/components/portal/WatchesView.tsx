@@ -44,7 +44,7 @@ const runStatusMeta: Record<RunStatus, { label: string; tone: Tone }> = {
 function RunStatusIcon({ status }: { status: RunStatus }) {
   switch (status) {
     case "running":
-      return <LoaderCircle className="size-3.5 animate-spin text-sky-300" />;
+      return <LoaderCircle className="size-3.5 animate-spin text-primary" />;
     case "succeeded":
       return <CheckCircle2 className="size-3.5 text-emerald-300" />;
     case "failed":
@@ -85,7 +85,7 @@ function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now
   return (
     <article aria-label={intent.text} className="frost rounded-2xl p-4 text-[13px]">
       <div className="flex items-start gap-3">
-        <Target className="mt-0.5 size-4 shrink-0 text-sky-300" />
+        <Target className="mt-0.5 size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <h3 className="text-[14px] font-medium leading-snug tracking-[-.01em]">{intent.text}</h3>
           {closed && <Badge tone={intentStatusMeta[intent.status].tone} className="mt-1">{intentStatusMeta[intent.status].label}</Badge>}

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState, useSyncExternalStore, type RefObject } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import {
   ArrowUpRight,
   Bot,
@@ -31,6 +31,7 @@ import type { PortalView } from "@/lib/session-routes";
 import { isMacPlatform, newestSessions } from "@/lib/search";
 import { sessionDisplayTitle } from "@/lib/session-title";
 import type { PinMap } from "@/lib/pins";
+import { holdRoomMotion } from "@/lib/room-motion";
 import type { RemoveProjectOptions } from "./useProjects";
 import type { ProjectSummary, RemovedProjectSummary, SessionSummary } from "@/lib/types";
 
@@ -59,7 +60,7 @@ export type SidebarProps = {
   onTerminal: () => void;
   /** True while the standalone terminal page is open. */
   terminalActive: boolean;
-  /** Open one of Portal's views (Chat is the home, `/`). */
+  /** Open one of Portal's views (Chat is the Agent popup). */
   onPortalView: (view: PortalView) => void;
   /** The Portal view on screen, or null while a session, the start page, or the terminal is open. */
   portalView: PortalView | null;
@@ -93,6 +94,10 @@ export type SidebarProps = {
   onClose: () => void;
   desktopOpen: boolean;
   onCollapse: () => void;
+  /** The logo: enter Palace mode (docs/GLASS.md, Palace mode). */
+  onShowRoom: (opener: HTMLElement) => void;
+  /** Palace mode has finished sliding the desktop sidebar out: hidden and inert until it comes back. */
+  away: boolean;
 };
 
 const PortalViewEntries = memo(function PortalViewEntries({
@@ -290,8 +295,8 @@ function SidebarContent(props: SidebarProps) {
       <div className="mb-3 flex shrink-0 items-center gap-2 px-2">
         <button
           type="button"
-          aria-label="Portal home"
-          onClick={() => onPortalView("palace")}
+          aria-label="Show the room"
+          onClick={(event) => props.onShowRoom(event.currentTarget)}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left"
         >
           <PortalMark />
@@ -371,8 +376,68 @@ function SidebarContent(props: SidebarProps) {
   );
 }
 
+/** The desktop sidebar's collapse and expand (docs/GLASS.md, Sidebar collapse); `globals.css` has the same duration. */
+const SLIDE_MS = 220;
+
+/**
+ * Whether the collapsible sidebar is mounted, and whether it is shown (expanded), for an `open`
+ * that changes. Closing keeps it mounted while it slides out and unmounts it after, keeping its
+ * React work out of the tree as before; opening mounts it collapsed and expands it two frames
+ * later, so the transition runs. Under reduced motion both happen at once, and so does any change
+ * before the page has settled from hydration (the stored preference replacing the server's
+ * default must not slide). While it slides, the room's loop draws at full rate (`holdRoomMotion`)
+ * and terminals wait for the end to refit.
+ */
+function useSidebarSlide(open: boolean, reducedMotion: boolean) {
+  // False through hydration and the store re-renders that follow it (they run in its passive
+  // effects, before the next frame); true from the first frame after.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const instant = reducedMotion || !settled;
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(open);
+  // Derived during render, so a change is one render, not an effect pass.
+  if (open && !mounted) setMounted(true);
+  if (!open && shown) setShown(false);
+  if (instant && !open && mounted) setMounted(false);
+  if (instant && open && !shown) setShown(true);
+  useEffect(() => {
+    if (!open || shown) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setShown(true));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, shown]);
+  // Unmount once closed for the length of the slide, whether or not it had got as far as expanding
+  // (an expand undone within its two frames never changes `shown`); reopening cancels it.
+  useEffect(() => {
+    if (open || !mounted) return;
+    const timer = setTimeout(() => setMounted(false), SLIDE_MS);
+    return () => clearTimeout(timer);
+  }, [open, mounted]);
+  const previous = useRef(shown);
+  useEffect(() => {
+    if (previous.current === shown) return;
+    previous.current = shown;
+    const release = holdRoomMotion();
+    // An instant change holds for a frame only: under reduced motion the room's still frame redraws
+    // when the boost comes and goes (`room/loop.ts`), so no glass is left where the panel was.
+    const timer = setTimeout(release, instant ? 16 : SLIDE_MS);
+    return () => {
+      clearTimeout(timer);
+      release();
+    };
+  }, [shown, instant]);
+  return { mounted, shown };
+}
+
 export default function Sidebar(props: SidebarProps) {
   const desktop = useMediaQuery("(min-width: 768px)", true);
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const { mounted, shown } = useSidebarSlide(props.desktopOpen, reducedMotion);
   const [storedWidth, storeWidth] = usePreference(
     "portal.sidebar.width",
     "280",
@@ -390,10 +455,13 @@ export default function Sidebar(props: SidebarProps) {
       >
         <SheetContent
           side="left"
+          liquid
           showCloseButton={false}
           className="!w-[min(320px,88vw)] gap-0 p-0"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
+            // Palace mode's pinned logo has focus when the sheet's logo entered it.
+            if (document.querySelector('[data-palace-logo="in"]')) return;
             // The opener may be gone (its pane closed, its tab unmounted): then the first toggle on the page.
             const opener = props.returnFocus?.current;
             (opener?.isConnected ? opener : document.getElementById("sidebar-toggle"))?.focus();
@@ -407,11 +475,21 @@ export default function Sidebar(props: SidebarProps) {
         </SheetContent>
       </Sheet>
     );
-  if (!props.desktopOpen) return null;
+  if (!mounted) return null;
   return (
+    // The slot animates its width (the panel's and the gap's) while the panel slides out or in.
+    <div
+      className="sidebar-slot"
+      inert={props.away}
+      data-shown={shown ? "" : undefined}
+      data-resizing={dragWidth !== null ? "" : undefined}
+      style={{ width: shown ? width + 10 : 0 }}
+    >
     <aside
       aria-label="Workspace sidebar"
-      className="sidebar-shell frost-subtle relative"
+      aria-hidden={!shown || undefined}
+      inert={!shown}
+      className="sidebar-shell shell-panel frost-subtle liquid relative"
       style={{ width }}
     >
       <SidebarContent {...props} />
@@ -423,13 +501,15 @@ export default function Sidebar(props: SidebarProps) {
         aria-valuemax={400}
         aria-valuenow={width}
         tabIndex={0}
-        className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize touch-none hover:bg-white/5 focus-visible:bg-white/10"
+        // In the gap beside the panel, not over its rim.
+        className="absolute inset-y-0 -right-[9px] z-20 w-2 cursor-col-resize touch-none rounded-full hover:bg-white/5 focus-visible:bg-white/10"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
+          // The panel's width is measured from its own left edge (the shell's padding is left of it).
           if (e.currentTarget.hasPointerCapture(e.pointerId))
-            setDragWidth(Math.max(240, Math.min(400, e.clientX)));
+            setDragWidth(Math.max(240, Math.min(400, e.clientX - e.currentTarget.parentElement!.getBoundingClientRect().left)));
         }}
         onPointerUp={(e) => {
           e.currentTarget.releasePointerCapture(e.pointerId);
@@ -459,5 +539,6 @@ export default function Sidebar(props: SidebarProps) {
         }}
       />
     </aside>
+    </div>
   );
 }

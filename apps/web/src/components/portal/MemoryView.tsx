@@ -245,7 +245,7 @@ function RecordCard({
         <code className="font-mono text-[12px] text-foreground/90">{record.key}</code>
         <Badge>{record.type}</Badge>
         {!active && <Badge tone={statusTone[record.status]}>{record.status}</Badge>}
-        <Badge tone={pinnable ? "violet" : "neutral"}>{authorityLabels[record.authority]}</Badge>
+        <Badge tone={pinnable ? "warm" : "neutral"}>{authorityLabels[record.authority]}</Badge>
         <span className="text-[11px] text-muted-foreground" title="How far Portal relies on it">
           trust {Math.round(record.trust * 100)}%
         </span>

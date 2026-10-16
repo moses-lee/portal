@@ -31,12 +31,12 @@ test("the foyer card counts what waits and opens the page; no sidebar entry carr
   await setupPortal(page, { portal: { items } });
   await page.goto("/");
   const nav = navOf(page);
-  await expect(nav.getByRole("button")).toHaveText(["Palace", "Watches", "Activity", "Memory", "System", "Terminal"]);
+  await expect(nav.getByRole("button")).toHaveText(["Watches", "Activity", "Memory", "System", "Terminal"]);
   await expect(nav.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0);
   const foyer = foyerOf(page);
   await expect(foyer).toContainText("4 items need you");
   await expect(foyer).not.toHaveAttribute("aria-current", "page");
-  // Palace shows no item cards.
+  // The start page shows no item cards.
   await expect(page.getByRole("article")).toHaveCount(0);
 
   await foyer.click();

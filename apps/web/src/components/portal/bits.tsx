@@ -5,10 +5,12 @@ import { LoaderCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, relativeTime } from "@/lib/orchestrator/format";
 
-export type Tone = "neutral" | "amber" | "sky" | "emerald" | "rose" | "violet";
+export type Tone = "neutral" | "warm" | "amber" | "sky" | "emerald" | "rose" | "violet";
 
 const toneClass: Record<Tone, string> = {
   neutral: "bg-white/8 text-foreground/70",
+  /** The warm accent (docs/GLASS.md): a label that stands out without a status meaning. */
+  warm: "bg-primary/12 text-primary",
   amber: "bg-amber-300/15 text-amber-200",
   sky: "bg-sky-300/12 text-sky-200",
   emerald: "bg-emerald-400/12 text-emerald-300",

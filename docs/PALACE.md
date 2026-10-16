@@ -1,5 +1,7 @@
 # Palace: the room behind Portal
 
+**2026-10-15: the Palace page became Palace mode** (`docs/GLASS.md`, Palace mode): the logo, or Esc on desktop, slides the panels out and leaves the room, and a pinned logo brings them back. It is local state, not a page or a URL; `/` opens the new-session start page, and stored `/` and `/palace` links enter Palace mode. Read "the Palace page" below as Palace mode.
+
 Current UI (2026-10-14): Palace is home (`/`) and a local sidebar action, with no separate `/palace` route. Non-session pages cover the content beside the sidebar; Agent is popup-only. Tracked sessions and robot scarves have been removed. The historical design notes below describe earlier layouts where stated.
 
 

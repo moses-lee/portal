@@ -105,7 +105,7 @@ function ToolStatus({ status }: { status?: string | null }) {
   if (status === "in_progress")
     return (
       <LoaderCircle
-        className="size-3.5 shrink-0 animate-spin text-indigo-200"
+        className="size-3.5 shrink-0 animate-spin text-primary"
         aria-label="In progress"
       />
     );
@@ -393,7 +393,7 @@ const TurnView = memo(function TurnView({
             <Message key={`user-${i}`} align="end">
               <MessageContent className="gap-1.5">
                 <Bubble variant="secondary" className="max-w-[90%]">
-                  <BubbleContent className="!rounded-[20px] !border-white/5 !bg-[#252b3e]/70 !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
+                  <BubbleContent className="!rounded-[20px] !border-bubble-border !bg-bubble !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
                     {segment.text}
                   </BubbleContent>
                 </Bubble>

@@ -138,7 +138,7 @@ export default function SessionHeader({
               initial={renameFrom ?? ""}
               ariaLabel="Conversation title"
               maxLength={SESSION_TITLE_MAX}
-              className="w-full max-w-xl rounded-md border border-indigo-500 bg-zinc-900 px-2 py-0.5 text-[13px] font-medium leading-snug outline-none"
+              className="w-full max-w-xl rounded-md border border-accent-line bg-zinc-900 px-2 py-0.5 text-[13px] font-medium leading-snug outline-none"
               onCancel={stopRenaming}
               onCommit={(next) => {
                 stopRenaming();

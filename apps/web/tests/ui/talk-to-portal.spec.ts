@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal, tabUrl } from "./fixtures";
 import { approval } from "./orchestrator-fixtures";
-import { openPage } from "./surfaces";
+import { openPage, showPage } from "./surfaces";
 import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
 declare global {
@@ -17,7 +17,7 @@ const openAgent = async (page: Page) => {
   await expect(agent(page)).toBeVisible();
 };
 
-test("Palace is home and the unified sidebar opens Agent without a chat page", async ({ page }) => {
+test("home is the start page and the unified sidebar opens Agent without a chat page", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   const sidebar = page.getByRole("complementary", { name: "Workspace sidebar" });
@@ -27,8 +27,8 @@ test("Palace is home and the unified sidebar opens Agent without a chat page", a
   const recent = sidebar.getByRole("region", { name: "Recent rooms" });
   await expect(recent.getByRole("button", { name: new RegExp(firstTitle) })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: /1 item needs you/ })).toBeVisible();
-  await expect(nav.getByRole("button")).toHaveText(["Palace", "Watches", "Activity", "Memory", "System", "Terminal"]);
-  await expect(nav.getByRole("button", { name: "Palace", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("button")).toHaveText(["Watches", "Activity", "Memory", "System", "Terminal"]);
+  await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message Portal" })).toHaveCount(0);
   await openAgent(page);
   await expect(agent(page).getByRole("tablist", { name: "Threads" })).toHaveCount(0);
@@ -42,8 +42,9 @@ test("Palace is home and the unified sidebar opens Agent without a chat page", a
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Watches", level: 1 })).toBeVisible();
   await expect(line).toHaveCount(0);
-  // The brand is a home link.
-  await sidebar.getByRole("button", { name: "Portal home" }).click();
+  // The brand shows the room (Palace mode); its pinned twin comes back.
+  await sidebar.getByRole("button", { name: "Show the room" }).click();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await expect(page).toHaveURL(/\/$/);
   await sidebar.getByRole("button", { name: "New conversation in portal", exact: true }).click();
   await expect(page).toHaveURL(tabUrl);
@@ -132,7 +133,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
     (request) => request.path === "/api/portal/messages" && request.method === "POST",
   );
   expect(sent).toHaveLength(1);
-  // No session is focused beneath Palace, so the view context remains empty.
+  // No session is focused beneath the page, so the view context remains empty.
   expect(Object.keys(sent[0].body as object).sort()).toEqual(["message", "view"]);
   expect((sent[0].body as { message: { role: string } }).message.role).toBe("user");
   expect((sent[0].body as { view: unknown }).view).toEqual({ sessionId: null, tabId: null, paneId: null });
@@ -312,6 +313,8 @@ test("the daytime room sits behind every Portal view and follows the user's turn
   await page.clock.install({ time: new Date(Date.UTC(2026, 9, 4, 14, 0, 0)) });
   await setupPortal(page);
   await page.goto("/");
+  // A Portal page: the room follows Portal, not the workspace.
+  await showPage(page, "watches");
   await openAgent(page);
   const room = page.locator(".room-scene");
   await expect(room).toHaveAttribute("data-scene", "day");
