@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEventHandler } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type UIEventHandler } from "react";
 import { createPortal } from "react-dom";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { Bot, X } from "lucide-react";
@@ -8,8 +8,9 @@ import IconButton from "./IconButton";
 import PortalThread from "./portal/PortalThread";
 import PortalStatusLine from "./portal/PortalStatusLine";
 import ThreadSwitcher from "./portal/ThreadSwitcher";
-import { usePortalEvents, usePortalLive } from "./portal/PortalLive";
+import { usePortalLive } from "./portal/PortalLive";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
+import { sheetDragCloses, TAP_SLOP_PX } from "@/lib/workspace-mobile";
 
 export type AgentDialogProps = {
   open: boolean;
@@ -18,10 +19,16 @@ export type AgentDialogProps = {
   onThreadChange: (threadId: string) => void;
   /** The shell decides whether a link opens another surface or leaves the conversation open. */
   onNavigate: (path: string) => void;
+  /** Threads with news, from the shell's inbox (`useAgentInboxState`), for the switcher's dots. */
+  unread: ReadonlySet<string>;
 };
 
-/** Agent has its own conversation surface; dismissing it leaves its threads and streams alive. */
-export default function AgentDialog({ open, onClose, threadId, onThreadChange, onNavigate }: AgentDialogProps) {
+/**
+ * Agent has its own conversation surface; dismissing it leaves its threads and streams alive. A
+ * centred panel from 640 px up; below, a bottom sheet under a strip of the page, closed by dragging
+ * its grip or header down (`useSheetDrag`), tapping the strip, or its close button.
+ */
+export default function AgentDialog({ open, onClose, threadId, onThreadChange, onNavigate, unread }: AgentDialogProps) {
   const { error } = usePortalLive();
   const returnTo = useRef<HTMLElement | null>(null);
   const navigating = useRef(false);
@@ -42,6 +49,7 @@ export default function AgentDialog({ open, onClose, threadId, onThreadChange, o
     onNavigate(path);
   }, [onNavigate]);
   const onOpenChange = useCallback((next: boolean) => !next && onClose(), [onClose]);
+  const { sheet, dragHandlers } = useSheetDrag(onClose);
 
   /**
    * A stable portal target keeps the React conversation mounted while Radix's dialog shell
@@ -72,6 +80,7 @@ export default function AgentDialog({ open, onClose, threadId, onThreadChange, o
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay data-room-slow="" className="fixed inset-0 isolate z-50 bg-black/45 duration-100 supports-backdrop-filter:backdrop-blur-md data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
           <DialogPrimitive.Content
+            ref={sheet}
             data-agent-dialog="" data-palette-dialog=""
             onOpenAutoFocus={(event) => {
               event.preventDefault();
@@ -97,9 +106,13 @@ export default function AgentDialog({ open, onClose, threadId, onThreadChange, o
               const target = event.detail.originalEvent.target;
               if (target instanceof Node && bodyHost.current?.contains(target)) event.preventDefault();
             }}
-            className="glass fixed inset-0 z-50 flex h-dvh w-screen flex-col overflow-hidden text-sm text-popover-foreground outline-none duration-100 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:h-[85dvh] sm:w-[60vw] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+            className="glass fixed inset-x-0 top-[calc(env(safe-area-inset-top)+2.5rem)] bottom-0 z-50 flex flex-col overflow-hidden rounded-t-2xl text-sm text-popover-foreground outline-none duration-200 ease-out data-open:animate-in data-closed:animate-out max-sm:data-open:slide-in-from-bottom max-sm:data-closed:slide-out-to-bottom sm:inset-auto sm:top-1/2 sm:left-1/2 sm:h-[85dvh] sm:w-[60vw] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:duration-100 sm:data-open:fade-in-0 sm:data-closed:fade-out-0"
           >
-            <header className="flex shrink-0 items-start gap-3 border-b border-white/[0.07] px-5 py-3 pt-[max(.75rem,env(safe-area-inset-top))]">
+            {/* The grip: the sheet's drag handle on a phone (the header drags too). */}
+            <div data-agent-grip aria-hidden="true" {...dragHandlers} className="flex shrink-0 cursor-grab justify-center pt-2 pb-1 [touch-action:none] sm:hidden">
+              <span className="h-1 w-9 rounded-full bg-white/25" />
+            </div>
+            <header {...dragHandlers} className="flex shrink-0 items-start gap-3 border-b border-white/[0.07] px-5 py-3 max-sm:pt-1 max-sm:[touch-action:none]">
               <Bot className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <DialogPrimitive.Title className="text-[13px] font-medium">Agent</DialogPrimitive.Title>
@@ -115,27 +128,15 @@ export default function AgentDialog({ open, onClose, threadId, onThreadChange, o
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
-      {host && createPortal(<AgentConversations open={open} threadId={threadId} onThreadChange={onThreadChange} onNavigate={navigate} host={host} onScrollCapture={rememberScroll} />, host)}
+      {host && createPortal(<AgentConversations open={open} unread={unread} threadId={threadId} onThreadChange={onThreadChange} onNavigate={navigate} host={host} onScrollCapture={rememberScroll} />, host)}
     </>
   );
 }
 
-function AgentConversations({ open, threadId, onThreadChange, onNavigate, host, onScrollCapture }: Pick<AgentDialogProps, "open" | "threadId" | "onThreadChange" | "onNavigate"> & { host: HTMLDivElement; onScrollCapture: UIEventHandler<HTMLDivElement> }) {
+function AgentConversations({ open, threadId, onThreadChange, onNavigate, unread, host, onScrollCapture }: Pick<AgentDialogProps, "open" | "threadId" | "onThreadChange" | "onNavigate" | "unread"> & { host: HTMLDivElement; onScrollCapture: UIEventHandler<HTMLDivElement> }) {
   const { threads } = usePortalLive();
   const [visited, setVisited] = useState([threadId]);
   if (!visited.includes(threadId)) setVisited([...visited, threadId]);
-  const [unread, setUnread] = useState<ReadonlySet<string>>(new Set());
-  if (open && unread.has(threadId)) {
-    const next = new Set(unread);
-    next.delete(threadId);
-    setUnread(next);
-  }
-  usePortalEvents((event) => {
-    if (event.type !== "messages") return;
-    const id = event.threadId ?? MAIN_THREAD_ID;
-    if (open && id === threadId) return;
-    setUnread((current) => current.has(id) ? current : new Set(current).add(id));
-  });
   const handlers = useMemo(() => ({ onOpenCurationRun: (runId: string) => onNavigate(`/memory/curation/${encodeURIComponent(runId)}`) }), [onNavigate]);
   const openWatches = useCallback(() => onNavigate("/watches"), [onNavigate]);
 
@@ -181,4 +182,64 @@ function AgentConversations({ open, threadId, onThreadChange, onNavigate, host, 
       {visited.map((id) => <PortalThread key={id} threadId={id} thread={threads.find((thread) => thread.id === id) ?? null} visible={id === threadId} handlers={handlers} onOpenWatches={openWatches} onNavigate={onNavigate} />)}
     </div>
   );
+}
+
+/** Where the dialog is a bottom sheet (below Tailwind's `sm`), so its grip and header drag. */
+const SHEET_QUERY = "(max-width: 639px)";
+
+/**
+ * Drag-to-close for the phone sheet: a pointer on the grip or header that moves down past the tap
+ * slop takes over (captured, so a press that started on a header button does not click it), the
+ * sheet follows it on `translate`, and on release `sheetDragCloses` decides between closing and
+ * springing back. `translate` composes with the exit animation's `transform`, so a close slides
+ * on from where the finger left it.
+ */
+function useSheetDrag(onClose: () => void) {
+  const sheet = useRef<HTMLDivElement | null>(null);
+  const gesture = useRef<{ pointerId: number; y: number; dragging: boolean; lastY: number; lastAt: number; speed: number } | null>(null);
+  const settle = useCallback((closing: boolean) => {
+    const element = sheet.current;
+    if (!element) return;
+    if (closing) return onClose();
+    element.style.transition = "translate 200ms ease-out";
+    element.style.translate = "";
+  }, [onClose]);
+  const dragHandlers = useMemo(() => ({
+    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
+      if (!event.isPrimary || !window.matchMedia(SHEET_QUERY).matches) return;
+      gesture.current = { pointerId: event.pointerId, y: event.clientY, dragging: false, lastY: event.clientY, lastAt: event.timeStamp, speed: 0 };
+    },
+    onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
+      const g = gesture.current;
+      const element = sheet.current;
+      if (!g || g.pointerId !== event.pointerId || !element) return;
+      const dy = Math.max(0, event.clientY - g.y);
+      if (!g.dragging) {
+        if (dy <= TAP_SLOP_PX) return;
+        g.dragging = true;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        element.style.transition = "none";
+      }
+      const elapsed = event.timeStamp - g.lastAt;
+      if (elapsed > 0) g.speed = (event.clientY - g.lastY) / elapsed;
+      g.lastY = event.clientY;
+      g.lastAt = event.timeStamp;
+      element.style.translate = `0 ${dy}px`;
+    },
+    onPointerUp: (event: ReactPointerEvent<HTMLElement>) => {
+      const g = gesture.current;
+      if (!g || g.pointerId !== event.pointerId) return;
+      gesture.current = null;
+      // A finger that stopped before lifting is not flicking.
+      const speed = event.timeStamp - g.lastAt > 100 ? 0 : g.speed;
+      if (g.dragging) settle(sheetDragCloses(Math.max(0, event.clientY - g.y), speed));
+    },
+    onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => {
+      const g = gesture.current;
+      if (!g || g.pointerId !== event.pointerId) return;
+      gesture.current = null;
+      if (g.dragging) settle(false);
+    },
+  }), [settle]);
+  return { sheet, dragHandlers };
 }

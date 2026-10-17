@@ -25,6 +25,7 @@ import { daySections, formatDateTime } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
 import { threadDraftKey } from "@/lib/orchestrator/drafts";
+import { threadRoutes } from "@/lib/orchestrator/api";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
@@ -41,16 +42,6 @@ function describeChatError(error: unknown): string {
   return message === "Failed to fetch"
     ? "Could not reach the server. Check the connection and try again."
     : message || "Portal could not answer. Try again.";
-}
-
-/** Where a thread's messages live. The main thread keeps its original routes. */
-function threadRoutes(threadId: string) {
-  const base = `/api/portal/threads/${encodeURIComponent(threadId)}`;
-  return {
-    messages: threadId === MAIN_THREAD_ID ? "/api/portal/messages" : `${base}/messages`,
-    message: (id: string) => `${base}/messages/${encodeURIComponent(id)}`,
-    cancel: `${base}/cancel`,
-  };
 }
 
 /** `GET` a page of messages; the response may lack cursors (an older server, a test fixture). */

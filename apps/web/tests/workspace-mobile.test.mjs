@@ -9,6 +9,10 @@ import {
   NARROW_QUERY,
   paneCounter,
   paneNeighbours,
+  replyPreview,
+  SHEET_CLOSE_PX,
+  SHEET_FLICK_SPEED,
+  sheetDragCloses,
   swipeOutcome,
   switcherPanes,
   tabRendersSplit,
@@ -132,4 +136,26 @@ test("keyboard up: the viewport 150 px below its largest height; back when it re
   assert.equal(state.keyboardUp, true);
   // A custom threshold.
   assert.equal(viewportAfterResize({ width: 390, largestHeight: 800, keyboardUp: false }, 390, 700, 50).keyboardUp, true);
+});
+
+test("reply preview: an assistant message's text on one line, without Markdown's marks", () => {
+  const reply = (...parts) => ({ role: "assistant", parts });
+  assert.equal(replyPreview(reply({ type: "text", text: "## Done\n\nThe **review** of `auth_flow` passed.\n> quoted" })), "Done The review of auth_flow passed. quoted");
+  // Tool parts are skipped; text parts join.
+  assert.equal(replyPreview(reply({ type: "text", text: "First." }, { type: "tool-list_watches" }, { type: "text", text: "Second." })), "First. Second.");
+  // Nothing to show: no message, a user message, a reply with only tools or blank text.
+  assert.equal(replyPreview(undefined), null);
+  assert.equal(replyPreview({ role: "user", parts: [{ type: "text", text: "hi" }] }), null);
+  assert.equal(replyPreview(reply({ type: "tool-list_watches" })), null);
+  assert.equal(replyPreview(reply({ type: "text", text: "  \n " })), null);
+});
+
+test("sheet drag: closes past the distance or on a downward flick, never from a tap", () => {
+  assert.equal(sheetDragCloses(SHEET_CLOSE_PX, 0), true);
+  assert.equal(sheetDragCloses(SHEET_CLOSE_PX - 1, 0), false);
+  assert.equal(sheetDragCloses(40, SHEET_FLICK_SPEED), true);
+  assert.equal(sheetDragCloses(40, SHEET_FLICK_SPEED - 0.01), false);
+  // Within the tap slop nothing closes, however fast.
+  assert.equal(sheetDragCloses(8, 5), false);
+  assert.equal(sheetDragCloses(0, 0), false);
 });

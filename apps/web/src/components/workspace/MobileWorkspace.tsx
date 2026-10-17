@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { PaneNode } from "@portal/contracts/workspace";
+import AgentReplyToast from "./AgentReplyToast";
 import PaneBar from "./PaneBar";
 import PanesSheet from "./PanesSheet";
 import type { SessionState } from "@/lib/session-state";
@@ -11,8 +12,10 @@ import { paneNeighbours, type PaneRef } from "@/lib/workspace-mobile";
 export type MobileWorkspaceProps = {
   /** The panes to switch between, in order: the whole workspace flat on a phone, one tab's on a tablet. */
   panes: readonly PaneRef[];
-  /** The pane the URL focuses; null while a resolver settles (nothing shows until it does). */
+  /** The pane the URL focuses; null while a resolver settles (nothing shows until it does), or with `empty`. */
   focused: PaneRef | null;
+  /** A phone's empty workspace: the start page, shown with the bar (for Agent) and no panes. */
+  empty?: ReactNode;
   /** The pane's content (the session pane with its menu wired to its tab). */
   renderPane: (tabId: string, pane: PaneNode) => ReactNode;
   titleOf: (pane: PaneNode) => string;
@@ -29,13 +32,15 @@ export type MobileWorkspaceProps = {
 
 /**
  * The flat workspace (decision 18): one pane at a time from `panes`, the bar under it to move to the
- * neighbours or open the sheet. No strip, no splits. Only the shown pane is mounted (the history
- * cache makes switching cheap; a phone has no room for background streams). The same component
- * serves a tablet's tabs of 3 or 4 panes, scoped to that tab (decision 20).
+ * neighbours, open the sheet or open Agent, and Agent's reply preview over it. No strip, no splits.
+ * Only the shown pane is mounted (the history cache makes switching cheap; a phone has no room for
+ * background streams). The same component serves a tablet's tabs of 3 or 4 panes, scoped to that
+ * tab (decision 20).
  */
 export default function MobileWorkspace({
   panes,
   focused,
+  empty,
   renderPane,
   titleOf,
   stateOf,
@@ -48,10 +53,11 @@ export default function MobileWorkspace({
 }: MobileWorkspaceProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const { index, previous, next } = useMemo(() => paneNeighbours(panes, focused?.pane.id ?? null), [panes, focused]);
+  const root = useRef<HTMLDivElement>(null);
   return (
-    <div data-mobile-workspace data-pane-bar-host className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {focused && renderPane(focused.tabId, focused.pane)}
-      {focused && (
+    <div ref={root} data-mobile-workspace data-pane-bar-host className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      {focused ? renderPane(focused.tabId, focused.pane) : empty}
+      {focused ? (
         <PaneBar
           title={titleOf(focused.pane)}
           state={focused.pane.sessionId !== null ? stateOf(focused.pane.sessionId) : null}
@@ -61,7 +67,10 @@ export default function MobileWorkspace({
           onNext={next ? () => onFocus(next.tabId, next.pane.id) : null}
           onOpenSheet={() => setSheetOpen(true)}
         />
-      )}
+      ) : empty ? (
+        <PaneBar title="Start page" state={null} index={0} count={0} onPrevious={null} onNext={null} onOpenSheet={() => {}} />
+      ) : null}
+      <AgentReplyToast host={root} />
       <PanesSheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
