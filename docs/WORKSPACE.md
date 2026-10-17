@@ -6,7 +6,7 @@ Date: 2026-10-05, built 2026-10-06. Status: implemented on `feat/workspace` (ste
 
 The unified sidebar always contains the foyer, recent rooms, navigation, and projects. Desktop workspace tabs remain present even when empty; mobile keeps its bottom pane bar and sheet. Non-session pages cover the full area beside the sidebar, including the tabs. The workspace remains mounted, preserving focused panes, drafts, transcript scroll, and session terminals. Closing a page reveals that same workspace, or Palace when opened over Palace. Background URL repairs and workspace changes do not dismiss pages.
 
-Agent is a separate popup (⌘K/Ctrl+K), and `/` opens Search outside editors. Tracked sessions and their controls/tools/settings/storage have been removed. Every session Agent creates opens a background tab automatically; focus is still per device and never steered by creation. Public URLs remain for home (`/`, Palace), tabs, and session/start resolvers. Page overlays and Agent threads have no standalone URLs. These decisions supersede the older tracked-panel and auto-open entries below.
+Agent is a separate popup (⌘K/Ctrl+K), and `/` opens Search outside editors. On a phone it is also one tap away in the pane bar, and opens as a bottom sheet (decision 31, 2026-10-17). Tracked sessions and their controls/tools/settings/storage have been removed. Every session Agent creates opens a background tab automatically; focus is still per device and never steered by creation. Public URLs remain for home (`/`, Palace), tabs, and session/start resolvers. Page overlays and Agent threads have no standalone URLs. These decisions supersede the older tracked-panel and auto-open entries below.
 
 ## Why
 
@@ -57,6 +57,7 @@ This spec adds a **workspace**: a strip of tabs, each tab holding one session or
 | 28 | Libraries | Splits: `react-resizable-panels` (already installed, upgrade 4.12 to 4.14), nested, structure from our tree, sizes seeded on mount and applied from server pushes through its ref. Tabs: Radix Tabs from the installed `radix-ui`, force-mounted and hidden. Reorder: the stable `@dnd-kit/core` + `@dnd-kit/sortable` line, not `@dnd-kit/react` 0.x. Not dockview. |
 | 29 | Dragging | Round one had none. Added 2026-10-08: tabs reorder by dragging within the strip, like Chrome (or Space and the arrow keys on a focused tab), one `move_tab` per drop. Still no drag-to-split, no dragging out of the strip, no dragging sessions in from the sidebar. |
 | 30 | Hidden tabs | The focused tab plus the 3 most recently focused stay mounted (their streams run). Others mount on focus from the history cache. Unread is computed from the session-list stream, so it works for unmounted tabs too. Found while building: a browser allows six HTTP/1.1 connections per host and Portal runs on plain HTTP, so one stream per mounted pane could not work (a 2x2 tab alone used the whole budget). Mounted panes now share one multiplexed session stream; see Server routes and Web mounting. |
+| 31 | Agent on a phone | Added 2026-10-17. The pane bar's chevrons gave way to Agent's button (left) and a panes button (right); swiping still switches panes. The button shows Portal working, an approval waiting, or unread news. Agent opens as a bottom sheet below 640 px, under a strip of the page, closed by dragging its grip or header down. A reply that lands while Agent is closed (every reply, any thread) floats a one-line preview just above the composer for 6 s; tapping it opens that thread. The bar still hides with the keyboard; an empty workspace's start page keeps the bar for the button. |
 
 ## Model
 
@@ -189,8 +190,9 @@ Unchanged, except "Open full page" goes through the resolver, which focuses or o
 ### Mobile (below 768 px)
 
 - `MobileWorkspace.tsx`: the flat pane list, in tab then tree order. Renders the focused pane only; the URL still names tab and pane.
-- `PaneBar.tsx` under the composer: the current pane's state dot and title, "2 of 7", chevrons at both ends. Pointer-tracked horizontal swipe on the bar (threshold 40 px, vertical drift cancels) switches to the neighbour. Tap opens `PanesSheet.tsx`: every pane with icon, title, state badge, project, a close button per row, and "New session" at the bottom. The bar hides when `visualViewport.height` drops by more than 150 px (keyboard up), the way the composer hint hides on touch.
+- `PaneBar.tsx` under the composer: Agent's button, the current pane's state dot and title with "2 of 7", and the panes button (decision 31). Pointer-tracked horizontal swipe on the bar (threshold 40 px, vertical drift cancels) switches to the neighbour. Tap opens `PanesSheet.tsx`: every pane with icon, title, state badge, project, a close button per row, and "New session" at the bottom. The bar hides when `visualViewport.height` drops by more than 150 px (keyboard up), the way the composer hint hides on touch.
 - Tablet, 768 to 1100 px: `SplitTree` renders tabs of 1 or 2 panes; larger tabs render the focused pane with `PaneBar` scoped to that tab.
+- Agent from the bar (decision 31): `useAgentInboxState` (`portal/AgentInbox.tsx`) lives in the shell and tracks unread threads from `messages` events (lifted out of `AgentDialog`, so it counts before Agent first opens), Portal's activity, and on a phone the latest reply, fetched with `?limit=1`. `AgentReplyToast.tsx` places the preview 8 px above `.composer-wrap`, measured, so it clears the composer with or without the bar. `AgentDialog`'s `useSheetDrag` moves the sheet on `translate`, so a close slides on from where the finger let go.
 
 ### Preferences
 

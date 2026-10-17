@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { firstTitle, portalItem, setupPortal, thirdTitle } from "./fixtures";
+import { expect, test, type Page } from "@playwright/test";
+import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal, thirdTitle } from "./fixtures";
 import { approval, globalEntity, helperJob, intent, intentJob, mainThread, memoryRecords, repoEntity, reviewThread } from "./orchestrator-fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
 
@@ -116,22 +116,16 @@ test.describe("the workspace on a phone", () => {
     await expect(page).toHaveURL("/tabs/t1");
   });
 
-  test("the pane bar counts the flat list; chevrons and a swipe switch panes; the sheet lists, closes and opens them", async ({ page }) => {
+  test("the pane bar counts the flat list; a swipe switches panes; the sheet lists, closes and opens them", async ({ page }) => {
     const fixture = await setupPortal(page, { workspace: threePanes() });
     await page.goto("/tabs/t1");
     const bar = page.getByRole("group", { name: "Panes" });
     const counter = bar.locator("[data-pane-counter]");
     await expect(bar).toBeVisible();
     await expect(counter).toHaveText("1 of 3");
-    await expect(bar.getByRole("button", { name: "Previous pane" })).toBeDisabled();
     // No strip and no splits on a phone: one pane at a time.
     await expect(page.getByRole("tablist", { name: "Workspace tabs" })).toHaveCount(0);
     await expect(page.locator("[data-pane]")).toHaveCount(1);
-    await bar.getByRole("button", { name: "Next pane" }).click();
-    await expect(page).toHaveURL(/\/tabs\/t2\?pane=p2$/);
-    await expect(counter).toHaveText("2 of 3");
-    await expect(page.locator('[data-pane="p2"]')).toBeVisible();
-    await expect(page.locator('[data-pane="p1"]')).toHaveCount(0);
 
     // A swipe to the left on the bar pulls the next pane in; a swipe is not a tap, so no sheet.
     const title = bar.locator("[data-pane-bar-title]");
@@ -144,9 +138,16 @@ test.describe("the workspace on a phone", () => {
       await page.mouse.up();
     };
     await swipe(box.x + box.width * 0.8, box.x + box.width * 0.2);
+    await expect(page).toHaveURL(/\/tabs\/t2\?pane=p2$/);
+    await expect(counter).toHaveText("2 of 3");
+    await expect(page.locator('[data-pane="p2"]')).toBeVisible();
+    await expect(page.locator('[data-pane="p1"]')).toHaveCount(0);
+    await swipe(box.x + box.width * 0.8, box.x + box.width * 0.2);
     await expect(counter).toHaveText("3 of 3");
     await expect(page).toHaveURL(/\/tabs\/t2\?pane=p3$/);
-    await expect(bar.getByRole("button", { name: "Next pane" })).toBeDisabled();
+    // The last pane has no next: another swipe stays.
+    await swipe(box.x + box.width * 0.8, box.x + box.width * 0.2);
+    await expect(counter).toHaveText("3 of 3");
     await expect(page.getByRole("dialog", { name: "Panes" })).toHaveCount(0);
     // And back to the right.
     await swipe(box.x + box.width * 0.2, box.x + box.width * 0.8);
@@ -186,5 +187,119 @@ test.describe("the workspace on a phone", () => {
     await expect(bar).toBeHidden();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(bar).toBeVisible();
+  });
+
+  test("the bar's panes button opens the sheet too", async ({ page }) => {
+    await setupPortal(page, { workspace: threePanes() });
+    await page.goto("/tabs/t1");
+    await page.getByRole("group", { name: "Panes" }).getByRole("button", { name: "Panes", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Panes" }).locator("[data-pane-row]")).toHaveCount(3);
+  });
+});
+
+test.describe("Agent from the phone's bar", () => {
+  const onePane = () => workspaceOf([tab("t1", pane("p1", "s1"))]);
+  const threads = [mainThread, reviewThread];
+  const agentButton = (page: Page) => page.getByRole("group", { name: "Panes" }).locator("[data-agent-button]");
+  const agentSheet = (page: Page) => page.getByRole("dialog", { name: "Agent", exact: true });
+
+  test("the Agent button opens a bottom sheet that a drag on its grip closes; a short drag springs back", async ({ page }, info) => {
+    await setupPortal(page, { workspace: onePane() });
+    await page.goto("/tabs/t1");
+    await agentButton(page).click();
+    await expect(agentSheet(page)).toBeVisible();
+    await expect.poll(async () => (await agentSheet(page).boundingBox())?.y).toBe(40);
+    await page.screenshot({ path: info.outputPath("agent-sheet.png") });
+    const grip = agentSheet(page).locator("[data-agent-grip]");
+    const drag = async (by: number) => {
+      const box = (await grip.boundingBox())!;
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      // Slow steps, so the release is a drag and not a flick.
+      for (let step = 1; step <= 10; step++) {
+        await page.mouse.move(x, y + (by * step) / 10);
+        await page.waitForTimeout(20);
+      }
+      await page.waitForTimeout(150);
+      await page.mouse.up();
+    };
+    await drag(60);
+    await expect(agentSheet(page)).toBeVisible();
+    await expect.poll(async () => (await agentSheet(page).boundingBox())?.y).toBe(40);
+    await drag(200);
+    await expect(agentSheet(page)).toHaveCount(0);
+    // It opens again from the top, not where the drag left it.
+    await agentButton(page).click();
+    await expect.poll(async () => (await agentSheet(page).boundingBox())?.y).toBe(40);
+  });
+
+  test("a reply while Agent is closed marks the button and floats a preview above the composer; tapping it opens that thread", async ({ page }, info) => {
+    const fixture = await setupPortal(page, { workspace: onePane(), portal: { threads } });
+    await page.goto("/tabs/t1");
+    await expect(agentButton(page)).toHaveAccessibleName("Agent");
+    fixture.appendPortalMessage(
+      { id: "rt9", role: "assistant", metadata: { at: Date.now() }, parts: [{ type: "text", text: "The **review** finished with two findings." }] },
+      reviewThread.id,
+    );
+    await emitPortal(page, { type: "messages", threadId: reviewThread.id });
+    await expect(agentButton(page)).toHaveAccessibleName("Agent, new messages");
+    const preview = page.locator("[data-agent-reply-preview]");
+    await expect(preview).toContainText(`Portal in ${reviewThread.title}: The review finished with two findings.`);
+    // Above the composer, clear of it.
+    const composer = (await page.locator(".composer-wrap").boundingBox())!;
+    const box = (await preview.boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(composer.y);
+    await page.screenshot({ path: info.outputPath("agent-reply-preview.png") });
+
+    await preview.getByRole("button", { name: /Portal in/ }).click();
+    await expect(agentSheet(page)).toBeVisible();
+    await expect(page.getByRole("tablist", { name: "Threads" }).getByRole("tab", { name: reviewThread.title })).toHaveAttribute("aria-selected", "true");
+    await expect(preview).toHaveCount(0);
+    await agentSheet(page).getByRole("button", { name: "Close Agent" }).click();
+    await expect(agentButton(page)).toHaveAccessibleName("Agent");
+  });
+
+  test("the preview's cross dismisses it, and a reply in the open thread shows none", async ({ page }) => {
+    const fixture = await setupPortal(page, { workspace: onePane() });
+    await page.goto("/tabs/t1");
+    fixture.appendPortalMessage({ id: "m9", role: "assistant", metadata: { at: Date.now() }, parts: [{ type: "text", text: "Nothing needs you right now." }] });
+    await emitPortal(page, { type: "messages", threadId: "main" });
+    const preview = page.locator("[data-agent-reply-preview]");
+    await expect(preview).toContainText("Portal replied: Nothing needs you right now.");
+    await preview.getByRole("button", { name: "Dismiss" }).click();
+    await expect(preview).toHaveCount(0);
+    // Still unread until Agent is opened.
+    await expect(agentButton(page)).toHaveAccessibleName("Agent, new messages");
+    await agentButton(page).click();
+    await expect(agentSheet(page)).toBeVisible();
+    await emitPortal(page, { type: "messages", threadId: "main" });
+    await page.waitForTimeout(300);
+    await expect(preview).toHaveCount(0);
+  });
+
+  test("the button shows Portal working and an approval waiting", async ({ page }) => {
+    await setupPortal(page, { workspace: onePane() });
+    await page.goto("/tabs/t1");
+    // The shell (and its stream) is up once the bar is.
+    await expect(agentButton(page)).toHaveAccessibleName("Agent");
+    await emitPortal(page, { type: "status", status: { ...portalStatus, busyThreads: ["main"] } });
+    await expect(agentButton(page)).toHaveAttribute("data-agent-activity", "working");
+    await expect(agentButton(page)).toHaveAccessibleName("Agent, working");
+    await emitPortal(page, { type: "approvals", approvals: [approval] });
+    // (The approvals dialog is modal and hides the bar from role queries; the attribute still reads.)
+    await expect(page.locator("[data-pane-bar] [data-agent-button]")).toHaveAttribute("data-agent-activity", "waiting");
+  });
+
+  test("an empty workspace keeps the bar for Agent, with no counter or sheet", async ({ page }) => {
+    await setupPortal(page, { workspace: workspaceOf([]) });
+    await page.goto("/new");
+    const bar = page.getByRole("group", { name: "Panes" });
+    await expect(bar.locator("[data-agent-button]")).toBeVisible();
+    await expect(bar.locator("[data-pane-counter]")).toHaveCount(0);
+    await expect(bar.locator("[data-pane-bar-title]")).toBeDisabled();
+    await bar.locator("[data-agent-button]").click();
+    await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
   });
 });

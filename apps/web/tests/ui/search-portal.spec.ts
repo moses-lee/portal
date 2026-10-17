@@ -163,14 +163,15 @@ test("Agent retains conversation scroll and supports wheel scrolling, focus wrap
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
-  test("Agent fills the viewport and can be dismissed with its close button", async ({ page }) => {
+  test("Agent is a bottom sheet under a strip of the page and can be dismissed with its close button", async ({ page }) => {
     await setupPortal(page);
     await page.goto("/");
     await page.getByRole("button", { name: "Toggle sidebar" }).click();
     await page.getByRole("button", { name: "Agent", exact: true }).click();
     await expect(agent(page)).toBeVisible();
-    const box = await agent(page).boundingBox();
-    expect(box).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+    // Wait out the slide in, then measure: full width, down to the foot, 40 px of the page above it.
+    await expect.poll(async () => (await agent(page).boundingBox())?.y).toBe(40);
+    expect(await agent(page).boundingBox()).toEqual({ x: 0, y: 40, width: 390, height: 804 });
     await agent(page).getByRole("button", { name: "Close Agent" }).click();
     await expect(agent(page)).toHaveCount(0);
   });

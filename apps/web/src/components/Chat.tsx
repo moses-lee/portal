@@ -30,6 +30,7 @@ import PortalPage from "./PortalPage";
 import WorkspaceView from "./workspace/WorkspaceView";
 import { useWorkspaceActions } from "./workspace/useWorkspaceActions";
 import { PortalLiveProvider, usePortalLive } from "./portal/PortalLive";
+import { AgentInboxProvider, useAgentInboxState } from "./portal/AgentInbox";
 import { SessionsProvider, useSessions } from "./SessionsProvider";
 import { WorkspaceProvider, useWorkspace } from "./WorkspaceProvider";
 import { useSessionPins } from "./usePins";
@@ -1031,8 +1032,16 @@ function ChatShell() {
   /** The room's frames open their project the way the sidebar's project entries do: a start page with it picked. */
   const roomOpenProject = useStableCallback(startIn);
   const roomHost = useMemo(() => ({ projects, openProject: roomOpenProject }), [projects, roomOpenProject]);
+  /** The phone bar's Agent button and reply preview (docs/WORKSPACE.md, Mobile). */
+  const openAgent = useStableCallback((threadId?: string) => {
+    if (threadId) setAgentThreadId(threadId);
+    setShowSidebar(false);
+    setPalette("agent");
+  });
+  const agentInbox = useAgentInboxState({ open: palette === "agent", threadId: agentThreadId, previews: !desktop, openAgent });
 
   return (
+    <AgentInboxProvider value={agentInbox}>
     <RoomHostProvider value={roomHost}>
       <div className="portal-shell" data-palace-mode={palace ? (away ? "away" : "") : undefined}>
         <Sidebar
@@ -1055,7 +1064,7 @@ function ChatShell() {
           onReorderPinned={sidebarReorderPinned}
           onOpenSettings={sidebarOpenSettings}
           onOpenSearch={sidebarOpenSearch}
-          onOpenAgent={() => { setShowSidebar(false); setPalette("agent"); }}
+          onOpenAgent={() => openAgent()}
           onOpenRemoved={() => openSurface({ view: "removed" })}
           onRenameProject={sidebarRename}
           onRemoveProject={sidebarRemove}
@@ -1093,7 +1102,7 @@ function ChatShell() {
           onOpenSession={searchOpenSession}
           onOpenProject={searchOpenProject}
         />
-        <AgentDialog open={palette === "agent"} onClose={() => setPalette(null)} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} />
+        <AgentDialog open={palette === "agent"} onClose={() => setPalette(null)} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} unread={agentInbox.unread} />
         <ShellRoom portal={portalOpen || palace} palace={palace} workspaceActivity={workspaceActivity} />
         {/* The centre panel (docs/GLASS.md, Floating panels): a rounded clip, not frosted; page overlays fill it. */}
         <div data-shell-centre inert={away} className="shell-centre relative flex min-h-0 min-w-0 flex-1">
@@ -1141,5 +1150,6 @@ function ChatShell() {
         <ApprovalsDialog onNavigate={navigateSurface} />
       </div>
     </RoomHostProvider>
+    </AgentInboxProvider>
   );
 }

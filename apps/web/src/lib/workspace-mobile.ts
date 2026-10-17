@@ -1,8 +1,9 @@
 /**
  * The phone and tablet rules of the workspace (docs/WORKSPACE.md, decisions 18 to 20): which
  * viewport class a device is, which tabs render as splits there, the pane switcher's list and
- * neighbours, the bar's swipe decision from pointer deltas, and keyboard-up detection from
- * `visualViewport` samples. No React, no DOM: the node test runner loads this file directly.
+ * neighbours, the bar's swipe decision from pointer deltas, keyboard-up detection from
+ * `visualViewport` samples, and the Agent's reply preview and sheet drag. No React, no DOM: the
+ * node test runner loads this file directly.
  */
 import type { PaneNode, Tab, Workspace } from "@portal/contracts/workspace";
 import { panesOf, tabPanes } from "@portal/shared/workspace";
@@ -140,4 +141,39 @@ export function viewportAfterResize(previous: ViewportSample | null, width: numb
   if (!previous || previous.width !== width) return { width, largestHeight: height, keyboardUp: false };
   const largestHeight = Math.max(previous.largestHeight, height);
   return { width, largestHeight, keyboardUp: largestHeight - height > drop };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Agent from the bar
+// ---------------------------------------------------------------------------------------------
+
+/** How long a reply's preview stays above the composer before it goes by itself. */
+export const REPLY_PREVIEW_MS = 6000;
+
+/**
+ * The one line a reply's preview shows: the message's text parts joined, whitespace collapsed and
+ * Markdown's heading, quote, bold and code marks dropped. Null for anything but an assistant
+ * message with text (a user message, a reply that only called tools).
+ */
+export function replyPreview(message: { role: string; parts: readonly { type: string; text?: string }[] } | undefined): string | null {
+  if (!message || message.role !== "assistant") return null;
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" && typeof part.text === "string" ? [part.text] : []))
+    .join("\n")
+    .replace(/^[ \t]*(?:#{1,6}|>)[ \t]*/gm, "")
+    .replace(/\*\*|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || null;
+}
+
+/** Dragging the Agent sheet down past this closes it on release. */
+export const SHEET_CLOSE_PX = 120;
+/** A release moving down faster than this (px per ms) closes it from any distance past the tap slop. */
+export const SHEET_FLICK_SPEED = 0.5;
+
+/** Whether a drag on the Agent sheet's grip that ended `dy` px down, moving at `speed` px/ms, closes it. */
+export function sheetDragCloses(dy: number, speed: number): boolean {
+  if (dy <= TAP_SLOP_PX) return false;
+  return dy >= SHEET_CLOSE_PX || speed >= SHEET_FLICK_SPEED;
 }

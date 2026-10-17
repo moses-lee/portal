@@ -208,6 +208,24 @@ export default function WorkspaceView({
     />
   );
 
+  /** The start page of an empty workspace. */
+  const startPane = (
+    <SessionPane
+      key="start"
+      sessionId={null}
+      paneId={null}
+      start={start}
+      onOpenSidebar={onOpenSidebar}
+      showGithub={showGithub}
+      onToggleGithub={onToggleGithub}
+      initialSend={initialSend}
+      onInitialSendHandled={onInitialSendHandled}
+      onNew={openStartTab}
+      onSessionDeleted={onSessionDeleted}
+      onActivity={reportActivity}
+    />
+  );
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <Tabs.Root value={focusedTabId ?? ""} onValueChange={(tabId) => navigateTo(pathOfTab(tabId))} activationMode="manual" className="flex min-h-0 flex-1 flex-col">
@@ -224,21 +242,24 @@ export default function WorkspaceView({
         // No strip here (a phone, or no tabs): the missing pane alone, with the way to a new conversation.
         <MissingConversation onNew={openStartTab} />
       ) : empty ? (
-        // The first session created here opens the first tab.
-        <SessionPane
-          key="start"
-          sessionId={null}
-          paneId={null}
-          start={start}
-          onOpenSidebar={onOpenSidebar}
-          showGithub={showGithub}
-          onToggleGithub={onToggleGithub}
-          initialSend={initialSend}
-          onInitialSendHandled={onInitialSendHandled}
-          onNew={openStartTab}
-          onSessionDeleted={onSessionDeleted}
-          onActivity={reportActivity}
-        />
+        // The first session created here opens the first tab. A phone keeps its bar under it, for Agent.
+        kind === "mobile" ? (
+          <MobileWorkspace
+            panes={[]}
+            focused={null}
+            empty={startPane}
+            renderPane={renderPaneIn}
+            titleOf={paneTitleOf}
+            stateOf={stateOf}
+            sessionOf={sessionOf}
+            unreadPanes={unreadPanes}
+            onFocus={showPane}
+            onClosePane={closePane}
+            onNewSession={openStartTab}
+          />
+        ) : (
+          startPane
+        )
       ) : kind === "mobile" && switcher ? (
         // Decision 18: the flat list, one pane at a time; no strip, no splits.
         <MobileWorkspace
