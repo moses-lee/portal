@@ -82,8 +82,8 @@ import {
 } from "@/lib/settings";
 import type { RemovedProjectSummary } from "@/lib/types";
 import { missingWatchedFolders } from "@/lib/monitoring";
-import type { MonitoringSnapshot } from "@portal/contracts/monitoring";
-import { portalSend } from "@/lib/orchestrator/api";
+import type { FolderCheckResult } from "@portal/contracts/monitoring";
+import { isAbort, portalJson, portalSend } from "@/lib/orchestrator/api";
 import type { RoomEnvironment, RoomState, RoomWeather } from "@portal/contracts/room";
 import { LAYOUT_VERSION } from "@portal/shared/room";
 import { publishRoomState, useRoomFailed, useRoomState } from "@/room/useRoomState";
@@ -163,7 +163,9 @@ function sessionsValue(settings: Settings, field: SessionsField): number {
 /** The monitoring section's typed fields: the two disk levels in GB and the watched folders, one per line. */
 type MonitoringField = "warnFreeGb" | "criticalFreeGb" | "watchedFolders";
 const monitoringFields: readonly MonitoringField[] = ["warnFreeGb", "criticalFreeGb", "watchedFolders"];
-const monitoringFieldMeta: Record<Exclude<MonitoringField, "watchedFolders">, { label: string; default: number }> = {
+type DiskLevelField = Exclude<MonitoringField, "watchedFolders">;
+const diskLevelFields: readonly DiskLevelField[] = ["warnFreeGb", "criticalFreeGb"];
+const monitoringFieldMeta: Record<DiskLevelField, { label: string; default: number }> = {
   warnFreeGb: { label: "Warning below … GB free", default: defaultSettings.monitoring.disk.warnFreeGb },
   criticalFreeGb: { label: "Critical below … GB free", default: defaultSettings.monitoring.disk.criticalFreeGb },
 };
@@ -237,6 +239,7 @@ type FieldKey =
   | "idleStop.enabled"
   | "idleStop.afterMinutes"
   | `monitoring.${MonitoringField}`
+  | "monitoring.disk"
   | `apiKey.${OrchestratorProvider}`
   | `script.${ScriptKind}.${keyof ScriptSettings}`;
 
@@ -719,61 +722,77 @@ export default function SettingsDialog({
     });
 
   /**
-   * Checks a typed monitoring field client-side, then persists it. A blank level puts its default
-   * back; the server takes the levels only as a pair with warning above critical, so both go
-   * together and a pair the other way round is refused here, with a reason. Folders are one per
-   * line, blank lines dropped; a malformed one refuses the whole list rather than vanish.
+   * Checks the typed watched folders client-side, then persists them. One per line, blank lines
+   * dropped; a malformed one refuses the whole list rather than vanish.
    */
-  const saveMonitoringField = async (field: MonitoringField, value: string) => {
+  const saveWatchedFolders = async (value: string) => {
     if (!settings) return;
-    const key: FieldKey = `monitoring.${field}`;
-    if (field === "watchedFolders") {
-      const folders = [...new Set(value.split("\n").map((line) => line.trim()).filter(Boolean))];
-      const bad = folders.filter((folder) => !isWatchedFolder(folder));
-      if (bad.length > 0) {
-        setStatusFor(key, {
-          kind: "error",
-          message: `Use absolute paths or paths under ~ (not ${bad.map((folder) => `"${folder}"`).join(", ")}).`,
-        });
-        return;
-      }
-      if (folders.length > monitoringLimits.watchedFolders) {
-        setStatusFor(key, { kind: "error", message: `Watch at most ${monitoringLimits.watchedFolders} folders.` });
-        return;
-      }
-      if (folders.join("\n") === settings.monitoring.watchedFolders.join("\n")) {
-        clearMonitoringDraft(field);
-        return;
-      }
-      const ok = await run(key, () => update({ monitoring: { watchedFolders: folders } }), "Could not save the folders.");
-      if (ok) clearMonitoringDraft(field);
-      return;
-    }
-    const trimmed = value.trim();
-    const gb = trimmed ? Number(trimmed) : monitoringFieldMeta[field].default;
-    if (!/^\d*$/.test(trimmed) || !isDiskLevelGb(gb)) {
+    const key: FieldKey = "monitoring.watchedFolders";
+    const folders = [...new Set(value.split("\n").map((line) => line.trim()).filter(Boolean))];
+    const bad = folders.filter((folder) => !isWatchedFolder(folder));
+    if (bad.length > 0) {
       setStatusFor(key, {
         kind: "error",
-        message: `Enter a whole number of GB from ${monitoringLimits.minGb} to ${monitoringLimits.maxGb.toLocaleString("en-US")}.`,
+        message: `Use absolute paths or paths under ~ (not ${bad.map((folder) => `"${folder}"`).join(", ")}).`,
       });
       return;
     }
-    if (gb === settings.monitoring.disk[field]) {
-      clearMonitoringDraft(field);
+    if (folders.length > monitoringLimits.watchedFolders) {
+      setStatusFor(key, { kind: "error", message: `Watch at most ${monitoringLimits.watchedFolders} folders.` });
       return;
     }
-    const disk = { ...settings.monitoring.disk, [field]: gb };
+    if (folders.join("\n") === settings.monitoring.watchedFolders.join("\n")) {
+      clearMonitoringDraft("watchedFolders");
+      return;
+    }
+    const ok = await run(key, () => update({ monitoring: { watchedFolders: folders } }), "Could not save the folders.");
+    if (ok) clearMonitoringDraft("watchedFolders");
+  };
+
+  /**
+   * Saves the disk levels as the pair the server takes: each from its pending draft, else as saved.
+   * A blank level puts its default back. Each is checked on its own (the error goes under it), then
+   * warning above critical (the error goes under `edited`, the field just left); a valid pair goes
+   * in one PATCH and both drafts clear. So lowering both levels works in either order: the first
+   * field waits, with a reason, until the second makes the pair valid.
+   */
+  const saveDiskLevels = async (edited: DiskLevelField) => {
+    if (!settings) return;
+    const disk = { ...settings.monitoring.disk };
+    let valid = true;
+    for (const field of diskLevelFields) {
+      const draft = monitoringDrafts[field];
+      if (draft === undefined) continue;
+      const trimmed = draft.trim();
+      const gb = trimmed ? Number(trimmed) : monitoringFieldMeta[field].default;
+      if (!/^\d*$/.test(trimmed) || !isDiskLevelGb(gb)) {
+        setStatusFor(`monitoring.${field}`, {
+          kind: "error",
+          message: `Enter a whole number of GB from ${monitoringLimits.minGb} to ${monitoringLimits.maxGb.toLocaleString("en-US")}.`,
+        });
+        valid = false;
+      } else disk[field] = gb;
+    }
+    if (!valid) return;
     if (disk.warnFreeGb <= disk.criticalFreeGb) {
-      setStatusFor(key, {
+      const other: DiskLevelField = edited === "warnFreeGb" ? "criticalFreeGb" : "warnFreeGb";
+      setStatusFor(`monitoring.${other}`, null);
+      setStatusFor(`monitoring.${edited}`, {
         kind: "error",
-        message: field === "warnFreeGb"
+        message: edited === "warnFreeGb"
           ? `The warning level must be above the critical level (${disk.criticalFreeGb} GB).`
           : `The critical level must be below the warning level (${disk.warnFreeGb} GB).`,
       });
       return;
     }
-    const ok = await run(key, () => update({ monitoring: { disk } }), "Could not save the level.");
-    if (ok) clearMonitoringDraft(field);
+    for (const field of diskLevelFields) setStatusFor(`monitoring.${field}`, null);
+    const clearLevelDrafts = () => diskLevelFields.forEach(clearMonitoringDraft);
+    if (disk.warnFreeGb === settings.monitoring.disk.warnFreeGb && disk.criticalFreeGb === settings.monitoring.disk.criticalFreeGb) {
+      clearLevelDrafts();
+      return;
+    }
+    const ok = await run("monitoring.disk", () => update({ monitoring: { disk } }), "Could not save the levels.");
+    if (ok) clearLevelDrafts();
   };
 
   const saveScriptToggle = (kind: ScriptKind, abortOnFailure: boolean) => {
@@ -810,10 +829,10 @@ export default function SettingsDialog({
       if (draft !== undefined) void saveSessionsField(field, draft);
     }
     if (idleStopDraft !== undefined) void saveIdleStopMinutes(idleStopDraft);
-    for (const field of monitoringFields) {
-      const draft = monitoringDrafts[field];
-      if (draft !== undefined) void saveMonitoringField(field, draft);
-    }
+    // The disk levels go as one pair, whichever of them has a draft.
+    const levelDraft = diskLevelFields.find((field) => monitoringDrafts[field] !== undefined);
+    if (levelDraft) void saveDiskLevels(levelDraft);
+    if (monitoringDrafts.watchedFolders !== undefined) void saveWatchedFolders(monitoringDrafts.watchedFolders);
   };
 
   const close = () => {
@@ -1110,8 +1129,9 @@ export default function SettingsDialog({
               status={(field) => status[`monitoring.${field}`] ?? null}
               onChange={(field, value) => setMonitoringDrafts((prev) => ({ ...prev, [field]: value }))}
               onBlur={(field) => {
-                const draft = monitoringDrafts[field];
-                if (draft !== undefined) void saveMonitoringField(field, draft);
+                if (field === "watchedFolders") {
+                  if (monitoringDrafts.watchedFolders !== undefined) void saveWatchedFolders(monitoringDrafts.watchedFolders);
+                } else if (monitoringDrafts[field] !== undefined) void saveDiskLevels(field);
               }}
             />
           )}
@@ -1385,9 +1405,9 @@ function IdleStopField({
 }
 
 /**
- * The Monitoring section: the disk levels and the watched folders. A folder the last disk survey
- * did not find is flagged but kept (it may be mounted later); the survey is read once when the
- * section opens, from `GET /api/monitoring`.
+ * The Monitoring section: the disk levels and the watched folders. A folder that is not there is
+ * flagged but kept (it may be mounted later); `POST /api/monitoring/folders/check` is asked when
+ * the section opens and again whenever the saved list changes.
  */
 function MonitoringSettings({
   values,
@@ -1402,23 +1422,35 @@ function MonitoringSettings({
   /** The folders as stored: only these can have been surveyed. */
   saved: string[];
   dirty: (field: MonitoringField) => boolean;
-  saving: (field: MonitoringField) => boolean;
-  status: (field: MonitoringField) => FieldStatus | null;
+  /** Per field, or `"disk"` for the pair of levels, which saves as one. */
+  saving: (field: MonitoringField | "disk") => boolean;
+  status: (field: MonitoringField | "disk") => FieldStatus | null;
   onChange: (field: MonitoringField, value: string) => void;
   onBlur: (field: MonitoringField) => void;
 }) {
   const id = useId();
-  const [survey, setSurvey] = useState<MonitoringSnapshot["disk"]["survey"]>(null);
+  const [check, setCheck] = useState<FolderCheckResult | null>(null);
+  const savedKey = saved.join("\n");
   useEffect(() => {
+    // No folders: nothing to ask, and an older answer names none of them (only saved folders are flagged).
+    if (!savedKey) return;
+    const paths = savedKey.split("\n");
     const controller = new AbortController();
-    fetch("/api/monitoring", { signal: controller.signal })
-      .then(async (r) => (r.ok ? ((await r.json()) as MonitoringSnapshot).disk.survey : null))
-      .then((next) => setSurvey(next))
-      // No survey means no warnings; the folders still save.
-      .catch(() => {});
+    portalJson<FolderCheckResult>("/api/monitoring/folders/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths }),
+      signal: controller.signal,
+    })
+      .then(setCheck)
+      // No answer means no warnings; the folders still save.
+      .catch((e: unknown) => {
+        if (!isAbort(e)) setCheck(null);
+      });
     return () => controller.abort();
-  }, []);
-  const missing = missingWatchedFolders(saved, survey);
+  }, [savedKey]);
+  const missing = missingWatchedFolders(saved, check);
+  const savingLevels = saving("disk");
   return (
     <>
       <div className="space-y-3 rounded-xl border border-border/60 p-4">
@@ -1447,7 +1479,7 @@ function MonitoringSettings({
                     autoComplete="off"
                     value={values[field]}
                     placeholder={String(monitoringFieldMeta[field].default)}
-                    disabled={saving(field)}
+                    disabled={savingLevels}
                     aria-describedby={fieldStatus ? statusId : undefined}
                     aria-invalid={fieldStatus?.kind === "error" || undefined}
                     onChange={(e) => onChange(field, e.target.value)}
@@ -1456,11 +1488,12 @@ function MonitoringSettings({
                   />
                   <span className="text-xs text-muted-foreground">GB</span>
                 </div>
-                <FieldStatusText id={statusId} status={fieldStatus} saving={saving(field)} dirty={dirty(field)} />
+                <FieldStatusText id={statusId} status={fieldStatus} saving={false} dirty={dirty(field)} />
               </div>
             );
           })}
         </div>
+        <FieldStatusText id={`${id}-levels-status`} status={status("disk")} saving={savingLevels} />
       </div>
       <div className="space-y-2 rounded-xl border border-border/60 p-4">
         <label htmlFor={`${id}-folders`} className="text-xs font-medium">
@@ -1486,7 +1519,7 @@ function MonitoringSettings({
         />
         {missing.length > 0 && (
           <p role="status" className="text-[11px] text-amber-300">
-            Not found when last measured: {missing.join(", ")}. Kept in the list; it is measured again once it exists.
+            Not found: {missing.join(", ")}. Kept in the list; it is measured once it exists.
           </p>
         )}
         <FieldStatusText id={`${id}-folders-status`} status={status("watchedFolders")} saving={saving("watchedFolders")} dirty={dirty("watchedFolders")} />

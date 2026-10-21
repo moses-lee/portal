@@ -10,6 +10,27 @@ import type { MonitoringLevel } from "@portal/contracts/monitoring";
 export const BYTES_PER_GB = 1e9;
 
 /**
+ * "16 GB", "9.8 GB", "350 MB", "12 KB", "—" for null. Memory counts in binary units, as Activity
+ * Monitor does (a 16 GB Mac reads 16 GB); disk in decimal ones, as Finder and the disk levels do.
+ * The one formatter for every place a size is shown (the Monitoring view, the room's cards), so
+ * they read the same.
+ */
+export function formatBytes(bytes: number | null | undefined, kind: "memory" | "disk" = "disk"): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
+  const step = kind === "memory" ? 1024 : 1000;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= step && unit < units.length - 1) {
+    value /= step;
+    unit++;
+  }
+  // Below 10 one decimal says something; above it the decimal is noise.
+  const text = unit === 0 || value >= 10 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "");
+  return `${text} ${units[unit]}`;
+}
+
+/**
  * macOS's `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning, 4 critical. Anything else
  * (an older kernel, a read that failed) reads as normal, so a broken read never paints the view red.
  */

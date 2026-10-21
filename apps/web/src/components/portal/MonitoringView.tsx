@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, FolderX, LoaderCircle, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, FolderX, LoaderCircle, Play, RefreshCw, Square, Trash2, X } from "lucide-react";
 import type { AttributedProcess, MonitoringLevel, MonitoringSnapshot } from "@portal/contracts/monitoring";
 import type { PortalLinks } from "../PortalPage";
 import { RemoveConfirm } from "../ProjectActions";
@@ -9,7 +9,6 @@ import SessionStateBadge from "../SessionStateBadge";
 import { useSettings } from "../useSettings";
 import type { RemoveProjectOptions } from "../useProjects";
 import { Badge, ConfirmButton, Empty, ErrorLine, Loading, SectionTitle, ViewBody } from "./bits";
-import { useNow } from "./PortalLive";
 import { Button } from "@/components/ui/button";
 import { isAbort, portalJson, portalSend } from "@/lib/orchestrator/api";
 import { formatClock } from "@/lib/orchestrator/format";
@@ -30,12 +29,12 @@ import {
   processTree,
   sessionRows,
   spanText,
+  canStop,
   stopHint,
   summaryTiles,
   worktreeRows,
   type ChartModel,
   type CleanupScriptResult,
-  type StopFields,
   type SummaryTile,
   type TreeRow,
   type WorktreeRowView,
@@ -46,6 +45,8 @@ import type { ProjectSummary } from "@/lib/types";
 
 /** How often the open view asks for a fresh snapshot (docs/MONITORING.md, Sampler and API). */
 const POLL_MS = 5_000;
+/** How long an action's error stays up when nothing else replaces it. */
+const ACTION_ERROR_MS = 15_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 const tileClass: Record<MonitoringLevel, string> = {
@@ -156,10 +157,13 @@ const CHART_H = 72;
  */
 function Chart({ model, now }: { model: ChartModel; now: number }) {
   const frame = { from: now - DAY_MS, to: now, yMax: model.yMax, width: CHART_W, height: CHART_H };
-  const [hover, setHover] = useState<number | null>(null);
+  // The hovered point by its time, not its index: the next poll may drop the oldest points, and the
+  // point under the pointer may be gone with them (then the latest reading shows again).
+  const [hoverAt, setHoverAt] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const latest = [...model.points].reverse().find((point) => point.value !== null) ?? null;
-  const shown = hover !== null ? model.points[hover] : latest;
+  const hovered = hoverAt !== null ? (model.points.find((point) => point.at === hoverAt) ?? null) : null;
+  const shown = hovered ?? latest;
   const x = (at: number) => ((at - frame.from) / (frame.to - frame.from)) * CHART_W;
   const y = (value: number) => CHART_H - (Math.min(value, frame.yMax) / (frame.yMax || 1)) * CHART_H;
   const onMove = (clientX: number) => {
@@ -170,14 +174,14 @@ function Chart({ model, now }: { model: ChartModel; now: number }) {
     model.points.forEach((point, index) => {
       if (Math.abs(point.at - at) < Math.abs(model.points[best].at - at)) best = index;
     });
-    setHover(best);
+    setHoverAt(model.points[best].at);
   };
   return (
     <figure data-chart={model.key} className="min-w-0 rounded-2xl border border-white/8 bg-white/[.02] px-3.5 pt-3 pb-2.5">
       <figcaption className="mb-2 flex items-baseline justify-between gap-2 text-[11px]">
         <span className="font-medium text-foreground/85">{model.label}</span>
         <span className="truncate text-muted-foreground tabular-nums">
-          {shown && shown.value !== null ? `${hover !== null ? `${formatClock(shown.at)} · ` : ""}${formatBytes(shown.value, model.kind)}` : "—"}
+          {shown && shown.value !== null ? `${hovered ? `${formatClock(shown.at)} · ` : ""}${formatBytes(shown.value, model.kind)}` : "—"}
         </span>
       </figcaption>
       {model.points.length === 0 ? (
@@ -189,9 +193,9 @@ function Chart({ model, now }: { model: ChartModel; now: number }) {
           aria-label={`${model.label} over the last 24 hours`}
           viewBox={`0 0 ${CHART_W} ${CHART_H}`}
           preserveAspectRatio="none"
-          className="block h-[72px] w-full touch-none overflow-visible"
+          className="block h-[72px] w-full touch-pan-y overflow-visible"
           onPointerMove={(event) => onMove(event.clientX)}
-          onPointerLeave={() => setHover(null)}
+          onPointerLeave={() => setHoverAt(null)}
         >
           {model.timeBands.map((band) => (
             <rect key={`t${band.from}`} x={x(Math.max(band.from, frame.from))} y={0} width={Math.max(0.5, x(band.to) - x(Math.max(band.from, frame.from)))} height={CHART_H} className={bandFill[band.level]} />
@@ -201,7 +205,7 @@ function Chart({ model, now }: { model: ChartModel; now: number }) {
           ))}
           <line x1={0} x2={CHART_W} y1={CHART_H} y2={CHART_H} className="stroke-white/10" vectorEffect="non-scaling-stroke" />
           <path d={linePath(model.points, frame)} fill="none" className="stroke-primary" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-          {hover !== null && <line x1={x(model.points[hover].at)} x2={x(model.points[hover].at)} y1={0} y2={CHART_H} className="stroke-white/30" vectorEffect="non-scaling-stroke" />}
+          {hovered && <line x1={x(hovered.at)} x2={x(hovered.at)} y1={0} y2={CHART_H} className="stroke-white/30" vectorEffect="non-scaling-stroke" />}
         </svg>
       )}
       <div className="mt-1 flex justify-between text-[10px] text-muted-foreground/70">
@@ -212,65 +216,120 @@ function Chart({ model, now }: { model: ChartModel; now: number }) {
   );
 }
 
-/** Stop with a second click to confirm, where Portal may stop the process; otherwise why not, as a hint. */
-function StopSlot({ process, onStop, stopping }: { process: AttributedProcess & StopFields; onStop: (process: AttributedProcess) => void; stopping: number | null }) {
-  const hint = stopHint(process);
-  if (hint) return <span className="cursor-help text-[10px] text-muted-foreground/70" title={hint}>Can&apos;t stop</span>;
+/** The server's reason a process may not be stopped, as a sentence. */
+const reasonText = (process: AttributedProcess) => {
+  const hint = stopHint(process) ?? "";
+  return hint.charAt(0).toUpperCase() + hint.slice(1);
+};
+
+/**
+ * Stop with a second click to confirm, where Portal may stop the process. Otherwise "Can't stop",
+ * which a tap opens to say why (the row shows the reason under `reasonId`, which screen readers
+ * get either way); the reason is the hover title too.
+ */
+function StopSlot({
+  process,
+  onStop,
+  stopping,
+  reasonId,
+  revealed,
+  onReveal,
+}: {
+  process: AttributedProcess;
+  onStop: (process: AttributedProcess) => void;
+  stopping: number | null;
+  reasonId: string;
+  revealed: boolean;
+  onReveal: () => void;
+}) {
+  if (!canStop(process)) {
+    return (
+      <>
+        <button
+          type="button"
+          aria-expanded={revealed}
+          aria-describedby={reasonId}
+          title={reasonText(process)}
+          onClick={onReveal}
+          className="text-[10px] text-muted-foreground/80 underline decoration-dotted underline-offset-2 hover:text-foreground"
+        >
+          Can&apos;t stop
+        </button>
+        {!revealed && <span id={reasonId} className="sr-only">{reasonText(process)}</span>}
+      </>
+    );
+  }
   return <ConfirmButton label="Stop" confirmLabel="Confirm stop" icon={stopping === process.pid ? <LoaderCircle className="animate-spin" /> : <Square />} disabled={stopping !== null} onConfirm={() => onStop(process)} />;
 }
 
 /** "via pid 4100": a process charged to a worktree because an ancestor of it is. */
-function Inherited({ process }: { process: AttributedProcess & StopFields }) {
-  if (process.inheritedFrom === undefined) return null;
+function Inherited({ process }: { process: AttributedProcess }) {
+  if (typeof process.inheritedFrom !== "number") return null;
   return <span className="ml-1.5 font-sans text-[10px] text-muted-foreground">via pid {process.inheritedFrom}</span>;
 }
 
+type StopProps = { onStop: (process: AttributedProcess) => void; stopping: number | null };
+
 /** One process in an expanded row: its command (indented by depth), pid, memory and age, and Stop when Portal may stop it. */
-function ProcessList({ rows, onStop, stopping }: { rows: TreeRow[]; onStop: (process: AttributedProcess) => void; stopping: number | null }) {
+function ProcessItem({ process, depth, onStop, stopping }: TreeRow & StopProps) {
+  const [why, setWhy] = useState(false);
+  const reasonId = useId();
+  return (
+    <li aria-label={`Process ${process.pid}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-[11px]">
+      <span className="min-w-0 flex-1 truncate font-mono max-sm:basis-full" style={{ paddingLeft: `${depth * 12}px` }} title={process.command}>
+        {depth > 0 && <span className="text-muted-foreground">└ </span>}
+        {commandName(process.command)}
+        <Inherited process={process} />
+      </span>
+      {process.orphan && <Badge tone="amber">Orphan</Badge>}
+      <span className="w-14 shrink-0 text-muted-foreground tabular-nums">{process.pid}</span>
+      <span className="w-16 shrink-0 text-right tabular-nums">{formatBytes(process.memoryBytes, "memory")}</span>
+      <span className="w-14 shrink-0 text-right text-muted-foreground tabular-nums">{spanText(process.elapsedSeconds * 1000)}</span>
+      <span className="w-24 shrink-0 text-right">
+        <StopSlot process={process} onStop={onStop} stopping={stopping} reasonId={reasonId} revealed={why} onReveal={() => setWhy((open) => !open)} />
+      </span>
+      {why && <p id={reasonId} className="basis-full text-right text-[10px] text-muted-foreground">{reasonText(process)}</p>}
+    </li>
+  );
+}
+
+function ProcessList({ rows, onStop, stopping }: { rows: TreeRow[] } & StopProps) {
   if (rows.length === 0) return <p className="py-1 text-[11px] text-muted-foreground">No processes right now.</p>;
   return (
     <ul aria-label="Processes" className="divide-y divide-white/5 rounded-xl border border-white/6 bg-black/15">
-      {rows.map(({ process, depth }) => (
-        <li key={process.pid} aria-label={`Process ${process.pid}`} className="flex items-center gap-3 px-3 py-1.5 text-[11px] max-sm:flex-wrap max-sm:gap-y-1">
-          <span className="min-w-0 flex-1 truncate font-mono max-sm:basis-full" style={{ paddingLeft: `${depth * 12}px` }} title={process.command}>
-            {depth > 0 && <span className="text-muted-foreground">└ </span>}
-            {commandName(process.command)}
-            <Inherited process={process} />
-          </span>
-          {process.orphan && <Badge tone="amber">Orphan</Badge>}
-          <span className="w-14 shrink-0 text-muted-foreground tabular-nums">{process.pid}</span>
-          <span className="w-16 shrink-0 text-right tabular-nums">{formatBytes(process.memoryBytes, "memory")}</span>
-          <span className="w-14 shrink-0 text-right text-muted-foreground tabular-nums">{spanText(process.elapsedSeconds * 1000)}</span>
-          <span className="w-24 shrink-0 text-right">
-            <StopSlot process={process} onStop={onStop} stopping={stopping} />
-          </span>
-        </li>
-      ))}
+      {rows.map((row) => <ProcessItem key={row.process.pid} {...row} onStop={onStop} stopping={stopping} />)}
     </ul>
   );
 }
 
+function ProcessTableRow({ process, roleOf, onStop, stopping }: { process: AttributedProcess; roleOf?: (process: AttributedProcess) => string; onStop?: StopProps["onStop"]; stopping: number | null }) {
+  const [why, setWhy] = useState(false);
+  const reasonId = useId();
+  return (
+    <Row label={`Process ${process.pid}`}>
+      {roleOf && <Cell label="Role">{roleOf(process)}</Cell>}
+      <Cell label="Command" className="max-w-[420px]">
+        <span className="block truncate font-mono text-[11px]" title={process.command}>{commandName(process.command)}<Inherited process={process} /></span>
+      </Cell>
+      <Cell label="PID" className="text-muted-foreground tabular-nums">{process.pid}</Cell>
+      <Cell label="Memory" className="tabular-nums">{formatBytes(process.memoryBytes, "memory")}</Cell>
+      <Cell label="Age" className="text-muted-foreground tabular-nums">{spanText(process.elapsedSeconds * 1000)}</Cell>
+      {onStop && (
+        <Cell label="" className="text-right max-sm:justify-end max-sm:before:content-none">
+          <StopSlot process={process} onStop={onStop} stopping={stopping} reasonId={reasonId} revealed={why} onReveal={() => setWhy((open) => !open)} />
+          {why && <span id={reasonId} className="block max-w-48 text-[10px] whitespace-normal text-muted-foreground sm:ml-auto">{reasonText(process)}</span>}
+        </Cell>
+      )}
+    </Row>
+  );
+}
+
 /** A plain process table for the Portal and Other sections. */
-function ProcessTable({ label, rows, roleOf, onStop, stopping }: { label: string; rows: AttributedProcess[]; roleOf?: (process: AttributedProcess) => string; onStop?: (process: AttributedProcess) => void; stopping: number | null }) {
+function ProcessTable({ label, rows, roleOf, onStop, stopping }: { label: string; rows: AttributedProcess[]; roleOf?: (process: AttributedProcess) => string; onStop?: StopProps["onStop"]; stopping: number | null }) {
   const head = [...(roleOf ? ["Role"] : []), "Command", "PID", "Memory", "Age", ...(onStop ? [""] : [])];
   return (
     <DataTable label={label} head={head}>
-      {rows.map((process) => (
-        <Row key={process.pid} label={`Process ${process.pid}`}>
-          {roleOf && <Cell label="Role">{roleOf(process)}</Cell>}
-          <Cell label="Command" className="max-w-[420px]">
-            <span className="block truncate font-mono text-[11px]" title={process.command}>{commandName(process.command)}<Inherited process={process} /></span>
-          </Cell>
-          <Cell label="PID" className="text-muted-foreground tabular-nums">{process.pid}</Cell>
-          <Cell label="Memory" className="tabular-nums">{formatBytes(process.memoryBytes, "memory")}</Cell>
-          <Cell label="Age" className="text-muted-foreground tabular-nums">{spanText(process.elapsedSeconds * 1000)}</Cell>
-          {onStop && (
-            <Cell label="" className="text-right max-sm:justify-end max-sm:before:content-none">
-              <StopSlot process={process} onStop={onStop} stopping={stopping} />
-            </Cell>
-          )}
-        </Row>
-      ))}
+      {rows.map((process) => <ProcessTableRow key={process.pid} process={process} roleOf={roleOf} onStop={onStop} stopping={stopping} />)}
     </DataTable>
   );
 }
@@ -278,7 +337,7 @@ function ProcessTable({ label, rows, roleOf, onStop, stopping }: { label: string
 /**
  * Monitoring (docs/MONITORING.md): memory, swap, pressure and disk, and what uses them, charged to
  * sessions, worktrees and Portal, with the manual actions. Polls `GET /api/monitoring` every 5 s
- * while open; colours stay here (no badge, no alert elsewhere).
+ * while open and the page is visible; colours stay here (no badge, no alert elsewhere).
  */
 export default function MonitoringView({
   links,
@@ -290,10 +349,9 @@ export default function MonitoringView({
   projects: ProjectSummary[];
   onRemoveProject: (id: string, opts?: RemoveProjectOptions) => Promise<void>;
 }) {
-  const now = useNow(POLL_MS);
   const [snapshot, setSnapshot] = useState<MonitoringSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionError | null>(null);
   const [reload, setReload] = useState(0);
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [stopping, setStopping] = useState<number | null>(null);
@@ -306,11 +364,20 @@ export default function MonitoringView({
   const { settings } = useSettings();
   const scriptSet = !!settings && isScriptEnabled(settings.scripts.preWorktreeDelete);
 
-  // Poll while mounted: one request at a time, the next 5 s after the last answer.
+  // Poll while mounted and the page is visible: one request at a time, the next 5 s after the last
+  // answer. A hidden page asks nothing; on showing again it asks at once and polls on from there.
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let loading = false;
+    const stopTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
     const load = async () => {
+      stopTimer();
+      if (loading) return;
+      loading = true;
       try {
         const next = await portalJson<MonitoringSnapshot>("/api/monitoring", { signal: controller.signal }, "Could not read the numbers.");
         setSnapshot(next);
@@ -318,16 +385,31 @@ export default function MonitoringView({
       } catch (e) {
         if (isAbort(e)) return;
         setError(e instanceof Error ? e.message : "Could not read the numbers.");
+      } finally {
+        loading = false;
       }
-      if (!controller.signal.aborted) timer = setTimeout(load, POLL_MS);
+      if (!controller.signal.aborted && !document.hidden) timer = setTimeout(load, POLL_MS);
+    };
+    const onVisibility = () => {
+      if (document.hidden) stopTimer();
+      else void load();
     };
     void load();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       controller.abort();
-      if (timer) clearTimeout(timer);
+      stopTimer();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [reload]);
   const refetch = useCallback(() => setReload((n) => n + 1), []);
+
+  // An action's error stays until the next action, or a while.
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = setTimeout(() => setActionError(null), ACTION_ERROR_MS);
+    return () => clearTimeout(timer);
+  }, [actionError]);
 
   const toggle = (key: string) =>
     setOpen((prev) => {
@@ -337,32 +419,34 @@ export default function MonitoringView({
       return next;
     });
 
-  const act = async (fallback: string, action: () => Promise<unknown>) => {
+  /** Runs an action; its error is shown in `scope` (the section it came from), naming `what`. */
+  const act = async (scope: ActionScope, what: string, fallback: string, action: () => Promise<unknown>) => {
     setActionError(null);
     try {
       await action();
       return true;
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : fallback);
+      setActionError({ scope, message: `${what}: ${e instanceof Error ? e.message : fallback}` });
       return false;
     }
   };
 
-  const stopProcess = async (process: AttributedProcess) => {
+  const stopProcess = async (scope: ActionScope, process: AttributedProcess) => {
     setStopping(process.pid);
-    await act("Could not stop the process.", () => portalSend(`/api/monitoring/processes/${process.pid}/stop`, "POST", undefined, "Could not stop the process."));
+    await act(scope, `Process ${process.pid}`, "Could not stop the process.", () => portalSend(`/api/monitoring/processes/${process.pid}/stop`, "POST", undefined, "Could not stop the process."));
     setStopping(null);
     refetch();
   };
 
-  const stopCli = async (sessionId: string) => {
+  const stopCli = async (sessionId: string, title: string) => {
     setStoppingCli(sessionId);
-    await act("Could not stop the CLI.", () => portalSend(`/api/sessions/${encodeURIComponent(sessionId)}/stop-cli`, "POST", undefined, "Could not stop the CLI."));
+    await act("sessions", title, "Could not stop the CLI.", () => portalSend(`/api/sessions/${encodeURIComponent(sessionId)}/stop-cli`, "POST", undefined, "Could not stop the CLI."));
     setStoppingCli(null);
     refetch();
   };
 
   const runCleanup = async (projectId: string) => {
+    setActionError(null);
     setConfirmCleanup(null);
     setCleaning(projectId);
     setCleanup((prev) => ({ ...prev, [projectId]: {} }));
@@ -378,29 +462,46 @@ export default function MonitoringView({
     }
   };
 
+  const dismissCleanup = (projectId: string) =>
+    setCleanup((prev) => {
+      const next = { ...prev };
+      delete next[projectId];
+      return next;
+    });
+
   const refreshDisk = async () => {
     setRefreshing(true);
-    await act("Could not start measuring.", async () => {
+    await act("disk", "Refresh", "Could not start measuring.", async () => {
       const { disk } = await portalSend<{ disk: MonitoringSnapshot["disk"] }>("/api/monitoring/disk/refresh", "POST", undefined, "Could not start measuring.");
       setSnapshot((prev) => (prev ? { ...prev, disk } : prev));
     });
     setRefreshing(false);
   };
 
+  const errorIn = (scope: ActionScope) => (actionError?.scope === scope ? actionError.message : null);
+
   const view = useMemo(() => {
     if (!snapshot?.supported) return null;
-    // The server's clock places the rows; between polls the local one moves the countdowns on.
-    const at = Math.max(snapshot.now, now);
+    // The server's clock places the rows; the 5 s poll moves the countdowns and ages on.
+    const at = snapshot.now;
+    const sessions = sessionRows(snapshot, at);
+    const worktrees = worktreeRows(snapshot, at);
+    // Each row's process tree, built once per snapshot rather than on every render of an open row.
+    const trees = new Map<string, TreeRow[]>([
+      ...sessions.map((row) => [`s:${row.sessionId}`, processTree(snapshot.processes, row.pids)] as const),
+      ...worktrees.map((row) => [`w:${row.projectId}`, processTree(snapshot.processes, row.pids)] as const),
+    ]);
     return {
       tiles: summaryTiles(snapshot),
       charts: chartModels(snapshot),
-      sessions: sessionRows(snapshot, at),
-      worktrees: worktreeRows(snapshot, at),
+      sessions,
+      worktrees,
+      trees,
       portal: portalRows(snapshot.processes),
       others: otherRows(snapshot.processes),
       at,
     };
-  }, [snapshot, now]);
+  }, [snapshot]);
 
   if (!snapshot) {
     return (
@@ -439,7 +540,15 @@ export default function MonitoringView({
           Run cleanup script
         </Button>
         {projectById.has(row.projectId) && (
-          <Button type="button" size="xs" variant="ghost" className="text-muted-foreground" onClick={() => setRemoving(row.projectId)}>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className="text-muted-foreground"
+            disabled={cleaning === row.projectId}
+            title={cleaning === row.projectId ? "Wait for the cleanup script to finish" : undefined}
+            onClick={() => setRemoving(row.projectId)}
+          >
             <Trash2 />
             Remove worktree
           </Button>
@@ -468,10 +577,9 @@ export default function MonitoringView({
         </p>
       </section>
 
-      <ErrorLine>{actionError}</ErrorLine>
-
       <section aria-labelledby="monitoring-sessions">
         <SectionTitle id="monitoring-sessions" count={view.sessions.length}>Sessions</SectionTitle>
+        <ScopedError>{errorIn("sessions")}</ScopedError>
         {view.sessions.length === 0 ? (
           <Empty>No session has a live agent CLI.</Empty>
         ) : (
@@ -479,6 +587,8 @@ export default function MonitoringView({
             {view.sessions.map((row) => {
               const key = `s:${row.sessionId}`;
               const title = sessionDisplayTitle(row.title);
+              // A busy session's CLI is mid-turn (or waiting on an approval, or running background work): stopping it would cut that off.
+              const busy = row.busy || row.idleSince === null;
               return (
                 <Fragment key={row.sessionId}>
                   <Row label={title}>
@@ -497,15 +607,25 @@ export default function MonitoringView({
                     <Cell label="Idle" className="text-muted-foreground">{row.idleText}</Cell>
                     <Cell label="Idle stop" className="text-muted-foreground">{row.stopText}</Cell>
                     <Cell label="" className="text-right max-sm:justify-end max-sm:before:content-none">
-                      <Button type="button" size="xs" variant="ghost" className="text-muted-foreground" disabled={stoppingCli !== null} onClick={() => void stopCli(row.sessionId)}>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        className="text-muted-foreground"
+                        disabled={stoppingCli !== null || busy}
+                        title={busy ? "The session is busy; stop the CLI once it is idle" : "Stop this session's agent CLI; the next prompt starts it again"}
+                        aria-describedby={busy ? `busy-${row.sessionId}` : undefined}
+                        onClick={() => void stopCli(row.sessionId, title)}
+                      >
                         {stoppingCli === row.sessionId ? <LoaderCircle className="animate-spin" /> : <Square />}
                         Stop CLI
                       </Button>
+                      {busy && <span id={`busy-${row.sessionId}`} className="block text-[10px] text-muted-foreground">Busy; stop once idle</span>}
                     </Cell>
                   </Row>
                   {open.has(key) && (
                     <Detail span={8}>
-                      <ProcessList rows={processTree(snapshot.processes, row.pids)} onStop={(process) => void stopProcess(process)} stopping={stopping} />
+                      <ProcessList rows={view.trees.get(key) ?? []} onStop={(process) => void stopProcess("sessions", process)} stopping={stopping} />
                     </Detail>
                   )}
                 </Fragment>
@@ -517,6 +637,7 @@ export default function MonitoringView({
 
       <section aria-labelledby="monitoring-worktrees">
         <SectionTitle id="monitoring-worktrees" count={view.worktrees.length}>Worktrees</SectionTitle>
+        <ScopedError>{errorIn("worktrees")}</ScopedError>
         {view.worktrees.length === 0 ? (
           <Empty>No worktree projects.</Empty>
         ) : (
@@ -553,11 +674,18 @@ export default function MonitoringView({
                             <Button type="button" size="xs" variant="ghost" onClick={() => setConfirmCleanup(null)}>Cancel</Button>
                           </div>
                         )}
-                        {outcome?.error && <ErrorLine>{outcome.error}</ErrorLine>}
-                        {outcome?.result && (
-                          <div role="status" className="text-[11px]">
-                            <p className={outcome.result.ok ? "text-muted-foreground" : "text-amber-200"}>Cleanup script: {cleanupSummary(outcome.result)}</p>
-                            {(outcome.result.stdout || outcome.result.stderr) && (
+                        {(outcome?.error || outcome?.result) && (
+                          <div role="status" aria-label={`Cleanup script in ${row.name}`} className="text-[11px]">
+                            <div className="flex items-start gap-2">
+                              <div className="min-w-0 flex-1">
+                                {outcome.error && <ErrorLine>{outcome.error}</ErrorLine>}
+                                {outcome.result && <p className={outcome.result.ok ? "text-muted-foreground" : "text-amber-200"}>Cleanup script: {cleanupSummary(outcome.result)}</p>}
+                              </div>
+                              <Button type="button" size="icon-xs" variant="ghost" className="text-muted-foreground" aria-label="Dismiss the cleanup output" title="Dismiss" onClick={() => dismissCleanup(row.projectId)}>
+                                <X />
+                              </Button>
+                            </div>
+                            {outcome.result && (outcome.result.stdout || outcome.result.stderr) && (
                               <pre className="mt-1 max-h-40 overflow-auto rounded-lg bg-black/25 p-2 font-mono text-[10.5px] whitespace-pre-wrap text-foreground/75">{[outcome.result.stdout, outcome.result.stderr].filter(Boolean).join("\n")}</pre>
                             )}
                           </div>
@@ -573,7 +701,7 @@ export default function MonitoringView({
                             }}
                           />
                         )}
-                        {open.has(key) && <ProcessList rows={processTree(snapshot.processes, row.pids)} onStop={(process) => void stopProcess(process)} stopping={stopping} />}
+                        {open.has(key) && <ProcessList rows={view.trees.get(key) ?? []} onStop={(process) => void stopProcess("worktrees", process)} stopping={stopping} />}
                       </div>
                     </Detail>
                   )}
@@ -586,10 +714,11 @@ export default function MonitoringView({
 
       <section aria-labelledby="monitoring-portal">
         <SectionTitle id="monitoring-portal">Portal</SectionTitle>
+        <ScopedError>{errorIn("portal")}</ScopedError>
         {view.portal.length === 0 ? (
           <Empty>Portal&apos;s own processes could not be read.</Empty>
         ) : (
-          <ProcessTable label="Portal processes" rows={view.portal} roleOf={(process) => (process.owner.kind === "portal" ? portalRoleLabels[process.owner.role] : "")} onStop={(process) => void stopProcess(process)} stopping={stopping} />
+          <ProcessTable label="Portal processes" rows={view.portal} roleOf={(process) => (process.owner.kind === "portal" ? portalRoleLabels[process.owner.role] : "")} onStop={(process) => void stopProcess("portal", process)} stopping={stopping} />
         )}
       </section>
 
@@ -614,6 +743,7 @@ export default function MonitoringView({
         >
           Disk
         </SectionTitle>
+        <ScopedError>{errorIn("disk")}</ScopedError>
         <DataTable label="Volumes" head={["Volume", "Free", "Total", "Used"]}>
           {(snapshot.sample?.volumes ?? []).map((volume, index) => {
             const used = volume.totalBytes > 0 ? 1 - volume.freeBytes / volume.totalBytes : 0;
@@ -705,6 +835,16 @@ export default function MonitoringView({
       </section>
     </ViewBody>
   );
+}
+
+/** Where an action's error shows: the section the action was taken in. */
+type ActionScope = "sessions" | "worktrees" | "portal" | "disk";
+type ActionError = { scope: ActionScope; message: string };
+
+/** An action's error under its section's title. */
+function ScopedError({ children }: { children: string | null }) {
+  if (!children) return null;
+  return <div className="mb-2"><ErrorLine>{children}</ErrorLine></div>;
 }
 
 function SizeList({ label, rows }: { label: string; rows: { name: string; bytes: number | null; mono?: boolean }[] }) {

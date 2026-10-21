@@ -387,3 +387,27 @@ test("helpers: the database port, the removal clock, the summary of a sample", (
   });
   assert.equal(summarize({ ...sample, volumes: [] }, { warnFreeGb: 30, criticalFreeGb: 15 }, null).disk, null);
 });
+
+test("POST /api/monitoring/folders/check says whether each folder exists, ~ expanded, and is origin-checked", async (t) => {
+  const { app, worktree, scratch } = await setup(t);
+  const check = (payload, headers = {}) => app.inject({ method: "POST", url: "/api/monitoring/folders/check", payload, headers });
+  assert.equal((await check({ paths: [worktree] }, EVIL)).statusCode, 403, "origin-checked");
+  assert.equal((await check({})).statusCode, 400);
+  assert.equal((await check({ paths: [1] })).statusCode, 400);
+  assert.equal((await check({ paths: [""] })).statusCode, 400);
+  assert.equal((await check({ paths: Array.from({ length: 21 }, (_, i) => `/p${i}`) })).statusCode, 400, "at most 20");
+
+  const file = path.join(worktree, "file");
+  const gone = path.join(scratch, "not-here");
+  const tilde = "~/.portal-folder-check-that-does-not-exist";
+  const response = await check({ paths: [worktree, gone, file, tilde, "~", "relative/folder"] });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(response.json().paths, [
+    { path: worktree, expanded: worktree, exists: true },
+    { path: gone, expanded: gone, exists: false },
+    { path: file, expanded: file, exists: false },
+    { path: tilde, expanded: path.join(os.homedir(), ".portal-folder-check-that-does-not-exist"), exists: false },
+    { path: "~", expanded: os.homedir(), exists: true },
+    { path: "relative/folder", expanded: "relative/folder", exists: false },
+  ]);
+});

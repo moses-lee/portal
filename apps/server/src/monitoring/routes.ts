@@ -3,7 +3,12 @@
  * refresh, and the manual process stop. Reads are not origin-checked, like the other GETs; the
  * actions are.
  */
+import { stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
+import { FOLDER_CHECK_MAX, type FolderCheckResult } from "@portal/contracts/monitoring";
+import { expandHome } from "@portal/shared/monitoring";
 import type { AppContext } from "../context.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 
@@ -31,5 +36,31 @@ export function registerMonitoringRoutes(app: FastifyInstance, ctx: AppContext) 
     const pid = Number(req.params.pid);
     if (!/^\d+$/.test(req.params.pid) || !Number.isSafeInteger(pid)) return reply.code(400).send({ error: "Expected a numeric pid." });
     return ctx.monitoring.stopProcess(pid);
+  });
+
+  /**
+   * `POST /api/monitoring/folders/check` `{ paths: string[] }` -> `FolderCheckResult`: whether each
+   * folder exists now (one `stat` each, `~` expanded), for the watched-folder warning in Settings,
+   * without waiting for a disk survey. At most 20 paths.
+   */
+  app.post<{ Body: { paths?: unknown } }>("/api/monitoring/folders/check", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    const paths = req.body?.paths;
+    if (!Array.isArray(paths) || !paths.every((entry): entry is string => typeof entry === "string" && entry.trim().length > 0 && entry.length <= 4096)) {
+      return reply.code(400).send({ error: "Expected { paths: string[] }." });
+    }
+    if (paths.length > FOLDER_CHECK_MAX) return reply.code(400).send({ error: `At most ${FOLDER_CHECK_MAX} paths.` });
+    const home = os.homedir();
+    const result: FolderCheckResult = {
+      paths: await Promise.all(
+        paths.map(async (given) => {
+          const expanded = expandHome(given.trim(), home);
+          // Only an absolute path names a folder; a relative one would be read against the server's cwd.
+          const exists = path.isAbsolute(expanded) && (await stat(expanded).then((info) => info.isDirectory(), () => false));
+          return { path: given, expanded, exists };
+        }),
+      ),
+    };
+    return result;
   });
 }

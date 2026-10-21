@@ -36,7 +36,10 @@ const proc = (pid, owner, memoryBytes, extra = {}) => ({
   command: `/usr/bin/p${pid}`,
   cwd: null,
   owner,
+  inheritedFrom: null,
   orphan: false,
+  stoppable: true,
+  stopBlockedReason: null,
   ...extra,
 });
 
@@ -100,14 +103,11 @@ function snapshot(extra = {}) {
   };
 }
 
-test("bytes read in binary units for memory and decimal ones for disk", () => {
+test("the view formats sizes with the shared formatter", async () => {
+  const shared = await import("@portal/shared/monitoring");
+  assert.equal(formatBytes, shared.formatBytes);
   assert.equal(formatBytes(16 * GiB, "memory"), "16 GB");
-  assert.equal(formatBytes(350 * MiB, "memory"), "350 MB");
-  assert.equal(formatBytes(9.84 * GiB, "memory"), "9.8 GB");
   assert.equal(formatBytes(22e9), "22 GB");
-  assert.equal(formatBytes(1.5e12), "1.5 TB");
-  assert.equal(formatBytes(512), "512 B");
-  assert.equal(formatBytes(null), "—");
 });
 
 test("levels colour neutral, amber and red", () => {
@@ -144,17 +144,15 @@ test("agents count adapters once, not per session", () => {
   assert.deepEqual(agentsTotal({ sessions: [], processes: [proc(9, { kind: "portal", role: "adapter" }, 10)] }), { count: 0, memoryBytes: 10 });
 });
 
-test("Stop follows the server's stoppable flag, else the same rule; a hint says why not", async () => {
+test("Stop follows the server's stoppable flag alone; the note gives the server's reason", async () => {
   const { stopHint } = await import("../src/lib/monitoring.ts");
-  assert.equal(canStop(proc(1, { kind: "none" }, 1)), false);
   assert.equal(canStop(proc(1, { kind: "session", sessionId: "s1" }, 1)), true);
-  assert.equal(canStop(proc(1, { kind: "worktree", projectId: "w1" }, 1)), true);
-  assert.equal(canStop(proc(1, { kind: "portal", role: "adapter" }, 1)), true);
-  for (const role of ["server", "web", "database"]) assert.equal(canStop(proc(1, { kind: "portal", role }, 1)), false, role);
-  assert.equal(canStop(proc(1, { kind: "worktree", projectId: "w1" }, 1, { stoppable: false, stopBlockedReason: "Inherited from pid 7." })), false);
+  // No client-side rule: what the server says goes, whatever the owner.
   assert.equal(canStop(proc(1, { kind: "portal", role: "database" }, 1, { stoppable: true })), true);
-  assert.equal(stopHint(proc(1, { kind: "worktree", projectId: "w1" }, 1, { stoppable: false, stopBlockedReason: "Inherited from pid 7." })), "Inherited from pid 7.");
-  assert.equal(stopHint(proc(1, { kind: "portal", role: "server" }, 1)), "Part of Portal itself; restart Portal instead.");
+  assert.equal(canStop(proc(1, { kind: "session", sessionId: "s1" }, 1, { stoppable: false, stopBlockedReason: "x" })), false);
+  const inherited = proc(1, { kind: "worktree", projectId: "w1" }, 1, { inheritedFrom: 7, stoppable: false, stopBlockedReason: "inherited from pid 7; stop that process" });
+  assert.equal(stopHint(inherited), "inherited from pid 7; stop that process");
+  assert.equal(stopHint(proc(1, { kind: "none" }, 1, { stoppable: false })), "Portal does not stop this process.");
   assert.equal(stopHint(proc(1, { kind: "session", sessionId: "s1" }, 1)), null);
 });
 
@@ -253,13 +251,13 @@ test("the cleanup script's outcome reads in one line", async () => {
   assert.equal(cleanupSummary({ ...base, ok: false, code: null, timedOut: true, durationMs: 300_000 }), "Timed out after 300 s");
 });
 
-test("watched folders the survey found missing are named as configured", async () => {
+test("watched folders the check found missing are named as configured", async () => {
   const { missingWatchedFolders } = await import("../src/lib/monitoring.ts");
-  const survey = { watched: [
-    { path: "/Users/me/.codex", exists: true, bytes: 1, children: [] },
-    { path: "/Users/me/gone", exists: false, bytes: null, children: [] },
-    { path: "/tmp/old", exists: false, bytes: null, children: [] },
+  const check = { paths: [
+    { path: "/Users/me/.codex", expanded: "/Users/me/.codex", exists: true },
+    { path: "/Users/me/gone", expanded: "/Users/me/gone", exists: false },
+    { path: "/tmp/old", expanded: "/tmp/old", exists: false },
   ] };
-  assert.deepEqual(missingWatchedFolders(["~/.codex", "~/gone", "/tmp/old", "/tmp/new"], survey), ["~/gone", "/tmp/old"]);
-  assert.deepEqual(missingWatchedFolders(["~/gone"], null), []);
+  assert.deepEqual(missingWatchedFolders(["/Users/me/.codex", "/Users/me/gone", "/tmp/old", "/tmp/new"], check), ["/Users/me/gone", "/tmp/old"]);
+  assert.deepEqual(missingWatchedFolders(["/Users/me/gone"], null), []);
 });

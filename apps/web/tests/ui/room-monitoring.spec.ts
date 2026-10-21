@@ -82,18 +82,18 @@ test("the barometer and the jar rest until the first reading, then follow the st
   await expect.poll(async () => (await summary(room)).barometer).toBe("normal");
   expect((await summary(room)).jar).toEqual({ fill: 0.74, lid: "normal" });
   await page.mouse.move(bx + 1, by);
-  await expect(tooltip).toContainText("Memory: 11.3 GB used of 16.0 GB");
-  await expect(tooltip).toContainText("Swap: 2.5 GB used of 4.0 GB");
+  await expect(tooltip).toContainText("Memory: 11 GB used of 16 GB");
+  await expect(tooltip).toContainText("Swap: 2.5 GB used of 4 GB");
   await expect(tooltip).toContainText("Pressure: normal");
   await expect(tooltip).toContainText("Click to open Monitoring");
 
   const [jx, jy] = await pointOf(room, "jar:jar");
   await page.mouse.move(jx, jy);
   await expect(tooltip).toContainText("Jar");
-  await expect(tooltip).toContainText("120.0 GB free of 460.0 GB (74% used)");
-  await expect(tooltip).toContainText("monorepo-a: 88.0 GB");
+  await expect(tooltip).toContainText("120 GB free of 460 GB (74% used)");
+  await expect(tooltip).toContainText("monorepo-a: 88 GB");
   await expect(tooltip).toContainText("Portal images: 60 MB");
-  await expect(tooltip).toContainText("Sizes measured 4m ago");
+  await expect(tooltip).toContainText("Sizes measured 4 min ago");
   await page.mouse.move(10, 500);
   await expect(tooltip).toHaveCount(0);
   await page.waitForTimeout(SETTLE_MS);

@@ -10,6 +10,7 @@
  *   GET  /api/monitoring                        MonitoringSnapshot
  *   POST /api/monitoring/disk/refresh           -> { disk: MonitoringDisk } (origin-checked; starts a survey now)
  *   POST /api/monitoring/processes/:pid/stop    -> { pid, target: "group" | "process" } (origin-checked; refused unless the row is `stoppable`)
+ *   POST /api/monitoring/folders/check          { paths } -> FolderCheckResult (origin-checked; whether each folder exists now)
  * Live: the portal stream pushes `{ type: "monitoring", summary }` after every system sample (60 s).
  */
 
@@ -210,3 +211,9 @@ export type MonitoringSummary = {
   /** When the last survey finished; null before the first. */
   surveyedAt: number | null;
 };
+
+/** `POST /api/monitoring/folders/check`: at most this many paths per request. */
+export const FOLDER_CHECK_MAX = 20;
+
+/** `POST /api/monitoring/folders/check`'s answer: per path as given, the path with `~` expanded and whether a folder is there now. */
+export type FolderCheckResult = { paths: { path: string; expanded: string; exists: boolean }[] };

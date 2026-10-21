@@ -7,6 +7,7 @@
 import type {
   AttributedProcess,
   DiskSurvey,
+  FolderCheckResult,
   MonitoringDisk,
   MonitoringLevel,
   MonitoringPoint,
@@ -15,9 +16,11 @@ import type {
   MonitoringWorktreeRow,
   PortalRole,
 } from "@portal/contracts/monitoring";
-import { BYTES_PER_GB } from "@portal/shared/monitoring";
+import { BYTES_PER_GB, formatBytes } from "@portal/shared/monitoring";
 import { relativeTime } from "./orchestrator/format.ts";
 import { countdownText } from "./session-lifecycle.ts";
+
+export { formatBytes };
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -40,25 +43,6 @@ export const levelTones: Record<MonitoringLevel, "neutral" | "amber" | "rose"> =
   warning: "amber",
   critical: "rose",
 };
-
-/**
- * "16 GB", "9.8 GB", "350 MB", "12 KB", "—" for null. Memory counts in binary units, as Activity
- * Monitor does (a 16 GB Mac reads 16 GB); disk in decimal ones, as Finder and the disk levels do.
- */
-export function formatBytes(bytes: number | null | undefined, kind: "memory" | "disk" = "disk"): string {
-  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
-  const step = kind === "memory" ? 1024 : 1000;
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = Math.max(0, bytes);
-  let unit = 0;
-  while (value >= step && unit < units.length - 1) {
-    value /= step;
-    unit++;
-  }
-  // Below 10 one decimal says something; above it the decimal is noise.
-  const text = unit === 0 || value >= 10 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "");
-  return `${text} ${units[unit]}`;
-}
 
 /** Whole GB for the disk levels: `30 GB`. */
 export const formatGb = (gb: number) => `${gb} GB`;
@@ -143,31 +127,13 @@ export function agentsTotal(snapshot: Pick<MonitoringSnapshot, "sessions" | "pro
   return { count: snapshot.sessions.length, memoryBytes: sessionsBytes + adapterBytes };
 }
 
-/**
- * The stop fields the server adds to each process: whether `POST /api/monitoring/processes/:pid/stop`
- * would act, why not, and for a row charged to a worktree through an ancestor, that ancestor's pid.
- * Optional here so the view works against a server that does not send them yet.
- */
-export type StopFields = { stoppable?: boolean; stopBlockedReason?: string; inheritedFrom?: number };
+/** Whether the view offers Stop: exactly when the stop route would act (the server decides, `stoppable`). */
+export const canStop = (process: Pick<AttributedProcess, "stoppable">): boolean => process.stoppable;
 
-/**
- * Whether the view offers Stop. The server's `stoppable` decides; without it, the same rule:
- * Portal acts only on what it can account for (decision 18), a session's or a worktree's process
- * or an adapter, never its own server, web server or database.
- */
-export function canStop(process: Pick<AttributedProcess, "owner"> & StopFields): boolean {
-  if (process.stoppable !== undefined) return process.stoppable;
-  if (process.owner.kind === "none") return false;
-  return process.owner.kind !== "portal" || process.owner.role === "adapter";
-}
-
-/** Why Stop is not offered, for the hint where the button would be; null when it is. */
-export function stopHint(process: Pick<AttributedProcess, "owner"> & StopFields): string | null {
+/** Why Stop is not offered, for the note where the button would be; null when it is. */
+export function stopHint(process: Pick<AttributedProcess, "stoppable" | "stopBlockedReason">): string | null {
   if (canStop(process)) return null;
-  if (process.stopBlockedReason) return process.stopBlockedReason;
-  if (process.owner.kind === "none") return "Portal did not start this process.";
-  if (process.owner.kind === "portal") return "Part of Portal itself; restart Portal instead.";
-  return "Portal does not stop this process.";
+  return process.stopBlockedReason ?? "Portal does not stop this process.";
 }
 
 export type TreeRow = { process: AttributedProcess; depth: number };
@@ -395,13 +361,11 @@ export function cleanupSummary(result: CleanupScriptResult): string {
 }
 
 /**
- * The configured watched folders the last disk survey found missing. The survey lists folders with
- * `~` expanded, so `~/x` matches a surveyed path ending in `/x`. A folder added since the survey has
- * no reading and is not called missing.
+ * The configured watched folders that `POST /api/monitoring/folders/check` found missing, as
+ * configured. Folders the check did not cover (added since it ran) are not called missing.
  */
-export function missingWatchedFolders(configured: readonly string[], survey: Pick<DiskSurvey, "watched"> | null): string[] {
-  if (!survey) return [];
-  const matches = (entry: string, path: string) =>
-    entry === path || (entry === "~" ? false : entry.startsWith("~/") && path.endsWith(entry.slice(1)));
-  return configured.filter((entry) => survey.watched.some((folder) => !folder.exists && matches(entry.trim(), folder.path)));
+export function missingWatchedFolders(configured: readonly string[], check: FolderCheckResult | null): string[] {
+  if (!check) return [];
+  const missing = new Set(check.paths.filter((entry) => !entry.exists).map((entry) => entry.path));
+  return configured.filter((entry) => missing.has(entry));
 }

@@ -9,7 +9,6 @@ import {
   backgroundRuns,
   barometerLevel,
   describeObject,
-  gigabytes,
   hearthLevel,
   jarState,
   lampState,
@@ -205,17 +204,10 @@ test("the jar fills to the used share of the disk, its lid the disk level; empty
   assert.deepEqual(jarState(reading({ disk: { path: "/", freeBytes: 500e9, totalBytes: 460e9, level: "normal" } })), { fill: 0, lid: "normal" });
 });
 
-test("sizes read as Activity Monitor (memory) and Finder (disk) count them", () => {
-  assert.equal(gigabytes(16 * GIB, "memory"), "16.0 GB");
-  assert.equal(gigabytes(512 * 2 ** 20, "memory"), "512 MB");
-  assert.equal(gigabytes(460e9, "disk"), "460.0 GB");
-  assert.equal(gigabytes(60e6, "disk"), "60 MB");
-});
-
 test("the barometer's card: memory, swap and pressure, or that there is no reading yet; a click opens Monitoring", () => {
   const card = describeObject({ kind: "barometer", id: "barometer" }, { ...quiet, monitoring: reading({ pressure: "warning" }), now });
   assert.equal(card.title, "Barometer");
-  assert.deepEqual(card.lines, ["Memory: 11.3 GB used of 16.0 GB", "Swap: 2.5 GB used of 4.0 GB", "Pressure: warning"]);
+  assert.deepEqual(card.lines, ["Memory: 11 GB used of 16 GB", "Swap: 2.5 GB used of 4 GB", "Pressure: warning"]);
   assert.equal(card.hint, "Click to open Monitoring");
   assert.equal(card.action, "Open Monitoring");
   const noSwap = describeObject({ kind: "barometer", id: "barometer" }, { ...quiet, monitoring: reading({ swap: { usedBytes: 0, totalBytes: 0 } }), now });
@@ -229,13 +221,13 @@ test("the jar's card: free and total, the five largest items, when they were mea
   const card = describeObject({ kind: "jar", id: "jar" }, { ...quiet, monitoring: reading(), now });
   assert.equal(card.title, "Jar");
   assert.deepEqual(card.lines, [
-    "120.0 GB free of 460.0 GB (74% used)",
-    "monorepo-a: 88.0 GB",
-    "monorepo-b: 41.2 GB",
+    "120 GB free of 460 GB (74% used)",
+    "monorepo-a: 88 GB",
+    "monorepo-b: 41 GB",
     "Database: 3.4 GB",
     "/Users/moses/.codex: 2.1 GB",
     "Portal images: 60 MB",
-    "Sizes measured 4m ago",
+    "Sizes measured 4 min ago",
   ]);
   assert.equal(card.hint, "Click to open Monitoring");
   const low = describeObject({ kind: "jar", id: "jar" }, {
@@ -243,7 +235,7 @@ test("the jar's card: free and total, the five largest items, when they were mea
     monitoring: reading({ disk: { path: "/", freeBytes: 20e9, totalBytes: 460e9, level: "warning" }, largest: [], surveyedAt: null }),
     now,
   });
-  assert.deepEqual(low.lines, ["20.0 GB free of 460.0 GB (96% used)", "Below the warning level", "Folder sizes not measured yet"]);
+  assert.deepEqual(low.lines, ["20 GB free of 460 GB (96% used)", "Below the warning level", "Folder sizes not measured yet"]);
   const unread = describeObject({ kind: "jar", id: "jar" }, { ...quiet, monitoring: reading({ disk: null, surveyedAt: now - 10_000 }), now });
   assert.equal(unread.lines[0], "The disk holding Portal's home could not be read");
   assert.equal(unread.lines.at(-1), "Sizes measured just now");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BYTES_PER_GB, darwinPressureLevel, diskLevel, expandHome, linuxPressureLevel } from "../src/monitoring.ts";
+import { BYTES_PER_GB, darwinPressureLevel, diskLevel, expandHome, formatBytes, linuxPressureLevel } from "../src/monitoring.ts";
 
 const GB = BYTES_PER_GB;
 
@@ -42,4 +42,23 @@ test("expandHome expands ~ and ~/ only", () => {
   assert.equal(expandHome("~/.codex", "/Users/me/"), "/Users/me/.codex");
   assert.equal(expandHome("/abs/~/x", "/Users/me"), "/abs/~/x");
   assert.equal(expandHome("~other", "/Users/me"), "~other");
+});
+
+test("sizes read as Activity Monitor (memory, binary) and Finder (disk, decimal) count them", () => {
+  const GiB = 1024 ** 3;
+  const MiB = 1024 ** 2;
+  assert.equal(formatBytes(16 * GiB, "memory"), "16 GB");
+  assert.equal(formatBytes(350 * MiB, "memory"), "350 MB");
+  assert.equal(formatBytes(9.84 * GiB, "memory"), "9.8 GB");
+  assert.equal(formatBytes(11.3 * GiB, "memory"), "11 GB");
+  assert.equal(formatBytes(4 * GiB, "memory"), "4 GB");
+  assert.equal(formatBytes(22e9), "22 GB");
+  assert.equal(formatBytes(460e9, "disk"), "460 GB");
+  assert.equal(formatBytes(60e6, "disk"), "60 MB");
+  assert.equal(formatBytes(1.5e12), "1.5 TB");
+  assert.equal(formatBytes(512), "512 B");
+  assert.equal(formatBytes(-5), "0 B");
+  assert.equal(formatBytes(null), "—");
+  assert.equal(formatBytes(undefined), "—");
+  assert.equal(formatBytes(Number.NaN), "—");
 });

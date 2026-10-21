@@ -8,9 +8,10 @@
 import type { MonitoringLevel, MonitoringSummary } from "@portal/contracts/monitoring";
 import type { RoomWeather } from "@portal/contracts/room";
 import type { LivenessState, SessionLink } from "@portal/contracts/types";
+import { formatBytes } from "@portal/shared/monitoring";
 import { assignSlots, bucket, hashId, mulberry32 } from "@portal/shared/room";
 import { sessionState, sessionStateLabels } from "@portal/shared/session-state";
-import { relativeAge } from "../lib/relative-age.ts";
+import { relativeTime } from "../lib/orchestrator/format.ts";
 import { BENCH } from "./layout.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -259,33 +260,18 @@ export function jarState(summary: MonitoringSummary | null): JarState {
   return { fill: Math.round(used * 100) / 100, lid: disk.level };
 }
 
-const GIB = 2 ** 30;
-
-/**
- * Bytes as gigabytes to one decimal ("11.2 GB"), under 1 GB in megabytes. Memory in binary units,
- * as Activity Monitor counts it (16 GB of RAM reads 16.0); disk in decimal, as Finder does.
- */
-export function gigabytes(bytes: number, unit: "memory" | "disk"): string {
-  const gb = bytes / (unit === "memory" ? GIB : 1e9);
-  if (gb < 1) return `${Math.round(gb * (unit === "memory" ? 1024 : 1000))} MB`;
-  return `${gb.toFixed(1)} GB`;
-}
-
 const NO_READING = "No reading yet: Portal measures once a minute, on macOS and Linux";
 
-/** The barometer's hover card lines: memory used, swap, and pressure. */
+/** The barometer's hover card lines: memory used, swap, and pressure. Sizes read as in Monitoring (`formatBytes`). */
 export function barometerLines(summary: MonitoringSummary | null): string[] {
   if (!summary) return [NO_READING, "The needle rests until then"];
   const { memory, swap } = summary;
   return [
-    `Memory: ${gigabytes(memory.usedBytes, "memory")} used of ${gigabytes(memory.totalBytes, "memory")}`,
-    swap.totalBytes > 0 ? `Swap: ${gigabytes(swap.usedBytes, "memory")} used of ${gigabytes(swap.totalBytes, "memory")}` : "Swap: none in use",
+    `Memory: ${formatBytes(memory.usedBytes, "memory")} used of ${formatBytes(memory.totalBytes, "memory")}`,
+    swap.totalBytes > 0 ? `Swap: ${formatBytes(swap.usedBytes, "memory")} used of ${formatBytes(swap.totalBytes, "memory")}` : "Swap: none in use",
     `Pressure: ${summary.pressure}`,
   ];
 }
-
-/** "just now" or "4m ago". */
-const ago = (ms: number) => (ms < 60_000 ? "just now" : `${relativeAge(ms)} ago`);
 
 /** The jar's hover card lines: free and total, the five largest items of the last survey, and when they were measured. */
 export function jarLines(summary: MonitoringSummary | null, now: number): string[] {
@@ -295,15 +281,15 @@ export function jarLines(summary: MonitoringSummary | null, now: number): string
   const fill = jarState(summary).fill;
   if (!disk || fill === null) lines.push("The disk holding Portal's home could not be read");
   else {
-    lines.push(`${gigabytes(disk.freeBytes, "disk")} free of ${gigabytes(disk.totalBytes, "disk")} (${Math.round(fill * 100)}% used)`);
+    lines.push(`${formatBytes(disk.freeBytes, "disk")} free of ${formatBytes(disk.totalBytes, "disk")} (${Math.round(fill * 100)}% used)`);
     if (disk.level !== "normal") lines.push(`Below the ${disk.level} level`);
   }
   if (surveyedAt === null || largest.length === 0) {
     lines.push("Folder sizes not measured yet");
     return lines;
   }
-  lines.push(...largest.slice(0, 5).map((item) => `${item.label}: ${gigabytes(item.bytes, "disk")}`));
-  lines.push(`Sizes measured ${ago(now - surveyedAt)}`);
+  lines.push(...largest.slice(0, 5).map((item) => `${item.label}: ${formatBytes(item.bytes, "disk")}`));
+  lines.push(`Sizes measured ${relativeTime(surveyedAt, now)}`);
   return lines;
 }
 
