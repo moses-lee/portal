@@ -8,7 +8,7 @@ import { orchestratorProviders } from "../orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings } from "../orchestrator/types.ts";
 import { applySettingsPatch, isOrchestratorProvider, mergeSettings, settingsOverrides } from "@portal/shared/settings";
 import type { Settings, SettingsPatch } from "@portal/shared/settings";
-import { parseSettingsPatch } from "../lib/settings-store.ts";
+import { SettingsError, parseSettingsPatch } from "../lib/settings-store.ts";
 import type { SettingsStore } from "../lib/settings-store.ts";
 
 /** Key changes from one patch: a non-empty string stores that key, "" removes it. */
@@ -64,7 +64,13 @@ export function createSettingsStore(backend: SettingsBackend): SettingsStore {
     // Validate before queueing so a bad request never waits behind a write.
     const parsed = parseSettingsPatch(input);
     const next = await mutate(async () => {
-      const merged = applySettingsPatch(await read(), parsed);
+      const current = await read();
+      // The disk levels are checked as a pair against what is stored, since a patch may carry only one.
+      const disk = { ...current.monitoring.disk, ...parsed.monitoring?.disk };
+      if (disk.warnFreeGb <= disk.criticalFreeGb) {
+        throw new SettingsError(`The disk warning level (${disk.warnFreeGb} GB) must be above the critical level (${disk.criticalFreeGb} GB).`, 400);
+      }
+      const merged = applySettingsPatch(current, parsed);
       // Keys live outside the overrides: settingsOverrides() never carries them, the backend gets them separately.
       await backend.write(settingsOverrides(merged), parsed.orchestrator?.apiKeys ?? {});
       return merged;

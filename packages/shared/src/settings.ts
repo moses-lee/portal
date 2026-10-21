@@ -17,18 +17,38 @@ export type Settings = {
   orchestrator: OrchestratorSettings;
   /** User scripts run before certain actions; see scripts.ts. */
   scripts: ScriptsSettings;
-  /** Session lifecycle: when the sweep removes idle worktrees (docs/SESSION-LIFECYCLE.md). */
+  /** Session lifecycle: when the sweep removes idle worktrees (docs/SESSION-LIFECYCLE.md) and idle agent CLIs stop (docs/MONITORING.md). */
   sessions: SessionsSettings;
+  /** Monitoring (docs/MONITORING.md): the disk levels and the folders outside Portal to measure. */
+  monitoring: MonitoringSettings;
 };
 
-/** The lifecycle sweep's clock, in hours since a worktree project went idle. */
+/** The session lifecycle's clocks: idle worktree removal, in hours, and the idle CLI stop, in minutes. */
 export type SessionsSettings = {
   /** A clean, unpinned worktree project is removed this long after it goes idle. */
   worktrees: { removeAfterHours: number };
+  /**
+   * A session's agent CLI is stopped once it has been idle this long, counted from no earlier than
+   * its last attach; the next prompt (or opening the session) starts it again (docs/MONITORING.md).
+   */
+  idleStop: { enabled: boolean; afterMinutes: number };
 };
 
 export type SessionsSettingsPatch = {
   worktrees?: { removeAfterHours?: number };
+  idleStop?: { enabled?: boolean; afterMinutes?: number };
+};
+
+export type MonitoringSettings = {
+  /** Free space, in GB, below which the disk reads warning and critical; warning is always above critical. */
+  disk: { warnFreeGb: number; criticalFreeGb: number };
+  /** Absolute folders (or `~/…`) whose sizes the disk survey reports, in the order the user listed them. */
+  watchedFolders: string[];
+};
+
+export type MonitoringSettingsPatch = {
+  disk?: { warnFreeGb?: number; criticalFreeGb?: number };
+  watchedFolders?: string[];
 };
 
 /**
@@ -40,6 +60,7 @@ export type SettingsPatch = {
   orchestrator?: OrchestratorSettingsPatch;
   scripts?: ScriptsPatch;
   sessions?: SessionsSettingsPatch;
+  monitoring?: MonitoringSettingsPatch;
 };
 
 export const gitActionKinds: readonly GitActionKind[] = ["checks", "conflicts", "review"];
@@ -71,9 +92,62 @@ export function isLifecycleHours(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= sessionsLimits.minHours && (value as number) <= sessionsLimits.maxHours;
 }
 
+/** Range limits for the idle CLI stop: whole minutes from 10 to a week. */
+export const idleStopLimits = {
+  minMinutes: 10,
+  maxMinutes: 10_080,
+} as const;
+
+/** An idle stop clock: a whole number of minutes within `idleStopLimits`. */
+export function isIdleStopMinutes(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= idleStopLimits.minMinutes && (value as number) <= idleStopLimits.maxMinutes;
+}
+
 export const defaultSessionsSettings: SessionsSettings = {
   worktrees: { removeAfterHours: 72 },
+  idleStop: { enabled: true, afterMinutes: 120 },
 };
+
+/** Range limits for the monitoring section. */
+export const monitoringLimits = {
+  /** Disk levels are whole GB from 1 to 10 000. */
+  minGb: 1,
+  maxGb: 10_000,
+  watchedFolders: 20,
+  /** Longest watched folder path, after trimming. */
+  pathLength: 1024,
+} as const;
+
+export const defaultMonitoringSettings: MonitoringSettings = {
+  disk: { warnFreeGb: 30, criticalFreeGb: 15 },
+  watchedFolders: [],
+};
+
+/** A disk level: a whole number of GB within `monitoringLimits`. */
+export function isDiskLevelGb(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= monitoringLimits.minGb && (value as number) <= monitoringLimits.maxGb;
+}
+
+/**
+ * A watched folder as written: absolute, or under the home folder (`~` or `~/…`, expanded by the
+ * server), within the length limit, with no control characters. Expects a trimmed string.
+ */
+export function isWatchedFolder(value: unknown): value is string {
+  if (typeof value !== "string" || !value || value.length > monitoringLimits.pathLength) return false;
+  if (/[\u0000-\u001F\u007F]/.test(value)) return false;
+  return value.startsWith("/") || value === "~" || value.startsWith("~/");
+}
+
+/** The well-formed folders of `given`, trimmed, without repeats, at most `monitoringLimits.watchedFolders`; null when `given` is not a list. */
+export function cleanWatchedFolders(given: unknown): string[] | null {
+  if (!Array.isArray(given)) return null;
+  const kept: string[] = [];
+  for (const entry of given) {
+    const folder = typeof entry === "string" ? entry.trim() : entry;
+    if (isWatchedFolder(folder) && !kept.includes(folder)) kept.push(folder);
+  }
+  return kept.slice(0, monitoringLimits.watchedFolders);
+}
 
 export function isHungAfterMinutes(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= orchestratorLimits.hungAfterMinutes;
@@ -98,6 +172,7 @@ export const defaultSettings: Settings = {
   orchestrator: defaultOrchestratorSettings,
   scripts: defaultScripts,
   sessions: defaultSessionsSettings,
+  monitoring: defaultMonitoringSettings,
 };
 
 export function isOrchestratorProvider(value: unknown): value is OrchestratorProvider {
@@ -167,11 +242,33 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
 
 /** `base` sessions settings with the well-formed clocks of `given` laid on top; anything else leaves the base value. */
 function mergeSessions(base: SessionsSettings, given: SessionsSettingsPatch | undefined): SessionsSettings {
-  const next: SessionsSettings = { worktrees: { ...base.worktrees } };
+  const next: SessionsSettings = { worktrees: { ...base.worktrees }, idleStop: { ...base.idleStop } };
   if (!given || typeof given !== "object") return next;
   if (given.worktrees && typeof given.worktrees === "object" && isLifecycleHours(given.worktrees.removeAfterHours)) {
     next.worktrees = { removeAfterHours: given.worktrees.removeAfterHours };
   }
+  if (given.idleStop && typeof given.idleStop === "object") {
+    if (typeof given.idleStop.enabled === "boolean") next.idleStop.enabled = given.idleStop.enabled;
+    if (isIdleStopMinutes(given.idleStop.afterMinutes)) next.idleStop.afterMinutes = given.idleStop.afterMinutes;
+  }
+  return next;
+}
+
+/**
+ * `base` monitoring settings with the well-formed fields of `given` laid on top. The disk levels
+ * are taken only as a pair that keeps warning above critical; the folder list replaces the base
+ * one, without its malformed entries.
+ */
+function mergeMonitoring(base: MonitoringSettings, given: MonitoringSettingsPatch | undefined): MonitoringSettings {
+  const next: MonitoringSettings = { disk: { ...base.disk }, watchedFolders: [...base.watchedFolders] };
+  if (!given || typeof given !== "object") return next;
+  if (given.disk && typeof given.disk === "object") {
+    const warnFreeGb = isDiskLevelGb(given.disk.warnFreeGb) ? given.disk.warnFreeGb : base.disk.warnFreeGb;
+    const criticalFreeGb = isDiskLevelGb(given.disk.criticalFreeGb) ? given.disk.criticalFreeGb : base.disk.criticalFreeGb;
+    if (warnFreeGb > criticalFreeGb) next.disk = { warnFreeGb, criticalFreeGb };
+  }
+  const folders = cleanWatchedFolders(given.watchedFolders);
+  if (folders) next.watchedFolders = folders;
   return next;
 }
 
@@ -183,6 +280,7 @@ export function mergeSettings(overrides: SettingsPatch | null | undefined): Sett
     orchestrator: mergeOrchestrator(defaultSettings.orchestrator, overrides?.orchestrator),
     scripts: mergeScripts(defaultSettings.scripts, overrides?.scripts),
     sessions: mergeSessions(defaultSettings.sessions, overrides?.sessions),
+    monitoring: mergeMonitoring(defaultSettings.monitoring, overrides?.monitoring),
   };
 }
 
@@ -229,7 +327,19 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   if (settings.sessions.worktrees.removeAfterHours !== defaultSettings.sessions.worktrees.removeAfterHours) {
     sessions.worktrees = { removeAfterHours: settings.sessions.worktrees.removeAfterHours };
   }
+  const idleStop: NonNullable<SessionsSettingsPatch["idleStop"]> = {};
+  if (settings.sessions.idleStop.enabled !== defaultSettings.sessions.idleStop.enabled) idleStop.enabled = settings.sessions.idleStop.enabled;
+  if (settings.sessions.idleStop.afterMinutes !== defaultSettings.sessions.idleStop.afterMinutes) idleStop.afterMinutes = settings.sessions.idleStop.afterMinutes;
+  if (Object.keys(idleStop).length > 0) sessions.idleStop = idleStop;
   if (Object.keys(sessions).length > 0) result.sessions = sessions;
+
+  const monitoring: MonitoringSettingsPatch = {};
+  const disk: NonNullable<MonitoringSettingsPatch["disk"]> = {};
+  if (settings.monitoring.disk.warnFreeGb !== defaultSettings.monitoring.disk.warnFreeGb) disk.warnFreeGb = settings.monitoring.disk.warnFreeGb;
+  if (settings.monitoring.disk.criticalFreeGb !== defaultSettings.monitoring.disk.criticalFreeGb) disk.criticalFreeGb = settings.monitoring.disk.criticalFreeGb;
+  if (Object.keys(disk).length > 0) monitoring.disk = disk;
+  if (settings.monitoring.watchedFolders.length > 0) monitoring.watchedFolders = [...settings.monitoring.watchedFolders];
+  if (Object.keys(monitoring).length > 0) result.monitoring = monitoring;
 
   return result;
 }
@@ -248,5 +358,6 @@ export function applySettingsPatch(settings: Settings, patch: SettingsPatch): Se
     orchestrator: mergeOrchestrator(settings.orchestrator, patch.orchestrator),
     scripts: mergeScripts(settings.scripts, patch.scripts),
     sessions: mergeSessions(settings.sessions, patch.sessions),
+    monitoring: mergeMonitoring(settings.monitoring, patch.monitoring),
   };
 }

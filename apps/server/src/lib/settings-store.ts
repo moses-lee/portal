@@ -3,8 +3,10 @@ import path from "node:path";
 import { orchestratorProviders } from "../orchestrator/types.ts";
 import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPatch } from "../orchestrator/types.ts";
 import type { ConsolidationSettings } from "@portal/contracts/orchestrator";
-import { gitActionKinds, isClockTime, isHungAfterMinutes, isLifecycleHours, isOrchestratorProvider, orchestratorLimits, sessionsLimits } from "@portal/shared/settings";
-import type { GitActionKind, SessionsSettingsPatch, Settings, SettingsPatch } from "@portal/shared/settings";
+import { gitActionKinds, idleStopLimits, isClockTime, isHungAfterMinutes, isIdleStopMinutes, isLifecycleHours, isOrchestratorProvider, orchestratorLimits, sessionsLimits } from "@portal/shared/settings";
+import type { GitActionKind, MonitoringSettingsPatch, SessionsSettingsPatch, Settings, SettingsPatch } from "@portal/shared/settings";
+import { cleanWatchedFolders, isDiskLevelGb, isWatchedFolder, monitoringLimits } from "@portal/shared/settings";
+import { expandHome } from "@portal/shared/monitoring";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";
 import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "@portal/shared/scripts";
 
@@ -64,6 +66,7 @@ export type SettingsFile = {
   };
   scripts?: ScriptsPatch;
   sessions?: SessionsSettingsPatch;
+  monitoring?: MonitoringSettingsPatch;
 };
 
 /** The overrides read from a file, without the version marker. */
@@ -160,6 +163,15 @@ function checkLifecycleHours(name: string, value: unknown): Checked<number> {
   return { error: `${name} must be a whole number of hours between ${sessionsLimits.minHours} and ${sessionsLimits.maxHours}.` };
 }
 
+/** The idle CLI stop's fields, each checked on its own. */
+function checkIdleStopField(field: "enabled" | "afterMinutes", value: unknown): Checked<boolean | number> {
+  if (field === "enabled") return typeof value === "boolean" ? { value } : { error: "sessions.idleStop.enabled must be true or false." };
+  if (isIdleStopMinutes(value)) return { value };
+  return { error: `sessions.idleStop.afterMinutes must be a whole number of minutes between ${idleStopLimits.minMinutes} and ${idleStopLimits.maxMinutes}.` };
+}
+
+const idleStopFields = ["enabled", "afterMinutes"] as const;
+
 /** Control characters other than newline, carriage return, and tab. */
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
@@ -189,7 +201,73 @@ function parseSessionsPatch(given: unknown): SessionsSettingsPatch {
     if (section[field] === undefined) continue;
     (patch as Record<string, unknown>)[group] = { [field]: required(checkLifecycleHours(`sessions.${group}.${field}`, section[field])) };
   }
+  if (given.idleStop !== undefined) {
+    if (!isPlainObject(given.idleStop)) throw new SettingsError("sessions.idleStop must be an object.", 400);
+    const idleStop: NonNullable<SessionsSettingsPatch["idleStop"]> = {};
+    for (const field of idleStopFields) {
+      if (given.idleStop[field] === undefined) continue;
+      (idleStop as Record<string, unknown>)[field] = required(checkIdleStopField(field, given.idleStop[field]));
+    }
+    if (Object.keys(idleStop).length > 0) patch.idleStop = idleStop;
+  }
   return patch;
+}
+
+const diskLevelFields = ["warnFreeGb", "criticalFreeGb"] as const;
+
+function checkDiskLevel(field: (typeof diskLevelFields)[number], value: unknown): Checked<number> {
+  if (isDiskLevelGb(value)) return { value };
+  return { error: `monitoring.disk.${field} must be a whole number of GB between ${monitoringLimits.minGb} and ${monitoringLimits.maxGb}.` };
+}
+
+/**
+ * The monitoring section of a PATCH. Watched folders are trimmed and `~` is expanded against the
+ * server's home, so what is stored is absolute; repeats are dropped. Whether warning stays above
+ * critical depends on the stored levels too, so the store checks that once the patch is applied.
+ */
+function parseMonitoringPatch(given: unknown, home: string): MonitoringSettingsPatch {
+  if (!isPlainObject(given)) throw new SettingsError("monitoring must be an object.", 400);
+  const patch: MonitoringSettingsPatch = {};
+  if (given.disk !== undefined) {
+    if (!isPlainObject(given.disk)) throw new SettingsError("monitoring.disk must be an object.", 400);
+    const disk: NonNullable<MonitoringSettingsPatch["disk"]> = {};
+    for (const field of diskLevelFields) {
+      if (given.disk[field] === undefined) continue;
+      disk[field] = required(checkDiskLevel(field, given.disk[field]));
+    }
+    patch.disk = disk;
+  }
+  if (given.watchedFolders !== undefined) {
+    if (!Array.isArray(given.watchedFolders)) throw new SettingsError("monitoring.watchedFolders must be a list of folders.", 400);
+    const folders: string[] = [];
+    for (const entry of given.watchedFolders) {
+      const folder = typeof entry === "string" ? entry.trim() : entry;
+      if (!isWatchedFolder(folder)) {
+        throw new SettingsError(`Watched folder ${JSON.stringify(entry)} must be an absolute path or start with ~/ (at most ${monitoringLimits.pathLength} characters).`, 400);
+      }
+      const expanded = expandHome(folder, home);
+      if (!folders.includes(expanded)) folders.push(expanded);
+    }
+    if (folders.length > monitoringLimits.watchedFolders) {
+      throw new SettingsError(`At most ${monitoringLimits.watchedFolders} watched folders (got ${folders.length}).`, 400);
+    }
+    patch.watchedFolders = folders;
+  }
+  return patch;
+}
+
+/** The monitoring section of a settings file; a bad level or folder falls back to its default (the pair check is the merge's). */
+function parseMonitoringFile(given: unknown): SettingsFile["monitoring"] {
+  if (!isPlainObject(given)) return undefined;
+  const monitoring: MonitoringSettingsPatch = {};
+  if (isPlainObject(given.disk)) {
+    const disk: NonNullable<MonitoringSettingsPatch["disk"]> = {};
+    for (const field of diskLevelFields) if (isDiskLevelGb(given.disk[field])) disk[field] = given.disk[field];
+    if (Object.keys(disk).length > 0) monitoring.disk = disk;
+  }
+  const folders = cleanWatchedFolders(given.watchedFolders);
+  if (folders && folders.length > 0) monitoring.watchedFolders = folders;
+  return Object.keys(monitoring).length > 0 ? monitoring : undefined;
 }
 
 function parsePromptsPatch(given: unknown): Partial<Record<GitActionKind, string>> {
@@ -270,7 +348,7 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
  * ignored, but prompt kinds, script kinds, and API key providers must be known, and every value must have the
  * right type and size. Strings are trimmed. Only the sections present in `input` appear in the result.
  */
-export function parseSettingsPatch(input: unknown): SettingsPatch {
+export function parseSettingsPatch(input: unknown, { home = os.homedir() }: { home?: string } = {}): SettingsPatch {
   if (!isPlainObject(input)) throw new SettingsError("Expected a JSON object.", 400);
   const patch: SettingsPatch = {};
   if (input.gitActions !== undefined) {
@@ -280,6 +358,7 @@ export function parseSettingsPatch(input: unknown): SettingsPatch {
   if (input.orchestrator !== undefined) patch.orchestrator = parseOrchestratorPatch(input.orchestrator);
   if (input.scripts !== undefined) patch.scripts = parseScriptsPatch(input.scripts);
   if (input.sessions !== undefined) patch.sessions = parseSessionsPatch(input.sessions);
+  if (input.monitoring !== undefined) patch.monitoring = parseMonitoringPatch(input.monitoring, home);
   return patch;
 }
 
@@ -308,6 +387,14 @@ function parseSessionsFile(given: unknown): SettingsFile["sessions"] {
     const section = given[group];
     if (!isPlainObject(section) || !isLifecycleHours(section[field])) continue;
     (sessions as Record<string, unknown>)[group] = { [field]: section[field] };
+  }
+  if (isPlainObject(given.idleStop)) {
+    const idleStop: NonNullable<SessionsSettingsPatch["idleStop"]> = {};
+    for (const field of idleStopFields) {
+      const checked = checkIdleStopField(field, given.idleStop[field]);
+      if ("value" in checked) (idleStop as Record<string, unknown>)[field] = checked.value;
+    }
+    if (Object.keys(idleStop).length > 0) sessions.idleStop = idleStop;
   }
   return Object.keys(sessions).length > 0 ? sessions : undefined;
 }
@@ -379,6 +466,8 @@ function parseOverridesObject(parsed: Record<string, unknown>): FileOverrides {
   if (scripts) overrides.scripts = scripts;
   const sessions = parseSessionsFile(parsed.sessions);
   if (sessions) overrides.sessions = sessions;
+  const monitoring = parseMonitoringFile(parsed.monitoring);
+  if (monitoring) overrides.monitoring = monitoring;
   return overrides;
 }
 

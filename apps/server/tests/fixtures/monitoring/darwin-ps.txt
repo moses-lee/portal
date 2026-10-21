@@ -1,0 +1,18 @@
+    1     0     1 03-09:04:00  42:27.98  18480 /sbin/launchd
+  663     1   663 03-03:49:38  16:23.45  64064 /usr/libexec/logd
+  665     1   665 03-03:49:38   1:20.77   7920 /usr/libexec/UserEventAgent (System)
+  667     1   667 03-03:49:38 631:54.77  18464 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  668     1   668 03-03:49:38   0:06.44   6032 /System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted
+  671     1   671 03-03:49:38   0:16.33  10496 /usr/sbin/systemstats --daemon
+  738     1   738 03-03:49:38   4:21.67  14432 /usr/libexec/runningboardd
+  935     1   935 03-03:49:28   0:01.31   1776 /usr/libexec/pboard
+ 1065     1  1065 03-03:49:26   0:00.27   9520 /usr/libexec/seserviced
+ 1252     1  1252 03-03:48:51   0:05.66   6672 /opt/homebrew/opt/colima/bin/colima start -f
+ 7604     1  7604    15:13:20   0:02.20  12336 /System/Library/PrivateFrameworks/TVIdleServices.framework/idleassetsd
+ 8040     1  8040    15:12:53   0:00.27  12608 /usr/libexec/amfid
+13157     1 13157    15:11:17   0:00.07   6688 /usr/libexec/aneuserd
+21208     1 21208    11:01:26   0:00.13  21056 /System/Library/PrivateFrameworks/GeoAnalytics.framework/geoanalyticsd
+30853     1 30853    13:51:47   0:00.43  15904 /usr/libexec/swtransparencyd
+49846     1 49846 01-10:18:42   8:33.64 120272 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent
+77139 77051 77139 03-03:32:21   0:00.43   1488 postgres: logical replication launcher   
+  681     1   681 03-03:49:38   0:00.36   1600 /usr/libexec/remoted

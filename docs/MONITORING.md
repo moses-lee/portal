@@ -122,8 +122,8 @@ type ProcessRow = { pid; ppid; pgid; elapsedSeconds; cpuSeconds; memoryBytes; co
 Each process is charged to the first owner that matches:
 
 1. **Session**: the process is the session's CLI root (`findSessionRoot`) or a descendant of it.
-2. **Portal**: the server itself, its children that are adapters (`descendants(serverPid)` minus session trees), the web server (found by its listening port), and Postgres (the container's VM process on macOS, the container's processes on Linux).
-3. **Worktree**: the process's working folder, or a path in its command line, is inside a Portal worktree's folder. A Bazel server matches through `--workspace_directory=<path>` with no Bazel-specific code, and so do dev servers and test databases started inside a worktree. Only processes using more than 20 MB get their working folder looked up, to keep `lsof` cheap.
+2. **Portal**: the server itself, its children that are adapters (`descendants(serverPid)` minus session trees), the web server (found by its listening port), and Postgres (on macOS the VM of the container runtime the port's listener belongs to: Colima/Lima, Docker Desktop, OrbStack or Podman, a Virtualization.framework VM recognised by that runtime's disk images among its open files, never any other app's VM; on Linux the container's processes, from `docker ps --filter publish=<port>` whether or not a listener was seen).
+3. **Worktree**: the process's working folder, or a path in its command line, is inside a Portal worktree's folder. A Bazel server matches through `--workspace_directory=<path>` with no Bazel-specific code, and so do dev servers and test databases started inside a worktree. Only processes using more than 20 MB get their working folder looked up, to keep `lsof` cheap. A process that matches nothing on its own inherits the worktree of its nearest ancestor that did (`inheritedFrom` in the row); only worktrees are inherited.
 4. **None**: everything else.
 
 A process whose parent is pid 1 and that is charged to a session or a worktree is marked **orphan** in the view.
@@ -137,7 +137,7 @@ Runs `du` over: each worktree folder, `<portalHome>/blobs`, `<portalHome>/logs`,
 - `monitoring/sampler.ts` takes a system sample every 60 s into the 24 h ring. It runs whether or not a browser is open; it is a handful of `sysctl`/`statfs` calls.
 - `GET /api/monitoring` returns the latest sample, the ring, the attributed process table (read fresh, at most once per 5 s whoever asks), the session and worktree rows, and the cached disk survey with its age. It starts a survey when the cached one is older than 10 minutes.
 - `POST /api/monitoring/disk/refresh` starts a survey now.
-- `POST /api/monitoring/processes/:pid/stop` sends SIGTERM to the process (its group, when it leads one), then SIGKILL after 5 s. It refuses unless the pid is in the latest table, attributed to something, and the server's own pid is not in its group.
+- `POST /api/monitoring/processes/:pid/stop` sends SIGTERM to the process (its group, when it leads one), then SIGKILL after 5 s. It decides on a table at most 5 s old and refuses unless the row is `stoppable`: attributed to something, not inherited (stop the process it came from), not Portal's server, web server or database (an adapter may be stopped), not the server or anything above it, and not in a process group with any of those. Each row carries `stoppable` and `stopBlockedReason`, so the view shows the same rules. Just before the signal the table is read again, and the process must still have the same command and start time (and, for a group, still lead it).
 - `POST /api/sessions/:id/stop-cli` runs the idle stop for one session now.
 - `POST /api/projects/:id/cleanup-script` runs `preWorktreeDelete` in the worktree, with the same environment as before a delete plus `PORTAL_SCRIPT_TRIGGER=manual` so a script can tell the two apart. It answers 409 while a session in that worktree is busy.
 - The portal stream gains a `monitoring` event every 60 s with the summary only (pressure level, memory used, swap used, disk free and level), for the room and the summary strip. The view polls `GET /api/monitoring` every 5 s while it is open.
@@ -159,8 +159,8 @@ Every minute, for each session whose link is live:
 ### Process cleanup
 
 - **Adapters** are spawned with `detached: true` (their own process group). `fail()` and `dispose` kill the group (`-pgid`), SIGTERM then SIGKILL after 5 s.
-- Their pgids are written to `<portalHome>/run/adapters.json`. On boot, any group listed there that is still alive is killed before new adapters start, which covers a server that crashed or was SIGKILLed.
-- **Scripts** (`exec-command.ts`): the script's process group is killed after a normal exit too, not just on timeout, so nothing a script backgrounds outlives it.
+- Their pgids are written to `<portalHome>/run/adapters.json`, each with the pid and start time of the server that started it. On boot, a listed group is killed before new adapters start when its server is no longer running and it still looks like that adapter (orphaned, same command and start time), which covers a server that crashed or was SIGKILLed; a group whose server still runs (another server on the same Portal home) is left alone and stays listed.
+- **Scripts** (the configured scripts: `preWorktreeDelete` and the others, and Run cleanup script): the script's process group is killed after a normal exit too, not just on timeout, so nothing a script backgrounds outlives it. The orchestrator's `run_command` is not a script and keeps its old behaviour. A worktree's removal and its cleanup script never run at once (the second gets a 409).
 - **Terminals:** unchanged (a terminal's job is to keep what you start).
 - **Session delete:** after `session/close`, the session's CLI tree is checked and killed, as in the idle stop.
 

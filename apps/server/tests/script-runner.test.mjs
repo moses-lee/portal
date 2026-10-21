@@ -128,6 +128,45 @@ test("a timeout is a failure: the process group is killed and the message names 
   assert.ok(Date.now() - started < 10_000, "did not wait for sleep to finish");
 });
 
+test("with stopGroupOnExit (scripts), what a command leaves running in the background is stopped once it exits normally", { skip: process.platform === "win32" }, async (t) => {
+  const cwd = tempDir(t);
+  const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  let pid = null;
+  t.after(() => { if (pid && isAlive(pid)) process.kill(pid, "SIGKILL"); });
+  const started = Date.now();
+  // The background job keeps stdout open, so the result also shows the wait ended with it.
+  const result = await execCommand("sleep 30 & echo $!", { cwd, timeoutMs: 20_000, maxBytes: 4096, shell: "/bin/sh", stopGroupOnExit: true });
+  pid = Number(result.stdout.trim());
+  assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.ok(Number.isInteger(pid) && pid > 0, result.stdout);
+  assert.ok(Date.now() - started < 10_000, "did not wait for the background job to finish");
+  for (const deadline = Date.now() + 5_000; isAlive(pid) && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(isAlive(pid), false, "the background job was stopped with the script's group");
+});
+
+test("without stopGroupOnExit (the orchestrator's run_command), a background job that let go of the output keeps running", { skip: process.platform === "win32" }, async (t) => {
+  const cwd = tempDir(t);
+  const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  let pid = null;
+  t.after(() => { if (pid && isAlive(pid)) process.kill(pid, "SIGKILL"); });
+  const result = await execCommand("sleep 30 >/dev/null 2>&1 & echo $!", { cwd, timeoutMs: 20_000, maxBytes: 4096, shell: "/bin/sh" });
+  pid = Number(result.stdout.trim());
+  assert.equal(result.code, 0);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(isAlive(pid), true, "left running, as before");
+});
+
+test("runScript asks the runner to stop what the script left running", async () => {
+  const calls = [];
+  await runScript("preWorktreeDelete", settings({ command: "true" }), { cwd: "/tmp" }, async (command, opts) => {
+    calls.push(opts);
+    return { code: 0, stdout: "", stderr: "", timedOut: false };
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].stopGroupOnExit, true);
+});
+
 test("describeFailure quotes only the tail of long output", () => {
   const long = `${"x".repeat(5000)}THE END`;
   const message = describeFailure("preWorktreeDelete", settings(), { ran: true, ok: false, code: 2, stdout: long, stderr: "", timedOut: false });

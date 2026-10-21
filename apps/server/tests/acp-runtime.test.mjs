@@ -8,9 +8,10 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { createAcpRuntime, toMeta } from "../src/lib/acp-runtime.ts";
+import { createAcpRuntime, idleStopAt, toMeta } from "../src/lib/acp-runtime.ts";
+import { createAdapterGroupFile } from "../src/lib/adapter-groups.ts";
 import { createBlobStore } from "../src/lib/blobs.ts";
-import { readProcessTable } from "../src/lib/process-probe.ts";
+import { parsePs, readProcessTable } from "../src/lib/process-probe.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/store.ts";
 import { temporaryDatabase } from "./helpers/db.mjs";
@@ -2072,3 +2073,280 @@ test("a manual send bypasses a paused queue when the agent is free, queues behin
   await delay(100);
   assert.deepEqual(session.events.filter(({ type }) => type === "user").map(({ text }) => text), ["hello", "name:Direct", "hello"]);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Idle CLI stop (docs/MONITORING.md)
+
+const MINUTE = 60_000;
+
+test("idleStopAt counts from the later of going idle and attaching, and only for an idle, attached session with the stop on", () => {
+  const on = { enabled: true, afterMs: 120 * MINUTE };
+  const idle = { busy: false, pendingPermissions: new Set(), backgroundTasks: new Map(), idleSince: 1_000, attachedAt: 500, link: { status: "live" } };
+  assert.equal(idleStopAt(idle, on), 1_000 + 120 * MINUTE);
+  // Attached after it went idle (an old session opened): the full time from the attach.
+  assert.equal(idleStopAt({ ...idle, attachedAt: 50_000 }, on), 50_000 + 120 * MINUTE);
+  assert.equal(idleStopAt(idle, { ...on, afterMs: 10 * MINUTE }), 1_000 + 10 * MINUTE);
+  assert.equal(idleStopAt(idle, { ...on, enabled: false }), null, "setting off");
+  assert.equal(idleStopAt({ ...idle, busy: true }, on), null, "busy");
+  assert.equal(idleStopAt({ ...idle, pendingPermissions: new Set(["r"]) }, on), null, "pending approval");
+  assert.equal(idleStopAt({ ...idle, backgroundTasks: new Map([["t", {}]]) }, on), null, "background work");
+  assert.equal(idleStopAt({ ...idle, idleSince: null }, on), null, "no idle clock");
+  assert.equal(idleStopAt({ ...idle, attachedAt: null }, on), null, "not attached");
+  assert.equal(idleStopAt({ ...idle, link: { status: "offline", error: null } }, on), null, "offline");
+});
+
+test("the idle stop lets an idle agent go once its clock runs out, and the next prompt, the queue, or an attach brings it back", async (t) => {
+  const { runtime, cwd, messages, starts } = setup(t, { modes: { claude: "resume" } });
+  const session = await runtime.createSession(cwd, "claude");
+  await runtime.sendPrompt(session.id, "name:First");
+  await until(() => !session.busy && session.idleSince !== null, "the first turn to end");
+  const stops = [];
+  runtime.onCliStopped((stop) => stops.push(stop));
+  const info = runtime.idleStopInfo(session.id);
+  assert.equal(info.idleSince, session.idleSince);
+  assert.ok(info.attachedAt > 0);
+  assert.equal(info.stopsAt, Math.max(info.idleSince, info.attachedAt) + 120 * MINUTE);
+  assert.equal(runtime.idleStopInfo("nope"), null);
+
+  // Not due yet: nothing happens.
+  assert.deepEqual(await runtime.stopIdleClis(info.stopsAt - 1), []);
+  assert.deepEqual(session.link, { status: "live" });
+  // Off: nothing happens however long it has been idle.
+  runtime.setIdleStopOptions({ enabled: false });
+  assert.deepEqual(await runtime.stopIdleClis(info.stopsAt + 10 * MINUTE), []);
+  assert.equal(runtime.idleStopInfo(session.id).stopsAt, null);
+  runtime.setIdleStopOptions({ enabled: true });
+
+  const [adapter] = starts("claude");
+  assert.deepEqual(await runtime.stopIdleClis(info.stopsAt), [session.id]);
+  assert.deepEqual(session.link, { status: "offline", error: null }, "offline as after a restart, with no error");
+  assert.equal(session.lost, null);
+  assert.equal(messages("claude", "session/close").length, 1, "the agent closed the session");
+  assert.equal(stops.length, 1);
+  assert.deepEqual({ ...stops[0], idleMs: undefined }, { sessionId: session.id, automatic: true, idleMs: undefined, afterMs: 120 * MINUTE });
+  assert.equal(stops[0].idleMs, info.stopsAt - session.idleSince);
+  assert.deepEqual(runtime.idleStopInfo(session.id), { attachedAt: null, idleSince: session.idleSince, stopsAt: null });
+  // Its only session gone, the adapter itself was stopped.
+  await until(() => !isAlive(adapter.pid), "the empty adapter to stop");
+  assert.ok(runtime.listSessions().some(({ id }) => id === session.id), "nothing was deleted");
+
+  // The next prompt starts a fresh adapter and resumes the session.
+  await runtime.sendPrompt(session.id, "name:Second");
+  await until(() => !session.busy, "the resumed turn to end");
+  assert.equal(starts("claude").length, 2);
+  assert.equal(messages("claude", "session/resume").length, 1);
+  assert.deepEqual(session.link, { status: "live" });
+  assert.equal(session.title, "Second");
+  assert.ok(runtime.idleStopInfo(session.id).attachedAt >= info.attachedAt, "the clock restarts at the attach");
+
+  // The queue does too.
+  await runtime.stopSessionCli(session.id);
+  assert.equal(session.link.status, "offline");
+  assert.equal(stops.at(-1).automatic, false);
+  await runtime.queuePrompt(session.id, "name:Queued");
+  await until(() => session.title === "Queued" && !session.busy, "the queued prompt to run");
+  assert.equal(messages("claude", "session/resume").length, 2);
+
+  // And so does opening it (attach).
+  await runtime.stopSessionCli(session.id);
+  await runtime.attach(session.id);
+  assert.deepEqual(session.link, { status: "live" });
+  assert.equal(messages("claude", "session/resume").length, 3);
+});
+
+test("the idle stop leaves busy sessions, pending approvals, and background work alone, and keeps an adapter other sessions use", async (t) => {
+  const { runtime, cwd, starts } = setup(t, { modes: { claude: "resume" } });
+  const [busy, asking, background, quiet] = await Promise.all([1, 2, 3, 4].map(() => runtime.createSession(cwd, "claude")));
+  await runtime.sendPrompt(busy.id, "tool");
+  await runtime.sendPrompt(asking.id, "hold");
+  await until(() => asking.pendingPermissions.size > 0, "the approval");
+  await runtime.sendPrompt(background.id, "background");
+  await until(() => !background.busy && background.backgroundTasks.size === 1, "the background task");
+  const later = Date.now() + 1_000 * MINUTE;
+  assert.deepEqual(await runtime.stopIdleClis(later), [quiet.id]);
+  for (const session of [busy, asking, background]) assert.deepEqual(session.link, { status: "live" }, session.id);
+  assert.equal(starts("claude").length, 1);
+  assert.ok(isAlive(starts("claude")[0].pid), "the adapter still serves the other sessions");
+
+  // Asked for by hand, a busy session is refused with the reason, an offline one too.
+  await assert.rejects(runtime.stopSessionCli(busy.id), /busy/);
+  await assert.rejects(runtime.stopSessionCli(asking.id), /busy/);
+  await assert.rejects(runtime.stopSessionCli(background.id), /busy/);
+  await assert.rejects(runtime.stopSessionCli(quiet.id), /not running/);
+  await assert.rejects(runtime.stopSessionCli("nope"), /No such session/);
+});
+
+test("dispose saves held events before it waits for the adapters to exit", { skip: process.platform === "win32" }, async (t) => {
+  const memory = createMemorySessionStore();
+  let adapterPid = null;
+  const appended = [];
+  const store = {
+    ...memory,
+    async appendEvents(id, batch) {
+      appended.push({ at: Date.now(), types: batch.map((event) => event.update?.sessionUpdate ?? event.type), adapterAlive: isAlive(adapterPid) });
+      return memory.appendEvents(id, batch);
+    },
+  };
+  // The adapter ignores SIGTERM, so the shutdown waits out its grace before the SIGKILL.
+  const { cwd, spawnRuntime, starts } = setup(t, { modes: { claude: { mode: "default", ignoreTerm: true } } });
+  const runtime = spawnRuntime({ store, disposeGraceMs: 1_000 });
+  const session = await runtime.createSession(cwd, "claude");
+  adapterPid = starts("claude").at(-1).pid;
+  await runtime.sendPrompt(session.id, "tool");
+  // The tool call row is held for the next write (up to WRITE_DELAY_MS, 250 ms).
+  await until(() => session.events.some((event) => event.update?.sessionUpdate === "tool_call"), "the tool call");
+  const before = appended.length;
+  const started = Date.now();
+  await runtime.dispose();
+  assert.ok(Date.now() - started >= 900, "the shutdown waited out the adapter's grace");
+  await until(() => !isAlive(adapterPid), "the adapter to go on SIGKILL");
+  const late = appended.slice(before);
+  const write = late.find(({ types }) => types.includes("tool_call"));
+  assert.ok(write, "the held tool call was written");
+  assert.ok(write.adapterAlive, "before the adapter was gone");
+  assert.ok(write.at - started < 150, `at once, not when the write timer or the adapter's grace ran out (${write.at - started} ms)`);
+});
+
+test("a prompt or an attach that arrives while the idle stop looks for the CLI keeps the agent running", async (t) => {
+  // `ps` is held until the test lets it go, so the prompt lands while the stop is under way.
+  let releaseTable = null;
+  const readProcesses = () => new Promise((resolve) => { releaseTable = () => resolve(null); });
+  const { cwd, spawnRuntime, messages } = setup(t, { modes: { claude: "resume" } });
+  const runtime = spawnRuntime({ readProcesses });
+  const session = await runtime.createSession(cwd, "claude");
+
+  const stop = runtime.stopSessionCli(session.id);
+  await until(() => releaseTable !== null, "the stop to read the process table");
+  const prompt = runtime.sendPrompt(session.id, "name:Meanwhile");
+  await delay(20);
+  releaseTable();
+  await assert.rejects(stop, /started working in this session meanwhile/);
+  await prompt;
+  await until(() => !session.busy && session.title === "Meanwhile", "the prompt to run");
+  assert.deepEqual(session.link, { status: "live" });
+  assert.equal(messages("claude", "session/close").length, 0, "the agent was never told to close the session");
+  assert.equal(messages("claude", "session/resume").length, 0, "nothing had to be reattached");
+
+  // The same for an attach (opening the session).
+  releaseTable = null;
+  const again = runtime.stopIdleClis(Date.now() + 1_000 * MINUTE);
+  await until(() => releaseTable !== null, "the idle stop to read the process table");
+  const attach = runtime.attach(session.id);
+  await delay(20);
+  releaseTable();
+  assert.deepEqual(await again, []);
+  await attach;
+  assert.deepEqual(session.link, { status: "live" });
+  assert.equal(messages("claude", "session/close").length, 0);
+});
+
+test("a session CLI still running after its agent let it go is killed, on an idle stop and on a delete", { skip: process.platform === "win32" }, async (t) => {
+  // A stand-in for Claude Code's per-session CLI: a process the table lists under the adapter with the session's id.
+  const clis = [];
+  t.after(() => { for (const child of clis) if (isAlive(child.pid)) process.kill(child.pid, "SIGKILL"); });
+  const spawnCli = () => {
+    const child = spawn("sleep", ["30"], { stdio: "ignore" });
+    clis.push(child);
+    return child;
+  };
+  let fakeRows = [];
+  const readProcesses = async () => {
+    const table = await readProcessTable();
+    if (!table) return null;
+    // The real table, with the stand-ins re-parented under the adapter and named after their session.
+    const lines = [...table.rows.values()].map((row) => {
+      const fake = fakeRows.find((entry) => entry.pid === row.pid);
+      return fake ? `${row.pid} ${fake.ppid} ${row.pgid} 00:01 0:00.00 0 ${fake.command}` : null;
+    }).filter(Boolean);
+    const extra = parsePs(lines.join("\n"), table.at);
+    for (const [pid, row] of extra.rows) {
+      table.rows.set(pid, row);
+      table.children.set(row.ppid, [...(table.children.get(row.ppid) ?? []), pid]);
+    }
+    return table;
+  };
+  const { cwd, spawnRuntime, starts } = setup(t, { modes: { claude: "resume" } });
+  const runtime = spawnRuntime({ readProcesses, cliKillCheckMs: 50, stopGraceMs: 500 });
+  const [stopped, deleted] = await Promise.all([runtime.createSession(cwd, "claude"), runtime.createSession(cwd, "claude")]);
+  const agentPid = starts("claude").at(-1).pid;
+  const first = spawnCli();
+  const second = spawnCli();
+  fakeRows = [
+    { pid: first.pid, ppid: agentPid, command: `claude --resume ${stopped.upstreamId}` },
+    { pid: second.pid, ppid: agentPid, command: `claude --resume ${deleted.upstreamId}` },
+  ];
+
+  await runtime.stopSessionCli(stopped.id);
+  await until(() => first.exitCode !== null || first.signalCode !== null, "the stopped session's CLI to be killed");
+  assert.ok(second.exitCode === null && second.signalCode === null, "the other session's CLI is left alone");
+  await runtime.deleteSession(deleted.id);
+  await until(() => second.exitCode !== null || second.signalCode !== null, "the deleted session's CLI to be killed");
+});
+
+test("adapters lead their own process groups, listed in the groups file while they run and killed from it on the next boot", { skip: process.platform === "win32" }, async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "portal-groups-"));
+  const file = path.join(dir, "run", "adapters.json");
+  const spawned = [];
+  t.after(() => {
+    for (const child of spawned) if (isAlive(child.pid)) process.kill(-child.pid, "SIGKILL");
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const { cwd, spawnRuntime, starts } = setup(t);
+  const runtime = spawnRuntime({ adapterGroups: createAdapterGroupFile(file) });
+  await runtime.createSession(cwd, "claude");
+  const adapterPid = starts("claude")[0].pid;
+  const listed = JSON.parse(readFileSync(file, "utf8")).groups;
+  assert.deepEqual(listed.map(({ pgid }) => pgid), [adapterPid]);
+  assert.match(listed[0].command, /fake-acp-agent\.mjs claude/);
+  const table = await readProcessTable();
+  assert.equal(table.rows.get(adapterPid).pgid, adapterPid, "the adapter leads its own group");
+  await runtime.dispose();
+  assert.equal(isAlive(adapterPid), false);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).groups, [], "a stopped group leaves the file");
+
+  // A server that died left groups behind: one still the adapter it started (orphaned, as an adapter
+  // is once its server is gone), one whose pgid now belongs to an unrelated process (a recycled
+  // number), and one whose leader still has a parent. A group a running server owns (a second
+  // server on the same Portal home) is listed too. Only the first may be killed.
+  const startOrphan = async (tag) => {
+    const launcher = spawn(process.execPath, ["-e", `
+      const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", ${JSON.stringify(tag)}], { detached: true, stdio: "ignore" });
+      process.stdout.write(String(child.pid));
+      child.unref();
+    `], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    launcher.stdout.on("data", (chunk) => { out += chunk; });
+    await once(launcher, "exit");
+    const pid = Number(out.trim());
+    spawned.push({ pid });
+    // The launcher is gone, so the adapter stand-in is re-parented to pid 1 like an adapter whose server died.
+    for (let tries = 0; (await readProcessTable())?.rows.get(pid)?.ppid !== 1; tries++) {
+      assert.ok(tries < 40, `Timed out waiting for ${tag} to be orphaned`);
+      await delay(50);
+    }
+    return pid;
+  };
+  const leftover = await startOrphan("leftover-adapter");
+  const othersAdapter = await startOrphan("live-server-adapter");
+  const unrelated = spawn("sleep", ["30"], { stdio: "ignore", detached: true });
+  const parented = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "parented-adapter"], { stdio: "ignore", detached: true });
+  spawned.push(unrelated, parented);
+  await until(() => isAlive(unrelated.pid) && isAlive(parented.pid), "the stand-ins to start");
+  const now = Date.now();
+  const gone = { pid: 999_999, startedAt: now - 60_000 };
+  const adapterCommand = (tag) => `${process.execPath} -e setInterval(() => {}, 1000) ${tag}`;
+  writeFileSync(file, JSON.stringify({ groups: [
+    { pgid: leftover, command: adapterCommand("leftover-adapter"), startedAt: now, server: gone },
+    { pgid: unrelated.pid, command: `${process.execPath} /some/adapter.js`, startedAt: now, server: gone },
+    { pgid: parented.pid, command: adapterCommand("parented-adapter"), startedAt: now, server: gone },
+    { pgid: othersAdapter, command: adapterCommand("live-server-adapter"), startedAt: now, server: { pid: process.pid, startedAt: Math.round(Date.now() - process.uptime() * 1000) } },
+  ] }));
+  const next = spawnRuntime({ adapterGroups: createAdapterGroupFile(file), stopGraceMs: 1_000 });
+  await next.ready;
+  await until(() => !isAlive(leftover), "the leftover adapter to be killed");
+  assert.ok(isAlive(unrelated.pid), "a group that is not the recorded adapter is left alone");
+  assert.ok(isAlive(parented.pid), "an adapter whose parent still runs is left alone");
+  assert.ok(isAlive(othersAdapter), "a running server's adapter is left alone");
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).groups.map(({ pgid }) => pgid), [othersAdapter], "only the running server's group stays listed");
+});
+

@@ -20,14 +20,15 @@ test("ps durations parse in both the macOS and the Linux forms", () => {
 });
 
 const table = parsePs([
-  "    1     0 10-00:00:00  1:00.00 /sbin/launchd",
-  "  100     1    01:00:00  0:42.49 node claude-agent-acp/dist/index.js",
-  "  200   100    00:50:00 11:37.01 claude --output-format stream-json --session-id=abc-123 --verbose",
-  "  201   100    00:40:00  8:00.00 claude --output-format stream-json --resume other-456",
-  "  300   200       45:00  0:00.02 /bin/zsh -c bazel test //...",
-  "  301   300       44:59  0:03.10 bazel test //...",
-  "  400   201       01:00  0:00.00 sleep 60",
+  "    1     0     1 10-00:00:00  1:00.00  18480 /sbin/launchd",
+  "  100     1   100    01:00:00  0:42.49  90112 node claude-agent-acp/dist/index.js",
+  "  200   100   100    00:50:00 11:37.01 358400 claude --output-format stream-json --session-id=abc-123 --verbose",
+  "  201   100   100    00:40:00  8:00.00 300000 claude --output-format stream-json --resume other-456",
+  "  300   200   300       45:00  0:00.02   2048 /bin/zsh -c bazel test //...",
+  "  301   300   300       44:59  0:03.10  40960 bazel test //...",
+  "  400   201   100       01:00  0:00.00    512 sleep 60",
   "garbage line",
+  "  500     1 01:00  0:00.00 a line in the old five-column form",
 ].join("\n"), 1_000_000);
 
 test("the table links children to parents and skips lines it cannot read", () => {
@@ -35,6 +36,9 @@ test("the table links children to parents and skips lines it cannot read", () =>
   assert.deepEqual(table.children.get(100), [200, 201]);
   assert.equal(table.rows.get(301).command, "bazel test //...");
   assert.equal(table.rows.get(200).cpuMs, 697_010);
+  assert.equal(table.rows.get(200).pgid, 100);
+  assert.equal(table.rows.get(300).pgid, 300, "a shell leads its own group");
+  assert.equal(table.rows.get(200).rssBytes, 358_400 * 1024, "rss is read in KiB");
   assert.deepEqual(descendants(table, 100).map((row) => row.pid), [200, 201, 300, 400, 301]);
   assert.deepEqual(descendants(table, 301), []);
 });
@@ -57,4 +61,13 @@ test("the real process table has this process and a child it just started", { sk
   assert.ok(found, "the child is below this process");
   assert.match(found.command, /^sleep 5/);
   assert.ok(found.elapsedMs < 5_000);
+  assert.ok(found.rssBytes > 0);
+});
+
+test("reads made while one is running share it", { skip: process.platform === "win32" }, async () => {
+  const [a, b] = await Promise.all([readProcessTable(), readProcessTable()]);
+  assert.ok(a);
+  assert.equal(a, b, "one ps read answered both");
+  const c = await readProcessTable();
+  assert.notEqual(c, a, "a later read runs ps again");
 });

@@ -1,18 +1,23 @@
 /**
- * The machine's process table, read with one `ps` call: who is whose child, how long each process
- * has run, and how much CPU it has used. `ps -A -o pid=,ppid=,etime=,time=,command=` means the same
- * on macOS and Linux, so no per-platform code is needed there; Windows has no `ps`, and the read
- * answers null. Callers share one read across every session they probe.
+ * The machine's process table, read with one `ps` call: who is whose child and in which process
+ * group, how long each process has run, how much CPU it has used, and its resident memory.
+ * `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,command=` means the same on macOS and Linux, so no
+ * per-platform code is needed there; Windows has no `ps`, and the read answers null. Callers share
+ * one read across every session they probe, and liveness and Monitoring share a read in flight.
  */
 import { execFile } from "node:child_process";
 
 export type ProcessRow = {
   pid: number;
   ppid: number;
+  /** The process group; a group leader has `pgid === pid`. */
+  pgid: number;
   /** How long the process has run, at `ProcessTable.at` (one-second resolution). */
   elapsedMs: number;
   /** User plus system CPU time used so far. */
   cpuMs: number;
+  /** Resident memory. On macOS it undercounts processes the system has compressed (see monitoring/probe). */
+  rssBytes: number;
   command: string;
 };
 
@@ -23,7 +28,7 @@ export type ProcessTable = {
   children: Map<number, number[]>;
 };
 
-const PS_ARGS = ["-A", "-ww", "-o", "pid=,ppid=,etime=,time=,command="];
+const PS_ARGS = ["-A", "-ww", "-o", "pid=,ppid=,pgid=,etime=,time=,rss=,command="];
 const PS_TIMEOUT_MS = 5_000;
 /** Enough for thousands of processes with long command lines. */
 const PS_MAX_BUFFER = 16 * 1024 * 1024;
@@ -46,10 +51,13 @@ export function parsePs(stdout: string, at: number): ProcessTable {
   const rows = new Map<number, ProcessRow>();
   const children = new Map<number, number[]>();
   for (const line of stdout.split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(line);
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.*)$/.exec(line);
     if (!match) continue;
-    const [, pid, ppid, etime, time, command] = match;
-    const row = { pid: Number(pid), ppid: Number(ppid), elapsedMs: parseDuration(etime), cpuMs: parseDuration(time), command: command.trim() };
+    const [, pid, ppid, pgid, etime, time, rss, command] = match;
+    const row = {
+      pid: Number(pid), ppid: Number(ppid), pgid: Number(pgid), elapsedMs: parseDuration(etime), cpuMs: parseDuration(time),
+      rssBytes: Number(rss) * 1024, command: command.trim(),
+    };
     if (!Number.isFinite(row.elapsedMs) || !Number.isFinite(row.cpuMs)) continue;
     rows.set(row.pid, row);
   }
@@ -62,14 +70,20 @@ export function parsePs(stdout: string, at: number): ProcessTable {
   return { at, rows, children };
 }
 
-/** The whole table, or null where `ps` cannot be run (Windows) or fails. */
+let reading: Promise<ProcessTable | null> | null = null;
+
+/**
+ * The whole table, or null where `ps` cannot be run (Windows) or fails. A call made while another
+ * is running gets that read, so the liveness probe and Monitoring never run `ps` twice at once.
+ */
 export function readProcessTable(): Promise<ProcessTable | null> {
   if (process.platform === "win32") return Promise.resolve(null);
-  return new Promise((resolve) => {
+  reading ??= new Promise<ProcessTable | null>((resolve) => {
     execFile("ps", PS_ARGS, { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BUFFER, env: { ...process.env, LC_ALL: "C" } }, (error, stdout) => {
       resolve(error ? null : parsePs(stdout, Date.now()));
     });
-  });
+  }).finally(() => { reading = null; });
+  return reading;
 }
 
 /** Every process below `pid` (not `pid` itself), parents before their children. */

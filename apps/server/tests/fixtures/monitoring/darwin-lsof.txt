@@ -1,0 +1,9 @@
+p2099
+fcwd
+n/Users/moses/repos/portal/apps/web
+p78886
+fcwd
+n/Users/moses/.portal/worktrees/portal/manage-memory-and-storage/apps/server/tests/fixtures/monitoring
+p81257
+fcwd
+n/

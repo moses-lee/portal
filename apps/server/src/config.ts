@@ -8,6 +8,8 @@ import path from "node:path";
 export interface ServerConfig {
   /** Port the HTTP API listens on. Next.js proxies `/api/*` here. */
   port: number;
+  /** Port the Next.js web server listens on (`PORTAL_WEB_PORT`, else `PORT` as the web app reads it, else 3000); Monitoring finds the web server by it. */
+  webPort: number;
   /** Interface to bind. Loopback by default: the browser reaches the API through the Next.js proxy. */
   host: string;
   /** Postgres connection string. */
@@ -36,8 +38,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error(`PORTAL_SERVER_PORT must be a port number, got ${JSON.stringify(env.PORTAL_SERVER_PORT)}`);
   }
+  const webPort = Number(env.PORTAL_WEB_PORT || env.PORT || 3000);
   return {
     port,
+    webPort: Number.isInteger(webPort) && webPort > 0 && webPort <= 65535 ? webPort : 3000,
     host: env.PORTAL_SERVER_HOST ?? "127.0.0.1",
     databaseUrl: env.DATABASE_URL ?? "postgres://portal:portal@127.0.0.1:5433/portal",
     portalHome: env.PORTAL_HOME || path.join(os.homedir(), ".portal"),

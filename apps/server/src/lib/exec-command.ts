@@ -4,6 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import { childEnv } from "./child-env.ts";
+import { terminate } from "./process-stop.ts";
 
 export type ExecResult = {
   /** Exit code; null when the process was killed (timeout) or could not start. */
@@ -66,9 +67,17 @@ class BoundedOutput {
  * Run `command` through the shell (`/bin/sh` unless `shell` names another) in `cwd` with the
  * user's environment (not the dev server's), plus `env` when given.
  * The child leads its own process group so a timeout kills everything it started, not just the
- * shell. Never rejects: a timeout or a start failure is reported in the result.
+ * shell. With `stopGroupOnExit` (the user's configured scripts), once the shell exits whatever it
+ * left running in the background is stopped too (SIGTERM, then SIGKILL after the grace), so
+ * nothing a script starts outlives it; a process that moved to a group of its own (`setsid`) is out
+ * of reach. Never rejects: a timeout or a start failure is reported in the result.
  */
-export function execCommand(command: string, { cwd, timeoutMs, maxBytes, env, shell = true }: { cwd: string; timeoutMs: number; maxBytes: number; env?: Record<string, string>; shell?: string | true }): Promise<ExecResult> {
+export function execCommand(
+  command: string,
+  { cwd, timeoutMs, maxBytes, env, shell = true, stopGroupOnExit = false }: {
+    cwd: string; timeoutMs: number; maxBytes: number; env?: Record<string, string>; shell?: string | true; stopGroupOnExit?: boolean;
+  },
+): Promise<ExecResult> {
   return new Promise((resolve) => {
     const stdout = new BoundedOutput(maxBytes);
     const stderr = new BoundedOutput(maxBytes);
@@ -93,6 +102,12 @@ export function execCommand(command: string, { cwd, timeoutMs, maxBytes, env, sh
       timedOut = true;
       killGroup();
     }, timeoutMs);
+    // Background jobs keep the output pipes open, so the result waits for them to go.
+    if (stopGroupOnExit) {
+      child.on("exit", () => {
+        if (child.pid !== undefined) terminate([{ pgid: child.pid }]);
+      });
+    }
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (err) => {

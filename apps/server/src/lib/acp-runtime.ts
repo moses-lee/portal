@@ -8,7 +8,9 @@ import type { AgentDefinition } from "./agents.ts";
 import { childEnv } from "./child-env.ts";
 import { type BlobStore, externalizeImages } from "./blobs.ts";
 import { DEFAULT_HUNG_AFTER_MS, type ProbeState, createProbeState, deriveLiveness, isHeartbeat, resetProbe, sampleProbe, trackProgress, trackToolCall } from "./liveness.ts";
-import { type ProcessTable, readProcessTable } from "./process-probe.ts";
+import { type AdapterGroupFile, killLeftoverAdapters } from "./adapter-groups.ts";
+import { type ProcessTable, descendants, findSessionRoot, readProcessTable } from "./process-probe.ts";
+import { STOP_GRACE_MS, type Termination, signalTarget, terminate } from "./process-stop.ts";
 import { coalesceTextChunks, isTextChunk, readTurnPage } from "./session-pages.ts";
 import { createMemorySessionStore, type SessionRecord, type SessionStore } from "../sessions/store.ts";
 import { AIR_CLIENT_META, AIR_UPDATE_METHOD, ASYNC_TASK_STOP_METHOD, type AirNotification, parseAirNotification, routeAirUpdates } from "./air-tasks.ts";
@@ -82,6 +84,12 @@ export type Session = Omit<SessionMeta, "awaitingPermission" | "liveness" | "bac
   livenessConfig: LivenessConfig;
   /** The liveness state list subscribers last heard (in a patch or `created`), so a transition is told once. */
   listedLiveness: LivenessState;
+  /** When the agent was last attached (created or reattached); null while it is not. Starts the idle stop clock. */
+  attachedAt: number | null;
+  /** Set while the idle stop lets the agent go (see `stopCli`); a prompt or an attach waits for it. */
+  stopping: Promise<void> | null;
+  /** Prompts and attaches waiting on `stopping`; with any, the stop gives up before the agent is told (`waitForStop`). */
+  stopWaiters: number;
 };
 
 /** A task the agent keeps running after its turn ended. */
@@ -126,6 +134,15 @@ type AgentProcess = {
   loss: SessionLoss | null;
   /** By upstream (agent-side) session ID. */
   sessions: Map<string, Session>;
+  /**
+   * Callers between `connect` and registering their session (a create or a reattach in flight);
+   * an adapter with none of these and no sessions is stopped by the idle stop (`retireIfEmpty`).
+   */
+  claims: number;
+  /** The adapter's process group (it leads one of its own), or null where it could not get one. */
+  pgid: number | null;
+  /** Set once Portal itself stopped the process, so its exit is not reported as a crash. */
+  stopping: Termination | null;
 };
 
 type PendingPermission = {
@@ -231,6 +248,40 @@ export function isIdle(session: Pick<Session, "busy" | "pendingPermissions" | "b
   return !session.busy && session.pendingPermissions.size === 0 && session.backgroundTasks.size === 0;
 }
 
+/** The idle CLI stop's settings (`sessions.idleStop`); `setIdleStopOptions` changes them. */
+export type IdleStopConfig = { enabled: boolean; afterMs: number };
+
+export const DEFAULT_IDLE_STOP: IdleStopConfig = { enabled: true, afterMs: 120 * 60_000 };
+/** How often the idle stop looks for idle agents. */
+export const IDLE_STOP_EVERY_MS = 60_000;
+/** How long after the agent let a session go its CLI may still run before it is killed. */
+export const CLI_KILL_CHECK_MS = 10_000;
+
+/**
+ * When the idle stop lets the session's agent go (docs/MONITORING.md, "Idle CLI stop"): once it has
+ * been idle (`isIdle`, with `idleSince` set) for `afterMs`, counted from no earlier than the agent
+ * was last attached, so opening an old session gives it the full time. Null when it never will as
+ * things stand: the stop is off, the agent is not attached, or the session is doing something.
+ */
+export function idleStopAt(
+  session: Pick<Session, "busy" | "pendingPermissions" | "backgroundTasks" | "idleSince" | "attachedAt" | "link">,
+  config: IdleStopConfig,
+): number | null {
+  if (!config.enabled || session.link.status !== "live" || session.attachedAt === null || session.idleSince === null || !isIdle(session)) return null;
+  return Math.max(session.idleSince, session.attachedAt) + config.afterMs;
+}
+
+/** What the idle stop did to one session, for whoever records it (Activity). */
+export type CliStop = {
+  sessionId: string;
+  /** Whether the idle stop's own clock fired it, rather than a person (`stopSessionCli`). */
+  automatic: boolean;
+  /** How long the session had been idle when its agent was let go. */
+  idleMs: number;
+  /** The idle stop's threshold at the time. */
+  afterMs: number;
+};
+
 /**
  * A turn is open when the most recent turn marker is its start: `turn_end` and `error` close a
  * turn, while updates such as usage reports may trail either. Returns null when `tail` holds no
@@ -243,6 +294,23 @@ function turnOpen(tail: readonly PortalEvent[]): boolean | null {
     if (type === "turn_end" || type === "error") return false;
   }
   return null;
+}
+
+/**
+ * Adapter process groups still running, across every runtime in this process. A server that exits
+ * without disposing its runtime (an exit on a fatal error) still tells them to stop: they lead
+ * groups of their own, so they no longer get the terminal's signals with the server.
+ */
+const runningGroups = new Set<number>();
+let exitHookInstalled = false;
+
+function trackGroup(pgid: number) {
+  runningGroups.add(pgid);
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", () => {
+    for (const group of runningGroups) signalTarget({ pgid: group }, "SIGTERM");
+  });
 }
 
 /** Callbacks for one viewer of a session; see `subscribe`. */
@@ -275,6 +343,21 @@ export type AcpRuntimeOptions = {
   readProcesses?: () => Promise<ProcessTable | null>;
   /** Where inline images in tool results are moved to; without one they stay in the event. */
   blobs?: BlobStore | null;
+  /** The idle CLI stop's settings to start with; the app applies the user's (`setIdleStopOptions`). */
+  idleStop?: Partial<IdleStopConfig>;
+  /** How often the idle stop runs; 0 turns the timer off (tests call `stopIdleClis` by hand). */
+  idleStopEveryMs?: number;
+  /** How long after an agent let a session go its CLI is looked for and killed (see `CLI_KILL_CHECK_MS`). */
+  cliKillCheckMs?: number;
+  /** How long a stopped process (an adapter group, a CLI) has between SIGTERM and SIGKILL. */
+  stopGraceMs?: number;
+  /** The same at shutdown, which cannot wait as long. */
+  disposeGraceMs?: number;
+  /**
+   * Where the adapters' process groups are listed while they run (`<portalHome>/run/adapters.json`);
+   * groups a previous server left there are killed before the first adapter starts. Null keeps no list.
+   */
+  adapterGroups?: AdapterGroupFile | null;
 };
 
 /** How often the probe samples while any turn is open. */
@@ -287,9 +370,16 @@ export function createAcpRuntime(
   {
     initializeTimeoutMs = 30_000, agentCallTimeoutMs = 5_000, store = createMemorySessionStore(), recentEvents = 2_000,
     hungAfterMs = DEFAULT_HUNG_AFTER_MS, probeEveryMs = PROBE_EVERY_MS, readProcesses = readProcessTable, blobs = null,
+    idleStop = {}, idleStopEveryMs = IDLE_STOP_EVERY_MS, cliKillCheckMs = CLI_KILL_CHECK_MS, stopGraceMs = STOP_GRACE_MS, disposeGraceMs = 1_000,
+    adapterGroups = null,
   }: AcpRuntimeOptions = {},
 ) {
   const livenessConfig: LivenessConfig = { hungAfterMs };
+  const idleStopConfig: IdleStopConfig = { ...DEFAULT_IDLE_STOP, ...idleStop };
+  const cliStopListeners = new Set<(stop: CliStop) => void>();
+  /** CLI kill checks waiting to run, and process stops still in their grace; both are cut short on dispose. */
+  const killChecks = new Set<NodeJS.Timeout>();
+  const terminations = new Set<Termination>();
   const definitions = new Map(agentDefinitions.map((agent) => [agent.id, agent]));
   const processes = new Map<string, AgentProcess>();
   let advisor: PermissionAdvisor | null = null;
@@ -555,6 +645,7 @@ export function createAcpRuntime(
 
   /** Drop a session's link to its process; the next open or prompt reattaches it. */
   function detach(session: Session, error: string | null) {
+    session.attachedAt = null;
     if (session.process) {
       if (session.process.sessions.get(session.upstreamId) === session) session.process.sessions.delete(session.upstreamId);
       session.process = null;
@@ -591,7 +682,29 @@ export function createAcpRuntime(
     }
     // Closing ACP rejects pending initialize/new/prompt requests immediately.
     instance.conn.close(error);
-    instance.proc.kill();
+    stopAdapter(instance);
+  }
+
+  /**
+   * Stop an adapter and everything in its process group (the CLIs it started): SIGTERM, then
+   * SIGKILL after the grace, a shorter one at shutdown. The group leaves the groups file once it is gone.
+   */
+  function stopAdapter(instance: AgentProcess) {
+    if (instance.stopping) return;
+    const { pgid } = instance;
+    if (pgid === null) {
+      instance.stopping = { done: Promise.resolve(), hurry() {} };
+      instance.proc.kill();
+      return;
+    }
+    const termination = terminate([{ pgid }], { graceMs: disposed ? disposeGraceMs : stopGraceMs });
+    instance.stopping = termination;
+    terminations.add(termination);
+    void termination.done.then(() => {
+      terminations.delete(termination);
+      runningGroups.delete(pgid);
+      adapterGroups?.remove(pgid);
+    });
   }
 
   /**
@@ -649,13 +762,20 @@ export function createAcpRuntime(
   function startProcess(agent: AgentDefinition): AgentProcess {
     let proc: ChildProcessWithoutNullStreams;
     try {
+      // Its own process group, so stopping it stops the CLIs it starts too (see `stopAdapter`).
       proc = spawn(agent.command, agent.args, {
         cwd: process.cwd(),
         env: { ...childEnv(), ...agent.env },
         stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       });
     } catch (error) {
       throw agentError(agent, "could not start", error);
+    }
+    const pgid = process.platform !== "win32" && typeof proc.pid === "number" ? proc.pid : null;
+    if (pgid !== null) {
+      trackGroup(pgid);
+      adapterGroups?.add({ pgid, command: [agent.command, ...agent.args].join(" "), startedAt: Date.now() });
     }
 
     // AIR background task updates are moved off `session/update` before the SDK's closed schema
@@ -737,6 +857,9 @@ export function createAcpRuntime(
       failure: null,
       loss: null,
       sessions: new Map(),
+      claims: 0,
+      pgid,
+      stopping: null,
     };
     processes.set(agent.id, instance);
 
@@ -753,9 +876,10 @@ export function createAcpRuntime(
         exitCode: code, signal,
       };
       // The connection usually closes before the exit is reported; the exit says more, so it replaces
-      // that loss, unless the exit is only Portal's own SIGTERM after the connection went.
+      // that loss, unless the exit is only Portal's own stop after the connection went.
       const previous = instance.loss;
-      if (previous?.reason === "connection_closed" && !(proc.killed && signal === "SIGTERM")) {
+      const stoppedByPortal = (proc.killed || instance.stopping !== null) && (signal === "SIGTERM" || signal === "SIGKILL");
+      if (previous?.reason === "connection_closed" && !stoppedByPortal) {
         const refined = { ...exited, at: previous.at };
         instance.loss = refined;
         for (const session of sessions.values()) if (session.lost === previous) setLost(session, refined);
@@ -794,13 +918,24 @@ export function createAcpRuntime(
     return instance;
   }
 
+  /**
+   * The agent's running process, started when there is none. The caller holds a claim on it
+   * (`instance.claims`), so the idle stop does not stop it before the caller's session is
+   * registered; the caller releases it once it is (or failed).
+   */
   async function connect(agentId: string): Promise<AgentProcess> {
     if (disposed) throw new Error("ACP runtime is stopped");
     const agent = definitions.get(agentId);
     if (!agent) throw new Error(`Unknown agent: ${agentId}`);
     const instance = processes.get(agentId) ?? startProcess(agent);
-    await instance.ready;
-    if (instance.failure) throw instance.failure;
+    instance.claims++;
+    try {
+      await instance.ready;
+      if (instance.failure) throw instance.failure;
+    } catch (error) {
+      instance.claims--;
+      throw error;
+    }
     return instance;
   }
 
@@ -860,6 +995,9 @@ export function createAcpRuntime(
       lost: record.lost ?? null,
       livenessConfig,
       listedLiveness: "idle",
+      attachedAt: null,
+      stopping: null,
+      stopWaiters: 0,
     };
     session.listedLiveness = livenessOf(session).state;
     sessions.set(session.id, session);
@@ -923,7 +1061,16 @@ export function createAcpRuntime(
     };
     await Promise.all(Array.from({ length: Math.min(LOAD_CONCURRENCY, records.length) }, worker));
   }
-  const ready = loadPersisted();
+  /** Adapter groups a previous server left running go before this one starts any (see `adapter-groups.ts`). */
+  async function sweepLeftovers() {
+    if (!adapterGroups) return;
+    try {
+      await killLeftoverAdapters(adapterGroups, { readProcesses, graceMs: stopGraceMs });
+    } catch (error) {
+      console.error(`Could not stop adapters a previous server left running: ${errorMessage(error)}`);
+    }
+  }
+  const ready = Promise.all([sweepLeftovers(), loadPersisted()]).then(() => {});
 
   function listSessions(): SessionMeta[] {
     return [...sessions.values()]
@@ -946,6 +1093,14 @@ export function createAcpRuntime(
     await ready;
     const title = options.title?.trim() || null;
     const instance = await connect(agentId);
+    try {
+      return await createOn(instance, cwd, projectId, title);
+    } finally {
+      instance.claims--;
+    }
+  }
+
+  async function createOn(instance: AgentProcess, cwd: string, projectId: string, title: string | null): Promise<Session> {
     let response: acp.NewSessionResponse;
     try {
       response = await instance.conn.agent.request(acp.methods.agent.session.new, { cwd, mcpServers: [] });
@@ -975,6 +1130,7 @@ export function createAcpRuntime(
       },
     };
     const session = makeSession(record, 0, { status: "live" });
+    session.attachedAt = now;
     session.process = instance;
     instance.sessions.set(response.sessionId, session);
     try {
@@ -1002,6 +1158,8 @@ export function createAcpRuntime(
   async function attach(id: string): Promise<void> {
     await ready;
     const session = requireSession(id);
+    // The idle stop is letting the agent go: attach afresh once it has (or once it gave up for us).
+    await waitForStop(session);
     if (session.process && !session.process.failure && session.link.status === "live") return;
     if (session.attaching) return session.attaching;
     const agent: AgentDefinition = definitions.get(session.agentId)
@@ -1073,6 +1231,7 @@ export function createAcpRuntime(
         // clock it came back with. Background tasks the agent reports afterwards (AIR
         // `async_task_spawned` updates, see `backgroundTasks`) are what clear it again.
         if (settleIdle(session, { quiet: true })) persistMeta(session);
+        session.attachedAt = Date.now();
         setLink(session, { status: "live" }); // announces
       } catch (error) {
         // Startup failures already name the agent; only wrap errors from the resume itself.
@@ -1083,6 +1242,7 @@ export function createAcpRuntime(
         throw failure;
       } finally {
         session.attaching = null;
+        if (instance) instance.claims--;
       }
     })();
     return session.attaching;
@@ -1254,6 +1414,8 @@ export function createAcpRuntime(
    */
   async function openTurn(id: string, prompt: string | QueuedPrompt): Promise<boolean> {
     const target = requireSession(id);
+    // A prompt that arrives while the idle stop lets the agent go waits for it, then reattaches if it went.
+    await waitForStop(target);
     if (target.link.status !== "live") await attach(id);
     const { session, process: instance, upstreamId } = sessionOwner(id);
     if (session.busy) throw new Error("Session busy");
@@ -1559,10 +1721,13 @@ export function createAcpRuntime(
     if (!session) return false;
     // A reconnect in flight would otherwise register and persist the session again once it finishes.
     if (session.attaching) await session.attaching.catch(() => {});
+    if (session.stopping) await session.stopping;
     if (sessions.get(id) !== session) return false;
     sessions.delete(id);
     cancelPermissions(session);
     const instance = session.process;
+    // Found before the agent is told: once it closes the session its CLI may no longer sit under it.
+    const cli = instance && !instance.failure && session.link.status === "live" ? await findCli(session, instance) : null;
     if (instance && !instance.failure) {
       // The agent is told, but a stalled agent must not hold the delete (or the HTTP request) open.
       if (session.busy) {
@@ -1580,6 +1745,7 @@ export function createAcpRuntime(
       }
     }
     detach(session, null);
+    if (cli) checkCliGone(cli);
     session.busy = false;
     endTurn(session);
     session.backgroundTasks.clear();
@@ -1653,6 +1819,188 @@ export function createAcpRuntime(
     : null;
   probeTimer?.unref();
 
+  /** A session's CLI process as the table showed it, so a later look can tell it is the same process. */
+  type CliProcess = { pid: number; command: string };
+
+  /** The process running the session under its adapter (`findSessionRoot`); null when there is none of its own (Codex) or no `ps`. */
+  async function findCli(session: Session, instance: AgentProcess): Promise<CliProcess | null> {
+    const agentPid = instance.proc.pid;
+    if (typeof agentPid !== "number") return null;
+    const table = await readTable();
+    const pid = table ? findSessionRoot(table, agentPid, session.upstreamId) : null;
+    const row = pid === null ? undefined : table?.rows.get(pid);
+    return row ? { pid: row.pid, command: row.command } : null;
+  }
+
+  /**
+   * After an agent let a session go (closed it, or was told to): if the session's CLI is still in
+   * the process table `cliKillCheckMs` later, it and what runs under it get SIGTERM, then SIGKILL
+   * after the grace. A pid that now runs another command is left alone.
+   */
+  function checkCliGone(cli: CliProcess) {
+    const timer = setTimeout(() => {
+      killChecks.delete(timer);
+      if (disposed) return;
+      void readTable().then((table) => {
+        const row = table?.rows.get(cli.pid);
+        if (!table || disposed || !row || row.command !== cli.command) return;
+        console.warn(`Stopping session CLI ${cli.pid}, still running ${cliKillCheckMs / 1000}s after its agent let it go`);
+        const targets = [cli.pid, ...descendants(table, cli.pid).map((child) => child.pid)].map((pid) => ({ pid }));
+        const termination = terminate(targets, { graceMs: stopGraceMs });
+        terminations.add(termination);
+        void termination.done.then(() => terminations.delete(termination));
+      });
+    }, cliKillCheckMs);
+    timer.unref();
+    killChecks.add(timer);
+  }
+
+  /**
+   * Stop an adapter nobody uses any more: no session attached and no create or reattach in flight
+   * (`claims`). The next session of that agent starts a fresh one. Codex serves every session from
+   * one `codex app-server`, so this is what frees it.
+   */
+  function retireIfEmpty(instance: AgentProcess) {
+    if (instance.failure || !instance.initialized || instance.sessions.size > 0 || instance.claims > 0) return;
+    fail(instance, agentError(instance.agent, "stopped", "no session was using it"));
+  }
+
+  /**
+   * Let a session's agent go while it is idle (docs/MONITORING.md, "Idle CLI stop"): the steps of
+   * `deleteSession` up to and including `detach`, with nothing deleted. The agent closes the session
+   * when it can, the link goes offline as after a restart, the CLI is killed if it outlives that
+   * (`checkCliGone`), and an adapter left with no sessions is stopped. The next prompt, the queue,
+   * or opening the session reattaches it (`openTurn`, `attach`). Returns how long the session had
+   * been idle, or null when it was not stopped because something started meanwhile.
+   */
+  async function stopCli(session: Session, now: number): Promise<number | null> {
+    const instance = session.process;
+    if (!instance || instance.failure || session.stopping) return null;
+    let release!: () => void;
+    session.stopping = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const cli = await findCli(session, instance);
+      // A background task may have been announced while `ps` ran, or a prompt or an attach arrived
+      // (they wait for `stopping`): the agent is still needed, so it is left running.
+      if (!current(session) || session.process !== instance || instance.failure || !isIdle(session) || session.idleSince === null) return null;
+      if (session.stopWaiters > 0) return null;
+      const idleMs = Math.max(0, now - session.idleSince);
+      if (instance.capabilities.sessionCapabilities?.close) {
+        await settleWithin(instance.conn.agent.request(acp.methods.agent.session.close, { sessionId: session.upstreamId }), agentCallTimeoutMs, null);
+      }
+      // The agent may have gone meanwhile, which detached the session already (with the reason).
+      if (current(session) && session.process === instance) detach(session, null);
+      if (cli) checkCliGone(cli);
+      retireIfEmpty(instance);
+      return idleMs;
+    } finally {
+      session.stopping = null;
+      release();
+    }
+  }
+
+  /** Wait out an idle stop in progress on the session; counted, so the stop gives up when it can (`stopCli`). */
+  async function waitForStop(session: Session): Promise<void> {
+    if (!session.stopping) return;
+    session.stopWaiters++;
+    try {
+      await session.stopping;
+    } finally {
+      session.stopWaiters--;
+    }
+  }
+
+  /** Whether `stopCli` may run on the session now: attached, idle, and with nothing starting. */
+  function stoppable(session: Session): session is Session & { process: AgentProcess } {
+    return probeable(session) && current(session) && isIdle(session) && session.idleSince !== null
+      && !session.attaching && !session.stopping && !session.queueFiring;
+  }
+
+  let idleSweep: Promise<string[]> | null = null;
+
+  /**
+   * One run of the idle stop at `now`: every session whose stop is due (`idleStopAt`) has its
+   * agent let go, and adapters left with no sessions are stopped. Answers the ids stopped. Runs
+   * every `idleStopEveryMs`; tests call it with a fake clock. Nothing happens while it is off.
+   */
+  function stopIdleClis(now = Date.now()): Promise<string[]> {
+    idleSweep ??= (async () => {
+      const stopped: string[] = [];
+      if (disposed || !idleStopConfig.enabled) return stopped;
+      for (const session of [...sessions.values()]) {
+        const at = idleStopAt(session, idleStopConfig);
+        if (at === null || at > now || !stoppable(session)) continue;
+        try {
+          const idleMs = await stopCli(session, now);
+          if (idleMs === null) continue;
+          stopped.push(session.id);
+          notifyCliStop({ sessionId: session.id, automatic: true, idleMs, afterMs: idleStopConfig.afterMs });
+        } catch (error) {
+          console.error(`Could not stop the idle agent of session ${session.id}: ${errorMessage(error)}`);
+        }
+      }
+      for (const instance of [...processes.values()]) retireIfEmpty(instance);
+      return stopped;
+    })().finally(() => { idleSweep = null; });
+    return idleSweep;
+  }
+
+  /**
+   * Let the session's agent go now, whatever its idle clock says (`POST /api/sessions/:id/stop-cli`).
+   * Throws "No such session" for an unknown one, and a message saying why for one whose agent is
+   * not running or that is doing something (a turn, a permission prompt, background work).
+   */
+  async function stopSessionCli(id: string): Promise<void> {
+    await ready;
+    const session = requireSession(id);
+    const agent = definitions.get(session.agentId)?.name ?? session.agentName;
+    if (session.stopping) throw new Error(`${agent} is already being stopped for this session.`);
+    if (!probeable(session) || session.attaching) throw new Error(`${agent} is not running for this session.`);
+    if (!stoppable(session)) throw new Error(`${agent} is busy in this session (a turn, a permission prompt, or background work); stop that first.`);
+    const now = Date.now();
+    const idleMs = await stopCli(session, now);
+    if (idleMs === null) throw new Error(`${agent} started working in this session meanwhile, so it was left running.`);
+    notifyCliStop({ sessionId: session.id, automatic: false, idleMs, afterMs: idleStopConfig.afterMs });
+  }
+
+  function notifyCliStop(stop: CliStop) {
+    for (const listener of cliStopListeners) {
+      try {
+        listener(stop);
+      } catch (error) {
+        console.error(`A CLI stop listener failed: ${errorMessage(error)}`);
+      }
+    }
+  }
+
+  /** Hear every CLI the idle stop let go (automatic or asked for); returns the unsubscribe function. */
+  function onCliStopped(listener: (stop: CliStop) => void): () => void {
+    cliStopListeners.add(listener);
+    return () => { cliStopListeners.delete(listener); };
+  }
+
+  /**
+   * The session's idle stop clock, for Monitoring: when its agent was last attached, since when it
+   * has been idle, and when the idle stop will let it go (null when it will not as things stand: the
+   * stop is off, the agent is not attached, or the session is doing something). Null for an unknown session.
+   */
+  function idleStopInfo(id: string): { attachedAt: number | null; idleSince: number | null; stopsAt: number | null } | null {
+    const session = sessions.get(id);
+    if (!session) return null;
+    return { attachedAt: session.attachedAt, idleSince: session.idleSince, stopsAt: idleStopAt(session, idleStopConfig) };
+  }
+
+  /** Change the idle stop's settings (the user's `sessions.idleStop`); the next run uses them. */
+  function setIdleStopOptions(options: Partial<IdleStopConfig>): void {
+    if (typeof options.enabled === "boolean") idleStopConfig.enabled = options.enabled;
+    if (typeof options.afterMs === "number" && options.afterMs > 0) idleStopConfig.afterMs = options.afterMs;
+  }
+
+  const idleStopTimer = idleStopEveryMs > 0
+    ? setInterval(() => { void stopIdleClis(); }, idleStopEveryMs)
+    : null;
+  idleStopTimer?.unref();
+
   /** Change the liveness settings of every session (the hung threshold comes from the user's settings). */
   function setLivenessOptions(options: Partial<LivenessConfig>): void {
     if (typeof options.hungAfterMs === "number" && options.hungAfterMs > 0) livenessConfig.hungAfterMs = options.hungAfterMs;
@@ -1662,16 +2010,26 @@ export function createAcpRuntime(
   async function dispose() {
     disposed = true;
     if (probeTimer) clearInterval(probeTimer);
+    if (idleStopTimer) clearInterval(idleStopTimer);
+    for (const timer of killChecks) clearTimeout(timer);
+    killChecks.clear();
+    // The boot load (and the leftover sweep) must be done before the store closes under it.
+    await ready.catch(() => {});
+    // Stops already under way do not wait out their full grace either.
+    for (const termination of terminations) termination.hurry();
     for (const instance of processes.values()) fail(instance, new Error("ACP runtime is stopped."));
+    // Events go to the store before the adapters are waited for: the entry point exits soon after.
     for (const session of sessions.values()) flush(session);
     await Promise.all([...sessions.values()].map((session) => session.writes));
+    // Each adapter group gets the shorter shutdown grace to exit on SIGTERM, then SIGKILL.
+    await Promise.all([...terminations].map((termination) => termination.done));
     await store.dispose().catch(() => {});
   }
 
   return {
     ready, listSessions, getSession, createSession, attach, sendPrompt, sendOrQueue, queuePrompt, updateQueued, beginEdit, cancelEdit, removeQueued, setTitle, cancel, stopBackgroundTask,
     respondPermission, setPermissionAdvisor, setConfigOption, setMode, readEvents, eventsSince, subscribe, deleteSession, onSessionsChange, dispose,
-    probe, probeSession, setLivenessOptions,
+    probe, probeSession, setLivenessOptions, stopIdleClis, stopSessionCli, onCliStopped, idleStopInfo, setIdleStopOptions,
   };
 }
 

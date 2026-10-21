@@ -19,6 +19,7 @@ import type { BranchListing, Project, RemovedProject, RemovedProjectSummary, Wor
 import {
   WorktreeError, ensureWorktree, getPull, hasBranch, listBranches, listPulls, mainWorktreeOf, removeWorktree, repoRootOf,
 } from "../lib/worktrees.ts";
+import { runCleanupScript } from "./cleanup-script.ts";
 import { liveProjectRemovalIo, removeProject } from "./remove-worktree.ts";
 import { deleteSessionFully } from "../sessions/delete.ts";
 import { type ProjectError, summarizeProject } from "./store.ts";
@@ -209,6 +210,30 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: AppContext, { r
       const dirty = err instanceof Error && (err as { dirty?: unknown }).dirty === true;
       const scriptFailed = err instanceof ScriptError;
       return reply.code(errorStatus(err) ?? 500).send({ error: errorMessage(err), ...(dirty ? { dirty: true } : {}), ...(scriptFailed ? { scriptFailed: true } : {}) });
+    }
+  });
+
+  /**
+   * Run the pre-deletion script on a worktree without removing it (docs/MONITORING.md, "Run
+   * cleanup script"), with `PORTAL_SCRIPT_TRIGGER=manual`. Answers the script's result (`ok`,
+   * `code`, `stdout`, `stderr`, `timedOut`, `durationMs`); a failing script is a result, not an
+   * error. 409 while a session in the worktree is busy, when no script is set, or while the script
+   * runs already or the worktree is being removed (and a removal is refused while the script runs).
+   */
+  app.post<IdParams>("/api/projects/:id/cleanup-script", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    await Promise.all([ctx.projects.ready, ctx.sessions.ready]);
+    const project = ctx.projects.get(req.params.id);
+    if (!project) return reply.code(404).send({ error: "Unknown project." });
+    try {
+      return await runCleanupScript({
+        ...removalIo,
+        scripts: async () => (await ctx.settings.read()).scripts,
+        sessions: () => ctx.sessions.listSessions(),
+        projects: () => ctx.projects.list(),
+      }, project);
+    } catch (err) {
+      return fail(reply, err);
     }
   });
 

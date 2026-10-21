@@ -23,7 +23,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { ActivityInput } from "@portal/contracts/activity";
 import type { AppContext } from "../context.ts";
-import { RemovalSkipped, liveProjectRemovalIo, removeProject } from "../projects/remove-worktree.ts";
+import { RemovalSkipped, WorktreeBusy, liveProjectRemovalIo, removeProject } from "../projects/remove-worktree.ts";
 import { readGitInfo } from "./git-info.ts";
 import type { Project, WorktreeMeta } from "./types.ts";
 import { gitMaybe } from "./worktrees.ts";
@@ -110,9 +110,24 @@ function byProjectOf(sessions: SweepSession[]): Map<string, SweepSession[]> {
 }
 
 /** A project's idle clock: its newest session's (its creation without sessions), restarted by a restore. */
-function clockOf(project: Project, own: SweepSession[]): number {
+function clockOf(project: Pick<Project, "createdAt" | "revivedAt">, own: { idleSince: number | null }[]): number {
   const idle = own.length ? Math.max(...own.map((session) => session.idleSince ?? Infinity)) : project.createdAt;
   return Math.max(idle, project.revivedAt ?? 0);
+}
+
+/**
+ * When the sweep is due to remove a worktree project: its idle clock (`clockOf`) plus the setting.
+ * Null while it is pinned or any of its sessions is in use (no clock runs). Monitoring shows it; the
+ * sweep itself also holds a due project back for an open terminal (`holdOf`).
+ */
+export function removalAt(
+  project: Pick<Project, "createdAt" | "pinnedAt" | "revivedAt">,
+  own: { idleSince: number | null }[],
+  removeAfterHours: number,
+): number | null {
+  if (project.pinnedAt !== null) return null;
+  if (own.some((session) => session.idleSince === null)) return null;
+  return clockOf(project, own) + removeAfterHours * HOUR_MS;
 }
 
 /** What holds a worktree project back from removal. */
@@ -223,7 +238,8 @@ export async function runLifecycleSweep(
     try {
       ({ branchDeleted } = await deps.removeWorktreeProjects(members, recheck));
     } catch (err) {
-      if (err instanceof RemovalSkipped) return;
+      // Something changed, or the cleanup script is running in it: nothing was removed; the next sweep looks again.
+      if (err instanceof RemovalSkipped || err instanceof WorktreeBusy) return;
       // Git refused (the tree changed since the check), or the pre-delete script aborted.
       failedAt.set(root, clock);
       for (const project of members) await keep(project, failureReason(err));

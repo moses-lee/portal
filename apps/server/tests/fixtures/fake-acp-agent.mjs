@@ -84,7 +84,8 @@ function update(sessionId, update) {
 
 /**
  * This agent's behaviour from the test's config file: a mode name, or `{ mode, ...knobs }` with
- * `resume` (what a resume or load answers, see there) and `setModeError` (set_mode is refused).
+ * `resume` (what a resume or load answers, see there), `setModeError` (set_mode is refused), and
+ * `ignoreTerm` (SIGTERM is ignored, so only the SIGKILL after the grace stops it).
  */
 function config() {
   const entry = JSON.parse(readFileSync(configPath, "utf8"))[agentId];
@@ -95,6 +96,7 @@ function mode() {
   return config().mode;
 }
 
+if (config().ignoreTerm) process.on("SIGTERM", () => {});
 log({ event: "spawn", env: { NODE_ENV: process.env.NODE_ENV ?? null, TURBOPACK: process.env.TURBOPACK ?? null, PORTAL_KEEP: process.env.PORTAL_KEEP ?? null } });
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
