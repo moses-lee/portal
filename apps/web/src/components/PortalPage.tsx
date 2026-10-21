@@ -12,6 +12,8 @@ import { viewMeta } from "./portal/views";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import { portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
+import type { ProjectSummary } from "@/lib/types";
+import type { RemoveProjectOptions } from "./useProjects";
 
 function ViewLoading() {
   return <div className="flex flex-1 items-center justify-center text-muted-foreground"><LoaderCircle className="size-4 animate-spin" /></div>;
@@ -21,14 +23,18 @@ const WatchesView = dynamic(() => import("./portal/WatchesView"), { loading: Vie
 const ActivityView = dynamic(() => import("./portal/ActivityView"), { loading: ViewLoading });
 const MemoryView = dynamic(() => import("./portal/MemoryView"), { loading: ViewLoading });
 const SystemView = dynamic(() => import("./portal/SystemView"), { loading: ViewLoading });
+const MonitoringView = dynamic(() => import("./portal/MonitoringView"), { loading: ViewLoading });
 
 /** A page over the mounted workspace. Its location is local UI state, never the browser URL. */
-export default function PortalPage({ location, onNavigate, onOpenSidebar, onOpenSession, onClose }: {
+export default function PortalPage({ location, onNavigate, onOpenSidebar, onOpenSession, onClose, projects, onRemoveProject }: {
   location: Exclude<PortalLocation, { view: "chat" }>;
   onNavigate: (path: string) => void;
   onOpenSidebar: (opener?: HTMLElement | null) => void;
   onOpenSession: (sessionId: string) => void;
   onClose: () => void;
+  /** The listed projects and the sidebar's removal path, for Monitoring's "Remove worktree". */
+  projects: ProjectSummary[];
+  onRemoveProject: (id: string, opts?: RemoveProjectOptions) => Promise<void>;
 }) {
   const { putItem, requestApproval, items, error } = usePortalLive();
   const view = location.view;
@@ -76,6 +82,7 @@ export default function PortalPage({ location, onNavigate, onOpenSidebar, onOpen
     {view === "activity" && <ActivityView links={links} />}
     {view === "memory" && <MemoryView entityId={location.entityId} runId={location.runId} onSelectEntity={(entityId) => go({ view: "memory", entityId })} onSelectRun={links.openCurationRun} links={links} />}
     {view === "system" && <SystemView links={links} />}
+    {view === "monitoring" && <MonitoringView links={links} projects={projects} onRemoveProject={onRemoveProject} />}
     <ResponsiveDialog open={openItem !== null} onOpenChange={(open) => !open && setOpenItemId(null)} title="Item" description="An action item Portal raised.">
       {openItem && <PortalItemCard item={openItem} {...dialogHandlers} />}
     </ResponsiveDialog>

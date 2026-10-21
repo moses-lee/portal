@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Bot, Castle, Database, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
+import { Bot, Castle, Database, Gauge, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -67,8 +67,13 @@ import {
 import {
   defaultSettings,
   gitActionKinds,
+  idleStopLimits,
+  isDiskLevelGb,
   isHungAfterMinutes,
+  isIdleStopMinutes,
   isLifecycleHours,
+  isWatchedFolder,
+  monitoringLimits,
   orchestratorLimits,
   sessionsLimits,
   type GitActionKind,
@@ -76,6 +81,8 @@ import {
   type SettingsPatch,
 } from "@/lib/settings";
 import type { RemovedProjectSummary } from "@/lib/types";
+import { missingWatchedFolders } from "@/lib/monitoring";
+import type { MonitoringSnapshot } from "@portal/contracts/monitoring";
 import { portalSend } from "@/lib/orchestrator/api";
 import type { RoomEnvironment, RoomState, RoomWeather } from "@portal/contracts/room";
 import { LAYOUT_VERSION } from "@portal/shared/room";
@@ -109,8 +116,14 @@ const sectionMeta: Record<
   sessions: {
     label: "Sessions",
     description:
-      "How long finished work stays around. Portal checks every few minutes, whether or not a browser is open.",
+      "How long finished work stays around, and when idle agents are let go. Portal checks every few minutes, whether or not a browser is open.",
     icon: Timer,
+  },
+  monitoring: {
+    label: "Monitoring",
+    description:
+      "When free disk space counts as low, and which folders outside Portal to measure. The levels colour the Monitoring view only; Portal never acts on them.",
+    icon: Gauge,
   },
   scripts: {
     label: "Scripts",
@@ -145,6 +158,18 @@ const sessionsFieldMeta: Record<SessionsField, { label: string; description: str
 
 function sessionsValue(settings: Settings, field: SessionsField): number {
   return settings.sessions.worktrees[field];
+}
+
+/** The monitoring section's typed fields: the two disk levels in GB and the watched folders, one per line. */
+type MonitoringField = "warnFreeGb" | "criticalFreeGb" | "watchedFolders";
+const monitoringFields: readonly MonitoringField[] = ["warnFreeGb", "criticalFreeGb", "watchedFolders"];
+const monitoringFieldMeta: Record<Exclude<MonitoringField, "watchedFolders">, { label: string; default: number }> = {
+  warnFreeGb: { label: "Warning below … GB free", default: defaultSettings.monitoring.disk.warnFreeGb },
+  criticalFreeGb: { label: "Critical below … GB free", default: defaultSettings.monitoring.disk.criticalFreeGb },
+};
+
+function monitoringValue(settings: Settings, field: MonitoringField): string {
+  return field === "watchedFolders" ? settings.monitoring.watchedFolders.join("\n") : String(settings.monitoring.disk[field]);
 }
 
 /** The section shown when nothing asked for one and none is remembered. */
@@ -209,6 +234,9 @@ type FieldKey =
   | OrchestratorTextField
   | "reviews.answerReadOnly"
   | SessionsField
+  | "idleStop.enabled"
+  | "idleStop.afterMinutes"
+  | `monitoring.${MonitoringField}`
   | `apiKey.${OrchestratorProvider}`
   | `script.${ScriptKind}.${keyof ScriptSettings}`;
 
@@ -325,6 +353,10 @@ export default function SettingsDialog({
   const [sessionsDrafts, setSessionsDrafts] = useState<
     Partial<Record<SessionsField, string>>
   >({});
+  const [idleStopDraft, setIdleStopDraft] = useState<string | undefined>(undefined);
+  const [monitoringDrafts, setMonitoringDrafts] = useState<
+    Partial<Record<MonitoringField, string>>
+  >({});
   const paneRef = useRef<HTMLDivElement>(null);
 
   // The section on screen. The last one viewed is remembered in this browser; an explicit request
@@ -358,6 +390,8 @@ export default function SettingsDialog({
       setApiKeyDrafts({});
       setScriptDrafts({});
       setSessionsDrafts({});
+      setIdleStopDraft(undefined);
+      setMonitoringDrafts({});
       setActive(section ?? rememberedSection);
     }
   }
@@ -642,6 +676,106 @@ export default function SettingsDialog({
     if (ok) clearSessionsDraft(field);
   };
 
+  /** Turns the idle CLI stop on or off; saves as it is flipped. */
+  const saveIdleStopEnabled = async (enabled: boolean) => {
+    if (!settings || enabled === settings.sessions.idleStop.enabled) return;
+    await run(
+      "idleStop.enabled",
+      () => update({ sessions: { idleStop: { enabled } } }),
+      "Could not save the setting.",
+    );
+  };
+
+  /** Checks the typed idle time client-side, then persists it. Blank puts the default back. */
+  const saveIdleStopMinutes = async (value: string) => {
+    if (!settings) return;
+    const trimmed = value.trim();
+    const minutes = trimmed ? Number(trimmed) : defaultSettings.sessions.idleStop.afterMinutes;
+    if (!/^\d*$/.test(trimmed) || !isIdleStopMinutes(minutes)) {
+      setStatusFor("idleStop.afterMinutes", {
+        kind: "error",
+        message: `Enter a whole number of minutes from ${idleStopLimits.minMinutes} to ${idleStopLimits.maxMinutes}.`,
+      });
+      return;
+    }
+    if (minutes === settings.sessions.idleStop.afterMinutes) {
+      setIdleStopDraft(undefined);
+      return;
+    }
+    const ok = await run(
+      "idleStop.afterMinutes",
+      () => update({ sessions: { idleStop: { afterMinutes: minutes } } }),
+      "Could not save the setting.",
+    );
+    if (ok) setIdleStopDraft(undefined);
+  };
+
+  const clearMonitoringDraft = (field: MonitoringField) =>
+    setMonitoringDrafts((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+
+  /**
+   * Checks a typed monitoring field client-side, then persists it. A blank level puts its default
+   * back; the server takes the levels only as a pair with warning above critical, so both go
+   * together and a pair the other way round is refused here, with a reason. Folders are one per
+   * line, blank lines dropped; a malformed one refuses the whole list rather than vanish.
+   */
+  const saveMonitoringField = async (field: MonitoringField, value: string) => {
+    if (!settings) return;
+    const key: FieldKey = `monitoring.${field}`;
+    if (field === "watchedFolders") {
+      const folders = [...new Set(value.split("\n").map((line) => line.trim()).filter(Boolean))];
+      const bad = folders.filter((folder) => !isWatchedFolder(folder));
+      if (bad.length > 0) {
+        setStatusFor(key, {
+          kind: "error",
+          message: `Use absolute paths or paths under ~ (not ${bad.map((folder) => `"${folder}"`).join(", ")}).`,
+        });
+        return;
+      }
+      if (folders.length > monitoringLimits.watchedFolders) {
+        setStatusFor(key, { kind: "error", message: `Watch at most ${monitoringLimits.watchedFolders} folders.` });
+        return;
+      }
+      if (folders.join("\n") === settings.monitoring.watchedFolders.join("\n")) {
+        clearMonitoringDraft(field);
+        return;
+      }
+      const ok = await run(key, () => update({ monitoring: { watchedFolders: folders } }), "Could not save the folders.");
+      if (ok) clearMonitoringDraft(field);
+      return;
+    }
+    const trimmed = value.trim();
+    const gb = trimmed ? Number(trimmed) : monitoringFieldMeta[field].default;
+    if (!/^\d*$/.test(trimmed) || !isDiskLevelGb(gb)) {
+      setStatusFor(key, {
+        kind: "error",
+        message: `Enter a whole number of GB from ${monitoringLimits.minGb} to ${monitoringLimits.maxGb.toLocaleString("en-US")}.`,
+      });
+      return;
+    }
+    if (gb === settings.monitoring.disk[field]) {
+      clearMonitoringDraft(field);
+      return;
+    }
+    const disk = { ...settings.monitoring.disk, [field]: gb };
+    if (disk.warnFreeGb <= disk.criticalFreeGb) {
+      setStatusFor(key, {
+        kind: "error",
+        message: field === "warnFreeGb"
+          ? `The warning level must be above the critical level (${disk.criticalFreeGb} GB).`
+          : `The critical level must be below the warning level (${disk.warnFreeGb} GB).`,
+      });
+      return;
+    }
+    const ok = await run(key, () => update({ monitoring: { disk } }), "Could not save the level.");
+    if (ok) clearMonitoringDraft(field);
+  };
+
   const saveScriptToggle = (kind: ScriptKind, abortOnFailure: boolean) => {
     if (!settings || abortOnFailure === settings.scripts[kind].abortOnFailure)
       return;
@@ -674,6 +808,11 @@ export default function SettingsDialog({
     for (const field of sessionsFields) {
       const draft = sessionsDrafts[field];
       if (draft !== undefined) void saveSessionsField(field, draft);
+    }
+    if (idleStopDraft !== undefined) void saveIdleStopMinutes(idleStopDraft);
+    for (const field of monitoringFields) {
+      const draft = monitoringDrafts[field];
+      if (draft !== undefined) void saveMonitoringField(field, draft);
     }
   };
 
@@ -942,6 +1081,40 @@ export default function SettingsDialog({
                 }}
               />
             ))}
+          {settings && (
+            <IdleStopField
+              enabled={settings.sessions.idleStop.enabled}
+              value={idleStopDraft ?? String(settings.sessions.idleStop.afterMinutes)}
+              dirty={idleStopDraft !== undefined}
+              saving={{ enabled: !!saving["idleStop.enabled"], minutes: !!saving["idleStop.afterMinutes"] }}
+              status={{ enabled: status["idleStop.enabled"] ?? null, minutes: status["idleStop.afterMinutes"] ?? null }}
+              onToggle={(enabled) => void saveIdleStopEnabled(enabled)}
+              onChange={setIdleStopDraft}
+              onBlur={() => {
+                if (idleStopDraft !== undefined) void saveIdleStopMinutes(idleStopDraft);
+              }}
+            />
+          )}
+        </section>
+      )}
+
+      {active === "monitoring" && (
+        <section aria-labelledby="settings-monitoring" className="space-y-4">
+          <SectionHeading id="settings-monitoring" section="monitoring" />
+          {settings && (
+            <MonitoringSettings
+              values={Object.fromEntries(monitoringFields.map((field) => [field, monitoringDrafts[field] ?? monitoringValue(settings, field)])) as Record<MonitoringField, string>}
+              saved={settings.monitoring.watchedFolders}
+              dirty={(field) => monitoringDrafts[field] !== undefined}
+              saving={(field) => !!saving[`monitoring.${field}`]}
+              status={(field) => status[`monitoring.${field}`] ?? null}
+              onChange={(field, value) => setMonitoringDrafts((prev) => ({ ...prev, [field]: value }))}
+              onBlur={(field) => {
+                const draft = monitoringDrafts[field];
+                if (draft !== undefined) void saveMonitoringField(field, draft);
+              }}
+            />
+          )}
         </section>
       )}
 
@@ -1138,6 +1311,187 @@ function HoursField({
       </div>
       <FieldStatusText id={statusId} status={status} saving={saving} dirty={dirty} />
     </div>
+  );
+}
+
+/** The idle CLI stop (docs/MONITORING.md): on or off, and after how many idle minutes. The toggle saves as it is flipped, the minutes when the field is left. */
+function IdleStopField({
+  enabled,
+  value,
+  dirty,
+  saving,
+  status,
+  onToggle,
+  onChange,
+  onBlur,
+}: {
+  enabled: boolean;
+  value: string;
+  dirty: boolean;
+  saving: { enabled: boolean; minutes: boolean };
+  status: { enabled: FieldStatus | null; minutes: FieldStatus | null };
+  onToggle: (enabled: boolean) => void;
+  onChange: (value: string) => void;
+  onBlur: () => void;
+}) {
+  const id = useId();
+  const switchId = `${id}-switch`;
+  const statusId = `${id}-status`;
+  return (
+    <div className="space-y-2 rounded-xl border border-border/60 p-4">
+      <div className="flex h-8 items-center gap-2.5">
+        <Switch
+          id={switchId}
+          checked={enabled}
+          disabled={saving.enabled}
+          aria-describedby={`${id}-description`}
+          onCheckedChange={onToggle}
+        />
+        <label htmlFor={switchId} className="text-xs font-medium">
+          Stop idle agent CLIs
+        </label>
+        <span className="text-[11px] text-muted-foreground" aria-live="polite">
+          {status.enabled?.kind === "error" ? status.enabled.message : status.enabled?.kind === "saved" ? "Saved" : ""}
+        </span>
+      </div>
+      <p id={`${id}-description`} className="text-xs leading-relaxed text-muted-foreground">
+        A session&apos;s agent CLI is stopped once the session has been idle this long, counted from no
+        earlier than when it was last opened. Nothing is deleted: the next prompt, or opening the
+        session, starts it again. Each stop is logged in Activity.
+      </p>
+      <div className="flex items-center gap-2">
+        <label htmlFor={id} className="sr-only">
+          Stop after … minutes idle
+        </label>
+        <Input
+          id={id}
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          value={value}
+          placeholder={String(defaultSettings.sessions.idleStop.afterMinutes)}
+          disabled={saving.minutes || !enabled}
+          aria-describedby={status.minutes ? statusId : undefined}
+          aria-invalid={status.minutes?.kind === "error" || undefined}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
+          className="w-28 text-xs md:text-xs"
+        />
+        <span className="text-xs text-muted-foreground">minutes idle</span>
+      </div>
+      <FieldStatusText id={statusId} status={status.minutes} saving={saving.minutes} dirty={dirty} />
+    </div>
+  );
+}
+
+/**
+ * The Monitoring section: the disk levels and the watched folders. A folder the last disk survey
+ * did not find is flagged but kept (it may be mounted later); the survey is read once when the
+ * section opens, from `GET /api/monitoring`.
+ */
+function MonitoringSettings({
+  values,
+  saved,
+  dirty,
+  saving,
+  status,
+  onChange,
+  onBlur,
+}: {
+  values: Record<MonitoringField, string>;
+  /** The folders as stored: only these can have been surveyed. */
+  saved: string[];
+  dirty: (field: MonitoringField) => boolean;
+  saving: (field: MonitoringField) => boolean;
+  status: (field: MonitoringField) => FieldStatus | null;
+  onChange: (field: MonitoringField, value: string) => void;
+  onBlur: (field: MonitoringField) => void;
+}) {
+  const id = useId();
+  const [survey, setSurvey] = useState<MonitoringSnapshot["disk"]["survey"]>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/monitoring", { signal: controller.signal })
+      .then(async (r) => (r.ok ? ((await r.json()) as MonitoringSnapshot).disk.survey : null))
+      .then((next) => setSurvey(next))
+      // No survey means no warnings; the folders still save.
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
+  const missing = missingWatchedFolders(saved, survey);
+  return (
+    <>
+      <div className="space-y-3 rounded-xl border border-border/60 p-4">
+        <div className="space-y-1">
+          <p className="text-xs font-medium">Disk levels</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Free space on the volume holding Portal&apos;s home. Below the warning level the disk shows
+            amber in Monitoring, below the critical level red. Leave a field empty for its default.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {(["warnFreeGb", "criticalFreeGb"] as const).map((field) => {
+            const fieldId = `${id}-${field}`;
+            const statusId = `${fieldId}-status`;
+            const fieldStatus = status(field);
+            return (
+              <div key={field} className="space-y-2">
+                <label htmlFor={fieldId} className="text-xs font-medium">
+                  {monitoringFieldMeta[field].label}
+                </label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id={fieldId}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={values[field]}
+                    placeholder={String(monitoringFieldMeta[field].default)}
+                    disabled={saving(field)}
+                    aria-describedby={fieldStatus ? statusId : undefined}
+                    aria-invalid={fieldStatus?.kind === "error" || undefined}
+                    onChange={(e) => onChange(field, e.target.value)}
+                    onBlur={() => onBlur(field)}
+                    className="w-28 text-xs md:text-xs"
+                  />
+                  <span className="text-xs text-muted-foreground">GB</span>
+                </div>
+                <FieldStatusText id={statusId} status={fieldStatus} saving={saving(field)} dirty={dirty(field)} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="space-y-2 rounded-xl border border-border/60 p-4">
+        <label htmlFor={`${id}-folders`} className="text-xs font-medium">
+          Watched folders
+        </label>
+        <p id={`${id}-folders-description`} className="text-xs leading-relaxed text-muted-foreground">
+          Folders outside Portal whose size Monitoring shows, with their ten largest items. One
+          absolute path (or ~/…) per line, up to {monitoringLimits.watchedFolders}. For example
+          ~/Library/Caches/bazel, ~/.codex, ~/.claude.
+        </p>
+        <Textarea
+          id={`${id}-folders`}
+          rows={4}
+          value={values.watchedFolders}
+          disabled={saving("watchedFolders")}
+          spellCheck={false}
+          placeholder={"~/Library/Caches/bazel\n~/.codex"}
+          aria-describedby={`${id}-folders-description${status("watchedFolders") ? ` ${id}-folders-status` : ""}`}
+          aria-invalid={status("watchedFolders")?.kind === "error" || undefined}
+          onChange={(e) => onChange("watchedFolders", e.target.value)}
+          onBlur={() => onBlur("watchedFolders")}
+          className="min-h-20 resize-y font-mono text-xs leading-relaxed md:text-xs"
+        />
+        {missing.length > 0 && (
+          <p role="status" className="text-[11px] text-amber-300">
+            Not found when last measured: {missing.join(", ")}. Kept in the list; it is measured again once it exists.
+          </p>
+        )}
+        <FieldStatusText id={`${id}-folders-status`} status={status("watchedFolders")} saving={saving("watchedFolders")} dirty={dirty("watchedFolders")} />
+      </div>
+    </>
   );
 }
 

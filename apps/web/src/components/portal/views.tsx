@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Activity, BellRing, Brain, MessagesSquare, Radar, ServerCog, type LucideIcon } from "lucide-react";
+import { Activity, BellRing, Brain, Gauge, MessagesSquare, Radar, ServerCog, type LucideIcon } from "lucide-react";
 import { isVisibleItem } from "../PortalItemCard";
 import { usePortalLive } from "./PortalLive";
 import type { PortalView } from "@/lib/session-routes";
@@ -14,10 +14,11 @@ export const viewMeta: Record<PortalView, { label: string; title: string; icon: 
   activity: { label: "Activity", title: "Activity", icon: Activity },
   memory: { label: "Memory", title: "Memory", icon: Brain },
   system: { label: "System", title: "System", icon: ServerCog },
+  monitoring: { label: "Monitoring", title: "Monitoring", icon: Gauge },
 };
 
 /** The views with a sidebar entry: Needs you has none, the foyer card at the top of the sidebar opens it. */
-export const sidebarViews: readonly PortalView[] = ["watches", "activity", "memory", "system"];
+export const sidebarViews: readonly PortalView[] = ["watches", "activity", "memory", "system", "monitoring"];
 
 /** The numbers behind the sidebar's badges and the foyer card, per view, plus waiting approvals (the card names them first). */
 export type PortalViewCounts = Record<PortalView, number> & { approvals: number };
@@ -39,6 +40,8 @@ export function usePortalViewCounts(): PortalViewCounts {
     activity: 0,
     memory: counts?.inbox ?? 0,
     system: 0,
+    // Monitoring has no badge: its colours stay in the view (docs/MONITORING.md, decision 5).
+    monitoring: 0,
     approvals: approvals.length,
   };
 }

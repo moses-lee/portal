@@ -71,7 +71,7 @@ test("stored surface destinations round-trip, including main and side threads", 
   // Watches were Goals until 2026-10-04; the old path is gone and lands on the main thread like any unknown one.
   assert.deepEqual(portalLocation("/goals"), { view: "chat", threadId: "main" });
   assert.equal(portalPath("watches"), "/watches");
-  for (const view of ["attention", "watches", "activity", "system"]) {
+  for (const view of ["attention", "watches", "activity", "system", "monitoring"]) {
     assert.equal(portalPath(view), `/${view}`);
     assert.deepEqual(portalLocation(`/${view}`), { view });
     assert.deepEqual(portalLocation(`/${view}/extra`), { view: "chat", threadId: "main" });
