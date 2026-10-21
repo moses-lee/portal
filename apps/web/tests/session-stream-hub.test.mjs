@@ -404,3 +404,46 @@ test("close ends every subscription and the stream; the hub takes new subscripti
   assert.equal(sources.opened.length, 2);
   assert.equal(sources.last.url, "/api/sessions/streams?ids=b&since=b:5&attach=b");
 });
+
+test("removed history stays on the live stream without attaching, including retries and unrelated joins", () => {
+  const { timers, sources, hub } = setup();
+  const history = recorder();
+  hub.subscribe("removed", 4, history.handlers, { attach: false });
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url), { ids: ["removed"], since: ["removed:4"], attach: [] });
+  sources.last.emit("message", { sessionId: "removed", seq: 5, type: "turn_end", ts: 1 });
+  assert.deepEqual(history.calls, [["event", 5, { type: "turn_end", ts: 1 }]]);
+
+  hub.subscribe("active", 0, recorder().handlers);
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url).attach, ["active"]);
+  sources.last.emit("error");
+  timers.advance(1000);
+  assert.deepEqual(query(sources.last.url), { ids: ["removed", "active"], since: ["removed:5", "active:0"], attach: ["active"] });
+});
+
+test("restoring a history subscription attaches that session once, and removing it returns to history only", () => {
+  const { timers, sources, hub } = setup();
+  const offHistory = hub.subscribe("a", 4, recorder().handlers, { attach: false });
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url).attach, []);
+
+  // A known-active view replaces the history-only view after project restoration.
+  offHistory();
+  const offActive = hub.subscribe("a", 4, recorder().handlers);
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url).attach, ["a"]);
+  hub.subscribe("a", 4, recorder().handlers, { attach: false });
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url).attach, [], "another history view does not reattach an active session");
+
+  offActive();
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url), { ids: ["a"], since: ["a:4"], attach: [] });
+  sources.last.emit("error");
+  timers.advance(1000);
+  assert.deepEqual(query(sources.last.url).attach, [], "only history views remain after removal");
+  hub.subscribe("a", 4, recorder().handlers);
+  timers.advance(50);
+  assert.deepEqual(query(sources.last.url).attach, ["a"], "restoration also attaches when the id was already streamed");
+});

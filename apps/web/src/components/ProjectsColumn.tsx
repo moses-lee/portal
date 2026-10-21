@@ -85,6 +85,10 @@ export type ProjectsColumnProps = {
   projectPins: PinMap;
   sessionPins: PinMap;
   active: string | null;
+  /** The shared project selected on the focused start page; ignored while a session is active. */
+  selectedProjectId?: string | null;
+  /** A sidebar can stay mounted through its closing animation. Reveal again when it reopens. */
+  visible?: boolean;
   /** Sessions open somewhere in the workspace: their rows show a tab glyph. */
   openSessionIds: ReadonlySet<string>;
   onSelect: (id: string) => void;
@@ -439,6 +443,8 @@ const ProjectsColumn = memo(function ProjectsColumn({
   projectPins,
   sessionPins,
   active,
+  selectedProjectId,
+  visible: columnVisible = true,
   openSessionIds,
   onSelect,
   onOpenInNewTab,
@@ -558,6 +564,46 @@ const ProjectsColumn = memo(function ProjectsColumn({
           group.project.name.toLowerCase().includes(q),
       );
   }, [projects, sessions, sessionPins, query]);
+  const navigation = useRef<HTMLElement>(null);
+  const selectionReveal = useRef<{ key: string | null; revealed: boolean }>({ key: null, revealed: false });
+  const activeProjectId = active
+    ? sessions.find((session) => session.id === active)?.projectId
+    : null;
+  // Keep the session in this key even when its project is collapsed: switching between two hidden
+  // sessions should still bring their common project back into view after the user has scrolled away.
+  const selectionKey = active
+    ? `session:${active}:${activeProjectId && collapsed.has(activeProjectId) ? "collapsed" : "expanded"}`
+    : selectedProjectId
+      ? `project:${selectedProjectId}`
+      : null;
+  const selectionRendered = groups.some((group) => active
+    ? group.sessions.some((session) => session.id === active)
+    : group.project.id === selectedProjectId);
+  useEffect(() => {
+    if (selectionReveal.current.key !== selectionKey) selectionReveal.current = { key: selectionKey, revealed: false };
+    if (!columnVisible) {
+      selectionReveal.current.revealed = false;
+      return;
+    }
+    if (!selectionKey || selectionReveal.current.revealed || !selectionRendered) return;
+    // Wait for preferences and the DOM to settle, including a sidebar just mounted by its toggle.
+    const frame = requestAnimationFrame(() => {
+      const target = navigation.current?.querySelector<HTMLElement>('button[aria-current="page"]');
+      const scroll = navigation.current?.closest<HTMLElement>("[data-sidebar-scroll]");
+      if (!target || !scroll || target.getClientRects().length === 0) return;
+      const row = target.getBoundingClientRect();
+      const viewport = scroll.getBoundingClientRect();
+      // Leave room for the border even when fractional layout coordinates round on scrollTop.
+      const inset = 4;
+      // Adjust only this scroll container. scrollIntoView also moves enclosing pages and overlays.
+      if (row.top < viewport.top + inset) scroll.scrollTop += row.top - viewport.top - inset;
+      else if (row.bottom > viewport.bottom - inset) scroll.scrollTop += row.bottom - viewport.bottom + inset;
+      selectionReveal.current.revealed = true;
+    });
+    return () => cancelAnimationFrame(frame);
+    // These primitive values change for navigation, collapsing the selected project, or a pending
+    // selection arriving. Session activity, list reordering, and unrelated layout edits do not scroll.
+  }, [selectionKey, selectionRendered, columnVisible]);
   /**
    * Write the collapsed set, forgetting ids of projects that are gone. Pruning here rather than in an
    * effect keeps a background tab, whose project list goes stale until it is looked at again, from
@@ -636,6 +682,7 @@ const ProjectsColumn = memo(function ProjectsColumn({
         />
       </div>
       <nav
+        ref={navigation}
         aria-label="Projects and sessions"
         className="space-y-3 pb-4"
       >
@@ -662,6 +709,9 @@ const ProjectsColumn = memo(function ProjectsColumn({
           <SortableContext items={pinnedIds} strategy={verticalListSortingStrategy}>
             {groups.map(({ project, sessions: rows }, groupIndex) => {
               const isCollapsed = !query && collapsed.has(project.id);
+              const projectSelected = active
+                ? isCollapsed && project.id === activeProjectId
+                : project.id === selectedProjectId;
               const isPinned = project.id in projectPins;
               /** The list runs pinned first: a heading opens the pinned part, a rule closes it. */
               const divider = isPinned && groupIndex === 0
@@ -751,8 +801,9 @@ const ProjectsColumn = memo(function ProjectsColumn({
                               onClick={() => toggle(project.id)}
                               aria-expanded={!isCollapsed}
                               aria-controls={`project-${project.id}`}
+                              aria-current={projectSelected ? "page" : undefined}
                               title={`${project.name} · ${project.displayPath}`}
-                              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
+                              className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-1 py-1 text-left ${projectSelected ? "border-[var(--accent-line)] bg-[var(--accent-soft)]" : "border-transparent"}`}
                             >
                               {project.git ? (
                                 <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />

@@ -19,6 +19,8 @@ import { startKey } from "@/lib/drafts";
 import { sessionHistoryKey } from "@/lib/prompt-history";
 import { queueEditLabel } from "@/lib/prompt-queue";
 import { sessionDisplayTitle } from "@/lib/session-title";
+import { isRemovedSession } from "@/lib/removed-session";
+import type { RemovedProjectSummary } from "@/lib/types";
 
 const TerminalPanel = dynamic(() => import("./TerminalPanel"), {
   ssr: false,
@@ -77,7 +79,75 @@ export type SessionPaneProps = {
   pane?: PaneMenu;
   /** The agent's activity, for the room scene behind the focused pane. */
   onActivity?: (paneId: string | null, activity: AgentActivity) => void;
+  /** The current restoration availability for the open session's removed project. */
+  removedProject?: RemovedProjectSummary | null;
+  /** Restore the project, then reopen this specific conversation. */
+  onRestoreProject?: (projectId: string, sessionId: string) => Promise<void>;
+  removedProjectsLoading?: boolean;
+  removedProjectsError?: string | null;
+  onRefreshRemovedProjects?: () => Promise<void>;
 };
+
+function RemovedProjectBanner({
+  projectId,
+  sessionId,
+  project,
+  onRestore,
+  loading,
+  loadError,
+  onRefresh,
+}: {
+  projectId: string;
+  sessionId: string;
+  project: RemovedProjectSummary | null | undefined;
+  onRestore?: SessionPaneProps["onRestoreProject"];
+  loading: boolean;
+  loadError: string | null;
+  onRefresh?: () => Promise<void>;
+}) {
+  const [restoring, setRestoring] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const restore = async () => {
+    if (!project?.restorable || !onRestore || restoring) return;
+    setRestoring(true);
+    setError(null);
+    try {
+      await onRestore(projectId, sessionId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not restore the project. Try again.");
+    } finally {
+      setRestoring(false);
+    }
+  };
+  return (
+    <div data-removed-project className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-muted/25 px-5 py-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">Project removed</p>
+        {!project && !loadError && (
+          <p className="mt-1 text-xs text-muted-foreground">{loading ? "Checking restoration…" : "No restoration record is available for this project."}</p>
+        )}
+        {loadError && (
+          <div className="mt-1 flex items-center gap-2">
+            <p role="alert" className="text-xs text-destructive">{loadError}</p>
+            {onRefresh && <Button size="sm" variant="ghost" disabled={loading} onClick={() => void onRefresh()}>Retry</Button>}
+          </div>
+        )}
+        {project && !project.restorable && (
+          <p className="mt-1 text-xs text-muted-foreground">{project.reason ?? "This project cannot be restored."}</p>
+        )}
+        {error && <p role="alert" className="mt-1 text-xs text-destructive">{error}</p>}
+      </div>
+      <Button
+        size="sm"
+        variant="secondary"
+        disabled={!project?.restorable || !onRestore || restoring}
+        onClick={() => void restore()}
+      >
+        {restoring ? "Restoring…" : "Restore project and continue"}
+      </Button>
+    </div>
+  );
+}
 
 /**
  * What a pane shows for a session the server does not have (deleted, or from another Portal), and
@@ -115,6 +185,11 @@ export default function SessionPane({
   onInitialSendHandled,
   pane,
   onActivity,
+  removedProject,
+  onRestoreProject,
+  removedProjectsLoading = false,
+  removedProjectsError = null,
+  onRefreshRemovedProjects,
 }: SessionPaneProps) {
   const { historyCache, renameSession } = useSessions();
   const uid = useId();
@@ -134,6 +209,7 @@ export default function SessionPane({
     initialSend?.sessionId === sessionId && initialSend.pending;
   const {
     session,
+    readOnly,
     history,
     loading: historyLoading,
     loadingOlder,
@@ -165,9 +241,12 @@ export default function SessionPane({
     onDeleted: onSessionDeleted,
     onSubmit: onInitialSendHandled,
     sendBlocked: initialPending,
+    readOnly: !!removedProject,
   });
+  const removed = !!removedProject || isRemovedSession(session);
+  const projectId = session ? session.projectId || "unassigned" : removedProject?.id;
   const shellButton = useRef<HTMLButtonElement>(null);
-  const roomActivity: AgentActivity = sessionId ? activity : "idle";
+  const roomActivity: AgentActivity = sessionId && !readOnly ? activity : "idle";
   useEffect(() => {
     onActivity?.(paneId, roomActivity);
   }, [onActivity, paneId, roomActivity]);
@@ -200,26 +279,39 @@ export default function SessionPane({
               ? "Conversation"
               : "Your workspace"
         }
-        activity={activity}
-        statusLabel={statusLabel}
+        activity={readOnly ? "idle" : activity}
+        statusLabel={removed ? "Project removed" : statusLabel}
         hasSession={!!sessionId}
-        showShell={showShell && !!sessionId}
+        readOnly={readOnly}
+        showShell={showShell && !!sessionId && !readOnly}
         showGithub={showGithub}
         showSidebarToggle={showSidebarToggle}
         onSidebar={onOpenSidebar}
         onNew={onNew}
-        onTerminal={() => setShowShell((open) => !open)}
+        onTerminal={() => !readOnly && setShowShell((open) => !open)}
         onGithub={onToggleGithub}
         shellButton={shellButton}
         terminalPanelId={terminalPanelId}
         renameFrom={session?.title ?? ""}
-        onRename={session ? rename : undefined}
+        onRename={session && !readOnly ? rename : undefined}
         pane={pane}
       />
       {renameError && (
         <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
           {renameError}
         </p>
+      )}
+      {removed && sessionId && projectId && (
+        <RemovedProjectBanner
+          key={`${projectId}:${sessionId}`}
+          projectId={projectId}
+          sessionId={sessionId}
+          project={removedProject}
+          onRestore={onRestoreProject}
+          loading={removedProjectsLoading}
+          loadError={removedProjectsError}
+          onRefresh={onRefreshRemovedProjects}
+        />
       )}
       {!sessionId ? (
         <div data-room-passthrough className="min-h-0 flex-1 overflow-y-auto">
@@ -249,14 +341,15 @@ export default function SessionPane({
                 loadingOlder={loadingOlder}
                 error={historyError}
                 loadOlder={() => void loadOlder()}
-                busy={busy}
+                busy={busy && !readOnly}
                 agentId={session?.agentId ?? ""}
                 agentName={agentName}
                 onAnswer={answerPermission}
                 scrollRequest={scrollRequest}
+                readOnly={readOnly}
               />
             )}
-            <div className="composer-wrap">
+            {!readOnly && <div className="composer-wrap">
               <PromptQueue
                 queue={queue}
                 busy={busy}
@@ -319,15 +412,15 @@ export default function SessionPane({
                   )
                 }
               />
-            </div>
+            </div>}
           </Panel>
-          {showShell && (
+          {showShell && !readOnly && (
             <Separator
               aria-label="Resize terminal panel"
               className="h-1.5 shrink-0 bg-white/5 transition-colors hover:bg-accent-line focus-visible:bg-accent-line"
             />
           )}
-          {showShell && (
+          {showShell && !readOnly && (
             <Panel
               id="shell"
               defaultSize={`${shellSize}%`}

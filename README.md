@@ -25,6 +25,8 @@ Sessions and their transcripts are saved in Postgres and survive restarts: after
 
 The branch and working directory appear once below the composer. Click them for the full values and copy actions. Session rows use provider logos, two-line titles, and a separate actions menu. Search conversations, drag the sidebar divider to resize it, or hide it with the sidebar toggle; width and visibility are remembered in this browser. On mobile, navigation opens in a sheet with keyboard focus handling.
 
+The sidebar brings the focused conversation into view when you navigate between sessions or panes. A collapsed project stays collapsed and highlights its project row instead; a new-conversation page highlights its selected project. Background activity preserves your sidebar scroll position.
+
 Sign in on the machine running Portal before creating a session:
 
 - **Claude Code:** run `claude` and complete sign-in.
@@ -80,7 +82,7 @@ rm ~/Library/LaunchAgents/com.portal.plist
 
 ## Projects and terminals
 
-The start page's **project** picker lists your projects (pinned first, then the most recently worked in) and searches the host for folders to add: type a name to find git repositories under your home folder, or a path such as `~/repos/portal` to complete it; picking a folder adds it as a project and selects it. Each project is exactly one folder, stored as its resolved real path, and the same folder cannot be added twice. Rename or remove a project from its `⋯` menu in the sidebar; removing a project does not touch its sessions, which move to the **Removed** list at the bottom of the Projects section and keep working. If a project's folder disappears from disk, the project stays listed with a *missing* marker until you remove or re-add it, and starting a session or terminal in it fails with a clear error.
+The start page's **project** picker lists your projects (pinned first, then the most recently worked in) and searches the host for folders to add: type a name to find git repositories under your home folder, or a path such as `~/repos/portal` to complete it; picking a folder adds it as a project and selects it. Each project is exactly one folder, stored as its resolved real path, and the same folder cannot be added twice. Rename or remove a project from its `⋯` menu in the sidebar. Removing a project preserves its conversations as history and closes their terminals. Search labels those conversations **Removed**; opening one shows **Project removed** and **Restore project and continue** when restoration is available. Restoring brings its conversations back to the sidebar and reconnects the conversation you opened. The **Removed** list at the bottom of Projects also offers restoration and permanent deletion. Project removal and restoration update other viewers without a reload. If a project's folder disappears from disk, the project stays listed with a *missing* marker until you remove or re-add it, and starting a session or terminal in it fails with a clear error.
 
 ### Worktrees
 

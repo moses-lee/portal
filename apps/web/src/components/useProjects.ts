@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { migrateProjectPins } from "@/lib/pins";
+import { subscribeProjectChanges } from "@/lib/project-events";
 import type { Project, ProjectSummary } from "@/lib/types";
 
 export type AddProjectInput = { path: string; name?: string };
@@ -128,9 +129,11 @@ export function useProjects(): UseProjects {
       if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisibility);
+    const unsubscribe = subscribeProjectChanges(() => { void refresh(); });
     return () => {
       mountedRef.current = false;
       document.removeEventListener("visibilitychange", onVisibility);
+      unsubscribe();
     };
   }, [refresh]);
 

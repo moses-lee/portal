@@ -12,12 +12,14 @@ import {
 } from "react";
 import { writeDraft } from "@/lib/drafts";
 import { forgetPromptHistory, sessionHistoryKey } from "@/lib/prompt-history";
+import { notifyProjectChanges } from "@/lib/project-events";
 import { PAGE_TURNS, createHistoryCache, type HistoryCache } from "@/lib/history-cache";
 import { createSessionStreamHub, type SessionStreamHub } from "@/lib/session-stream-hub";
 import type {
   AgentInfo,
   EventPage,
   SessionListEvent,
+  SessionProjectsEvent,
   SessionSummary,
 } from "@/lib/types";
 
@@ -40,6 +42,8 @@ export type Sessions = {
   removeSession: (id: string) => void;
   /** Refetch the whole list; resolves with it. */
   refetchSessions: (signal?: AbortSignal) => Promise<SessionSummary[]>;
+  /** A successful restore is authoritative even before the project stream catches up. */
+  confirmProject: (project: SessionProjectsEvent["projects"][number]) => void;
   /** Reduced transcripts of visited (and hovered) sessions, shared by every session view. */
   historyCache: HistoryCache;
   /** The one stream every session view's events arrive on (see `@/lib/session-stream-hub`). */
@@ -79,6 +83,25 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  // REST replies and per-session streams may predate a removal/restoration received on the list
+  // stream. Keep its latest project snapshot authoritative across those slower responses.
+  const projectSnapshotRef = useRef<Map<string, SessionProjectsEvent["projects"][number]> | null>(null);
+  // A restore can succeed while the list stream is still disconnected, before its first snapshot.
+  const confirmedProjectsRef = useRef(new Map<string, SessionProjectsEvent["projects"][number]>());
+  const withCurrentProject = useCallback((session: SessionSummary): SessionSummary => {
+    const projects = projectSnapshotRef.current;
+    const confirmed = confirmedProjectsRef.current.get(session.projectId);
+    if (!projects && !confirmed) return session;
+    const project = confirmed ?? projects?.get(session.projectId) ?? null;
+    if (session.project === project || (session.project && project && session.project.id === project.id && session.project.name === project.name)) return session;
+    return { ...session, project };
+  }, []);
+  const confirmProject = useCallback((project: SessionProjectsEvent["projects"][number]) => {
+    const snapshot = projectSnapshotRef.current;
+    if (snapshot) snapshot.set(project.id, project);
+    else confirmedProjectsRef.current.set(project.id, project);
+    setSessions((previous) => previous.map(withCurrentProject));
+  }, [withCurrentProject]);
   /** The current list, for stream handlers that must not close over a stale render. */
   const sessionsRef = useRef(sessions);
   useEffect(() => {
@@ -94,9 +117,10 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     const { sessions: fetched } = (await r.json()) as {
       sessions: SessionSummary[];
     };
-    if (!signal?.aborted) setSessions(fetched);
-    return fetched;
-  }, []);
+    const current = fetched.map(withCurrentProject);
+    if (!signal?.aborted) setSessions(current);
+    return current;
+  }, [withCurrentProject]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -121,7 +145,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         if (controller.signal.aborted) return;
         setAgents(registry.agents);
         setDefaultAgentId(registry.defaultAgentId);
-        setSessions(saved.sessions);
+        setSessions(saved.sessions.map(withCurrentProject));
       } catch {
         if (!controller.signal.aborted) {
           setLoadError(
@@ -134,7 +158,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     };
     void load();
     return () => controller.abort();
-  }, []);
+  }, [withCurrentProject]);
 
   // Follow the list live once it has loaded: other sessions' busy, permission, connection, title,
   // and activity changes, plus sessions created or deleted from another browser. The open session's
@@ -143,6 +167,15 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
     if (loading || loadError) return;
     const controller = new AbortController();
     const es = new EventSource("/api/sessions/stream");
+    es.addEventListener("projects", (message) => {
+      const event = JSON.parse((message as MessageEvent).data) as SessionProjectsEvent;
+      const projects = new Map(event.projects.map((project) => [project.id, project]));
+      projectSnapshotRef.current = projects;
+      confirmedProjectsRef.current.clear();
+      // Refresh every entry, including sessions that have no mounted pane or open transcript.
+      setSessions((previous) => previous.map(withCurrentProject));
+      notifyProjectChanges();
+    });
     es.onmessage = (m) => {
       const event = JSON.parse(m.data) as SessionListEvent;
       switch (event.type) {
@@ -164,7 +197,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
           setSessions((prev) =>
             prev.some((s) => s.id === event.session.id)
               ? prev
-              : [event.session, ...prev],
+              : [withCurrentProject(event.session), ...prev],
           );
           return;
         case "updated":
@@ -184,22 +217,22 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       controller.abort();
       es.close();
     };
-  }, [loading, loadError, refetchSessions, historyCache]);
+  }, [loading, loadError, refetchSessions, historyCache, withCurrentProject]);
 
   const updateSession = useCallback(
     (id: string, patch: Partial<SessionSummary>) => {
       setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+        prev.map((s) => (s.id === id ? withCurrentProject({ ...s, ...patch }) : s)),
       );
     },
-    [],
+    [withCurrentProject],
   );
   const putSession = useCallback((session: SessionSummary) => {
     setSessions((prev) => [
-      session,
+      withCurrentProject(session),
       ...prev.filter((item) => item.id !== session.id),
     ]);
-  }, []);
+  }, [withCurrentProject]);
   const removeSession = useCallback((id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
   }, []);
@@ -254,11 +287,12 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
       putSession,
       removeSession,
       refetchSessions,
+      confirmProject,
       historyCache,
       sessionStreams,
       renameSession,
     }),
-    [agents, defaultAgentId, sessions, loading, loadError, updateSession, putSession, removeSession, refetchSessions, historyCache, sessionStreams, renameSession],
+    [agents, defaultAgentId, sessions, loading, loadError, updateSession, putSession, removeSession, refetchSessions, confirmProject, historyCache, sessionStreams, renameSession],
   );
   return <SessionsContext.Provider value={value}>{children}</SessionsContext.Provider>;
 }

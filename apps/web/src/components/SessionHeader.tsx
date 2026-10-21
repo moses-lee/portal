@@ -44,6 +44,7 @@ export default function SessionHeader({
   activity,
   statusLabel,
   hasSession,
+  readOnly = false,
   showShell,
   showGithub,
   showSidebarToggle = true,
@@ -66,6 +67,8 @@ export default function SessionHeader({
   /** The status line's text (see `sessionStatusLabel`); the activity's label when absent. */
   statusLabel?: string;
   hasSession: boolean;
+  /** The conversation's project is unavailable; session actions require restoration. */
+  readOnly?: boolean;
   showShell: boolean;
   showGithub: boolean;
   /** Only the first pane of a tab carries the sidebar toggle. */
@@ -197,7 +200,7 @@ export default function SessionHeader({
               <SquarePen className="size-4" />
             </IconButton>
           )}
-          {hasSession && (
+          {hasSession && !readOnly && (
             <IconButton
               ref={shellButton}
               label={showShell ? "Hide terminal" : "Show terminal"}

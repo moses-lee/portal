@@ -105,6 +105,13 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   }
   contexts.set(app, ctx);
   ctx.terminals = createTerminalsService(ctx);
+  const unsubscribeProjectTerminals = ctx.projects.subscribe(() => {
+    for (const terminal of ctx.terminals.list()) {
+      if (!terminal.sessionId) continue;
+      const session = ctx.sessions.getSession(terminal.sessionId);
+      if (session && !ctx.projects.get(session.projectId)) ctx.terminals.close(terminal.id);
+    }
+  });
   if (orchestrator) ctx.orchestrator = createOrchestratorService(ctx, typeof orchestrator === "object" ? orchestrator : {});
   // Owned here with the sessions, not by the orchestrator's job worker: it runs without the orchestrator.
   ctx.lifecycle = createLifecycleSweeper({ ...liveLifecycleSweepDeps(ctx), ...lifecycle.deps }, { start: lifecycle.start ?? true });
@@ -143,6 +150,7 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     await ctx.lifecycle.dispose().catch(failed("the lifecycle sweep"));
     await ctx.searchBackfill.dispose().catch(failed("the search backfill"));
     unsubscribeRoom();
+    unsubscribeProjectTerminals();
     // A running census count may still write the room row and log a milestone through the orchestrator.
     await ctx.room.dispose().catch(failed("the room"));
     // Stop the scheduler and any running turn before the sessions it may be driving go away.

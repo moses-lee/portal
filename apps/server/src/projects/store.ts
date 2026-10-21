@@ -28,6 +28,8 @@ export class ProjectError extends Error {
 export interface ProjectsStore {
   /** Resolves once the cache is loaded; `get`/`list` answer from it synchronously afterwards. */
   ready: Promise<void>;
+  /** Project records changed after a successful write. The cache is current when listeners run. */
+  subscribe(listener: () => void): () => void;
   /** Listed projects in the order they were added (restored ones return to their original slot). */
   list(): Project[];
   get(id: string): Project | undefined;
@@ -112,6 +114,13 @@ function byCreation(a: Project, b: Project): number {
 export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.homedir() }: { home?: string } = {}): ProjectsStore {
   let projects = new Map<string, Project>();
   let removed = new Map<string, RemovedProject>();
+  const listeners = new Set<() => void>();
+  function changed() {
+    // A failing observer must never turn a successful persisted write into a failed request.
+    for (const listener of listeners) {
+      try { listener(); } catch {}
+    }
+  }
 
   const ready = backend.load().then((loaded) => {
     projects = new Map([...loaded.projects].sort(byCreation).map((project) => [project.id, project]));
@@ -164,6 +173,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
     removed.delete(project.id);
     projects.set(project.id, project);
     projects = new Map([...projects.values()].sort(byCreation).map((p) => [p.id, p]));
+    changed();
     return project;
   }
 
@@ -172,12 +182,17 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
       const project = { ...require(id), ...fields };
       await backend.patch(id, fields);
       projects.set(id, project);
+      changed();
       return project;
     });
   }
 
   return {
     ready,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
     list: () => [...projects.values()],
     get: (id) => projects.get(id),
     findByPath,
@@ -201,6 +216,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
         };
         await backend.insert(project);
         projects.set(project.id, project);
+        changed();
         return project;
       });
     },
@@ -212,6 +228,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
         await backend.rename(id, trimmed);
         // Replacing the value keeps the key's position, so the list order is unchanged.
         projects.set(id, project);
+        changed();
         return project;
       });
     },
@@ -233,6 +250,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
           }
           ordered.push(projects.get(id)!);
         }
+        changed();
         return ordered;
       });
     },
@@ -250,6 +268,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
         await backend.remove(id, record);
         projects.delete(id);
         if (record) removed.set(id, record);
+        changed();
       });
     },
     listRemoved: () => [...removed.values()].sort((a, b) => b.removedAt - a.removedAt),
@@ -270,6 +289,7 @@ export function createProjectsStoreOn(backend: ProjectsBackend, { home = os.home
         if (!removed.has(id)) return false;
         await backend.forgetRemoved(id);
         removed.delete(id);
+        changed();
         return true;
       });
     },

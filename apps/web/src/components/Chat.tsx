@@ -332,6 +332,7 @@ function ChatShell() {
     putSession,
     removeSession,
     refetchSessions,
+    confirmProject,
     historyCache,
   } = useSessions();
   /**
@@ -368,6 +369,7 @@ function ChatShell() {
   /** Projects removed while conversations still pointed at them; the sidebar's Removed view. */
   const {
     removed: removedProjects,
+    loading: removedProjectsLoading,
     error: removedError,
     refresh: refreshRemoved,
     restore: restoreRemoved,
@@ -599,10 +601,11 @@ function ChatShell() {
 
   /**
    * Bring a removed project back (recreating its worktree when needed), then open its most recent
-   * conversation; opening a persisted session is what reconnects its agent.
+   * conversation (or the one being viewed); opening a persisted session reconnects its agent.
    */
-  const restoreProject = async (id: string) => {
+  const restoreProject = async (id: string, sessionId?: string) => {
     const project = await restoreRemoved(id);
+    confirmProject(project);
     // The project is back either way; a failed refetch only costs the jump to its conversation.
     const [, fetched] = await Promise.all([
       refreshProjects(),
@@ -612,11 +615,11 @@ function ChatShell() {
     setSurface(null);
     setPalette(null);
     leavePalace(false);
-    const newest = fetched
+    const target = sessionId ?? fetched
       .filter((s) => s.projectId === project.id)
-      .sort(byRecentActivity)[0];
-    if (newest) void actions.openSession(newest.id);
-    else void actions.openStartTab();
+      .sort(byRecentActivity)[0]?.id;
+    if (target) await actions.openSession(target);
+    else await actions.openStartTab();
     setShowSidebar(false);
   };
 
@@ -1066,6 +1069,7 @@ function ChatShell() {
           onTogglePinProject={toggleProjectPin}
           onTogglePinSession={toggleSessionPin}
           active={active}
+          selectedProjectId={active === null && route !== null && !surface && !palace ? selectedProjectId || null : null}
           openSessionIds={openSessionIds}
           onSelect={sidebarSelect}
           onOpenInNewTab={sidebarOpenInTab}
@@ -1126,6 +1130,11 @@ function ChatShell() {
               <WorkspaceView
                 route={route ?? retainedRoute}
                 start={start}
+                removedProjects={removedProjects}
+                removedProjectsLoading={removedProjectsLoading}
+                removedProjectsError={removedError}
+                onRefreshRemovedProjects={refreshRemoved}
+                onRestoreProject={restoreProject}
                 onOpenSidebar={toggleSidebar}
                 showGithub={showGithub}
                 onToggleGithub={toggleGithub}

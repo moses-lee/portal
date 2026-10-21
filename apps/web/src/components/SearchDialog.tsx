@@ -24,6 +24,7 @@ import {
   type RowPull,
 } from "@/lib/search";
 import { sessionDisplayTitle } from "@/lib/session-title";
+import { isRemovedSession } from "@/lib/removed-session";
 import type { ProjectSummary, SessionSummary } from "@/lib/types";
 
 export type SearchDialogProps = {
@@ -112,6 +113,7 @@ type Row = {
   primary: ReactNode;
   subtitle: string;
   pull?: RowPull;
+  removed?: boolean;
   time?: number;
   open: () => void;
 };
@@ -170,6 +172,7 @@ function SearchPanel({
       icon: <span className={iconBox}><AgentLogo agentId={session.agentId} className="size-4" /></span>,
       primary: <Highlight text={sessionDisplayTitle(session.title)} q={q} />,
       subtitle: joinDistinct(projectName(session), session.git?.branch),
+      removed: isRemovedSession(session),
       pull,
       time: session.lastActiveAt,
       open: () => {
@@ -212,6 +215,7 @@ function SearchPanel({
         ),
         primary: <Highlight text={hit.snippet} q={q} />,
         subtitle: sessionDisplayTitle(session.title),
+        removed: isRemovedSession(session),
         time: hit.ts,
         open: () => {
           onOpened();
@@ -317,6 +321,9 @@ function SearchPanel({
                       </span>
                     )}
                   </span>
+                  {row.removed && (
+                    <span className="shrink-0 rounded-md border border-border/70 bg-muted/45 px-1.5 py-0.5 text-[10px] text-muted-foreground">Removed</span>
+                  )}
                   {row.time !== undefined && (
                     <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{relativeAge(now - row.time)}</span>
                   )}

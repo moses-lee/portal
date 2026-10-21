@@ -1,6 +1,6 @@
 /** `/api/agents`, `/api/sessions/**`, and `/api/blobs/**`, as the web app's Next.js routes served them. */
 import { createReadStream } from "node:fs";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { errorMessage } from "../http/errors.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
@@ -12,7 +12,7 @@ import { displayPath } from "../lib/git-info.ts";
 import { summarizeForList, summarizeSession } from "../lib/session-summary.ts";
 import { deleteRemovedSessions, deleteSessionFully } from "./delete.ts";
 import { attachSessionViewer } from "./viewer.ts";
-import { SESSION_TITLE_MAX, STREAM_IDS_MAX, type PermissionAnswerRequest, type SessionListEvent, type SetConfigRequest } from "../lib/types.ts";
+import { SESSION_TITLE_MAX, STREAM_IDS_MAX, type PermissionAnswerRequest, type SessionListEvent, type SessionProjectsEvent, type SetConfigRequest } from "../lib/types.ts";
 
 const DEFAULT_PAGE = 300;
 const MAX_PAGE = 2000;
@@ -83,6 +83,13 @@ function parsePermissionBody(body: unknown): PermissionAnswerRequest | null {
 export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): void {
   const ready = () => Promise.all([ctx.projects.ready, ctx.sessions.ready]);
   const projectOf = (projectId: string) => ctx.projects.get(projectId) ?? null;
+  const projectRemoved = async (id: string, reply: FastifyReply): Promise<boolean> => {
+    await ready();
+    const session = ctx.sessions.getSession(id);
+    if (!session || ctx.projects.get(session.projectId)) return false;
+    reply.code(409).send({ error: "Project removed" });
+    return true;
+  };
 
   /**
    * Run the lifecycle sweep now (docs/SESSION-LIFECYCLE.md, "Sweep"): remove idle worktrees.
@@ -161,6 +168,13 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
         id, busy, awaitingPermission, link, title, titleSource, lastActiveAt, idleSince, turnEndedAt, backgroundTasks, liveness: liveness.state,
       })),
     });
+    const sendProjects = () => {
+      const event: SessionProjectsEvent = { projects: ctx.projects.list().map(({ id, name }) => ({ id, name })) };
+      stream.send(event, { event: "projects" });
+    };
+    // Reconnects refresh project availability too, including changes made while offline.
+    sendProjects();
+    stream.onClose(ctx.projects.subscribe(sendProjects));
     // `created` carries the full list entry, which needs the folder's git state; keep those in
     // order behind one another so a fast create-then-update cannot arrive reversed.
     let queue: Promise<void> = Promise.resolve();
@@ -373,6 +387,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (rejectCrossOrigin(req, reply)) return reply;
     const { text, queue } = (req.body ?? {}) as { text?: unknown; queue?: unknown };
     if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "empty prompt" });
+    if (await projectRemoved(req.params.id, reply)) return reply;
     try {
       if (queue === true) {
         const { queued, position } = await ctx.sessions.sendOrQueue(req.params.id, text);
@@ -394,6 +409,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (rejectCrossOrigin(req, reply)) return reply;
     const { text } = (req.body ?? {}) as { text?: unknown };
     if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "empty prompt" });
+    if (await projectRemoved(req.params.id, reply)) return reply;
     await ready();
     if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
     try {
@@ -410,6 +426,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
    */
   app.post<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId/edit", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
+    if (await projectRemoved(req.params.id, reply)) return reply;
     await ready();
     if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
     try {
@@ -426,6 +443,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
    */
   app.delete<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId/edit", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
+    if (await projectRemoved(req.params.id, reply)) return reply;
     await ready();
     if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
     return { item: await ctx.sessions.cancelEdit(req.params.id, req.params.itemId) };
@@ -438,6 +456,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
    */
   app.delete<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
+    if (await projectRemoved(req.params.id, reply)) return reply;
     await ready();
     if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
     const removed = await ctx.sessions.removeQueued(req.params.id, req.params.itemId);
@@ -459,6 +478,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (rejectCrossOrigin(req, reply)) return reply;
     const body = parsePermissionBody(req.body);
     if (!body) return reply.code(400).send({ error: "Expected {requestId, optionId: string | null}." });
+    if (await projectRemoved(req.params.id, reply)) return reply;
     try {
       ctx.sessions.respondPermission(req.params.id, body.requestId, body.optionId);
       return { ok: true };
@@ -471,6 +491,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (rejectCrossOrigin(req, reply)) return reply;
     const body = parseConfigBody(req.body);
     if (!body) return reply.code(400).send({ error: "Expected {configId, value} or {modeId}." });
+    if (await projectRemoved(req.params.id, reply)) return reply;
     try {
       const state = "modeId" in body
         ? await ctx.sessions.setMode(req.params.id, body.modeId)
@@ -505,6 +526,7 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   /** Reconnect the agent to a persisted session; progress and the outcome arrive as `meta` on the stream. */
   app.post<IdParams>("/api/sessions/:id/attach", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
+    if (await projectRemoved(req.params.id, reply)) return reply;
     try {
       await ctx.sessions.attach(req.params.id);
       return { ok: true };
