@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useSyncExternalStore } from "react";
+import type { MonitoringSummary } from "@portal/contracts/monitoring";
 import type { RoomEnvironment, RoomState } from "@portal/contracts/room";
 import { usePortalEvents } from "@/components/portal/PortalLive";
 import { nextMinute, roomCoordinates, sunClock, type SunClock } from "./sun";
@@ -79,6 +80,39 @@ export function useRoomState(): RoomState | null {
 /** Whether the room's state could not be loaded (and none has arrived since). */
 export function useRoomFailed(): boolean {
   return useSyncExternalStore(subscribeRoom, readFailed, serverFailed);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Memory and disk
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The portal stream's last `monitoring` event (docs/MONITORING.md, Room), for the barometer and the
+ * jar: sent on connect once the server has a sample, then once a minute. Kept at module level, so a
+ * room mounted again (after the terminal page) shows the last reading at once instead of resting
+ * until the next one. Null before the first, and for good on an OS the server cannot measure.
+ */
+let monitoring: MonitoringSummary | null = null;
+const monitoringListeners = new Set<() => void>();
+
+function subscribeMonitoring(listener: () => void) {
+  monitoringListeners.add(listener);
+  return () => {
+    monitoringListeners.delete(listener);
+  };
+}
+
+const readMonitoring = () => monitoring;
+const serverMonitoring = () => null;
+
+export function useMonitoringSummary(): MonitoringSummary | null {
+  const summary = useSyncExternalStore(subscribeMonitoring, readMonitoring, serverMonitoring);
+  usePortalEvents((event) => {
+    if (event.type !== "monitoring") return;
+    monitoring = event.summary;
+    for (const listener of [...monitoringListeners]) listener();
+  });
+  return summary;
 }
 
 // ---------------------------------------------------------------------------------------------

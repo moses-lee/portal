@@ -33,8 +33,10 @@ import { useRoomHost } from "./host";
 import { CAMERA_VERSION, readLayout, registerStage, subscribeLayout } from "./layout";
 import {
   backgroundRuns,
+  barometerLevel,
   describeObject,
   hearthLevel,
+  jarState,
   lampState,
   liveSummary,
   mailStack,
@@ -51,7 +53,7 @@ import Sketch, { skipSketchDrawIn } from "./Sketch.tsx";
 import { peekSnapshot, snapshotEligibility, snapshotRead, SNAPSHOT_READ_WAIT_MS, type SnapshotRecord } from "./snapshot.ts";
 import SnapshotImage from "./SnapshotImage";
 import { sceneForAltitude, skyColours } from "./sun";
-import { useRoomState, useSunClock } from "./useRoomState";
+import { useMonitoringSummary, useRoomState, useSunClock } from "./useRoomState";
 
 /**
  * The WebGL room's chunk (three.js and the scene). Named once so the background can start the
@@ -230,8 +232,8 @@ function openView(view: PortalView) {
  * WebGL, after a lost context or a canvas failure, and under `prefers-reduced-transparency`; one
  * veil over either. It follows the real sun at the room's
  * location, never a setting. The live objects follow the session list, the portal stream's status
- * and the census; the accumulated ones (books, notes, plants, frames, keys, the tree) the census,
- * the session and project lists and the active watches, and the milestones mount their furniture;
+ * and the census, the barometer and the jar its `monitoring` event; the accumulated ones (books,
+ * notes, plants, frames, keys, the tree) the census, the session and project lists and the active watches, and the milestones mount their furniture;
  * with the canvas up, a document-level pointer listener (`pointer.ts`) shows their hover cards and
  * clicks through. `palace` is the Palace page, where a clicked robot waves first.
  * The fixed `.room-scene` element carries what tests and CSS read: `data-scene` (day or night,
@@ -277,6 +279,7 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     else setIdleSince((current) => current ?? Date.now());
   });
   const now = clock?.at ?? 0;
+  const monitoring = useMonitoringSummary();
   const data: RoomLiveData = {
     crowd,
     needsYou: status?.counts.needsYou ?? 0,
@@ -286,6 +289,8 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     busy,
     lamp: lampState({ busy, night: scene === "night", idleSince: idleSince ?? now, now }),
     weather,
+    monitoring,
+    now,
   };
   const live = useSettledValue<RoomLiveScene>({
     crowd: data.crowd,
@@ -293,6 +298,8 @@ export default function RoomBackground({ activity, palace = false }: { activity:
     hearth: hearthLevel(data.activityLastHour),
     lamp: data.lamp,
     kettle: backgroundRuns(data.runs).length > 0,
+    barometer: barometerLevel(monitoring),
+    jar: jarState(monitoring),
   });
   const dataRef = useRef(data);
   useLayoutEffect(() => {
@@ -349,6 +356,9 @@ export default function RoomBackground({ activity, palace = false }: { activity:
           return openView("activity");
         case "kettle":
           return openView("watches");
+        case "barometer":
+        case "jar":
+          return openView("monitoring");
         case "lamp":
           return openView("chat");
         case "notes":

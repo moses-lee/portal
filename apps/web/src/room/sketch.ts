@@ -9,6 +9,7 @@
  * Pure: no React, no DOM; the node test runner loads this file directly. `Sketch.tsx` draws it.
  */
 import {
+  BAROMETER,
   BAY,
   BENCH,
   BOOKCASE,
@@ -17,6 +18,7 @@ import {
   DESK_LAMP,
   HEARTH,
   MAIL_SHELF,
+  PANTRY_SHELF,
   projectPoint,
   ROOM,
   RUG,
@@ -480,6 +482,31 @@ function slotStrokes(): Stroke[] {
   ];
 }
 
+/** The barometer on the chimney breast (its wooden back and bezel), and the pantry shelf above the stove with the jar on it. */
+function monitoringStrokes(): Stroke[] {
+  const { x, y, z, back, dial } = BAROMETER;
+  const shelf = PANTRY_SHELF;
+  const [s0, s1] = [shelf.x - shelf.width / 2, shelf.x + shelf.width / 2];
+  const top = shelf.y + shelf.thickness / 2;
+  const front = shelf.z + shelf.depth / 2;
+  const { x: jx, radius, height } = shelf.jar;
+  return [
+    { id: "barometer", closed: true, points: ring([x, y, z + 0.04], [back, 0, 0], [0, back, 0], 20) },
+    { id: "barometer-dial", closed: true, points: ring([x, y, z + 0.05], [dial + 0.008, 0, 0], [0, dial + 0.008, 0], 18) },
+    {
+      id: "pantry-shelf",
+      points: [
+        [s0, top, ROOM.back],
+        [s0, top, front],
+        [s1, top, front],
+        [s1, top, ROOM.back],
+      ],
+    },
+    { id: "jar", closed: true, points: facing(jx - radius, jx + radius, top, top + height, shelf.z + radius) },
+    { id: "jar-lid", closed: true, points: facing(jx - radius - 0.007, jx + radius + 0.007, top + height, top + height + 0.03, shelf.z + radius + 0.007) },
+  ];
+}
+
 function floorStrokes(): Stroke[] {
   const rug = (size: readonly number[], y: number) => flat(RUG.x - size[0] / 2, RUG.x + size[0] / 2, y, RUG.z - size[1] / 2, RUG.z + size[1] / 2);
   const { x, z, width, depth, top, thickness, leg } = BENCH;
@@ -527,6 +554,7 @@ export function sketchStrokes(reached: ReadonlySet<string> = new Set()): Stroke[
     ...(reached.has("second-bookcase") ? bookcaseFor("second-bookcase") : []),
     ...(wide ? boardStrokes(PINBOARD.width, PINBOARD.centre) : boardStrokes(CORKBOARD.width, ANCHORS.board[2])),
     ...slotStrokes(),
+    ...monitoringStrokes(),
     ...floorStrokes(),
   ];
 }

@@ -3,22 +3,25 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { AgXToneMapping, PCFShadowMap, type WebGLRenderer } from "three";
+import type { MonitoringLevel } from "@portal/contracts/monitoring";
 import type { RoomWeather } from "@portal/contracts/room";
 import FrostPass, { compileRoom } from "./frost/FrostPass";
 import { suspendFrost } from "./frost/registry";
 import type { GrowthScene } from "./growth";
-import type { HearthLevel, LampState, RobotCrowd } from "./live";
+import type { HearthLevel, JarState, LampState, RobotCrowd } from "./live";
 import { setCurrentLoop, startRoomLoop, type RoomLoop } from "./loop";
 import { clearRoomReport, reportRoom } from "./report";
 import { armSnapshots, copyFrame, type SnapshotScene } from "./snapshot.ts";
 
 type SnapshotPlace = { scene: SnapshotScene; latitude: number; longitude: number };
 import { sceneForAltitude, type SunClock } from "./sun";
+import Barometer from "./scene/Barometer";
 import Books from "./scene/Books";
 import CameraRig from "./scene/Camera";
 import Corkboard from "./scene/Corkboard";
 import Frames from "./scene/Frames";
 import Hearth from "./scene/Hearth";
+import Jar from "./scene/Jar";
 import { PointerBridge } from "./scene/Hotspot";
 import Keys from "./scene/Keys";
 import Kettle from "./scene/Kettle";
@@ -162,6 +165,9 @@ export type RoomLiveScene = {
   hearth: HearthLevel;
   lamp: LampState;
   kettle: boolean;
+  /** Memory pressure, or null at rest (docs/MONITORING.md, Room). */
+  barometer: MonitoringLevel | null;
+  jar: JarState;
 };
 
 export type RoomCanvasProps = {
@@ -181,7 +187,7 @@ export type RoomCanvasProps = {
  * The room's WebGL canvas (docs/PALACE.md, Web): react-three-fiber with a capped hand-driven loop,
  * DPR at most 1.5, no antialiasing, a low-power context, AgX tone mapping, and one sun shadow map.
  * Every frame goes through `FrostPass`, which blurs the room under the `.frost` panels. The live
- * objects (robots, lamp, hearth, kettle, mail tray) and the accumulated ones (books, notes, plants,
+ * objects (robots, lamp, hearth, kettle, mail tray, barometer, jar) and the accumulated ones (books, notes, plants,
  * frames, keys, the tree) are hotspots for the page's pointer (`pointer.ts`). Milestone furniture
  * mounts as it is reached, a fresh one delivered in a crate (`Milestones`).
  * Loaded with `next/dynamic` (no SSR) by `RoomBackground`, which owns the fallbacks.
@@ -253,6 +259,8 @@ function RoomCanvas({ clock, live, growth, weather, reducedMotion, onContextLost
       <Lamp state={live.lamp} reducedMotion={reducedMotion} />
       <Hearth level={live.hearth} reducedMotion={reducedMotion} />
       <Kettle steaming={live.kettle} reducedMotion={reducedMotion} />
+      <Barometer level={live.barometer} reducedMotion={reducedMotion} />
+      <Jar fill={live.jar.fill} lid={live.jar.lid} />
       <MailTray sealed={live.mail.sealed} open={live.mail.open} pile={live.mail.pile} />
       <Robots crowd={live.crowd} reducedMotion={reducedMotion} />
       <Books books={growth.books} shown={shown} />

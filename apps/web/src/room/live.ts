@@ -1,13 +1,16 @@
 /**
  * The room's live objects (docs/PALACE.md, Objects): which sessions have robots and where they
- * stand, what the mail tray, hearth, lamp and kettle show, and what each object's hover card says.
+ * stand, what the mail tray, hearth, lamp, kettle, barometer and jar show, and what each object's
+ * hover card says.
  * The scene's components draw from these; `RoomBackground` writes their summary into `data-room`
  * for tests. No React, no DOM, no three.js: the node test runner loads this file directly.
  */
+import type { MonitoringLevel, MonitoringSummary } from "@portal/contracts/monitoring";
 import type { RoomWeather } from "@portal/contracts/room";
 import type { LivenessState, SessionLink } from "@portal/contracts/types";
 import { assignSlots, bucket, hashId, mulberry32 } from "@portal/shared/room";
 import { sessionState, sessionStateLabels } from "@portal/shared/session-state";
+import { relativeAge } from "../lib/relative-age.ts";
 import { BENCH } from "./layout.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -226,11 +229,90 @@ const RUN_KINDS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------------------------
+// The barometer and the jar (docs/MONITORING.md, Room)
+// ---------------------------------------------------------------------------------------------
+
+/** The barometer's needle: the memory pressure, or null at rest (no reading yet, or no probe for this OS). */
+export function barometerLevel(summary: MonitoringSummary | null): MonitoringLevel | null {
+  return summary?.pressure ?? null;
+}
+
+/**
+ * Where the needle points, in radians clockwise from twelve o'clock, as a wall barometer reads:
+ * Fair on the right (normal), Change at the top (warning), Stormy on the left (critical). At rest it
+ * hangs straight down, off the scale, so it never reads as a level.
+ */
+export const NEEDLE_ANGLES: Record<MonitoringLevel | "rest", number> = { normal: 0.95, warning: 0, critical: -0.95, rest: Math.PI };
+
+export type JarState = {
+  /** The used fraction of the volume holding Portal's home, to 0.01; null at rest (empty jar). */
+  fill: number | null;
+  /** The disk level by the configured levels; null at rest (a neutral lid). */
+  lid: MonitoringLevel | null;
+};
+
+/** The jar: its fill is the used share of the volume holding Portal's home, its lid the disk level. */
+export function jarState(summary: MonitoringSummary | null): JarState {
+  const disk = summary?.disk;
+  if (!disk || disk.totalBytes <= 0) return { fill: null, lid: null };
+  const used = 1 - Math.min(disk.totalBytes, Math.max(0, disk.freeBytes)) / disk.totalBytes;
+  return { fill: Math.round(used * 100) / 100, lid: disk.level };
+}
+
+const GIB = 2 ** 30;
+
+/**
+ * Bytes as gigabytes to one decimal ("11.2 GB"), under 1 GB in megabytes. Memory in binary units,
+ * as Activity Monitor counts it (16 GB of RAM reads 16.0); disk in decimal, as Finder does.
+ */
+export function gigabytes(bytes: number, unit: "memory" | "disk"): string {
+  const gb = bytes / (unit === "memory" ? GIB : 1e9);
+  if (gb < 1) return `${Math.round(gb * (unit === "memory" ? 1024 : 1000))} MB`;
+  return `${gb.toFixed(1)} GB`;
+}
+
+const NO_READING = "No reading yet: Portal measures once a minute, on macOS and Linux";
+
+/** The barometer's hover card lines: memory used, swap, and pressure. */
+export function barometerLines(summary: MonitoringSummary | null): string[] {
+  if (!summary) return [NO_READING, "The needle rests until then"];
+  const { memory, swap } = summary;
+  return [
+    `Memory: ${gigabytes(memory.usedBytes, "memory")} used of ${gigabytes(memory.totalBytes, "memory")}`,
+    swap.totalBytes > 0 ? `Swap: ${gigabytes(swap.usedBytes, "memory")} used of ${gigabytes(swap.totalBytes, "memory")}` : "Swap: none in use",
+    `Pressure: ${summary.pressure}`,
+  ];
+}
+
+/** "just now" or "4m ago". */
+const ago = (ms: number) => (ms < 60_000 ? "just now" : `${relativeAge(ms)} ago`);
+
+/** The jar's hover card lines: free and total, the five largest items of the last survey, and when they were measured. */
+export function jarLines(summary: MonitoringSummary | null, now: number): string[] {
+  if (!summary) return [NO_READING, "The jar stays empty until then"];
+  const { disk, largest, surveyedAt } = summary;
+  const lines: string[] = [];
+  const fill = jarState(summary).fill;
+  if (!disk || fill === null) lines.push("The disk holding Portal's home could not be read");
+  else {
+    lines.push(`${gigabytes(disk.freeBytes, "disk")} free of ${gigabytes(disk.totalBytes, "disk")} (${Math.round(fill * 100)}% used)`);
+    if (disk.level !== "normal") lines.push(`Below the ${disk.level} level`);
+  }
+  if (surveyedAt === null || largest.length === 0) {
+    lines.push("Folder sizes not measured yet");
+    return lines;
+  }
+  lines.push(...largest.slice(0, 5).map((item) => `${item.label}: ${gigabytes(item.bytes, "disk")}`));
+  lines.push(`Sizes measured ${ago(now - surveyedAt)}`);
+  return lines;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Hover cards
 // ---------------------------------------------------------------------------------------------
 
 /** The live objects, then the accumulated ones (`growth.ts`: books, the board, plants, frames, keys, the tree). */
-export type RoomObjectKind = "robot" | "mail" | "hearth" | "kettle" | "lamp" | "window" | "book" | "notes" | "plant" | "frame" | "key" | "tree";
+export type RoomObjectKind = "robot" | "mail" | "hearth" | "kettle" | "lamp" | "window" | "barometer" | "jar" | "book" | "notes" | "plant" | "frame" | "key" | "tree";
 export type RoomTarget = { kind: RoomObjectKind; id: string };
 
 /** What the room knows right now, for the cards. */
@@ -243,6 +325,10 @@ export type RoomLiveData = {
   busy: boolean;
   lamp: LampState;
   weather: RoomWeather | null;
+  /** The portal stream's last `monitoring` event (docs/MONITORING.md); null before one arrives. */
+  monitoring: MonitoringSummary | null;
+  /** The clock the cards' ages are measured against (epoch ms). */
+  now: number;
 };
 
 export type RoomCard = {
@@ -317,13 +403,17 @@ export function describeObject(target: RoomTarget, data: RoomLiveData): RoomCard
         : ["The weather is not known yet"];
       return { title: "Window", about: "The sun and the weather where the room is", lines, hint: null, action: null, credit: true };
     }
+    case "barometer":
+      return card("Barometer", "Memory: the needle reads the pressure", barometerLines(data.monitoring), "Monitoring");
+    case "jar":
+      return card("Jar", "Disk: as full as the volume holding Portal's home", jarLines(data.monitoring, data.now), "Monitoring");
     default:
       // The accumulated objects' cards are `describeGrowth`'s.
       return null;
   }
 }
 
-/** The `data-room` summary of the live objects, for tests: robots with their state and place, the tray, the hearth, lamp, kettle. */
+/** The `data-room` summary of the live objects, for tests: robots with their state and place, the tray, the hearth, lamp, kettle, barometer and jar. */
 export function liveSummary(data: RoomLiveData) {
   return {
     robots: data.crowd.robots.map(({ id, state, place }) => ({ id, state, place })),
@@ -332,5 +422,7 @@ export function liveSummary(data: RoomLiveData) {
     hearth: hearthLevel(data.activityLastHour),
     lamp: data.lamp,
     kettle: backgroundRuns(data.runs).length > 0,
+    barometer: barometerLevel(data.monitoring),
+    jar: jarState(data.monitoring),
   };
 }
