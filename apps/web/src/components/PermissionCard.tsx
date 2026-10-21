@@ -75,10 +75,12 @@ const answeredByPortal = (b: PermissionBlock) => b.response?.outcome === "select
 export default function PermissionCard({
   b,
   onAnswer,
+  disabled = false,
 }: {
   b: PermissionBlock;
   /** Resolves when the server accepted the answer; rejects with a message to show otherwise. */
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
+  disabled?: boolean;
 }) {
   const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +88,7 @@ export default function PermissionCard({
   const answered = b.response !== null;
 
   const answer = async (optionId: string) => {
-    if (inFlight || answered) return;
+    if (inFlight || answered || disabled) return;
     setInFlight(true);
     setError(null);
     try {
@@ -140,7 +142,7 @@ export default function PermissionCard({
               <Button
                 key={o.optionId}
                 type="button"
-                disabled={inFlight}
+                disabled={inFlight || disabled}
                 onClick={() => void answer(o.optionId)}
                 className={`rounded px-3 py-1 text-xs font-medium disabled:opacity-50 ${optionClass[o.kind] ?? optionClass.reject_once}`}
               >
@@ -148,7 +150,7 @@ export default function PermissionCard({
               </Button>
             ))}
             <span className="text-[11px] text-zinc-500" aria-live="polite">
-              {inFlight ? "Sending…" : "Waiting for your answer"}
+              {disabled ? "Restore the project to answer" : inFlight ? "Sending…" : "Waiting for your answer"}
             </span>
           </div>
           {error && (

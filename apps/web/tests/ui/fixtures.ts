@@ -459,6 +459,8 @@ declare global {
       seq?: number,
     ) => Promise<void>;
     __portalSessions: SessionSummary[];
+    /** Every EventSource URL opened by this page, including sources later closed. */
+    __portalStreamUrls: string[];
     __portalLive: {
       status: OrchestratorStatus;
       items: Item[];
@@ -648,6 +650,7 @@ export async function setupPortal(
   await page.addInitScript(
     ({ sessions, live }) => {
       window.__portalSessions = sessions;
+      window.__portalStreamUrls = [];
       window.__portalLive = Object.assign(live, window.__portalLiveOverride ?? {});
       const sources = new Set<PreviewEventSource>();
       class PreviewEventSource extends EventTarget {
@@ -659,6 +662,7 @@ export async function setupPortal(
         constructor(url: string) {
           super();
           this.url = url;
+          window.__portalStreamUrls.push(url);
           this.sessionIds = url.startsWith("/api/sessions/streams?")
             ? (new URL(url, location.origin).searchParams.get("ids") ?? "").split(",").filter(Boolean)
             : null;
@@ -949,10 +953,17 @@ export async function setupPortal(
           },
         };
         currentProjects.push(restored);
-        if (!currentSessions.some((session) => session.id === "s9")) currentSessions.push({
+        const restoredSessions = currentSessions.filter((session) => session.projectId === restored.id);
+        for (const session of restoredSessions) {
+          session.project = { id: restored.id, name: restored.name };
+          session.git = restored.git;
+          session.cwdMissing = false;
+        }
+        if (restoredSessions.length === 0) currentSessions.push({
           ...makeSession("s9", "Finish the old branch", "codex", restored),
           lastActiveAt: row.lastActiveAt ?? now,
         });
+        await page.evaluate((sessions) => { window.__portalSessions = sessions; }, currentSessions);
         return json({ project: restored });
       }
       if (method === "DELETE") return route.fulfill({ status: 204 });
@@ -1181,6 +1192,19 @@ export async function setupPortal(
      * provider ignores it, as it would a stale copy.
      */
     pushWorkspace: publishWorkspace,
+    /** A lifecycle change from another viewer: refresh route data and notify the session list stream. */
+    pushProjects: async (projects: ProjectSummary[], removed: RemovedProjectSummary[] = []) => {
+      currentProjects.splice(0, currentProjects.length, ...structuredClone(projects));
+      currentRemoved.splice(0, currentRemoved.length, ...structuredClone(removed));
+      for (const session of currentSessions) {
+        const owner = currentProjects.find((project) => project.id === session.projectId);
+        session.project = owner ? { id: owner.id, name: owner.name } : null;
+      }
+      await page.evaluate(async ({ projects, sessions }) => {
+        window.__portalSessions = sessions;
+        await window.__portalEmit("/api/sessions/stream", { projects: projects.map(({ id, name }) => ({ id, name })) }, "projects");
+      }, { projects: currentProjects, sessions: currentSessions });
+    },
     /** The room's state changed on the server (a census recount, a milestone reached): `GET /api/room` answers it and the stream pushes it. */
     pushRoom: async (next: RoomState) => {
       live.room = structuredClone(next);

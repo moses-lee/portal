@@ -420,6 +420,11 @@ export type SessionListEvent =
   | { type: "updated"; id: string; patch: SessionListPatch }
   | { type: "deleted"; id: string };
 
+/** Named `projects` event on the session list stream; sent on connect and after project changes. */
+export type SessionProjectsEvent = {
+  projects: Pick<Project, "id" | "name">[];
+};
+
 export type PortalEvent =
   /** One of the agent's updates, or a background task starting or ending. */
   | { type: "update"; update: SessionUpdate | BackgroundTaskUpdate }

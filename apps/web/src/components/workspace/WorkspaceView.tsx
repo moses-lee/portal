@@ -19,6 +19,7 @@ import type { AgentActivity } from "@/lib/agent-activity";
 import { navigateTo } from "@/lib/navigation";
 import { startPath, tabPath, type WorkspaceRoute } from "@/lib/session-routes";
 import { sessionState } from "@/lib/session-state";
+import type { RemovedProjectSummary } from "@/lib/types";
 import { canSplitPane, locationPath, paneTitle, resolveFocus, staysInTab, tabTitle } from "@/lib/workspace";
 import { focusScope, MOBILE_QUERY, NARROW_QUERY, switcherPanes, tabRendersSplit, viewportKind, type PaneRef } from "@/lib/workspace-mobile";
 
@@ -27,6 +28,11 @@ export type WorkspaceViewProps = {
   route: WorkspaceRoute;
   /** The start page's props, shared by every start-page pane. */
   start: StartPaneProps;
+  removedProjects: RemovedProjectSummary[];
+  removedProjectsLoading: boolean;
+  removedProjectsError: string | null;
+  onRefreshRemovedProjects: () => Promise<void>;
+  onRestoreProject: (projectId: string, sessionId: string) => Promise<void>;
   onOpenSidebar: (opener: HTMLElement) => void;
   showGithub: boolean;
   onToggleGithub: (opener: HTMLElement) => void;
@@ -53,6 +59,11 @@ export type WorkspaceViewProps = {
 export default function WorkspaceView({
   route,
   start,
+  removedProjects,
+  removedProjectsLoading,
+  removedProjectsError,
+  onRefreshRemovedProjects,
+  onRestoreProject,
   onOpenSidebar,
   showGithub,
   onToggleGithub,
@@ -158,6 +169,11 @@ export default function WorkspaceView({
         paneId={p.id}
         paneKey={keyOf(p.id)}
         start={start}
+        removedProject={removedProjects.find((project) => project.id === (sessionOf(p.sessionId ?? "")?.projectId || "unassigned")) ?? null}
+        removedProjectsLoading={removedProjectsLoading}
+        removedProjectsError={removedProjectsError}
+        onRefreshRemovedProjects={onRefreshRemovedProjects}
+        onRestoreProject={onRestoreProject}
         showSidebarToggle={first}
         onOpenSidebar={onOpenSidebar}
         showGithub={showGithub}

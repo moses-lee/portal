@@ -63,6 +63,10 @@ Contract: `packages/contracts/src/search.ts`.
 - `SearchDialog`: its chunk is split out like the settings dialog; the panel mounts only while open. Empty query shows Recent and Recent sessions; with a query, Projects (4), Sessions (8), Messages (8). Selection is tracked by row identity, so late server results do not move it. Desktop is its own Radix Dialog (the shared `ResponsiveDialog` forces a visible title); under 640 px a bottom Sheet.
 - `Chat.tsx` holds the open state and the capture-phase shortcut listener (`/` for Search outside editors; ⌘K/Ctrl+K for Agent, including composers and terminals; held keys are ignored and another open dialog disables it); a session result opens through the workspace's open-session action, a project result through the start tab. Recents drop entries whose session or project is gone.
 
+## Removed conversations
+
+Conversations retained after project removal remain searchable, including recent and message results, with a **Removed** badge. Every entrypoint opens the retained history with **Project removed** and a restoration action. Removed conversations do not reconnect their agent or offer message, permission, settings, or terminal controls until the project is restored. Restoration continues the conversation that was opened; blockers and failures remain visible alongside its history. Project lifecycle events keep result labels and project lists current across viewers. Permanently deleted conversations are unavailable.
+
 ## Agent popup
 
 Updated 2026-10-14. Search and Agent are separate dialogs. Search keeps its result types, appearance, and keyboard selection; it has no conversation tab.

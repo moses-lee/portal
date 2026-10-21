@@ -19,6 +19,7 @@ import { applyConfigChange } from "@/lib/session-config";
 import { agentActivity } from "@/lib/agent-activity";
 import { sessionState as deriveSessionState } from "@/lib/session-state";
 import { sessionStatusLabel } from "@/lib/session-status";
+import { isRemovedSession } from "@/lib/removed-session";
 import type {
   EventPage,
   QueuedPrompt,
@@ -82,6 +83,8 @@ export type SessionStreamOptions = {
   onSubmit?: (id: string) => void;
   /** Hold sends back while true (the start page's first message is still in flight). */
   sendBlocked?: boolean;
+  /** Keep history live without attaching the agent or accepting session mutations. */
+  readOnly?: boolean;
 };
 
 /** The session's live state, as the stream's `meta` events keep it. */
@@ -120,12 +123,14 @@ function seed(
 export function useSessionStream(
   sessionId: string | null,
   historyCache: HistoryCache,
-  { onDeleted, onSubmit, sendBlocked = false }: SessionStreamOptions = {},
+  { onDeleted, onSubmit, sendBlocked = false, readOnly: requestedReadOnly = false }: SessionStreamOptions = {},
 ) {
   const { sessions, updateSession, sessionStreams } = useSessions();
   const session: SessionSummary | undefined = sessionId
     ? sessions.find((s) => s.id === sessionId)
     : undefined;
+  // Before the list knows the session's project, subscribing is safe but attaching is not.
+  const readOnly = requestedReadOnly || !session || session.project === undefined || isRemovedSession(session);
   const sessionDeleted = useStableCallback((id: string) => onDeleted?.(id));
   const submitted = useStableCallback((id: string) => onSubmit?.(id));
 
@@ -220,6 +225,9 @@ export function useSessionStream(
       if (batch.length === 0) return;
       setHistory((prev) => batch.reduce(appendEvent, prev));
       for (const ev of batch) {
+        // The resume cursor must describe rendered history. Metadata can remove a project and
+        // resubscribe before this frame; an unapplied event then needs to be replayed.
+        cursorRef.current = Math.max(cursorRef.current, ev.seq);
         if (ev.type === "turn_start") setBusy(true);
         if (ev.type === "turn_end" || ev.type === "error") {
           setBusy(false);
@@ -268,7 +276,6 @@ export function useSessionStream(
         unsubscribe?.();
         unsubscribe = sessionStreams.subscribe(sessionId, entry.cursor, {
           onEvent: (seq, ev) => {
-            cursorRef.current = Math.max(cursorRef.current, seq);
             // The hub hands over only events past this view's cursor (a replay serves the view
             // furthest behind); `appendEvent` drops a held event too, should one get through.
             // The server stamps each event with its logged time; an older server sent none.
@@ -283,7 +290,7 @@ export function useSessionStream(
             historyCache.delete(sessionId);
             sessionDeleted(sessionId);
           },
-        });
+        }, { attach: !readOnly });
       } catch {
         if (!controller.signal.aborted)
           setHistoryError(
@@ -301,7 +308,7 @@ export function useSessionStream(
       if (frame !== null) cancelAnimationFrame(frame);
       pending = [];
     };
-  }, [sessionId, updateSession, sessionDeleted, historyCache, sessionStreams]);
+  }, [sessionId, updateSession, sessionDeleted, historyCache, sessionStreams, readOnly]);
 
   // Keep the cache entry current so the next visit starts from this history and cursor.
   useEffect(() => {
@@ -365,6 +372,7 @@ export function useSessionStream(
   const submitPrompt = useCallback(
     async (text: string) => {
       if (!sessionId) throw new Error("No active session.");
+      if (readOnly) throw new Error("Project removed");
       const editing = readEditing(sessionId);
       if (editing) return saveQueuedEdit(sessionId, editing, text);
       submitted(sessionId);
@@ -383,7 +391,7 @@ export function useSessionStream(
         );
       }
     },
-    [sessionId, submitted],
+    [sessionId, submitted, readOnly],
   );
   const draftKey = sessionId ?? "new";
   const {
@@ -396,7 +404,7 @@ export function useSessionStream(
     draftKey,
     historyKey: sessionId ? sessionHistoryKey(sessionId) : undefined,
     submit: submitPrompt,
-    canSend: () => !!sessionId && !sendBlocked,
+    canSend: () => !!sessionId && !sendBlocked && !readOnly,
     onSent: () => setScrollRequest((request) => request + 1),
   });
 
@@ -427,7 +435,7 @@ export function useSessionStream(
    * edit in progress ends with its prompt (see the effect below), the composer keeping its text.
    */
   const stop = async () => {
-    if (!sessionId || stopping) return;
+    if (!sessionId || stopping || readOnly) return;
     setStopping(true);
     try {
       const response = await fetch(sessionUrl(sessionId, "/cancel"), {
@@ -463,7 +471,7 @@ export function useSessionStream(
    * was clicked) or was removed by another viewer.
    */
   const removeQueued = async (item: QueuedPrompt) => {
-    if (!sessionId) return false;
+    if (!sessionId || readOnly) return false;
     try {
       const response = await fetch(sessionUrl(sessionId, `/queue/${encodeURIComponent(item.id)}`), { method: "DELETE" });
       if (!response.ok) throw new Error("Could not remove the queued prompt. Try again.");
@@ -485,7 +493,7 @@ export function useSessionStream(
    * prompt is left pausing it afterwards.
    */
   const editQueued = async (item: QueuedPrompt) => {
-    if (!sessionId) return;
+    if (!sessionId || readOnly) return;
     try {
       const previous = readEditing(sessionId);
       const response = await fetch(queueItemUrl(sessionId, item.id, "/edit"), { method: "POST" });
@@ -505,7 +513,7 @@ export function useSessionStream(
 
   /** Leave the edit: `DELETE /queue/:itemId/edit` keeps the prompt's original text in its slot, and the composer keeps its text. */
   const cancelEdit = async () => {
-    if (!sessionId) return;
+    if (!sessionId || readOnly) return;
     const itemId = readEditing(sessionId);
     if (!itemId) return;
     try {
@@ -528,7 +536,7 @@ export function useSessionStream(
 
   /** Ask the server to reconnect the agent; the outcome arrives as `meta.link` on the stream. */
   const retryAttach = async () => {
-    if (!sessionId) return;
+    if (!sessionId || readOnly) return;
     setLink({ status: "connecting" });
     try {
       const r = await fetch(sessionUrl(sessionId, "/attach"), {
@@ -550,7 +558,7 @@ export function useSessionStream(
 
   /** Change a config option or mode: apply locally first, then adopt the agent's confirmed state or revert. */
   const setConfig = async (request: SetConfigRequest) => {
-    if (!sessionId || !sessionState || configInFlight) return;
+    if (!sessionId || !sessionState || configInFlight || readOnly) return;
     const previous = sessionState;
     setConfigError(null);
     setConfigInFlight(true);
@@ -586,6 +594,7 @@ export function useSessionStream(
   const answerPermission = useCallback(
     async (requestId: string, optionId: string) => {
       if (!sessionId) throw new Error("No active session.");
+      if (readOnly) throw new Error("Project removed");
       let r: Response;
       try {
         r = await fetch(sessionUrl(sessionId, "/permission"), {
@@ -603,7 +612,7 @@ export function useSessionStream(
         throw new Error(j.error ?? "Could not send the answer. Try again.");
       }
     },
-    [sessionId],
+    [sessionId, readOnly],
   );
 
   const lastTurn = history.turns.at(-1);
@@ -636,6 +645,7 @@ export function useSessionStream(
   return {
     /** The session's list entry, when the list has it. */
     session,
+    readOnly,
     history,
     loading: historyLoading,
     loadingOlder,

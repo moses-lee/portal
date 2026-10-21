@@ -42,6 +42,8 @@ export type SidebarProps = {
   onTogglePinProject: (id: string) => void;
   onTogglePinSession: (id: string) => void;
   active: string | null;
+  /** The shared project selected on the focused start page; null outside that page. */
+  selectedProjectId?: string | null;
   /** Sessions open somewhere in the workspace (decision 27): their rows show a small tab glyph. */
   openSessionIds: ReadonlySet<string>;
   onSelect: (id: string) => void;
@@ -263,12 +265,13 @@ function AgentShortcutHint() {
   );
 }
 
-function SidebarContent(props: SidebarProps) {
+function SidebarContent(props: SidebarProps & { visible: boolean }) {
   const {
     projects,
     projectPins,
     sessionPins,
     active,
+    selectedProjectId,
     openSessionIds,
     onSelect,
     onOpenInNewTab,
@@ -348,6 +351,8 @@ function SidebarContent(props: SidebarProps) {
           projectPins={projectPins}
           sessionPins={sessionPins}
           active={active}
+          selectedProjectId={props.projectsActive && !active ? selectedProjectId : null}
+          visible={props.visible}
           openSessionIds={openSessionIds}
           onSelect={onSelect}
           onOpenInNewTab={onOpenInNewTab}
@@ -471,7 +476,7 @@ export default function Sidebar(props: SidebarProps) {
           <SheetDescription className="sr-only">
             Portal, its views, and your projects and conversations.
           </SheetDescription>
-          <SidebarContent {...props} />
+          <SidebarContent {...props} visible={props.open} />
         </SheetContent>
       </Sheet>
     );
@@ -492,7 +497,7 @@ export default function Sidebar(props: SidebarProps) {
       className="sidebar-shell shell-panel frost-subtle liquid relative"
       style={{ width }}
     >
-      <SidebarContent {...props} />
+      <SidebarContent {...props} visible={shown && !props.away} />
       <div
         role="separator"
         aria-label="Resize sidebar"

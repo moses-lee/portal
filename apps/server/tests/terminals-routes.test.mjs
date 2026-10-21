@@ -96,11 +96,11 @@ test("standalone POST answers 409 when the home directory is gone", async (t) =>
 test("session terminals are listed per session and start in the session's directory", async (t) => {
   const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "portal-session-terminals-")));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  const sessions = new Map([["s1", { id: "s1", cwd }], ["gone", { id: "gone", cwd: path.join(cwd, "missing") }]]);
+  const sessions = new Map([["s1", { id: "s1", projectId: "p1", cwd }], ["gone", { id: "gone", projectId: "p1", cwd: path.join(cwd, "missing") }]]);
   const terminals = createTerminalRegistry();
   const app = Fastify();
   // Only the members the routes use; the real sessions service is exercised in the test above.
-  registerTerminalRoutes(app, { terminals, sessions: { ready: Promise.resolve(), getSession: (id) => sessions.get(id) } });
+  registerTerminalRoutes(app, { terminals, projects: { ready: Promise.resolve(), get: () => ({ id: "p1" }) }, sessions: { ready: Promise.resolve(), getSession: (id) => sessions.get(id) } });
   t.after(async () => { await app.close(); terminals.disposeAll(); });
 
   const created = await app.inject({ method: "POST", url: "/api/sessions/s1/terminals", headers: sameOrigin });

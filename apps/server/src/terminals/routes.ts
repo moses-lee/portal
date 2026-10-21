@@ -52,7 +52,7 @@ export function registerTerminalRoutes(app: FastifyInstance, ctx: AppContext): v
 
   app.get<IdParams>("/api/sessions/:id/terminals", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
-    await ctx.sessions.ready;
+    await Promise.all([ctx.sessions.ready, ctx.projects.ready]);
     if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
     return { terminals: ctx.terminals.listBySession(req.params.id).map(info) };
   });
@@ -60,14 +60,18 @@ export function registerTerminalRoutes(app: FastifyInstance, ctx: AppContext): v
   app.post<IdParams>("/api/sessions/:id/terminals", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
     const { id } = req.params;
-    await ctx.sessions.ready;
+    await Promise.all([ctx.sessions.ready, ctx.projects.ready]);
     const session = ctx.sessions.getSession(id);
     if (!session) return reply.code(404).send({ error: "Unknown session." });
+    if (!ctx.projects.get(session.projectId)) return reply.code(409).send({ error: "Project removed" });
     try {
       await stat(session.cwd);
     } catch {
       return reply.code(409).send({ error: `Working directory is missing: ${displayPath(session.cwd)}` });
     }
+    // A removal during the filesystem check already closed the old terminals; do not recreate one.
+    if (!ctx.projects.get(session.projectId)) return reply.code(409).send({ error: "Project removed" });
+    if (!ctx.sessions.getSession(id)) return reply.code(404).send({ error: "Unknown session." });
     return reply.code(201).send(info(ctx.terminals.create({ sessionId: id, cwd: session.cwd })));
   });
 }

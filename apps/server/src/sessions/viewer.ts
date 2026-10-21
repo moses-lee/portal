@@ -3,7 +3,7 @@
  * cursor replayed from memory (or `reset` when they have aged out), `meta` on connect and whenever
  * the agent's state, link or queue changes, the folder's git state, presence and owning project
  * re-read every second and re-announced when they change, and `deleted` once the session goes
- * away. Opening a viewer also reattaches the agent to a persisted session, unless the caller says
+ * away. Opening a viewer also reattaches the agent to a listed project's persisted session, unless the caller says
  * the session is already introduced (`attach: false`: the web's hub reopening its stream for
  * another session).
  *
@@ -101,15 +101,22 @@ export function attachSessionViewer(
       sink({ kind: "deleted" });
     },
   });
+  const unsubscribeProjects = ctx.projects.subscribe(() => {
+    const next = currentProject();
+    if (next?.id === project?.id && next?.name === project?.name) return;
+    project = next;
+    sendMeta();
+  });
   const metaPoll = setInterval(() => { void refreshMeta(false); }, META_POLL_MS);
   const detach = () => {
     if (detached) return;
     detached = true;
     clearInterval(metaPoll);
     unsubscribe();
+    unsubscribeProjects();
   };
   void refreshMeta(true);
   // Reconnect a persisted session's agent; the outcome arrives as `meta.link`.
-  if (attach && session.link.status !== "live") ctx.sessions.attach(id).catch(() => {});
+  if (attach && currentProject() && session.link.status !== "live") ctx.sessions.attach(id).catch(() => {});
   return detach;
 }

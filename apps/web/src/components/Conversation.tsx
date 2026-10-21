@@ -358,6 +358,7 @@ const TurnView = memo(function TurnView({
   working,
   day,
   onAnswer,
+  readOnly,
 }: {
   turn: Turn;
   agentId: string;
@@ -366,6 +367,7 @@ const TurnView = memo(function TurnView({
   /** Any time on the day of the day divider this turn sits under; 0 before the first. */
   day: number;
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
+  readOnly: boolean;
 }) {
   const finishedAt = !working && turn.endedAt ? turn.endedAt : 0;
   const segments: (Block | ActivityBlock[])[] = [];
@@ -449,6 +451,7 @@ const TurnView = memo(function TurnView({
               key={segment.requestId}
               b={segment}
               onAnswer={onAnswer}
+              disabled={readOnly}
             />
           );
         if (segment.kind === "error")
@@ -505,6 +508,7 @@ export default function Conversation({
   agentName,
   onAnswer,
   scrollRequest,
+  readOnly = false,
 }: {
   history: History;
   loading: boolean;
@@ -516,6 +520,7 @@ export default function Conversation({
   agentName: string;
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
   scrollRequest: number;
+  readOnly?: boolean;
 }) {
   /** Where the day dividers go, and the day each turn sits under (0 before the first known time). */
   const days = useMemo(() => daySections(history.turns.map(turnTime)), [history.turns]);
@@ -586,11 +591,10 @@ export default function Conversation({
                   <AgentLogo agentId={agentId} className="!size-7" />
                 </span>
                 <h2 className="mt-2 text-lg font-medium tracking-tight">
-                  Ready when you are.
+                  {readOnly ? "No messages yet." : "Ready when you are."}
                 </h2>
                 <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
-                  Give {agentName} a task, ask a question, or explore an idea
-                  together.
+                  {readOnly ? "This conversation has no saved messages." : <>Give {agentName} a task, ask a question, or explore an idea together.</>}
                 </p>
               </div>
             )}
@@ -606,6 +610,7 @@ export default function Conversation({
                     working={busy && i === history.turns.length - 1}
                     day={day}
                     onAnswer={onAnswer}
+                    readOnly={readOnly}
                   />
                 </MessageScrollerItem>
               );

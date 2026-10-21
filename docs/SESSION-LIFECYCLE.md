@@ -116,7 +116,7 @@ Pass 2, worktrees (rule 2): for each project with `worktree` set and `pinned_at`
 5. remove via the same `deleteWorktreeFolder` + `removeProject` path the HTTP route uses (`projects/routes.ts:352`), with the pre-delete script, no force, `deleteBranch: "merged"`. Sessions stay and become Removed. Clear `kept_reason`. Log `worktree.removed_idle` to Activity.
 6. if git refuses anyway (race), set `kept_reason` to git's message and carry on
 
-Sessions of a removed project are inert as today (they can still be opened; nothing new there). Rule 3's button deletes them for good.
+Sessions of a removed project remain readable as history. Search marks them **Removed**, and opening one shows **Project removed** with a restoration action and any blocker. They do not reconnect agents or accept messages, permission answers, settings changes, or new terminals until restoration succeeds. Restoration from a conversation returns to that same session. Project lifecycle events update availability across viewers; Rule 3's button deletes retained conversations for good.
 
 The existing `jobs/review-cleanup.ts` keeps its behaviour; rule 2 is the general case that also catches review worktrees it left behind.
 

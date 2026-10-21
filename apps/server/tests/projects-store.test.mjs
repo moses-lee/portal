@@ -59,6 +59,36 @@ test("memory store: seeded records are listed in creation order", async () => {
 });
 
 for (const [name, make] of backends) {
+  test(`${name} store: subscriptions observe committed project changes and detach cleanly`, async (t) => {
+    const { home } = folders(t);
+    const store = await opened((await make(t, home)).open);
+    const changes = [];
+    const detach = store.subscribe(() => {
+      changes.push({ listed: store.list().map(({ id }) => id), removed: store.listRemoved().map(({ id }) => id) });
+    });
+    // One broken observer cannot stop later observers or reject a committed write.
+    const detachBroken = store.subscribe(() => { throw new Error("observer failed"); });
+    let observed = 0;
+    const detachOther = store.subscribe(() => { observed++; });
+    const project = await store.add({ path: path.join(home, "one") });
+    await store.remove(project.id, { keep: true });
+    await store.restore(project.id);
+    assert.deepEqual(changes, [
+      { listed: [project.id], removed: [] },
+      { listed: [], removed: [project.id] },
+      { listed: [project.id], removed: [] },
+    ]);
+    assert.equal(observed, 3);
+    await rejectsWith(store.remove("nope"), 404);
+    assert.equal(changes.length, 3, "a rejected write emits nothing");
+    detach();
+    detachBroken();
+    detachOther();
+    await store.rename(project.id, "After unsubscribe");
+    assert.equal(changes.length, 3);
+    assert.equal(observed, 3);
+  });
+
   test(`${name} store: adds, renames, removes, and reloads projects`, async (t) => {
     const { home } = folders(t);
     const { open, reopen } = await make(t, home);
@@ -292,9 +322,14 @@ test("postgres store: a failed write leaves the cache untouched", async (t) => {
   const { db } = await temporaryDatabase(t);
   const store = await opened(() => createPgProjectsStore({ db, home }));
   const one = await store.add({ path: path.join(home, "one") });
+  let changed = 0;
+  const detach = store.subscribe(() => { changed++; });
+  t.after(detach);
   await db.execute("alter table projects add constraint no_renames check (name <> 'Forbidden')");
   await assert.rejects(store.rename(one.id, "Forbidden"));
   assert.equal(store.get(one.id).name, "one");
+  assert.equal(changed, 0, "a database failure must not invalidate observers");
   // The chain recovers: later writes still go through.
   assert.equal((await store.rename(one.id, "Fine")).name, "Fine");
+  assert.equal(changed, 1);
 });

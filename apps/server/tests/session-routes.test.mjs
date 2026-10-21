@@ -371,6 +371,9 @@ test("GET /api/sessions/stream sends a snapshot, then created/updated/deleted ch
     lastActiveAt: existing.lastActiveAt, idleSince: existing.createdAt, turnEndedAt: null, backgroundTasks: [], liveness: "idle",
   }]);
   assert.equal(presence.count(), before + 1);
+  const projects = await stream.next();
+  assert.equal(projects.event, "projects");
+  assert.deepEqual(projects.data.projects, [{ id: "proj-1", name: "Repo" }, { id: "proj-gone", name: "Gone" }]);
 
   const created = await createSession(app, { projectId: "proj-1", agentId: "codex" });
   const createdFrame = await stream.next();
@@ -702,6 +705,106 @@ test("opening a persisted session's stream reattaches its agent and reports it t
   await stream.cancel();
   const page = await events(app, session.id);
   assert.equal(page.nextSeq, 6);
+});
+
+test("removed projects preserve readable history without reconnecting; restore re-enables the selected session", async (t) => {
+  const fixture = await setup(t);
+  const session = await createSession(fixture.app);
+  await runTurn(fixture.app, session.id);
+  const terminal = await fixture.app.inject({ method: "POST", url: `/api/sessions/${session.id}/terminals` });
+  assert.equal(terminal.statusCode, 201, terminal.body);
+  assert.equal((await fixture.app.inject({ method: "DELETE", url: "/api/projects/proj-1" })).statusCode, 204);
+  assert.equal(appContext(fixture.app).terminals.get(terminal.json().id), undefined, "removal closes existing terminals and their sockets");
+  await fixture.app.close();
+
+  const app = await fixture.makeApp();
+  const detail = await app.inject({ method: "GET", url: `/api/sessions/${session.id}` });
+  assert.equal(detail.statusCode, 200);
+  assert.equal(detail.json().project, null);
+  assert.equal(detail.json().link.status, "offline");
+  assert.equal((await events(app, session.id)).events[0].text, "hello");
+
+  const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const single = sseReader(await fetch(`${base}/api/sessions/${session.id}/stream?since=5`, { signal: controller.signal }));
+  const multiplexed = sseReader(await fetch(`${base}/api/sessions/streams?ids=${session.id}&since=${session.id}:5`, { signal: controller.signal }));
+  for (const stream of [single, multiplexed]) {
+    const frame = await stream.next();
+    assert.equal(frame.event, "meta");
+    assert.equal(frame.data.project, null);
+    assert.equal(frame.data.link.status, "offline");
+  }
+  await delay(100);
+  assert.equal(fixture.messages("session/resume").length, 0, "neither stream attempts to resume a removed project's agent");
+
+  for (const [route, payload] of [["attach", undefined], ["prompt", { text: "continue" }], ["prompt", { text: "queued", queue: true }], ["config", { modeId: "plan" }], ["terminals", undefined]]) {
+    const response = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/${route}`, payload });
+    assert.equal(response.statusCode, 409, `${route}: ${response.body}`);
+    assert.deepEqual(response.json(), { error: "Project removed" });
+  }
+  for (const [method, route, payload] of [
+    ["POST", "permission", { requestId: "permission-1", optionId: "once" }],
+    ["PATCH", "queue/pending-1", { text: "edited" }],
+    ["POST", "queue/pending-1/edit", undefined],
+    ["DELETE", "queue/pending-1/edit", undefined],
+    ["DELETE", "queue/pending-1", undefined],
+  ]) {
+    const response = await app.inject({ method, url: `/api/sessions/${session.id}/${route}`, payload });
+    assert.equal(response.statusCode, 409, `${route}: ${response.body}`);
+    assert.deepEqual(response.json(), { error: "Project removed" });
+  }
+  const restored = await app.inject({ method: "POST", url: "/api/projects/removed/proj-1/restore" });
+  assert.equal(restored.statusCode, 200, restored.body);
+  // Already-open viewers learn about restoration immediately, without opening the agent themselves.
+  for (const stream of [single, multiplexed]) {
+    let frame;
+    do frame = await stream.next(); while (frame.data?.project?.id !== "proj-1");
+    assert.equal(frame.event, "meta");
+    assert.equal(frame.data.link.status, "offline");
+  }
+  assert.equal((await app.inject({ method: "POST", url: `/api/sessions/${session.id}/attach` })).statusCode, 200);
+  assert.equal(fixture.messages("session/resume").length, 1);
+  await single.cancel();
+  await multiplexed.cancel();
+
+  assert.equal((await app.inject({ method: "DELETE", url: `/api/sessions/${session.id}` })).statusCode, 204);
+  for (const path of ["", "/events", "/stream"]) {
+    assert.equal((await app.inject({ method: "GET", url: `/api/sessions/${session.id}${path}` })).statusCode, 404, path);
+  }
+});
+
+test("project changes reach every session-list subscriber and reconnect snapshots", async (t) => {
+  const { app } = await setup(t);
+  await createSession(app);
+  const base = await app.listen({ port: 0, host: "127.0.0.1" });
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const open = async () => {
+    const stream = sseReader(await fetch(`${base}/api/sessions/stream`, { signal: controller.signal }));
+    assert.equal((await stream.next()).data.type, "snapshot");
+    const projects = await stream.next();
+    assert.equal(projects.event, "projects");
+    return { stream, projects: projects.data.projects };
+  };
+  const a = await open();
+  const b = await open();
+  assert.ok(a.projects.some(({ id }) => id === "proj-1"));
+  assert.equal((await app.inject({ method: "DELETE", url: "/api/projects/proj-1" })).statusCode, 204);
+  for (const { stream } of [a, b]) {
+    const frame = await stream.next();
+    assert.equal(frame.event, "projects");
+    assert.equal(frame.data.projects.some(({ id }) => id === "proj-1"), false);
+  }
+  const reconnected = await open();
+  assert.equal(reconnected.projects.some(({ id }) => id === "proj-1"), false);
+  assert.equal((await app.inject({ method: "POST", url: "/api/projects/removed/proj-1/restore" })).statusCode, 200);
+  for (const { stream } of [a, b, reconnected]) {
+    const frame = await stream.next();
+    assert.equal(frame.event, "projects");
+    assert.ok(frame.data.projects.some(({ id }) => id === "proj-1"));
+    await stream.cancel();
+  }
 });
 
 test("GET /api/sessions/streams reattaches only the sessions named in attach; an empty attach reattaches none, an absent one all", async (t) => {

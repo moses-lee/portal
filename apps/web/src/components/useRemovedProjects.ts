@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { subscribeProjectChanges } from "@/lib/project-events";
 import type { ProjectSummary, RemovedProjectSummary } from "@/lib/types";
 
 const NETWORK_ERROR = "Could not reach the server. Check the connection and try again.";
@@ -13,6 +14,8 @@ async function readError(r: Response, fallback: string) {
 export type UseRemovedProjects = {
   /** Removed projects most recent first, then conversations whose project left no record. */
   removed: RemovedProjectSummary[];
+  /** True until the first list fetch settles. */
+  loading: boolean;
   /** Message from the last failed list fetch; cleared by a successful one. */
   error: string | null;
   /** Refetch the list. Never rejects; failures land in `error`. */
@@ -26,6 +29,7 @@ export type UseRemovedProjects = {
 /** The Removed view's rows and their two actions; refetches when the tab becomes visible again. */
 export function useRemovedProjects(): UseRemovedProjects {
   const [removed, setRemoved] = useState<RemovedProjectSummary[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
   const mountedRef = useRef(true);
@@ -44,6 +48,7 @@ export function useRemovedProjects(): UseRemovedProjects {
     if (!mountedRef.current || request !== requestRef.current) return;
     if (next) setRemoved(next);
     setError(message);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -56,9 +61,11 @@ export function useRemovedProjects(): UseRemovedProjects {
       if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisibility);
+    const unsubscribe = subscribeProjectChanges(() => { void refresh(); });
     return () => {
       mountedRef.current = false;
       document.removeEventListener("visibilitychange", onVisibility);
+      unsubscribe();
     };
   }, [refresh]);
 
@@ -71,6 +78,10 @@ export function useRemovedProjects(): UseRemovedProjects {
     }
     if (!r.ok) throw await readError(r, "Could not restore the project. Try again.");
     const { project } = (await r.json()) as { project: ProjectSummary };
+    // A GET begun before this mutation must not put the removed row back afterwards.
+    ++requestRef.current;
+    setLoading(false);
+    setError(null);
     setRemoved((prev) => prev.filter((row) => row.id !== id));
     return project;
   }, []);
@@ -83,8 +94,11 @@ export function useRemovedProjects(): UseRemovedProjects {
       throw new Error(NETWORK_ERROR);
     }
     if (!r.ok && r.status !== 404) throw await readError(r, "Could not delete the conversations. Try again.");
+    ++requestRef.current;
+    setLoading(false);
+    setError(null);
     setRemoved((prev) => prev.filter((row) => row.id !== id));
   }, []);
 
-  return { removed, error, refresh, restore, discard };
+  return { removed, loading, error, refresh, restore, discard };
 }

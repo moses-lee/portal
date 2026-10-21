@@ -16,10 +16,11 @@
  * nothing is lost across a reopen. The replay serves the view furthest behind; each view is
  * handed only the events past its own cursor, so a view never sees an event twice however often
  * the stream reopens (`appendEvent` drops a held event too, as a second guard). The query's
- * `attach` lists the sessions the stream did not carry before: the server reattaches those
- * agents (a session persisted by an earlier run) and only those, so a reopen for one new pane
+ * `attach` lists the sessions whose writable views are new to the stream: the server reattaches
+ * those agents (a session persisted by an earlier run) and only those, so a reopen for one new pane
  * does not re-announce every other session. A dropped stream is reopened with backoff and
- * reintroduces every session, as the server may have restarted. `EventSource`'s own retry is not
+ * reintroduces every writable session, as the server may have restarted. Retained history can
+ * subscribe without attachment and becomes writable when its project is restored. `EventSource`'s own retry is not
  * used, as the query must carry the current cursors; the hub closes a failed source and opens a
  * new one. With no subscribers no stream is held.
  *
@@ -55,8 +56,9 @@ export type SessionStreamHub = {
    * Follow `sessionId` from `since` (the last seq the view holds, -1 for none). The replay comes
    * first, then the first `meta`, as a stream of the session's own would send them. Answers the
    * function that ends the subscription; calling it more than once is fine.
+   * `attach: false` reads retained history without reconnecting its agent.
    */
-  subscribe(sessionId: string, since: number, handlers: SessionStreamHandlers): () => void;
+  subscribe(sessionId: string, since: number, handlers: SessionStreamHandlers, options?: { attach?: boolean }): () => void;
   /** Ends every subscription and closes the stream. The hub takes new subscriptions afterwards. */
   close(): void;
 };
@@ -80,6 +82,8 @@ export type SessionStreamHubOptions = {
 
 type Subscriber = {
   sessionId: string;
+  /** False for retained history: follow events without reconnecting an unavailable project. */
+  attach: boolean;
   /** The last seq this view holds; only events past it are delivered. */
   cursor: number;
   /** True until a stream has opened with this view's session: it still needs its replay and first `meta`. */
@@ -115,6 +119,8 @@ export function createSessionStreamHub({
   let source: StreamSource | null = null;
   /** The sessions the open stream carries (those the server has introduced to it); empty with no stream. */
   let streamed = new Set<string>();
+  /** Sessions whose current views allow attachment, tracked separately from history subscriptions. */
+  let attachable = new Set<string>();
   let cancelReopen: (() => void) | null = null;
   let reopenMs = Infinity;
   let cancelRetry: (() => void) | null = null;
@@ -140,6 +146,7 @@ export function createSessionStreamHub({
     source?.close();
     source = null;
     streamed = new Set();
+    attachable = new Set();
   };
   /** The frame's JSON object with its `sessionId`, or null for anything else. */
   const parse = (event: Event): (Record<string, unknown> & { sessionId: string }) | null => {
@@ -161,12 +168,15 @@ export function createSessionStreamHub({
       return;
     }
     const views = [...subscribers].filter((sub) => cursors.has(sub.sessionId));
+    const nextAttachable = new Set(views.filter((sub) => sub.attach).map((sub) => sub.sessionId));
     // The open stream already carries these sessions and every view has had its replay: nothing to do.
     const carried = source !== null && cursors.size === streamed.size && [...cursors.keys()].every((id) => streamed.has(id));
-    if (carried && views.every((sub) => !sub.fresh)) return;
-    const attach = [...cursors.keys()].filter((id) => !streamed.has(id));
+    const sameAttachable = nextAttachable.size === attachable.size && [...nextAttachable].every((id) => attachable.has(id));
+    if (carried && sameAttachable && views.every((sub) => !sub.fresh)) return;
+    const attach = [...nextAttachable].filter((id) => !attachable.has(id));
     closeSource();
     streamed = new Set(cursors.keys());
+    attachable = nextAttachable;
     for (const sub of views) sub.fresh = false;
     const mine = open(sessionStreamsUrl(cursors, attach));
     source = mine;
@@ -202,6 +212,7 @@ export function createSessionStreamHub({
       if (!data) return;
       // The server has dropped the session from the stream already; its views end here.
       streamed.delete(data.sessionId);
+      attachable.delete(data.sessionId);
       const gone = viewsOf(data.sessionId);
       for (const sub of gone) subscribers.delete(sub);
       for (const sub of gone) sub.handlers.onDeleted();
@@ -232,8 +243,8 @@ export function createSessionStreamHub({
   };
 
   return {
-    subscribe(sessionId, since, handlers) {
-      const sub: Subscriber = { sessionId, cursor: since, fresh: true, handlers };
+    subscribe(sessionId, since, handlers, { attach = true } = {}) {
+      const sub: Subscriber = { sessionId, attach, cursor: since, fresh: true, handlers };
       subscribers.add(sub);
       // A new view needs its replay and first `meta`, which the server sends on connect: the
       // stream reopens even when another view already has the session on it.
@@ -241,7 +252,8 @@ export function createSessionStreamHub({
       return () => {
         if (!subscribers.delete(sub)) return;
         // Another view keeps the session on the stream; the last one leaving drops it from the query.
-        if (viewsOf(sessionId).length === 0) requestReopen(debounceMs);
+        const remaining = viewsOf(sessionId);
+        if (remaining.length === 0 || (sub.attach && !remaining.some((view) => view.attach))) requestReopen(debounceMs);
       };
     },
     close() {
