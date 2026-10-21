@@ -8,6 +8,7 @@ import type {
   BulkItemStatus, BulkItemsResponse, Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
 } from "@portal/contracts/orchestrator";
 import type { WorkspaceView } from "@portal/contracts/workspace";
+import type { QueuedPrompt } from "@portal/contracts/types";
 
 import type { OrchestratorHub } from "./hub.ts";
 
@@ -104,7 +105,14 @@ export interface OrchestratorRuntime {
    */
   chat(userMessage: OrchestratorMessage, threadId?: string, view?: WorkspaceView | null): Promise<Response>;
   /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
-  cancel(threadId?: string): void;
+  cancel(threadId?: string): QueuedPrompt[];
+  /** Main composer only; the same editing, pause, and stop semantics as session queues. */
+  queue(): QueuedPrompt[];
+  enqueue(text: string, view?: WorkspaceView | null): Promise<{ queued: QueuedPrompt; position: number }>;
+  updateQueued(id: string, text: string): QueuedPrompt;
+  beginQueueEdit(id: string): QueuedPrompt;
+  cancelQueueEdit(id: string): QueuedPrompt | null;
+  removeQueued(id: string): QueuedPrompt | null;
 
   listItems(filter?: ItemFilter): Promise<Item[]>;
   updateItem(id: string, patch: ItemPatch): Promise<Item>;

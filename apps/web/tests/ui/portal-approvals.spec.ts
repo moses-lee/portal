@@ -139,7 +139,7 @@ test("message text can never raise or answer an approval", async ({ page }) => {
   await page.goto("/");
   await showAgent(page);
   await expect(page.getByText("APPROVAL REQUIRED")).toBeVisible();
-  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /approvals? waiting/ })).toHaveCount(0);
   expect(fixture.requests.some((r) => r.path.startsWith("/api/portal/approvals"))).toBe(false);
 });

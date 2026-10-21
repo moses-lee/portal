@@ -243,8 +243,8 @@ test("panels over the room are frosted by the canvas, not CSS, while an open dia
   await expect.poll(async () => Number(await canvas.getAttribute("data-frost"))).toBeGreaterThanOrEqual(2);
   await page.screenshot({ path: info.outputPath("frost.png") });
 
-  await page.keyboard.press("ControlOrMeta+k");
-  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Search", exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveClass(/\bglass\b/);
   expect(await backdropOf(dialog)).toContain("blur");

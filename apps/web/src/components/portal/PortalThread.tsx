@@ -5,10 +5,11 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { Archive, GitPullRequest, KeyRound, LoaderCircle, Sparkles, Target } from "lucide-react";
 import ChatComposer from "../ChatComposer";
+import PromptQueue from "../PromptQueue";
 import PortalMessage from "../PortalMessage";
 import { DayDivider } from "../ChatTime";
 import type { ItemCardHandlers } from "../PortalItemCard";
-import { useSend } from "../useSend";
+import { useAgentComposer } from "./useAgentComposer";
 import { openSettings } from "../useSettings";
 import { usePortalEvents, usePortalLive } from "./PortalLive";
 import { useWorkspace } from "../WorkspaceProvider";
@@ -26,6 +27,7 @@ import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator
 import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
 import { threadDraftKey } from "@/lib/orchestrator/drafts";
 import { threadRoutes } from "@/lib/orchestrator/api";
+import { queueEditLabel } from "@/lib/prompt-queue";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic" } as const;
@@ -221,17 +223,23 @@ export default function PortalThread({
   const loadingOlderRef = useRef(false);
   /** A `messages` event arrived while a turn was streaming here; fetched once the turn ends. */
   const newerPending = useRef(false);
+  const liveUpdates = useRef(new Map<string, OrchestratorMessage>());
+  const remoteRevision = useRef(0);
+  const remoteMessages = useRef(new Map<string, { message: OrchestratorMessage; revision: number; streaming: boolean }>());
+  const remoteSince = useCallback((revision: number) => [...remoteMessages.current.values()]
+    .filter((entry) => entry.streaming || entry.revision > revision).map((entry) => entry.message), []);
   // Load the newest page on mount and on every request, but never while a turn is streaming into
   // it: a turn that starts mid-load aborts it, and the load runs again once the turn ends.
   useEffect(() => {
     if (responding || historyServed >= historyRequest) return;
     const controller = new AbortController();
+    const revision = remoteRevision.current;
     const load = async () => {
       try {
         const page = await fetchPage(routes.messages, controller.signal);
         if (controller.signal.aborted) return;
         // Unchanged messages keep the objects already held, so their memoised rows skip rendering.
-        setMessages((prev) => replaceWithPage(prev, page.messages));
+        setMessages((prev) => mergeMessages(replaceWithPage(prev, page.messages), remoteSince(revision)));
         cursor.current = { before: page.before, after: page.after };
         setHasMore(page.hasMore);
         setHistoryError(null);
@@ -249,7 +257,7 @@ export default function PortalThread({
     };
     void load();
     return () => controller.abort();
-  }, [historyRequest, historyServed, responding, routes, setMessages]);
+  }, [historyRequest, historyServed, responding, routes, setMessages, remoteSince]);
 
   /**
    * Bring in what the server appended since the newest message held (a job's note, the stored copy
@@ -263,25 +271,40 @@ export default function PortalThread({
       return;
     }
     try {
+      const revision = remoteRevision.current;
       const page = await fetchPage(`${routes.messages}?after=${after}`);
-      setMessages((prev) => mergeMessages(prev, page.messages));
+      setMessages((prev) => mergeMessages(mergeMessages(prev, page.messages), remoteSince(revision)));
       if (page.after !== null) cursor.current.after = page.after;
     } catch {
       // The next event, or a reconnect, tries again.
     }
-  }, [routes, setMessages, refetchHistory]);
+  }, [routes, setMessages, refetchHistory, remoteSince]);
 
   usePortalEvents((event) => {
+    if (event.type === "chat-message" && event.threadId === threadId) {
+      // A history request already in flight must not erase a newer streaming snapshot.
+      remoteMessages.current.set(event.message.id, { message: event.message, revision: ++remoteRevision.current, streaming: event.message.role === "assistant" && !event.done });
+      if (remoteMessages.current.size > 200) remoteMessages.current.delete(remoteMessages.current.keys().next().value!);
+      // A queued turn can start before the previous request's final chunk reaches this browser.
+      if (responding) liveUpdates.current.set(event.message.id, event.message);
+      else setMessages((prev) => mergeMessages(prev, [event.message]));
+      return;
+    }
     if (event.type !== "reconnected" && !(event.type === "messages" && (event.threadId ?? MAIN_THREAD_ID) === threadId)) return;
     // The SDK owns the message list while it streams; the server's copies are merged once it is done.
     if (responding) newerPending.current = true;
     else void fetchNewer();
   });
   useEffect(() => {
+    if (!responding && liveUpdates.current.size) {
+      const updates = [...liveUpdates.current.values()];
+      liveUpdates.current.clear();
+      setMessages((prev) => mergeMessages(prev, updates));
+    }
     if (responding || !newerPending.current) return;
     newerPending.current = false;
     void fetchNewer();
-  }, [responding, fetchNewer]);
+  }, [responding, fetchNewer, setMessages]);
 
   /** The page before the oldest message held, prepended; the scroller keeps the viewport where it was. */
   const loadOlder = useCallback(async () => {
@@ -337,22 +360,18 @@ export default function PortalThread({
     },
     [sendMessage, ack],
   );
-  const canSend = useCallback(() => ready && !archived && !responding && !otherTurn, [ready, archived, responding, otherTurn]);
-  const { draft, setDraft, sending, error: chatError, send, reportError: setChatError } = useSend({
-    draftKey: key,
-    historyKey: key,
-    submit,
-    canSend,
+  const { draft, setDraft, sending, error: chatError, send, reportError: setChatError, queue, loaded: queueLoaded, editingId, editQueued, cancelEdit, removeQueued, stop: stopTurn, stopping } = useAgentComposer({
+    threadId, draftKey: key, ready, archived, busy: responding || otherTurn,
+    submitTurn: submit,
+    stopStream: stop,
+    cancelPath: routes.cancel,
+    currentView,
     describeError: describeChatError,
   });
   useEffect(() => {
     reportError.current = setChatError;
   }, [setChatError]);
   const composerWrap = useRef<HTMLDivElement>(null);
-  const stopTurn = () => {
-    stop();
-    fetch(routes.cancel, { method: "POST" }).catch(() => {});
-  };
   /**
    * The rows are memoised; `handlers` changes identity whenever the page above re-renders, so the
    * rows get a stable callback that reads the newest handler instead.
@@ -369,15 +388,14 @@ export default function PortalThread({
 
   const last = messages.at(-1);
   const waitingForReply =
-    (responding && (!last || last.role === "user" || !last.parts.some((part) => part.type === "text" && part.text))) ||
-    otherTurn;
+    (responding || otherTurn) && (!last || last.role === "user" || !last.parts.some((part) => part.type === "text" && part.text.trim()));
   const hint = !status
     ? "Connecting to Portal…"
     : !ready
       ? `Add a ${providerNames[status.provider]} API key in Settings to talk to Portal.`
       : archived
         ? "Portal archived this thread. Continue in the main thread."
-        : otherTurn
+        : otherTurn && !isMain
           ? "Portal is answering in this thread. You can stop it, or wait for the reply."
           : null;
 
@@ -407,7 +425,7 @@ export default function PortalThread({
               </div>
             )}
             <MessageScrollerContent
-              className="conversation-content !gap-8"
+              className="conversation-content"
               role="log"
               aria-live="off"
               aria-label="Messages"
@@ -458,7 +476,7 @@ export default function PortalThread({
                     {divider !== null && <DayDivider at={divider} className="mb-8" />}
                     <PortalMessage
                       message={message}
-                      streaming={responding && index === messages.length - 1}
+                      streaming={(responding || otherTurn) && index === messages.length - 1}
                       day={day}
                       onOpenCurationRun={canOpenCurationRun ? openCurationRun : undefined}
                       onLoadToolIO={loadToolIO}
@@ -468,24 +486,25 @@ export default function PortalThread({
                 );
               })}
               {waitingForReply && (
-                <p role="status" className="flex items-center gap-2.5 text-xs text-muted-foreground">
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                  Thinking…
-                </p>
+                <div role="status" aria-label="Agent is typing" className="agent-typing"><span /><span /><span /></div>
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
         </MessageScroller>
       </MessageScrollerProvider>
       <div ref={composerWrap} className="composer-wrap" data-draft-key={key}>
+        {isMain && <PromptQueue queue={queue} busy={responding || otherTurn} editingId={editingId} onEdit={(item) => void editQueued(item)} onRemove={(item) => void removeQueued(item)} />}
         <ChatComposer
           value={draft}
           onChange={setDraft}
           onSend={() => void send()}
-          onStop={stopTurn}
+          onStop={() => void stopTurn()}
           busy={(responding && !sending) || otherTurn}
           sending={sending}
-          disabled={!ready || archived}
+          stopping={stopping}
+          queues={isMain}
+          editing={editingId ? { label: queueEditLabel(queue, editingId), onCancel: () => void cancelEdit() } : undefined}
+          disabled={!ready || archived || !queueLoaded}
           label={isMain ? "Message Portal" : `Message Portal in ${thread?.title ?? "this thread"}`}
           historyKey={key}
           placeholder={

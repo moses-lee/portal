@@ -7,7 +7,8 @@
  * live server into it.
  */
 import { randomUUID } from "node:crypto";
-import { type LanguageModel, consumeStream, convertToModelMessages, pruneMessages } from "ai";
+import { type LanguageModel, consumeStream, convertToModelMessages, createUIMessageStreamResponse, pruneMessages, readUIMessageStream } from "ai";
+import { MAX_QUEUED_PROMPTS, type QueuedPrompt } from "@portal/contracts/types";
 import type { Sql } from "postgres";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 import { needsAttention } from "@portal/shared/items";
@@ -210,6 +211,9 @@ export function createOrchestratorRuntime({
   const listeners = new Set<(event: OrchestratorEvent) => void>();
   /** The chat turn running in each thread; a thread takes one turn at a time. */
   const chatTurns = new Map<string, AbortController>();
+  const promptQueue: QueuedPrompt[] = [];
+  const queuedViews = new Map<string, WorkspaceView | null>();
+  let queueStarting: string | null = null;
   let disposed = false;
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -392,7 +396,36 @@ export function createOrchestratorRuntime({
     };
   }
 
-  async function chat(userMessage: OrchestratorMessage, threadId: string = MAIN_THREAD_ID, view: WorkspaceView | null = null): Promise<Response> {
+  function queueSnapshot() { return promptQueue.map((item) => ({ ...item })); }
+  function queueChanged() { emit({ type: "queue", queue: queueSnapshot() }); }
+  function queuePaused() { return promptQueue.some((item) => item.editing); }
+  function queuedItem(id: string) {
+    const item = promptQueue.find((item) => item.id === id);
+    if (!item) throw httpError("That queued prompt is no longer in the queue.", 404);
+    return item;
+  }
+  function promptText(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) throw httpError("A queued prompt cannot be empty.", 400);
+    return trimmed;
+  }
+  /** Claims one turn at a time; edits pause the entire queue and failed turns leave it waiting. */
+  function fireQueue() {
+    if (disposed || queueStarting || chatTurns.has(MAIN_THREAD_ID) || !promptQueue.length || queuePaused()) return;
+    const head = promptQueue[0];
+    queueStarting = head.id;
+    const message: OrchestratorMessage = { id: head.id, role: "user", parts: [{ type: "text", text: head.text }] };
+    void chat(message, MAIN_THREAD_ID, queuedViews.get(head.id) ?? null, head.id)
+      .then((response) => consumeStream({ stream: response.body! }))
+      .catch((err: unknown) => {
+        if (queueStarting === head.id) queueStarting = null;
+        // An edit, removal or Stop can withdraw the prompt before it claims the turn.
+        if (promptQueue.some((item) => item.id === head.id) && !queuePaused()) console.error("Could not start the queued prompt:", err);
+        else fireQueue();
+      });
+  }
+
+  async function chat(userMessage: OrchestratorMessage, threadId: string = MAIN_THREAD_ID, view: WorkspaceView | null = null, queuedId?: string): Promise<Response> {
     await ready;
     if (disposed) throw httpError("Portal is shutting down.", 409);
     const thread = await store.getThread(threadId);
@@ -400,9 +433,18 @@ export function createOrchestratorRuntime({
     if (thread.status !== "active") throw httpError("This thread is archived.", 409);
     const { settings, apiKey } = await settingsAndKey();
     if (!apiKey) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
+    if (queuedId && (!promptQueue.some((item) => item.id === queuedId) || queuePaused())) throw httpError("The queued prompt was removed or is being edited.", 409);
+    if (!queuedId && threadId === MAIN_THREAD_ID && (queueStarting || (promptQueue.length > 0 && !queuePaused()))) throw httpError("Portal has queued prompts waiting; add this message to the queue.", 409);
     if (chatTurns.has(threadId)) throw httpError("Portal is still answering in this thread; wait for it or cancel it.", 409);
     const controller = new AbortController();
     chatTurns.set(threadId, controller);
+    if (queuedId) {
+      userMessage = { ...userMessage, parts: [{ type: "text", text: queuedItem(queuedId).text }] };
+      promptQueue.splice(promptQueue.findIndex((item) => item.id === queuedId), 1);
+      queuedViews.delete(queuedId);
+      queueStarting = null;
+      queueChanged();
+    }
     void emitStatus();
     const touched = new Set<string>();
     const at = timers.now();
@@ -413,6 +455,7 @@ export function createOrchestratorRuntime({
       const id = userMessage.id && !taken.has(userMessage.id) ? userMessage.id : randomUUID();
       const message: OrchestratorMessage = { ...userMessage, id, role: "user", metadata: { ...userMessage.metadata, at } };
       await store.appendMessages([message], threadId);
+      if (queuedId) emit({ type: "chat-message", threadId, message });
       // A stale world is refreshed in the background; the turn answers from the one it has (its age is in the prompt).
       void refreshIfStale("chat");
       const recent = historyWindow(await store.readMessages(threadId));
@@ -434,7 +477,9 @@ export function createOrchestratorRuntime({
       });
       const result = await agent.stream({ messages: modelMessages, abortSignal: controller.signal, timeout: CALL_TIMEOUT_MS });
       let settled = false;
-      return result.toUIMessageStreamResponse<OrchestratorMessage>({
+      let failed = false;
+      let continueQueue = false;
+      const stream = result.toUIMessageStream<OrchestratorMessage>({
         originalMessages: recent,
         generateMessageId: randomUUID,
         // The assistant message carries its own time, not the user message's. The `start` part is
@@ -452,7 +497,7 @@ export function createOrchestratorRuntime({
           }
           await trimStoredThread(threadId);
           const usage = await Promise.resolve(result.totalUsage).then(runUsage, () => null);
-          await turn.finish({ status: isAborted || controller.signal.aborted ? "cancelled" : "succeeded", usage, summary: text.slice(0, 120) });
+          await turn.finish({ status: isAborted || controller.signal.aborted ? "cancelled" : failed ? "failed" : "succeeded", usage, summary: text.slice(0, 120) });
           void hub.activity.log({
             actor: "user", kind: "chat.turn", summary: `Asked: ${text.slice(0, 160)}`,
             refs: { threadId, runId: turn.run.id }, detail: { items: [...touched] },
@@ -461,14 +506,35 @@ export function createOrchestratorRuntime({
           emit({ type: "messages", threadId });
           void emitStatus();
           if (touched.size > 0) void emitItems();
+          continueQueue = threadId === MAIN_THREAD_ID && !failed && !isAborted && !controller.signal.aborted;
+          if (continueQueue && !queuedId) fireQueue();
         },
         onError: (err) => {
+          failed = true;
           console.error("Orchestrator chat failed:", err);
           return errorMessage(err);
         },
-        // Finish (and persist) even when the browser closes the stream early.
-        consumeSseStream: ({ stream }) => consumeStream({ stream }),
       });
+      let replyStream: ReadableStream = stream;
+      if (queuedId) {
+        const [reply, updates] = stream.tee();
+        replyStream = reply;
+        // The queue runs without an owning browser request; every viewer receives its text live.
+        void (async () => {
+          let last: OrchestratorMessage | undefined;
+          try {
+            for await (const message of readUIMessageStream<OrchestratorMessage>({ stream: updates })) {
+              last = message;
+              emit({ type: "chat-message", threadId, message });
+            }
+          } finally {
+            if (last) emit({ type: "chat-message", threadId, message: last, done: true });
+          }
+          // Publish the last snapshot before the next queued user message, preserving feed order.
+          if (continueQueue) fireQueue();
+        })().catch((err: unknown) => console.error("Could not broadcast the queued reply:", err));
+      }
+      return createUIMessageStreamResponse({ stream: replyStream, consumeSseStream: ({ stream }) => consumeStream({ stream }) });
     } catch (err) {
       await prepared?.finish({ status: "failed", error: errorMessage(err) });
       releaseChat(threadId, controller);
@@ -558,8 +624,61 @@ export function createOrchestratorRuntime({
     },
     message: (threadId, id) => store.getMessage(threadId, id),
     chat,
+    queue: queueSnapshot,
+    async enqueue(text, view = null) {
+      await ready;
+      if (disposed) throw httpError("Portal is shutting down.", 409);
+      const trimmed = promptText(text);
+      const { settings, apiKey } = await settingsAndKey();
+      if (!apiKey) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
+      if (promptQueue.length >= MAX_QUEUED_PROMPTS) throw httpError(`The queue is full (${MAX_QUEUED_PROMPTS} prompts). Edit or remove one first.`, 409);
+      const queued = { id: randomUUID(), text: trimmed, queuedAt: timers.now(), editing: false };
+      promptQueue.push(queued);
+      queuedViews.set(queued.id, view);
+      const position = promptQueue.length;
+      queueChanged();
+      fireQueue();
+      return { queued: { ...queued }, position };
+    },
+    updateQueued(id, text) {
+      const item = queuedItem(id);
+      item.text = promptText(text);
+      item.editing = false;
+      queueChanged();
+      fireQueue();
+      return { ...item };
+    },
+    beginQueueEdit(id) {
+      const item = queuedItem(id);
+      item.editing = true;
+      queueChanged();
+      return { ...item };
+    },
+    cancelQueueEdit(id) {
+      const item = promptQueue.find((item) => item.id === id);
+      if (!item) return null;
+      item.editing = false;
+      queueChanged();
+      fireQueue();
+      return { ...item };
+    },
+    removeQueued(id) {
+      const index = promptQueue.findIndex((item) => item.id === id);
+      if (index === -1) return null;
+      const [item] = promptQueue.splice(index, 1);
+      queuedViews.delete(id);
+      queueChanged();
+      fireQueue();
+      return { ...item };
+    },
     cancel(threadId = MAIN_THREAD_ID) {
+      const queued = threadId === MAIN_THREAD_ID ? promptQueue.splice(0) : [];
+      if (threadId === MAIN_THREAD_ID) {
+        queuedViews.clear();
+        queueChanged();
+      }
       chatTurns.get(threadId)?.abort();
+      return queued;
     },
     listItems: (filter) => store.listItems(filter),
     updateItem,

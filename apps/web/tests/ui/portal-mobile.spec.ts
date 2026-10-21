@@ -38,7 +38,7 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
   };
   await page.getByRole("button", { name: "Toggle sidebar" }).click();
   await page.getByRole("dialog", { name: "Your workspace" }).getByRole("button", { name: /^Agent/ }).click();
-  await expect(page.getByRole("dialog", { name: "Agent" })).toBeVisible();
+  await expect(page.getByRole("main", { name: "Agent", exact: true })).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Threads" })).toBeVisible();
   const noHorizontalScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(await noHorizontalScroll()).toBe(true);
@@ -201,38 +201,22 @@ test.describe("Agent from the phone's bar", () => {
   const onePane = () => workspaceOf([tab("t1", pane("p1", "s1"))]);
   const threads = [mainThread, reviewThread];
   const agentButton = (page: Page) => page.getByRole("group", { name: "Panes" }).locator("[data-agent-button]");
-  const agentSheet = (page: Page) => page.getByRole("dialog", { name: "Agent", exact: true });
+  const agentSheet = (page: Page) => page.getByRole("main", { name: "Agent", exact: true });
 
-  test("the Agent button opens a bottom sheet that a drag on its grip closes; a short drag springs back", async ({ page }, info) => {
+  test("the Agent button opens a full overlay and closing it restores the pane bar", async ({ page }, info) => {
     await setupPortal(page, { workspace: onePane() });
     await page.goto("/tabs/t1");
     await agentButton(page).click();
     await expect(agentSheet(page)).toBeVisible();
-    await expect.poll(async () => (await agentSheet(page).boundingBox())?.y).toBe(40);
-    await page.screenshot({ path: info.outputPath("agent-sheet.png") });
-    const grip = agentSheet(page).locator("[data-agent-grip]");
-    const drag = async (by: number) => {
-      const box = (await grip.boundingBox())!;
-      const x = box.x + box.width / 2;
-      const y = box.y + box.height / 2;
-      await page.mouse.move(x, y);
-      await page.mouse.down();
-      // Slow steps, so the release is a drag and not a flick.
-      for (let step = 1; step <= 10; step++) {
-        await page.mouse.move(x, y + (by * step) / 10);
-        await page.waitForTimeout(20);
-      }
-      await page.waitForTimeout(150);
-      await page.mouse.up();
-    };
-    await drag(60);
-    await expect(agentSheet(page)).toBeVisible();
-    await expect.poll(async () => (await agentSheet(page).boundingBox())?.y).toBe(40);
-    await drag(200);
+    expect(await agentSheet(page).boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+    await expect(agentSheet(page).locator("[data-agent-grip]")).toHaveCount(0);
+    await expect(agentButton(page)).toBeHidden();
+    await page.screenshot({ path: info.outputPath("agent-overlay.png") });
+    await agentSheet(page).getByRole("button", { name: "Close Agent" }).click();
     await expect(agentSheet(page)).toHaveCount(0);
-    // It opens again from the top, not where the drag left it.
+    await expect(agentButton(page)).toBeVisible();
     await agentButton(page).click();
-    await expect.poll(async () => (await agentSheet(page).boundingBox())?.y).toBe(40);
+    await expect(agentSheet(page)).toBeVisible();
   });
 
   test("a reply while Agent is closed marks the button and floats a preview above the composer; tapping it opens that thread", async ({ page }, info) => {
@@ -264,6 +248,8 @@ test.describe("Agent from the phone's bar", () => {
   test("the preview's cross dismisses it, and a reply in the open thread shows none", async ({ page }) => {
     const fixture = await setupPortal(page, { workspace: onePane() });
     await page.goto("/tabs/t1");
+    // Wait for the live provider to mount before delivering an event through its stream.
+    await expect.poll(() => fixture.requests.some((request) => request.path === "/api/portal")).toBe(true);
     fixture.appendPortalMessage({ id: "m9", role: "assistant", metadata: { at: Date.now() }, parts: [{ type: "text", text: "Nothing needs you right now." }] });
     await emitPortal(page, { type: "messages", threadId: "main" });
     const preview = page.locator("[data-agent-reply-preview]");
@@ -300,6 +286,6 @@ test.describe("Agent from the phone's bar", () => {
     await expect(bar.locator("[data-pane-counter]")).toHaveCount(0);
     await expect(bar.locator("[data-pane-bar-title]")).toBeDisabled();
     await bar.locator("[data-agent-button]").click();
-    await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
+    await expect(page.getByRole("main", { name: "Agent", exact: true })).toBeVisible();
   });
 });

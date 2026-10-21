@@ -272,7 +272,7 @@ test("Esc enters and leaves Palace mode, but not from a terminal, a composer wit
 
   // So does the Agent dialog.
   await page.keyboard.press("ControlOrMeta+k");
-  const agent = page.getByRole("dialog", { name: "Agent", exact: true });
+  const agent = page.getByRole("main", { name: "Agent", exact: true });
   await expect(agent).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(agent).toHaveCount(0);

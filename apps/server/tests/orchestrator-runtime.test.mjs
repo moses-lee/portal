@@ -58,6 +58,108 @@ function setup(t, { key = "sk-test", sessions, projects, pulls, presence: presen
 
 const userMessage = (text, id = "u1") => ({ id, role: "user", parts: [{ type: "text", text }] });
 
+test("the main queue runs in order without a browser and broadcasts each queued reply live", async (t) => {
+  let release;
+  let calls = 0;
+  const { runtime, store, events } = setup(t, {
+    doStream: () => ++calls === 1 ? new Promise((resolve) => { release = () => resolve(textStream("first reply")); }) : textStream(`queued reply ${calls}`),
+  });
+  const response = await runtime.chat(userMessage("first"));
+  await flush();
+  await runtime.enqueue("second", { sessionId: "s1", tabId: "t1", paneId: "p1" });
+  await runtime.enqueue("third");
+  assert.equal(runtime.queue().length, 2);
+  release();
+  await response.text();
+  await flush(100);
+  assert.deepEqual((await store.readMessages()).map((message) => message.parts.filter((part) => part.type === "text").map((part) => part.text).join("")), ["first", "first reply", "second", "queued reply 2", "third", "queued reply 3"]);
+  assert.deepEqual(runtime.queue(), []);
+  const live = events.filter((event) => event.type === "chat-message");
+  assert.deepEqual(live.filter((event) => event.message.role === "user").map((event) => event.message.parts[0].text), ["second", "third"]);
+  assert.ok(live.some((event) => event.message.parts.some((part) => part.type === "text" && part.text === "queued reply 2")));
+});
+
+test("editing a main queued prompt pauses dispatch and saving keeps its slot", async (t) => {
+  let release;
+  let calls = 0;
+  const { runtime, store } = setup(t, {
+    doStream: () => ++calls === 1 ? new Promise((resolve) => { release = () => resolve(textStream("done")); }) : textStream("next"),
+  });
+  const response = await runtime.chat(userMessage("first"));
+  await flush();
+  const a = (await runtime.enqueue("second")).queued;
+  const b = (await runtime.enqueue("third")).queued;
+  runtime.beginQueueEdit(b.id);
+  release();
+  await response.text();
+  await flush();
+  assert.equal(calls, 1, "an edit anywhere pauses the whole queue");
+  assert.deepEqual(runtime.queue().map((item) => item.id), [a.id, b.id]);
+  runtime.updateQueued(b.id, "third revised");
+  await flush(100);
+  assert.deepEqual((await store.readMessages()).filter((message) => message.role === "user").map((message) => message.parts[0].text), ["first", "second", "third revised"]);
+});
+
+test("a failed queued turn leaves later prompts waiting instead of draining the queue", async (t) => {
+  let release;
+  let calls = 0;
+  t.mock.method(console, "error", () => {});
+  const { runtime } = setup(t, {
+    doStream: () => ++calls === 1
+      ? new Promise((resolve) => { release = () => resolve(textStream("done")); })
+      : { stream: convertArrayToReadableStream([{ type: "stream-start", warnings: [] }, { type: "error", error: new Error("model unavailable") }]) },
+  });
+  const response = await runtime.chat(userMessage("first"));
+  await flush();
+  await runtime.enqueue("will fail");
+  await runtime.enqueue("keep waiting");
+  release();
+  await response.text();
+  await flush(100);
+  assert.equal(calls, 2);
+  assert.deepEqual(runtime.queue().map((item) => item.text), ["keep waiting"]);
+  assert.equal((await runtime.status()).busy, false);
+  runtime.cancel();
+});
+
+test("Stop drops the main queue and aborts its turn; cancelling a side thread leaves it alone", async (t) => {
+  const { runtime, store } = setup(t, {
+    doStream: ({ abortSignal }) => new Promise((_, reject) => abortSignal.addEventListener("abort", () => reject(abortSignal.reason))),
+  });
+  const response = await runtime.chat(userMessage("first"));
+  await flush();
+  const a = (await runtime.enqueue("second")).queued;
+  const b = (await runtime.enqueue("third")).queued;
+  runtime.beginQueueEdit(a.id);
+  assert.deepEqual(runtime.cancel("side"), []);
+  assert.equal(runtime.queue().length, 2);
+  assert.deepEqual(runtime.cancel().map((item) => item.id), [a.id, b.id]);
+  await response.text();
+  await flush();
+  assert.deepEqual(runtime.queue(), []);
+  assert.equal((await store.readMessages()).filter((message) => message.role === "user").length, 1);
+});
+
+test("the main queue validates capacity, edits and removal without changing another prompt", async (t) => {
+  const { runtime } = setup(t, {
+    doStream: ({ abortSignal }) => new Promise((_, reject) => abortSignal.addEventListener("abort", () => reject(abortSignal.reason))),
+  });
+  const response = await runtime.chat(userMessage("first"));
+  await flush();
+  await assert.rejects(runtime.enqueue("  "), /empty/);
+  for (let i = 0; i < 10; i++) await runtime.enqueue(`follow-up ${i}`);
+  await assert.rejects(runtime.enqueue("overflow"), /queue is full/);
+  const head = runtime.queue()[0];
+  runtime.beginQueueEdit(head.id);
+  assert.throws(() => runtime.updateQueued(head.id, " "), /empty/);
+  assert.equal(runtime.cancelQueueEdit(head.id).text, head.text);
+  assert.equal(runtime.removeQueued(head.id).id, head.id);
+  assert.equal(runtime.removeQueued(head.id), null);
+  assert.throws(() => runtime.beginQueueEdit(head.id), /no longer/);
+  runtime.cancel();
+  await response.text();
+});
+
 const waitingSession = () => sessionMeta({ awaitingPermission: true });
 
 const itemInput = {
