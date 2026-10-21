@@ -18,7 +18,7 @@ export default function AgentReplyToast({ host }: { host: RefObject<HTMLElement 
   const { threads } = usePortalLive();
   const preview = agent?.preview ?? null;
   const bottom = useAboveComposer(host, preview !== null);
-  if (!agent || !preview) return null;
+  if (!agent || !preview || bottom === null) return null;
   const thread = preview.threadId === MAIN_THREAD_ID ? null : threads.find((t) => t.id === preview.threadId);
   return (
     <div
@@ -52,16 +52,20 @@ export default function AgentReplyToast({ host }: { host: RefObject<HTMLElement 
  * text, and moves when the bar comes and goes with the keyboard, not all of which resize anything.
  * Without a composer (a pane still loading) it sits above the bar, or the host's foot.
  */
-function useAboveComposer(host: RefObject<HTMLElement | null>, active: boolean): number {
-  const [bottom, setBottom] = useState(8);
+function useAboveComposer(host: RefObject<HTMLElement | null>, active: boolean): number | null {
+  const [bottom, setBottom] = useState<number | null>(null);
   useLayoutEffect(() => {
-    const root = host.current;
-    if (!active || !root) return;
+    if (!active) return;
     let frame = 0;
     const measure = () => {
-      const anchor = root.querySelector<HTMLElement>(".composer-wrap") ?? root.querySelector<HTMLElement>("[data-pane-bar]:not([hidden])");
-      const foot = root.getBoundingClientRect().bottom;
-      setBottom(Math.round(Math.max(8, (anchor ? foot - anchor.getBoundingClientRect().top : 0) + 8)));
+      // The parent ref may attach after this child's layout effect, or change while a workspace
+      // resolver finishes. Read the current host on every frame and show only after measuring.
+      const root = host.current;
+      if (root) {
+        const anchor = root.querySelector<HTMLElement>(".composer-wrap") ?? root.querySelector<HTMLElement>("[data-pane-bar]:not([hidden])");
+        const foot = root.getBoundingClientRect().bottom;
+        setBottom(Math.round(Math.max(8, (anchor ? foot - anchor.getBoundingClientRect().top : 0) + 8)));
+      }
       frame = requestAnimationFrame(measure);
     };
     measure();

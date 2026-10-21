@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { portalMessages, setupPortal, tabUrl } from "./fixtures";
 import type { OrchestratorMessage } from "../../src/lib/orchestrator/types";
 
-const agent = (page: Page) => page.getByRole("dialog", { name: "Agent", exact: true });
+const agent = (page: Page) => page.getByRole("main", { name: "Agent", exact: true });
 const composer = (page: Page) => agent(page).getByRole("textbox", { name: "Message Portal", exact: true });
 const search = (page: Page) => page.getByRole("dialog", { name: "Search", exact: true });
 const hydrated = (page: Page) => expect(page.getByText(/^(⌘K|Ctrl K)$/)).toBeVisible();
@@ -36,7 +36,7 @@ test("command-K opens Agent over the session, sends its context, and restores co
   await expect(sessionComposer).toHaveValue("");
 });
 
-test("Search and Agent are independent dialogs and Agent preserves its draft after dismissal", async ({ page }) => {
+test("Search opens independently and Agent preserves its draft after dismissal", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   await hydrated(page);
@@ -53,6 +53,11 @@ test("Search and Agent are independent dialogs and Agent preserves its draft aft
   await expect(agent(page)).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+k");
   await expect(composer(page)).toHaveValue("half a thought");
+  await expect(composer(page)).toBeFocused();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(search(page)).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(search(page)).toHaveCount(0);
   await expect(composer(page)).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(agent(page)).toHaveCount(0);
@@ -111,20 +116,21 @@ test("a page link in a reply opens its overlay without changing the workspace UR
   await expect(page).toHaveURL(tabUrl);
 });
 
-test("Agent is centered at sixty percent viewport width and eighty-five percent height", async ({ page }) => {
+test("Agent fills the central panel, leaving the sidebar accessible", async ({ page }) => {
   await setupPortal(page);
   await page.goto("/");
   await hydrated(page);
   await page.keyboard.press("ControlOrMeta+k");
   const box = await agent(page).boundingBox();
   expect(box).not.toBeNull();
-  expect(box!.width).toBeCloseTo(1440 * 0.6, 0);
-  expect(box!.height).toBeCloseTo(960 * 0.85, 0);
-  expect(box!.x).toBeCloseTo((1440 - box!.width) / 2, 0);
-  expect(box!.y).toBeCloseTo((960 - box!.height) / 2, 0);
+  const centre = (await page.locator('[data-shell-centre]').boundingBox())!;
+  expect(box!.width).toBeCloseTo(centre.width - 2, 0);
+  expect(box!.height).toBeCloseTo(centre.height - 2, 0);
+  await expect(page.getByRole("complementary", { name: "Workspace sidebar" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Agent" })).toHaveCount(0);
 });
 
-test("Agent retains conversation scroll and supports wheel scrolling, focus wrapping, and outside dismissal", async ({ page }) => {
+test("Agent retains conversation scroll and supports wheel scrolling and sidebar navigation", async ({ page }) => {
   const messages: OrchestratorMessage[] = Array.from({ length: 30 }, (_, index) => ({
     id: `scroll-${index}`,
     role: "assistant",
@@ -149,29 +155,20 @@ test("Agent retains conversation scroll and supports wheel scrolling, focus wrap
   await expect(composer(page)).toBeFocused();
   await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeCloseTo(position, 0);
   await composer(page).fill("Keep this draft");
-  const send = agent(page).getByRole("button", { name: "Send message", exact: true });
-  const close = agent(page).getByRole("button", { name: "Close Agent" });
-  await send.focus();
-  await page.keyboard.press("Tab");
-  await expect(close).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(send).toBeFocused();
-  await page.mouse.click(10, 10);
+  await page.getByRole("navigation", { name: "Portal", exact: true }).getByRole("button", { name: "Watches", exact: true }).click();
   await expect(agent(page)).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.body.style.pointerEvents)).toBe("");
 });
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
-  test("Agent is a bottom sheet under a strip of the page and can be dismissed with its close button", async ({ page }) => {
+  test("Agent fills the phone screen and can be dismissed with its close button", async ({ page }) => {
     await setupPortal(page);
     await page.goto("/");
     await page.getByRole("button", { name: "Toggle sidebar" }).click();
     await page.getByRole("button", { name: "Agent", exact: true }).click();
     await expect(agent(page)).toBeVisible();
-    // Wait out the slide in, then measure: full width, down to the foot, 40 px of the page above it.
-    await expect.poll(async () => (await agent(page).boundingBox())?.y).toBe(40);
-    expect(await agent(page).boundingBox()).toEqual({ x: 0, y: 40, width: 390, height: 804 });
+    expect(await agent(page).boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
     await agent(page).getByRole("button", { name: "Close Agent" }).click();
     await expect(agent(page)).toHaveCount(0);
   });

@@ -97,8 +97,8 @@ const GithubInspector = dynamic(() => import("./GithubInspector"));
 const SettingsDialog = dynamic(() => import("./SettingsDialog"));
 const ApprovalsDialog = dynamic(() => import("./portal/ApprovalsDialog"));
 const SearchDialog = dynamic(() => import("./SearchDialog"));
-const AgentDialog = dynamic(() => import("./AgentDialog"));
-type PageSurface = Exclude<PortalLocation, { view: "chat" }> | { view: "terminal" } | { view: "removed" };
+const AgentPage = dynamic(() => import("./AgentPage"));
+type PageSurface = PortalLocation | { view: "terminal" } | { view: "removed" };
 
 const SELECTED_PROJECT_KEY = "portal.selectedProjectId";
 
@@ -292,16 +292,22 @@ function ChatShell() {
   const onStartPage = !surface && (route?.kind === "start" || (focus.pane !== null && focus.pane.sessionId === null));
   useEffect(() => setCovered(surface !== null), [surface, setCovered]);
   const surfaceOpener = useRef<HTMLElement | null>(null);
-  const openSurface = (next: PageSurface) => {
+  const openSurface = useStableCallback((next: PageSurface) => {
     if (!surface) surfaceOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSurface(next);
     setPalette(null);
     setShowSidebar(false);
     leavePalace(false);
-  };
+  });
   const closeSurface = useStableCallback(() => {
     setSurface(null);
-    requestAnimationFrame(() => surfaceOpener.current?.isConnected && surfaceOpener.current.focus());
+    requestAnimationFrame(() => {
+      // A quick reopen or another surface takes focus before this scheduled restoration runs.
+      if (document.querySelector('[data-page-overlay], :is([role="dialog"], [role="alertdialog"])[data-state="open"]')) return;
+      const opener = surfaceOpener.current;
+      const target = opener?.isConnected && opener.getClientRects().length ? opener : workspaceFocusTarget(true);
+      target?.focus({ preventScroll: true });
+    });
   });
   useEffect(() => {
     if (!surface) return;
@@ -407,8 +413,10 @@ function ChatShell() {
     setSettingsSection(section);
     setShowSettings(true);
   });
-  /** Search and Agent are separate dialogs; at most one opens at a time. */
+  /** Remember the last thread and retain its conversation after Agent first opens. */
   const [agentThreadId, setAgentThreadId] = useState(MAIN_THREAD_ID);
+  const [agentVisited, setAgentVisited] = useState(false);
+  if (surface?.view === "chat" && !agentVisited) setAgentVisited(true);
   /** What search opened, newest first, per device; the dialog's Recent section. */
   const [searchRecents, setSearchRecents] = usePreference(RECENTS_KEY, "[]");
   /** Capture Agent's shortcut even in composers and terminals; slash belongs to Search only outside editors. */
@@ -428,11 +436,14 @@ function ChatShell() {
       if (otherOpen) return;
       event.preventDefault();
       event.stopPropagation();
-      setPalette((current) => (current === tab ? null : tab));
+      if (tab === "agent") {
+        if (surface?.view === "chat" && palette !== "search") closeSurface();
+        else openSurface({ view: "chat", threadId: agentThreadId });
+      } else setPalette((current) => (current === tab ? null : tab));
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, []);
+  }, [surface, agentThreadId, palette, closeSurface, openSurface]);
   /** The button that opened the sidebar sheet or the GitHub inspector sheet; focus returns there when it closes. */
   const sidebarOpener = useRef<HTMLElement | null>(null);
   const githubOpener = useRef<HTMLElement | null>(null);
@@ -686,8 +697,7 @@ function ChatShell() {
   const openPortalView = (view: PortalView) => {
     if (view === "chat") {
       setAgentThreadId(MAIN_THREAD_ID);
-      setPalette("agent");
-      setShowSidebar(false);
+      openSurface({ view: "chat", threadId: MAIN_THREAD_ID });
     } else openSurface(view === "memory" ? { view, entityId: null } : { view });
   };
   // Legacy paths remain a link format inside stored replies, but never become page URLs.
@@ -709,8 +719,7 @@ function ChatShell() {
     const location = portalLocation(destination.pathname);
     if (location.view === "chat") {
       setAgentThreadId(location.threadId);
-      setPalette("agent");
-      setShowSidebar(false);
+      openSurface(location);
     } else openSurface(location);
   });
 
@@ -918,7 +927,7 @@ function ChatShell() {
     [workspace, active],
   );
   // Decision: the document title is the page overlay's, else the focused session's display title, else "Portal".
-  const activeTitle = surface ? surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : activeSession ? sessionDisplayTitle(activeSession.title) : null;
+  const activeTitle = surface ? surface.view === "chat" ? "Agent" : surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : activeSession ? sessionDisplayTitle(activeSession.title) : null;
   useEffect(() => {
     document.title = activeTitle ?? "Portal";
   }, [activeTitle]);
@@ -1035,10 +1044,16 @@ function ChatShell() {
   /** The phone bar's Agent button and reply preview (docs/WORKSPACE.md, Mobile). */
   const openAgent = useStableCallback((threadId?: string) => {
     if (threadId) setAgentThreadId(threadId);
-    setShowSidebar(false);
-    setPalette("agent");
+    openSurface({ view: "chat", threadId: threadId ?? agentThreadId });
   });
-  const agentInbox = useAgentInboxState({ open: palette === "agent", threadId: agentThreadId, previews: !desktop, openAgent });
+  const agentInbox = useAgentInboxState({ open: surface?.view === "chat", threadId: agentThreadId, previews: !desktop, openAgent });
+  const restoreSearchFocus = useStableCallback(() => {
+    if (surface?.view !== "chat") return false;
+    const composer = document.querySelector<HTMLTextAreaElement>(`[data-agent-page] [data-thread="${CSS.escape(agentThreadId)}"] textarea:not(:disabled)`);
+    if (!composer) return false;
+    composer.focus({ preventScroll: true });
+    return true;
+  });
 
   return (
     <AgentInboxProvider value={agentInbox}>
@@ -1101,8 +1116,8 @@ function ChatShell() {
           projects={orderedProjects}
           onOpenSession={searchOpenSession}
           onOpenProject={searchOpenProject}
+          onRestoreFocus={restoreSearchFocus}
         />
-        <AgentDialog open={palette === "agent"} onClose={() => setPalette(null)} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} unread={agentInbox.unread} />
         <ShellRoom portal={portalOpen || palace} palace={palace} workspaceActivity={workspaceActivity} />
         {/* The centre panel (docs/GLASS.md, Floating panels): a rounded clip, not frosted; page overlays fill it. */}
         <div data-shell-centre inert={away} className="shell-centre relative flex min-h-0 min-w-0 flex-1">
@@ -1121,7 +1136,8 @@ function ChatShell() {
               />
             </Suspense>
           </div>
-          {surface ? <div data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="absolute inset-0 z-10 flex min-h-0 min-w-0 bg-background/95">
+          {agentVisited && <AgentPage open={surface?.view === "chat"} onClose={closeSurface} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} unread={agentInbox.unread} />}
+          {surface && surface.view !== "chat" ? <div key={surface.view} data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="page-overlay">
             {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} />}
           </div> : null}
         </div>

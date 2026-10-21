@@ -67,7 +67,7 @@ test("retired page URLs no longer serve standalone screens", async ({ page }) =>
   for (const path of ["/watches", "/memory/e-global", "/threads/review", "/terminal"]) {
     const response = await page.goto(path);
     expect(response?.status()).toBe(404);
-    await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("main", { name: "Agent", exact: true })).toHaveCount(0);
     await expect(page.locator("[data-page-overlay]")).toHaveCount(0);
   }
 });

@@ -176,12 +176,53 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
   /** `POST /api/portal/threads/:id/messages` — as `POST /api/portal/messages`, in that thread (each thread has its own lock). */
   app.post<IdParams>("/api/portal/threads/:id/messages", { compress: false }, (req, reply) => postMessage(req, reply, req.params.id));
 
-  /** `POST /api/portal/threads/:id/cancel` — stops that thread's chat turn; background jobs keep going. 204 either way. */
+  /** Stops that thread's chat turn. Main returns its dropped queue; side threads answer 204. */
   app.post<IdParams>("/api/portal/threads/:id/cancel", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
-    runtime.cancel(req.params.id);
-    return reply.code(204).send();
+    const queued = runtime.cancel(req.params.id);
+    return req.params.id === MAIN_THREAD_ID ? { queued } : reply.code(204).send();
+  });
+
+  app.get("/api/portal/queue", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    return { queue: runtime.queue() };
+  });
+  app.post("/api/portal/queue", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    const body = readObject(req.body);
+    if (!body || typeof body.text !== "string" || !body.text.trim()) return reply.code(400).send({ error: "Expected non-empty text." });
+    let view = null;
+    try {
+      view = body.view == null ? null : parseView(body.view);
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
+    return reply.code(202).send(await runtime.enqueue(body.text, view));
+  });
+  app.patch<IdParams>("/api/portal/queue/:id", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    const body = readObject(req.body);
+    if (!body || typeof body.text !== "string" || !body.text.trim()) return reply.code(400).send({ error: "Expected non-empty text." });
+    return { item: runtime.updateQueued(req.params.id, body.text) };
+  });
+  app.post<IdParams>("/api/portal/queue/:id/edit", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    return { item: runtime.beginQueueEdit(req.params.id) };
+  });
+  app.delete<IdParams>("/api/portal/queue/:id/edit", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    return { item: runtime.cancelQueueEdit(req.params.id) };
+  });
+  app.delete<IdParams>("/api/portal/queue/:id", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    return { item: runtime.removeQueued(req.params.id) };
   });
 
   /** `GET /api/portal/activity?before=&limit=&kind=&threadId=&runId=` — `{ entries }`, newest first. */
@@ -197,12 +238,11 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     };
   });
 
-  /** `POST /api/portal/cancel` — stops the main thread's chat turn; background jobs keep going. 204 either way. */
+  /** Stops the main thread's chat turn and returns its dropped queue; background jobs keep going. */
   app.post("/api/portal/cancel", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
-    runtime.cancel();
-    return reply.code(204).send();
+    return { queued: runtime.cancel() };
   });
 
   /** `GET /api/portal/items[?status=open,snoozed]` — items `{ items }`, every status unless filtered. */
@@ -276,6 +316,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     const opening: OrchestratorEvent[] = [
       { type: "status", status }, { type: "items", items }, { type: "threads", threads },
       { type: "approvals", approvals }, { type: "intents", intents }, { type: "workspace", workspace },
+      { type: "queue", queue: runtime.queue() },
       ...(room ? [{ type: "room" as const, state: room }] : []),
     ];
     const stream = openEventStream(req, reply);
