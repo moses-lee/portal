@@ -80,11 +80,12 @@ test("activity links open the thread, the item, the session, and memory", async 
   await showPage(page, "activity");
 
   await rows.nth(1).getByRole("button", { name: reviewThread.title }).click();
-  const agent = page.getByRole("dialog", { name: "Agent", exact: true });
+  const agent = page.getByRole("main", { name: "Agent", exact: true });
   await expect(agent).toBeVisible();
   await expect(agent.getByRole("tab", { name: reviewThread.title, exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page).toHaveURL("/");
   await agent.getByRole("button", { name: "Close Agent" }).click();
+  await showPage(page, "activity");
 
   // A session link dismisses the page and opens the room in a workspace tab.
   await rows.nth(2).getByRole("button", { name: "Session" }).click();

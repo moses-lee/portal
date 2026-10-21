@@ -9,7 +9,6 @@ import {
   History,
   LoaderCircle,
   ShieldQuestion,
-  Sparkles,
   Wrench,
 } from "lucide-react";
 import { getToolName, isToolUIPart, type UIMessagePart, type UIDataTypes, type UITools } from "ai";
@@ -24,6 +23,7 @@ import { Message, MessageContent, MessageFooter } from "@/components/ui/message"
 import { formatClock } from "@/lib/orchestrator/format";
 import { TOOL_IO_OMITTED, type OrchestratorMessage } from "@/lib/orchestrator/types";
 import { MessageTime } from "./ChatTime";
+import { messageBubbles } from "@/lib/orchestrator/message-bubbles";
 
 type Part = UIMessagePart<UIDataTypes, UITools>;
 
@@ -118,7 +118,7 @@ function ToolRow({ part, onOpen }: { part: ToolPart; onOpen?: () => void }) {
   );
 }
 
-function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
+function Reasoning({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -127,12 +127,8 @@ function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           className="flex max-w-full items-center gap-2 rounded-lg py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
-          {streaming ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
-            <Brain className="size-3.5" />
-          )}
-          {streaming ? "Thinking" : "Reasoning"}
+          <Brain className="size-3.5" />
+          Reasoning
           <ChevronDown className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
         </button>
       </CollapsibleTrigger>
@@ -152,9 +148,61 @@ function userText(message: OrchestratorMessage) {
     .join("\n");
 }
 
+function MessageActivity({ parts, onOpen }: { parts: Part[]; onOpen: () => void }) {
+  if (parts.length === 0) return null;
+  return (
+    <Collapsible className="w-full max-w-[90%]" onOpenChange={(open) => { if (open) onOpen(); }}>
+      <CollapsibleTrigger asChild>
+        <button type="button" className="group flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground">
+          Activity
+          <ChevronDown className="size-3 transition-transform group-data-[state=open]:rotate-180" />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2 pt-1">
+        {parts.map((part, index) => isToolUIPart(part)
+          ? <ToolRow key={index} part={part} />
+          : part.type === "reasoning" ? <Reasoning key={index} text={part.text} /> : null)}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function UserMessage({ message, at, day }: { message: OrchestratorMessage; at: number; day: number }) {
+  return (
+    <Message align="end">
+      <MessageContent className="gap-1.5">
+        <Bubble variant="secondary" className="max-w-[90%]">
+          <BubbleContent className="!rounded-[20px] !border-bubble-border !bg-bubble !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
+            {userText(message)}
+          </BubbleContent>
+        </Bubble>
+        {at > 0 && <MessageFooter className="!px-2"><MessageTime at={at} day={day || at} /></MessageFooter>}
+      </MessageContent>
+    </Message>
+  );
+}
+
+function ReplyLabel({ message }: { message: OrchestratorMessage }) {
+  const tick = message.metadata?.tick;
+  if (!tick) return null;
+  const at = message.metadata?.at;
+  return <p className="mb-1 px-2 text-[11px] text-muted-foreground">{tick.reason === "manual" ? "Manual" : "Scheduled"} check{at ? ` · ${formatClock(at)}` : ""}</p>;
+}
+
+function CurationLink({ message, onOpen }: { message: OrchestratorMessage; onOpen?: (runId: string) => void }) {
+  const run = message.metadata?.run;
+  if (run?.kind !== "consolidate" || !onOpen) return null;
+  return (
+    <button type="button" onClick={() => onOpen(run.id)} className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline">
+      <History className="size-3.5" />
+      Open the digest and changes
+    </button>
+  );
+}
+
 /**
- * One message of the thread: the user's bubble, or the orchestrator's reply with its text through
- * Markdown, reasoning folded away, and tool calls as compact rows. The thread is prose: the items
+ * One message of the thread: bubbles of prose separated by tool use, with tool calls and reasoning
+ * available in one collapsed Activity control. The thread is prose: the items
  * a message touched are not drawn under it (the Needs-you strip is where they are read and acted
  * on). Tick messages carry a "Scheduled check · 10:42" label instead of the Portal label. Each
  * message shows its time: a prompt when the server took it, a reply when it finished (nothing
@@ -180,74 +228,28 @@ const PortalMessage = memo(function PortalMessage({
   onNavigate?: (path: string) => void;
 }) {
   const at = message.metadata?.at ?? 0;
-  if (message.role === "user") {
-    return (
-      <Message align="end">
-        <MessageContent className="gap-1.5">
-          <Bubble variant="secondary" className="max-w-[90%]">
-            <BubbleContent className="!rounded-[20px] !border-bubble-border !bg-bubble !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
-              {userText(message)}
-            </BubbleContent>
-          </Bubble>
-          {at > 0 && (
-            <MessageFooter className="!px-2">
-              <MessageTime at={at} day={day || at} />
-            </MessageFooter>
-          )}
-        </MessageContent>
-      </Message>
-    );
-  }
+  if (message.role === "user") return <UserMessage message={message} at={at} day={day} />;
   const tick = message.metadata?.tick;
-  const run = message.metadata?.run;
-  const curationRun = run?.kind === "consolidate" && onOpenCurationRun ? run.id : null;
+  const bubbles = messageBubbles(message.parts);
+  const activity = message.parts.filter((part) => isToolUIPart(part) || (part.type === "reasoning" && part.text));
+  // The separate typing bubble is the only placeholder before text arrives.
+  if (bubbles.length === 0 && activity.length === 0 && !tick) return null;
   return (
     <Message>
-      <MessageContent className="gap-3">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Sparkles className="size-3.5" />
-          {tick
-            ? `${tick.reason === "manual" ? "Manual" : "Scheduled"} check${at ? ` · ${formatClock(at)}` : ""}`
-            : "Portal"}
-          {/* The start part stamps a time too; a reply shows its finish time once it has one. */}
-          {!tick && !streaming && at > 0 && (
-            <>
-              <span aria-hidden className="text-muted-foreground/50">·</span>
-              <MessageTime at={at} day={day || at} />
-            </>
-          )}
-        </div>
-        {message.parts.map((part, index) => {
-          if (part.type === "text")
-            return part.text ? <PortalMarkdown key={index} text={part.text} onNavigate={onNavigate} /> : null;
-          if (part.type === "reasoning")
-            return part.text ? (
-              <Reasoning
-                key={index}
-                text={part.text}
-                streaming={streaming && part.state === "streaming"}
-              />
-            ) : null;
-          if (isToolUIPart(part))
-            return (
-              <ToolRow
-                key={index}
-                part={part}
-                onOpen={message.metadata?.toolIO === "omitted" && onLoadToolIO ? () => onLoadToolIO(message.id) : undefined}
-              />
-            );
-          return null;
-        })}
-        {curationRun && (
-          <button
-            type="button"
-            onClick={() => onOpenCurationRun?.(curationRun)}
-            className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
-          >
-            <History className="size-3.5" />
-            Open the digest and changes
-          </button>
-        )}
+      <MessageContent className="gap-1.5">
+        <ReplyLabel message={message} />
+        {bubbles.map((bubble) => (
+          <Bubble key={bubble.key} variant="muted" className="max-w-[90%]" data-agent-bubble="">
+            <BubbleContent className="!rounded-[20px] !border-white/8 !bg-white/[.06] !px-4 !py-3">
+              <PortalMarkdown text={bubble.text} onNavigate={onNavigate} />
+            </BubbleContent>
+          </Bubble>
+        ))}
+        <MessageActivity parts={activity} onOpen={() => {
+          if (message.metadata?.toolIO === "omitted") onLoadToolIO?.(message.id);
+        }} />
+        {!tick && !streaming && at > 0 && <MessageFooter className="!px-2"><MessageTime at={at} day={day || at} /></MessageFooter>}
+        <CurationLink message={message} onOpen={onOpenCurationRun} />
       </MessageContent>
     </Message>
   );

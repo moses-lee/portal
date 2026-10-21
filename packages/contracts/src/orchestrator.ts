@@ -25,6 +25,7 @@
  *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `workspace`, `room`
  */
 import type { UIMessage } from "ai";
+import type { QueuedPrompt } from "./types.ts";
 import type { ActivityEntry } from "./activity.ts";
 import type { Approval } from "./approvals.ts";
 import type { Intent, JobRun } from "./jobs.ts";
@@ -393,6 +394,10 @@ export type OrchestratorStatus = {
 /** Pushed over `GET /api/portal/stream` (Server-Sent Events). */
 export type OrchestratorEvent =
   | { type: "status"; status: OrchestratorStatus }
+  /** Main-thread prompt queue, shared by every viewer and held in memory like session queues. */
+  | { type: "queue"; queue: QueuedPrompt[] }
+  /** A queued turn's live message, replacing an earlier snapshot with the same id. */
+  | { type: "chat-message"; threadId: string; message: OrchestratorMessage; done?: boolean }
   /** A thread changed outside the viewer's own chat turn (a job appended a message). Refetch that thread; absent `threadId` means the main thread. */
   | { type: "messages"; threadId?: string }
   | { type: "threads"; threads: Thread[] }

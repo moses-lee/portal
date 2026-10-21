@@ -69,7 +69,10 @@ test("status, messages, ticks, and items answer their JSON shapes; watches and t
   // The legacy memory document is gone from the API; curated memory lives under /api/portal/memory/**.
   assert.equal((await inject(app, "GET", "/api/portal/memory")).statusCode, 404);
 
-  assert.equal((await inject(app, "POST", "/api/portal/cancel")).statusCode, 204);
+  assert.deepEqual((await inject(app, "POST", "/api/portal/cancel")).json(), { queued: [] });
+  assert.deepEqual((await inject(app, "GET", "/api/portal/queue")).json(), { queue: [] });
+  assert.equal((await inject(app, "POST", "/api/portal/queue", { text: " " })).statusCode, 400);
+  assert.equal((await inject(app, "PATCH", "/api/portal/queue/missing", { text: "hi" })).statusCode, 404);
 });
 
 test("items: PATCH validates, 404s unknown ids, and persists; actions run server-side", async (t) => {

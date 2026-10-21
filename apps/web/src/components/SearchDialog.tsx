@@ -36,6 +36,8 @@ export type SearchDialogProps = {
   onOpenSession: (id: string) => void;
   /** Open a start-page tab in a project. */
   onOpenProject: (id: string) => void;
+  /** Let the shell restore focus to an active overlay when Search closes without navigating. */
+  onRestoreFocus?: () => boolean;
 };
 
 /** Global search: the existing search experience, independent of the Agent conversation. */
@@ -58,7 +60,7 @@ export default function SearchDialog(props: SearchDialogProps) {
     event.preventDefault();
     const target = returnTo.current;
     // Gone (the phone's sidebar sheet held the Search button): the first sidebar toggle, as the sheet does.
-    if (!opened.current && target) (target.isConnected ? target : document.getElementById("sidebar-toggle"))?.focus();
+    if (!opened.current && !props.onRestoreFocus?.() && target) (target.isConnected ? target : document.getElementById("sidebar-toggle"))?.focus();
     opened.current = false;
     returnTo.current = null;
   };

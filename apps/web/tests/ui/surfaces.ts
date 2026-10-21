@@ -27,7 +27,7 @@ export async function openPage(page: Page, view: PageView) {
 
 export async function showAgent(page: Page) {
   await page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /^Agent/ }).click();
-  await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
+  await expect(page.getByRole("main", { name: "Agent", exact: true })).toBeVisible();
 }
 
 export async function showSettings(page: Page, section: string) {

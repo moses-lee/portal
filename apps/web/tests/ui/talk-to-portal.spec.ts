@@ -10,7 +10,7 @@ declare global {
   }
 }
 
-const agent = (page: Page) => page.getByRole("dialog", { name: "Agent", exact: true });
+const agent = (page: Page) => page.getByRole("main", { name: "Agent", exact: true });
 const openAgent = async (page: Page) => {
   if (page.viewportSize()!.width < 768) await page.getByRole("button", { name: "Toggle sidebar" }).click();
   await page.getByRole("button", { name: "Agent", exact: true }).click();
@@ -41,7 +41,7 @@ test("home is the start page and the unified sidebar opens Agent without a chat 
   await nav.getByRole("button", { name: "Watches", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Watches", level: 1 })).toBeVisible();
-  await expect(line).toHaveCount(0);
+  await expect(line).toBeHidden();
   // The brand shows the room (Palace mode); its pinned twin comes back.
   await sidebar.getByRole("button", { name: "Show the room" }).click();
   await page.getByRole("button", { name: "Back to workspace" }).click();
@@ -79,7 +79,7 @@ test("without an API key Agent asks for one and Add API key opens settings", asy
     { section: "orchestrator" },
   ]);
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
-  await expect(agent(page)).toHaveCount(0);
+  await expect(page.locator("[data-agent-page]")).toBeAttached();
 });
 
 test("the thread renders replies, the tick label, and tool rows in prose; items live on the Needs-you page", async ({
@@ -94,6 +94,8 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   ).toBeVisible();
   await expect(page.getByText(/^Scheduled check · \d{2}:\d{2}/)).toBeVisible();
   const toolRow = page.getByRole("button", { name: /Ran get_tick_digest/ });
+  await expect(toolRow).toBeHidden();
+  await agent(page).getByRole("button", { name: "Activity", exact: true }).click();
   await expect(toolRow).toBeVisible();
   await toolRow.click();
   await expect(page.getByText('"changes": 1')).toBeVisible();
@@ -222,7 +224,7 @@ test("sending behaves as on a session page: the text stays, with Sending…, unt
   await expect(input).toHaveValue("What changed overnight?");
 });
 
-test("background work never blocks the composer; only this thread's own turn does", async ({
+test("background work permits sending and the main thread's turn permits queueing", async ({
   page,
 }) => {
   const fixture = await setupPortal(page, {
@@ -246,7 +248,7 @@ test("background work never blocks the composer; only this thread's own turn doe
   // A turn in this thread started elsewhere (another tab): the composer offers Stop, and a card's
   // Ask Portal (on the Needs-you page) hands its text to the composer.
   await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
-  await expect(page.getByText(/Portal is answering in this thread/)).toBeVisible();
+  await expect(agent(page).getByRole("button", { name: "Queue message", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
   await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await page.getByRole("complementary", { name: "Workspace sidebar" }).getByRole("button", { name: /Needs your attention|All caught up|Work in progress/ }).click();

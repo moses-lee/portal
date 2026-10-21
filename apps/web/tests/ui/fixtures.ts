@@ -501,7 +501,7 @@ export async function emit(
 
 /** Pushes one orchestrator event through the page's open `/api/portal/stream`. */
 export const emitPortal = (page: Page, event: OrchestratorEvent) =>
-  page.evaluate((event) => window.__portalEmit("/api/portal/stream", event, "message"), event);
+  page.evaluate((json) => window.__portalEmit("/api/portal/stream", JSON.parse(json), "message"), JSON.stringify(event));
 
 /** An init script: canvases refuse WebGL contexts, as in a browser without it (2D canvases still work). */
 export function disableWebGL() {
@@ -549,6 +549,7 @@ export async function setupPortal(
     portal?: {
       status?: Partial<OrchestratorStatus>;
       messages?: OrchestratorMessage[];
+      queue?: QueuedPrompt[];
       items?: Item[];
       threads?: Thread[];
       /** Side threads' messages by thread id. */
@@ -599,6 +600,8 @@ export async function setupPortal(
     options.projects ?? [project, worktree],
   );
   const currentRemoved = structuredClone(options.removed ?? []);
+  let agentQueue = structuredClone(options.portal?.queue ?? []);
+  let queuedId = 0;
   const live = {
     // Timed from now, not from module load, so "next in 7 min" holds however long the run has been going.
     status: { ...portalStatus, nextJob: { ...portalStatus.nextJob!, at: Date.now() + 7 * 60_000 }, ...options.portal?.status },
@@ -789,8 +792,30 @@ export async function setupPortal(
     }
     if (path === "/api/portal/messages" && method === "GET")
       return json({ messages: portalThread });
+    if (path === "/api/portal/queue" && method === "GET") return json({ queue: agentQueue });
+    if (path === "/api/portal/queue" && method === "POST") {
+      const queued = { id: `aq${++queuedId}`, text: body.text, queuedAt: Date.now(), editing: false };
+      agentQueue.push(queued);
+      await emitPortal(page, { type: "queue", queue: agentQueue });
+      return json({ queued, position: agentQueue.length }, 202);
+    }
+    const queueRoute = path.match(/^\/api\/portal\/queue\/([^/]+)(\/edit)?$/);
+    if (queueRoute) {
+      const item = agentQueue.find((item) => item.id === queueRoute[1]);
+      if (!item) return json({ error: "That queued prompt is no longer in the queue." }, 404);
+      if (queueRoute[2]) item.editing = method === "POST";
+      else if (method === "PATCH") { item.text = body.text; item.editing = false; }
+      else if (method === "DELETE") agentQueue = agentQueue.filter((entry) => entry !== item);
+      await emitPortal(page, { type: "queue", queue: agentQueue });
+      return json({ item });
+    }
     const threadRoute = path.match(/^\/api\/portal\/threads\/([^/]+)\/(messages|cancel)$/);
-    if (threadRoute?.[2] === "cancel" && method === "POST") return route.fulfill({ status: 204 });
+    if (threadRoute?.[2] === "cancel" && method === "POST") {
+      if (threadRoute[1] !== "main") return route.fulfill({ status: 204 });
+      const queued = agentQueue.splice(0);
+      await emitPortal(page, { type: "queue", queue: [] });
+      return json({ queued });
+    }
     if (threadRoute && method === "GET") {
       const id = decodeURIComponent(threadRoute[1]);
       if (id === "main") return json({ messages: portalThread });

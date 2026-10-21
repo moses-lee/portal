@@ -62,7 +62,7 @@ export type SidebarProps = {
   onTerminal: () => void;
   /** True while the standalone terminal page is open. */
   terminalActive: boolean;
-  /** Open one of Portal's views (Chat is the Agent popup). */
+  /** Open one of Portal's views. */
   onPortalView: (view: PortalView) => void;
   /** The Portal view on screen, or null while a session, the start page, or the terminal is open. */
   portalView: PortalView | null;
@@ -73,7 +73,7 @@ export type SidebarProps = {
   /** The pinned projects were dragged into `ids` order (every pinned id, first to last). */
   onReorderPinned: (ids: readonly string[]) => Promise<void>;
   onOpenSettings: () => void;
-  /** Open the Agent popup (also ⌘K / Ctrl+K); on mobile the sheet closes first. */
+  /** Open Agent (also ⌘K / Ctrl+K); on mobile the sheet closes first. */
   onOpenAgent: () => void;
   /** Open global search (also /); on mobile the sheet closes first. */
   onOpenSearch: () => void;
@@ -324,15 +324,17 @@ function SidebarContent(props: SidebarProps & { visible: boolean }) {
           <X />
         </Button>
       </div>
-      <div className="mb-4 flex shrink-0 items-center gap-1">
-        <Button variant="ghost" onClick={props.onOpenAgent} className="h-9 min-w-0 flex-1 justify-start gap-2 rounded-xl px-2 text-xs text-foreground/80">
+      <div className="mb-4 flex shrink-0 flex-col gap-1">
+        <Button variant="ghost" onClick={props.onOpenSearch} className="h-9 w-full justify-start gap-2 rounded-xl px-2 text-xs text-foreground/80">
+          <Search className="size-4" />
+          Search
+          <kbd aria-hidden="true" className="ml-auto font-sans text-[10px] text-muted-foreground/70">/</kbd>
+        </Button>
+        <Button variant="ghost" onClick={props.onOpenAgent} aria-current={portalView === "chat" ? "page" : undefined} className="h-9 w-full justify-start gap-2 rounded-xl px-2 text-xs text-foreground/80 aria-[current=page]:bg-white/8">
           <Bot className="size-4" />
           Agent
           <AgentShortcutHint />
         </Button>
-        <IconButton label="Search" title="Search (/)" onClick={props.onOpenSearch} className="text-muted-foreground">
-          <Search className="size-4" />
-        </IconButton>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-sidebar-scroll>
         <HomeColumn

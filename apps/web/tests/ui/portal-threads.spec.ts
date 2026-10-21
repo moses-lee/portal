@@ -10,7 +10,7 @@ import {
 
 const openAgent = async (page: Page) => {
   await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
+  await expect(page.getByRole("main", { name: "Agent", exact: true })).toBeVisible();
 };
 
 const threads = [mainThread, reviewThread, archivedThread];
