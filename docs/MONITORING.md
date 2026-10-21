@@ -1,6 +1,6 @@
 # Monitoring: memory, disk, and idle agent processes
 
-Date: 2026-10-21. Status: **spec for Moses's review; nothing built.** Branch `manage-memory-and-storage`.
+Date: 2026-10-21. Status: **built** (section As built); not merged. Branch `manage-memory-and-storage`.
 
 ## Why
 
@@ -56,7 +56,7 @@ The Bazel settings change goes to the monorepo as a separate PR (section Monorep
 
 ## The Monitoring view
 
-Route `/portal/monitoring`, sidebar entry **Monitoring** (icon `Gauge`), added to `PortalView`, `portalViews`, `viewMeta` and `sidebarViews` (`apps/web/src/components/portal/views.tsx`, `apps/web/src/lib/session-routes.ts`). It has no badge.
+Portal view `monitoring` (an overlay with an internal path, `portalPath("monitoring")`, like System and Activity), sidebar entry **Monitoring** (icon `Gauge`), added to `PortalView`, `portalViews`, `viewMeta` and `sidebarViews` (`apps/web/src/components/portal/views.tsx`, `apps/web/src/lib/session-routes.ts`). It has no badge.
 
 Top to bottom:
 
@@ -248,6 +248,26 @@ Each step ends green and committed.
 8. **Polish:** Playwright, the live check, and an As built section here.
 
 The monorepo PR is drafted alongside, and opened only when Moses says so. No DB migration is needed; settings live in the existing settings row. The live instance needs a rebuild and restart.
+
+## As built (2026-10-21)
+
+Built by subagents, reviewed (server and web reviews, every finding fixed) and live-checked on a scratch instance (empty database, scratch home) against this Mac. Changes from the spec above:
+
+- **Route:** Monitoring is a Portal overlay view like System, not a browser route.
+- **Stop rules (server-owned):** each process row carries `stoppable` and `stopBlockedReason`; the view only shows them. Refused: unattributed processes, inherited rows, Portal's server, web server and database (adapters may be stopped), the server and every process above it, and any process whose group holds one of those. The stop re-reads `ps` when the table is older than 5 s and signals only if pid, command and start time still match.
+- **Inheritance:** a process with no match of its own inherits the worktree of its nearest ancestor that matched, shown as "via pid N" and not stoppable (stop the ancestor). This is how a build server's children and test databases count with their worktree.
+- **macOS database VM:** only the VM of the container runtime serving the database port (colima/lima, Docker Desktop, OrbStack, podman, identified through its open disk images) is charged to Portal; other VMs are "none".
+- **Adapter sweep:** `adapters.json` entries record the owning server (pid and start time); groups of a server that is still running are never killed, so two servers sharing a home don't kill each other's adapters.
+- **Script group kill** applies to configured scripts (pre-delete and the manual cleanup), not to the orchestrator's `run_command`.
+- **Worktree work lock:** a removal and a cleanup script never run at once on one project (409 either way); the sweep retries next time.
+- **Watched folders:** `POST /api/monitoring/folders/check` reports which exist; Settings uses it on open and after a save.
+- **Log rotation:** five files in all (`server.log` and `.1`–`.4`).
+- **Units:** memory in binary units (as Activity Monitor), disk in decimal GB (as Finder and the levels); one shared `formatBytes`.
+- **Noise:** the server's own `ps`/`top`/`lsof`/`du` runs are left out of the table.
+
+Live check results: memory, swap and disk matched `vm_stat`, `sysctl` and `df`; process footprints matched `top` to the MB; a Haiku session stopped 24 s after its 10-minute mark (CLI and adapter exited, Activity entry written) and resumed on the next prompt with its context, model and mode; every refusal held; the cleanup script ran with `PORTAL_SCRIPT_TRIGGER=manual` and its backgrounded `sleep` was killed; a frozen adapter group left by a `kill -9`ed server was killed on the next boot. A plain `kill -9` leaves no orphans at all (adapters exit on stdin EOF).
+
+Known gaps: stopping a process that doesn't lead a group leaves its children running (they drop out of the worktree's rows). The monorepo PR is still a draft.
 
 ## Out of scope
 

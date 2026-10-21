@@ -52,6 +52,14 @@ export function memoryOf(input: Pick<AttributionInput, "table" | "memory">, pid:
 
 const WEB_ANCESTOR = /\bnext\b/;
 
+/** The tools the server runs to measure (here and for liveness); a reading of them is noise. */
+const PROBE_TOOL = /^(?:\S*\/)?(?:ps|top|lsof|du|nice|sysctl|vm_stat|ss|docker)(?:\s|$)/;
+
+/** Whether `row` is one of the server's own measuring commands, caught mid-run by the table it reads. */
+export function isProbeTool(row: { ppid: number; command: string }, serverPid: number): boolean {
+  return row.ppid === serverPid && PROBE_TOOL.test(row.command);
+}
+
 /** Rules 1 and 2, and the server's other descendants (which try rule 3 before falling back to the server). */
 function claim(input: AttributionInput): { owners: Map<number, ProcessOwner>; serverTree: Set<number> } {
   const { table } = input;
@@ -189,6 +197,7 @@ export function attribute(input: AttributionInput): AttributedProcess[] {
   const ancestry = serverAncestry(table, input.serverPid);
   const result: AttributedProcess[] = [];
   for (const row of table.rows.values()) {
+    if (isProbeTool(row, input.serverPid)) continue;
     const cwd = cwds.get(row.pid) ?? null;
     let owner = own.get(row.pid);
     let inheritedFrom: number | null = null;

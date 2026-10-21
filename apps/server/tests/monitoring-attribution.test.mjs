@@ -185,3 +185,25 @@ test("a path in a command line counts only as a whole path", () => {
   assert.ok(!commandNames(`cat /prefix${WT}`, WT));
   assert.ok(!commandNames("anything", ""));
 });
+
+test("the server's own measuring commands are left out, and its other children are not", () => {
+  const rows = attribute({
+    table: parsePs([
+      row(1, 0, 1, 18, "/sbin/launchd"),
+      row(500, 1, 500, 120, "node apps/server/src/index.ts"),
+      row(530, 500, 530, 2, "top -l 1 -stats pid,mem"),
+      row(531, 500, 531, 1, "/bin/ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,command="),
+      row(532, 500, 532, 1, "du -sk -x /tmp/a"),
+      row(533, 500, 533, 40, "git status --porcelain"),
+      row(540, 1, 540, 2, "top"),
+    ].join("\n")),
+    memory: null,
+    sessions: [],
+    adapterPids: [],
+    serverPid: 500,
+    webPids: [],
+    databasePids: [],
+    worktrees: [],
+  });
+  assert.deepEqual(rows.map((r) => r.pid).sort((a, b) => a - b), [1, 500, 533, 540]);
+});
