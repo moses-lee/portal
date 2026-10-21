@@ -68,9 +68,22 @@ async function setup(t, { probe = fakeProbe(), table, agents, monitoring = {} } 
   const worktree = path.join(portalHome, "worktrees", "repo", "feature");
   for (const folder of [repo, worktree, path.join(portalHome, "blobs")]) mkdirSync(folder, { recursive: true });
   writeFileSync(path.join(worktree, "file"), "x".repeat(4096));
-  const database = await temporaryDatabase(t);
+  // `t.after` hooks run in the order they were registered, so the database's cleanup is held back
+  // and run after the app closes: closing the pool while the app still holds its instance lock's
+  // reserved connection waits out the pool's 5 s end timeout.
+  const dropDatabase = [];
+  const database = await temporaryDatabase({ after: (cleanup) => dropDatabase.push(cleanup) });
+  let app = null;
+  t.after(async () => {
+    try {
+      await app?.close();
+      rmSync(scratch, { recursive: true, force: true });
+    } finally {
+      for (const cleanup of dropDatabase) await cleanup();
+    }
+  });
   const stops = [];
-  const app = await buildApp({
+  app = await buildApp({
     config: { ...loadConfig(), portalHome },
     database,
     orchestrator: false,
@@ -89,10 +102,6 @@ async function setup(t, { probe = fakeProbe(), table, agents, monitoring = {} } 
       },
       ...monitoring,
     },
-  });
-  t.after(async () => {
-    await app.close();
-    rmSync(scratch, { recursive: true, force: true });
   });
   const ctx = appContext(app);
   const parent = await ctx.projects.add({ path: repo, name: "repo" });

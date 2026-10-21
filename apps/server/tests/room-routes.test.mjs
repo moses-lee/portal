@@ -139,11 +139,17 @@ test("the portal stream opens with the room's state and pushes it when the envir
         buffer += value;
       }
     }
+    // The opening events are found by type: the stream also opens with others (the queue, and
+    // monitoring once there is a sample), and the room is the one this test is about.
     const opening = [];
-    for (let i = 0; i < 7; i++) opening.push(await next());
-    assert.deepEqual(opening.map((event) => event.type), ["status", "items", "threads", "approvals", "intents", "workspace", "room"]);
-    assert.equal(opening[6].state.environment.source, "none");
-    assert.equal(opening[6].state.layoutVersion, 1);
+    do opening.push(await next()); while (opening.at(-1).type !== "room");
+    const openingTypes = opening.map((event) => event.type);
+    for (const type of ["status", "items", "threads", "approvals", "intents", "workspace"]) {
+      assert.equal(openingTypes.filter((seen) => seen === type).length, 1, `the stream opens with ${type} once, before the room`);
+    }
+    const room = opening.at(-1);
+    assert.equal(room.state.environment.source, "none");
+    assert.equal(room.state.layoutVersion, 1);
 
     gate.resolve();
     let event;
