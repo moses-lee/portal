@@ -200,7 +200,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     respond(id, {});
     update(params.sessionId, { sessionUpdate: "current_mode_update", currentModeId: params.modeId });
   } else if (method === "session/prompt") {
-    const text = params.prompt[0].text;
+    // A prompt of attachments only has no text block.
+    const text = params.prompt.find((block) => block.type === "text")?.text ?? "";
     if (text === "exit") process.exit(17);
     if (text === "disconnect") {
       // Keep stdin open so only transport cleanup can stop this process.

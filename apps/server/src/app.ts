@@ -19,6 +19,7 @@ import { type MonitoringOptions, createMonitoringService } from "./monitoring/se
 import { registerMonitoringRoutes } from "./monitoring/routes.ts";
 import type { Settings } from "@portal/shared/settings";
 import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
+import { registerFileRoutes } from "./files/routes.ts";
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
 import { createProjectsService } from "./projects/service.ts";
 import { registerProjectRoutes } from "./projects/routes.ts";
@@ -139,6 +140,7 @@ export async function buildApp({ config = loadConfig(), database, logger = false
 
   app.get("/api/health", async () => ({ ok: true, service: "portal-server" }));
   registerSessionRoutes(app, ctx);
+  registerFileRoutes(app, ctx);
   registerProjectRoutes(app, ctx);
   registerSettingsRoutes(app, ctx);
   registerTerminalRoutes(app, ctx);

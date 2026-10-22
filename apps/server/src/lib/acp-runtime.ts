@@ -1,8 +1,11 @@
 /** Shared ACP transport, session ownership, and persisted, replayable event logs. */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import type { Attachment } from "@portal/contracts/files";
 import { MAX_CONFIG_STEPS, nextConfigChange, settingsOf } from "@portal/shared/agent-settings";
 import type { AgentDefinition } from "./agents.ts";
 import { childEnv } from "./child-env.ts";
@@ -171,6 +174,56 @@ const TITLE_LENGTH = 80;
 function titleFrom(text: string): string {
   const line = text.trim().split("\n")[0]?.trim() ?? "";
   return line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH - 1)}…` : line;
+}
+
+/** Image types every image-capable agent takes as an ACP `image` block (the Claude API's list). */
+const PROMPT_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+/** The largest image sent inline: the Claude API refuses base64 data past 5 MB; a bigger one goes as a link only. */
+export const MAX_PROMPT_IMAGE_BYTES = Math.floor((5 * 1024 * 1024) / 4) * 3;
+
+/** What a prompt carries: text (may be empty when there are attachments) and the files sent with it. */
+export type PromptInput = { text: string; attachments?: Attachment[] };
+
+/** Whether `attachment` goes to an agent with these capabilities as an inline image too. */
+export function sendsAsImage(attachment: Attachment, capabilities: acp.AgentCapabilities): boolean {
+  return !!capabilities.promptCapabilities?.image && PROMPT_IMAGE_TYPES.has(attachment.mimeType) && attachment.size <= MAX_PROMPT_IMAGE_BYTES;
+}
+
+/**
+ * The ACP content of a prompt (docs/FILES.md, "Prompts"): the text when there is any (blank text
+ * sends no block: the Claude API refuses a whitespace-only one); each image
+ * inline when the agent takes images (`images` holds the base64 data read for it; one missing is
+ * skipped); then every attachment, images included, as a `resource_link` to its stored file, which
+ * every ACP agent must accept (both bundled adapters pass it on as `[@name](file://…)` text).
+ */
+export function promptBlocks(
+  text: string, attachments: readonly Attachment[], capabilities: acp.AgentCapabilities, images: ReadonlyMap<string, string> = new Map(),
+): acp.ContentBlock[] {
+  const blocks: acp.ContentBlock[] = [];
+  if (text.trim()) blocks.push({ type: "text", text });
+  for (const attachment of attachments) {
+    const data = sendsAsImage(attachment, capabilities) ? images.get(attachment.path) : undefined;
+    if (data) blocks.push({ type: "image", data, mimeType: attachment.mimeType });
+  }
+  for (const { path, name, mimeType, size } of attachments) {
+    blocks.push({ type: "resource_link", uri: pathToFileURL(path).href, name, mimeType, size });
+  }
+  return blocks;
+}
+
+/** `promptBlocks` with the images it inlines read from disk (an unreadable one goes as a link only). */
+export async function buildPrompt(text: string, attachments: readonly Attachment[], capabilities: acp.AgentCapabilities): Promise<acp.ContentBlock[]> {
+  const images = new Map<string, string>();
+  await Promise.all(attachments.filter((attachment) => sendsAsImage(attachment, capabilities)).map(async ({ path }) => {
+    const bytes = await readFile(path).catch(() => null);
+    if (bytes && bytes.byteLength <= MAX_PROMPT_IMAGE_BYTES) images.set(path, bytes.toString("base64"));
+  }));
+  return promptBlocks(text, attachments, capabilities, images);
+}
+
+/** A 400 the routes pass on as it is. */
+function badRequest(message: string): Error {
+  return Object.assign(new Error(message), { status: 400 });
 }
 
 function selectHasValue(option: Extract<acp.SessionConfigOption, { type: "select" }>, value: string): boolean {
@@ -1248,11 +1301,12 @@ export function createAcpRuntime(
     return session.attaching;
   }
 
-  async function sendPrompt(id: string, text: string): Promise<void> {
+  async function sendPrompt(id: string, text: string, attachments: Attachment[] = []): Promise<void> {
     await ready;
     const target = requireSession(id);
     if (target.busy) throw new Error("Session busy");
-    await openTurn(id, text);
+    // Trimmed like a queued prompt, so both paths record and send the same text.
+    await openTurn(id, { text: text.trim(), attachments });
   }
 
   /**
@@ -1265,16 +1319,16 @@ export function createAcpRuntime(
    * and the agent is free, the text goes out at once, ahead of the waiting queue. A busy session
    * queues it as usual; it then waits behind the edit like the rest.
    */
-  async function sendOrQueue(id: string, text: string): Promise<{ queued: QueuedPrompt | null; position: number }> {
+  async function sendOrQueue(id: string, text: string, attachments: Attachment[] = []): Promise<{ queued: QueuedPrompt | null; position: number }> {
     await ready;
     const session = requireSession(id);
-    if (session.busy || session.queueFiring || (session.queue.length > 0 && !queuePaused(session))) return queuePrompt(id, text);
+    if (session.busy || session.queueFiring || (session.queue.length > 0 && !queuePaused(session))) return queuePrompt(id, text, attachments);
     try {
-      await openTurn(id, text);
+      await openTurn(id, { text: text.trim(), attachments });
     } catch (error) {
       // Another prompt took the turn while the agent was attaching: queue behind it rather than refuse.
       if (errorMessage(error) !== "Session busy") throw error;
-      return queuePrompt(id, text);
+      return queuePrompt(id, text, attachments);
     }
     return { queued: null, position: 0 };
   }
@@ -1282,15 +1336,18 @@ export function createAcpRuntime(
   /**
    * Put `text` at the end of the session's queue; it starts a turn once the agent is free (at once
    * when it is free now). Answers the item and its 1-based position. Throws when the queue holds
-   * `MAX_QUEUED_PROMPTS` already or the text is blank. The queue lives in memory only.
+   * `MAX_QUEUED_PROMPTS` already or the prompt is blank (no text and no attachments). The queue
+   * lives in memory only.
    */
-  async function queuePrompt(id: string, text: string): Promise<{ queued: QueuedPrompt; position: number }> {
+  async function queuePrompt(id: string, text: string, attachments: Attachment[] = []): Promise<{ queued: QueuedPrompt; position: number }> {
     await ready;
     const session = requireSession(id);
     const trimmed = text.trim();
-    if (!trimmed) throw new Error("A queued prompt cannot be empty.");
+    if (!trimmed && attachments.length === 0) throw new Error("A queued prompt cannot be empty.");
     if (session.queue.length >= MAX_QUEUED_PROMPTS) throw new Error(`The queue is full (${MAX_QUEUED_PROMPTS} prompts). Edit or remove one first.`);
-    const queued: QueuedPrompt = { id: randomUUID(), text: trimmed, queuedAt: Date.now(), editing: false };
+    const queued: QueuedPrompt = {
+      id: randomUUID(), text: trimmed, ...(attachments.length ? { attachments: [...attachments] } : {}), queuedAt: Date.now(), editing: false,
+    };
     session.queue.push(queued);
     // Taken before the queue may send it at once, so a free session answers "position 1", not 0.
     const position = session.queue.length;
@@ -1300,17 +1357,29 @@ export function createAcpRuntime(
   }
 
   /**
-   * Replace a queued prompt's text in place; it keeps its slot. Saving also ends an edit begun
-   * with `beginEdit`, so the queue resumes. Throws for an unknown item or blank text.
+   * Replace a queued prompt's text in place; it keeps its slot. `attachments`, when given, are the
+   * ones it keeps: some of those it had, by path (removing is allowed, adding is not: a 400).
+   * Saving also ends an edit begun with `beginEdit`, so the queue resumes. Throws for an unknown
+   * item or a prompt left blank (no text and no attachments).
    */
-  async function updateQueued(id: string, itemId: string, text: string): Promise<QueuedPrompt> {
+  async function updateQueued(id: string, itemId: string, text: string, attachments?: readonly Pick<Attachment, "path">[]): Promise<QueuedPrompt> {
     await ready;
     const session = requireSession(id);
     const trimmed = text.trim();
-    if (!trimmed) throw new Error("A queued prompt cannot be empty.");
     const index = session.queue.findIndex((item) => item.id === itemId);
     if (index === -1) throw new Error("That queued prompt is no longer in the queue.");
-    const updated = { ...session.queue[index], text: trimmed, editing: false };
+    const had = session.queue[index].attachments ?? [];
+    let kept = had;
+    if (attachments) {
+      const wanted = new Set(attachments.map((attachment) => attachment.path));
+      if ([...wanted].some((file) => !had.some((attachment) => attachment.path === file))) {
+        throw badRequest("A queued prompt can only keep the attachments it had.");
+      }
+      kept = had.filter((attachment) => wanted.has(attachment.path));
+    }
+    if (!trimmed && kept.length === 0) throw badRequest("A queued prompt cannot be empty.");
+    const { attachments: _previous, ...rest } = session.queue[index];
+    const updated: QueuedPrompt = { ...rest, text: trimmed, ...(kept.length ? { attachments: kept } : {}), editing: false };
     session.queue[index] = updated;
     notifyQueue(session);
     fireQueue(session);
@@ -1407,12 +1476,12 @@ export function createAcpRuntime(
   }
 
   /**
-   * Open a turn with a prompt: the text itself, or a queued item, which leaves the queue as the
+   * Open a turn with a prompt: one sent directly, or a queued item, which leaves the queue as the
    * turn starts. Attaches the agent first when it is not connected. Resolves to whether a turn
    * started: false when the queued item was removed, or began being edited, meanwhile. Throws
    * "Session busy" when a turn is already open.
    */
-  async function openTurn(id: string, prompt: string | QueuedPrompt): Promise<boolean> {
+  async function openTurn(id: string, prompt: PromptInput | QueuedPrompt): Promise<boolean> {
     const target = requireSession(id);
     // A prompt that arrives while the idle stop lets the agent go waits for it, then reattaches if it went.
     await waitForStop(target);
@@ -1420,32 +1489,34 @@ export function createAcpRuntime(
     const { session, process: instance, upstreamId } = sessionOwner(id);
     if (session.busy) throw new Error("Session busy");
     // A queued item may have been removed, or taken into a composer, while the agent was attaching.
-    const index = typeof prompt === "string" ? -1 : session.queue.findIndex((item) => item.id === prompt.id);
-    if (typeof prompt !== "string" && (index === -1 || session.queue[index].editing)) return false;
+    const queuedId = "id" in prompt ? prompt.id : null;
+    const index = queuedId === null ? -1 : session.queue.findIndex((item) => item.id === queuedId);
+    if (queuedId !== null && (index === -1 || session.queue[index].editing)) return false;
     // Claim the turn before yielding so concurrent requests cannot both start it.
     session.busy = true;
     let text: string;
-    if (typeof prompt === "string") text = prompt;
+    let attachments: Attachment[];
+    if (queuedId === null) ({ text, attachments = [] } = prompt);
     else {
       // Leaves the queue with the turn already claimed, so viewers hear a shorter queue and a busy session together.
-      text = session.queue[index].text;
+      ({ text, attachments = [] } = session.queue[index]);
       session.queue.splice(index, 1);
       notifyQueue(session);
     }
     session.lastActiveAt = Date.now();
-    // The first prompt names the session until something with more say does.
-    if (session.title === null && session.titleSource === "prompt") session.title = titleFrom(text) || null;
+    // The first prompt names the session until something with more say does; a prompt of files only, by its first file.
+    if (session.title === null && session.titleSource === "prompt") session.title = titleFrom(text) || attachments[0]?.name.slice(0, TITLE_LENGTH) || null;
     startTurn(session);
     settleIdle(session, { quiet: true });
     persistMeta(session);
     announce(session);
-    emit(session, { type: "user", text });
+    emit(session, { type: "user", text, ...(attachments.length ? { attachments } : {}) });
     emit(session, { type: "turn_start" });
 
     // The route returns immediately; subscribers receive the turn via its event log.
-    void instance.conn.agent.request(acp.methods.agent.session.prompt, {
-      sessionId: upstreamId,
-      prompt: [{ type: "text", text }],
+    void buildPrompt(text, attachments, instance.capabilities).then((prompt) => {
+      if (instance.failure) throw instance.failure;
+      return instance.conn.agent.request(acp.methods.agent.session.prompt, { sessionId: upstreamId, prompt });
     }).then((response) => {
       if (instance.failure) return;
       session.busy = false;

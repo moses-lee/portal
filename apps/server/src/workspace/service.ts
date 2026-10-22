@@ -4,7 +4,9 @@
  * mutation queue (so two devices' operations never interleave), saves only when something changed,
  * pushes the whole workspace to every page (`{ type: "workspace", workspace }`), and logs the
  * structural operations to the activity view (`workspace.opened`, `workspace.closed`,
- * `workspace.arranged`, `workspace.renamed`; `resize` and `move_tab` are not logged).
+ * `workspace.arranged`, `workspace.renamed`; `resize` and `move_tab` are not logged). File panes
+ * (docs/FILES.md) log as `workspace.opened` with `detail.path`; a file pane browsing to another path
+ * (`replace_file`) is navigation, not logged, like `resize`.
  *
  * A deleted session (the route, the orchestrator's `delete_session`, the purge of removed sessions)
  * loses its pane: the service hears of it through `deps.sessions.onDeleted`, and closes the pane without logging (whoever deleted the session logs the delete).
@@ -109,6 +111,10 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
         const { name } = await describe(op.sessionId);
         return { kind: "workspace.opened", summary: `Opened "${name}" in ${where}`, sessionId: op.sessionId, detail: { tabId, paneId: location?.paneId ?? null } };
       }
+      case "open_file": {
+        const where = op.target ? "beside another pane" : "a new tab";
+        return { kind: "workspace.opened", summary: `Opened ${op.path} in ${where}`, sessionId: null, detail: { tabId: location?.tabId ?? null, paneId: location?.paneId ?? null, path: op.path } };
+      }
       case "replace_pane": {
         const { name } = await describe(op.sessionId);
         return { kind: "workspace.opened", summary: `Opened "${name}" in a pane`, sessionId: op.sessionId, detail: { tabId: location?.tabId ?? null, paneId: op.paneId } };
@@ -131,6 +137,9 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
       }
       case "close_pane": {
         const hit = locatePane(before, op.paneId);
+        if (hit?.pane.kind === "file") {
+          return { kind: "workspace.closed", summary: `Closed ${hit.pane.path}`, sessionId: null, detail: { tabId: hit.tabId, paneId: op.paneId, what: "pane", path: hit.pane.path } };
+        }
         const sessionId = hit?.pane.sessionId ?? null;
         const summary = sessionId === null ? "Closed a new-session pane" : `Closed the pane of "${(await describe(sessionId)).name}"`;
         return { kind: "workspace.closed", summary, sessionId, detail: { tabId: hit?.tabId ?? null, paneId: op.paneId, what: "pane" } };
@@ -143,6 +152,7 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
       }
       case "move_tab":
       case "resize":
+      case "replace_file":
         return null;
     }
   }

@@ -11,7 +11,7 @@
 import { z } from "zod";
 import type { LayoutNode, Tab, Workspace } from "@portal/contracts/workspace";
 import { WORKSPACE_TAB_TITLE_MAX } from "@portal/contracts/workspace";
-import { defaultTabTitle, findTab, locateSession, presetOf, tabPanes } from "@portal/shared/workspace";
+import { defaultTabTitle, findTab, locateSession, presetOf, tabLeaves } from "@portal/shared/workspace";
 import type { SessionMeta } from "../../lib/types.ts";
 import type { DomainToolContext, ToolSet } from "../hub.ts";
 import { pickById } from "../ids.ts";
@@ -29,9 +29,9 @@ const edge = z.enum(["left", "right", "top", "bottom"]);
 
 const tabPath = (id: string) => `/tabs/${id}`;
 
-/** A layout as one line: `pane`, `row[pane, column[pane, pane]]`. */
+/** A layout as one line: `pane`, `row[pane, column[pane, file]]` (`file`: a file pane, docs/FILES.md). */
 export function shapeOf(node: LayoutNode): string {
-  return node.kind === "pane" ? "pane" : `${node.direction}[${node.children.map(shapeOf).join(", ")}]`;
+  return node.kind === "split" ? `${node.direction}[${node.children.map(shapeOf).join(", ")}]` : node.kind;
 }
 
 export function workspaceTools(ctx: DomainToolContext): ToolSet {
@@ -42,7 +42,7 @@ export function workspaceTools(ctx: DomainToolContext): ToolSet {
 
   const reading: ToolSet = {
     get_workspace: define(
-      "The workspace: the user's tabs in order, each with its name, shape (row[pane, column[pane, pane]]) and panes (session short id, title, live state; a pane with no session is the start page), plus what the user is looking at as they sent this message. Read-only.",
+      "The workspace: the user's tabs in order, each with its name, shape (row[pane, column[pane, pane]]) and panes (session short id, title, live state; a pane with no session is the start page; a file pane gives its path), plus what the user is looking at as they sent this message. Read-only.",
       z.object({}),
       async () => {
         const [workspace, sessions] = await Promise.all([hub.workspace.read(), deps.sessions.list()]);
@@ -55,7 +55,9 @@ export function workspaceTools(ctx: DomainToolContext): ToolSet {
           preset: presetOf(tab.root),
           shape: shapeOf(tab.root),
           path: tabPath(tab.id),
-          panes: tabPanes(tab).map((pane) => {
+          panes: tabLeaves(tab).map((pane) => {
+            // A file pane the user opened (docs/FILES.md); the tools here open and arrange sessions only.
+            if (pane.kind === "file") return { paneId: pane.id, file: pane.path };
             if (pane.sessionId === null) return { paneId: pane.id, sessionId: null, title: "New session" };
             const meta = byId.get(pane.sessionId);
             if (!meta) return { paneId: pane.id, sessionId: shortId(pane.sessionId), title: null, state: "unknown" };

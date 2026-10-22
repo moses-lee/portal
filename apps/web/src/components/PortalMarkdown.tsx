@@ -1,12 +1,13 @@
 "use client";
 
-import { createContext, memo, useContext, useSyncExternalStore, type ComponentProps } from "react";
+import { createContext, memo, useContext, useMemo, useSyncExternalStore, type ComponentProps } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import CodeBlock from "./CodeBlock";
 import { requestAppNavigation } from "@/lib/surface-navigation";
-import { inAppLinkPath } from "@/lib/session-routes";
+import { classifyHref, isAbsolutePath, keepMarkdownUrl, rehypePathTokens } from "@/lib/file-links";
+import FileLink, { DetectedPath, FileLinkContext, NoDetectedPaths } from "./files/FileLink";
 
 const noSubscription = () => () => {};
 const NavigationContext = createContext(requestAppNavigation);
@@ -20,42 +21,90 @@ function useOrigin(): string | null {
   );
 }
 
+type MarkdownProps<T extends "a" | "code" | "span"> = ComponentProps<T> & { node?: unknown };
+
+/** react-markdown hands every renderer its hast `node`; it is not a DOM attribute. */
+function withoutNode<T extends { node?: unknown }>(props: T): Omit<T, "node"> {
+  const rest = { ...props };
+  delete rest.node;
+  return rest;
+}
+
 /**
- * Internal reply links open their workspace tab, page overlay, or Agent thread in place;
- * external destinations open in a new browser tab.
+ * A link in a reply (docs/FILES.md, "Agent markdown links"), by `classifyHref`: internal links open
+ * their workspace tab, page overlay, or Agent thread in place; file paths open a file pane;
+ * everything else opens in a new browser tab. Without a working directory, a relative path is
+ * left as text: there is nothing to resolve it against.
  * Paths are recognised without the origin; a full URL on this origin once the browser has said what it is.
  */
-function MarkdownLink({ children, href, ...props }: ComponentProps<"a">) {
+export function MarkdownLink(markdownProps: MarkdownProps<"a">) {
+  const { children: text, href, ...props } = withoutNode(markdownProps);
   const origin = useOrigin();
   const navigate = useContext(NavigationContext);
-  const inApp = href ? inAppLinkPath(href, origin) : null;
-  if (inApp)
+  const { cwd } = useContext(FileLinkContext);
+  const target = classifyHref(href, origin);
+  const children = <NoDetectedPaths>{text}</NoDetectedPaths>;
+  if (target.kind === "app")
     return (
       <a
         {...props}
-        href={inApp}
+        href={target.path}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault();
-          navigate(inApp);
+          navigate(target.path);
         }}
       >
         {children}
       </a>
     );
+  if (target.kind === "file")
+    return cwd || isAbsolutePath(target.path) ? (
+      <FileLink {...props} path={target.path} line={target.line} cwd={cwd}>
+        {children}
+      </FileLink>
+    ) : (
+      <>{children}</>
+    );
+  if (target.kind === "text") return children;
+  if (target.kind === "none")
+    return (
+      <a {...props} href={href}>
+        {children}
+      </a>
+    );
   return (
-    <a {...props} href={href} target="_blank" rel="noreferrer">
+    <a {...props} href={target.href} target="_blank" rel="noreferrer">
       {children}
     </a>
   );
 }
 
-const components = {
+/** Inline code that names a file that exists becomes a link to it (decision 14). Fenced code always ends in a newline. */
+export function MarkdownCode(markdownProps: MarkdownProps<"code">) {
+  const { children, ...props } = withoutNode(markdownProps);
+  const code = <code {...props}>{children}</code>;
+  if (typeof children !== "string" || children.includes("\n") || props.className) return code;
+  return <DetectedPath text={children}>{code}</DetectedPath>;
+}
+
+/** The words `rehypePathTokens` marked as possible paths; every other span (highlighting) as it is. */
+export function MarkdownSpan(markdownProps: MarkdownProps<"span">) {
+  const { children, ...props } = withoutNode(markdownProps);
+  const token = (props as Record<string, unknown>)["data-path-token"];
+  if (typeof token === "string") return <DetectedPath text={token}>{children}</DetectedPath>;
+  return <span {...props}>{children}</span>;
+}
+
+/** The renderers every reply shares: code blocks, links, and paths. */
+export const markdownComponents = {
   pre: CodeBlock,
   a: MarkdownLink,
+  code: MarkdownCode,
+  span: MarkdownSpan,
 };
-const remarkPlugins = [remarkGfm];
-const rehypePlugins = [rehypeHighlight];
+export const markdownRemarkPlugins = [remarkGfm];
+export const markdownRehypePlugins = [rehypeHighlight, rehypePathTokens];
 
 /**
  * The item-card size: 13px text and lists that sit tight, so a body like "PRs waiting on you:"
@@ -72,29 +121,39 @@ const compactClassName = [
 
 /**
  * Markdown with the conversation's plugins and styles (`.conversation-markdown`), for the
- * orchestrator's replies and item bodies. `compact` is the item-card size.
+ * orchestrator's replies and item bodies. `compact` is the item-card size. Paths in a reply still
+ * `streaming` are checked for existence only once it settles (each prefix of a path would be asked about).
  */
 const PortalMarkdown = memo(function PortalMarkdown({
   text,
   compact = false,
   onNavigate,
+  cwd = null,
+  streaming = false,
 }: {
   text: string;
   compact?: boolean;
+  streaming?: boolean;
+  /** What relative file paths resolve against (a session's cwd, a previewed file's folder); without one, only absolute paths link. */
+  cwd?: string | null;
   /** A conversation can dismiss its popup before the shell opens an internal destination. */
   onNavigate?: (path: string) => void;
 }) {
+  const files = useMemo(() => ({ cwd, check: !streaming }), [cwd, streaming]);
   return (
     <NavigationContext value={onNavigate ?? requestAppNavigation}>
-      <div className={compact ? `conversation-markdown ${compactClassName}` : "conversation-markdown"}>
-        <ReactMarkdown
-          remarkPlugins={remarkPlugins}
-          rehypePlugins={rehypePlugins}
-          components={components}
-        >
-          {text}
-        </ReactMarkdown>
-      </div>
+      <FileLinkContext value={files}>
+        <div className={compact ? `conversation-markdown ${compactClassName}` : "conversation-markdown"}>
+          <ReactMarkdown
+            remarkPlugins={markdownRemarkPlugins}
+            rehypePlugins={markdownRehypePlugins}
+            components={markdownComponents}
+            urlTransform={keepMarkdownUrl}
+          >
+            {text}
+          </ReactMarkdown>
+        </div>
+      </FileLinkContext>
     </NavigationContext>
   );
 });

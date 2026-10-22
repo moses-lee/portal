@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import type { PaneNode } from "@portal/contracts/workspace";
+import type { LeafNode } from "@portal/contracts/workspace";
+import { useDirtyPanes } from "../files/useDirtyPanes";
 import AgentReplyToast from "./AgentReplyToast";
 import PaneBar from "./PaneBar";
 import PanesSheet from "./PanesSheet";
@@ -17,8 +18,8 @@ export type MobileWorkspaceProps = {
   /** A phone's empty workspace: the start page, shown with the bar (for Agent) and no panes. */
   empty?: ReactNode;
   /** The pane's content (the session pane with its menu wired to its tab). */
-  renderPane: (tabId: string, pane: PaneNode) => ReactNode;
-  titleOf: (pane: PaneNode) => string;
+  renderPane: (tabId: string, pane: LeafNode) => ReactNode;
+  titleOf: (pane: LeafNode) => string;
   stateOf: (sessionId: string) => SessionState | null;
   sessionOf: (sessionId: string) => SessionSummary | undefined;
   unreadPanes: ReadonlySet<string>;
@@ -28,13 +29,16 @@ export type MobileWorkspaceProps = {
   onNewSession: () => void;
   /** The sheet's line under its title; the default names the workspace. */
   sheetDescription?: string;
+  /** The key a pane renders under (the provider's `keyOf`); by default its id. */
+  keyOf?: (id: string) => string;
 };
 
 /**
  * The flat workspace (decision 18): one pane at a time from `panes`, the bar under it to move to the
  * neighbours, open the sheet or open Agent, and Agent's reply preview over it. No strip, no splits.
  * Only the shown pane is mounted (the history cache makes switching cheap; a phone has no room for
- * background streams). The same component serves a tablet's tabs of 3 or 4 panes, scoped to that
+ * background streams), and, hidden, any file pane with unsaved edits (docs/FILES.md), which would
+ * lose them. The same component serves a tablet's tabs of 3 or 4 panes, scoped to that
  * tab (decision 20).
  */
 export default function MobileWorkspace({
@@ -50,17 +54,28 @@ export default function MobileWorkspace({
   onClosePane,
   onNewSession,
   sheetDescription,
+  keyOf = (id) => id,
 }: MobileWorkspaceProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const { index, previous, next } = useMemo(() => paneNeighbours(panes, focused?.pane.id ?? null), [panes, focused]);
   const root = useRef<HTMLDivElement>(null);
+  const dirty = useDirtyPanes();
+  /** The shown pane, and hidden beside it the ones holding unsaved edits, in list order (one parent, so switching never remounts them). */
+  const kept = focused ? panes.filter(({ pane }) => pane.id === focused.pane.id || dirty.has(pane.id)) : [];
   return (
     <div ref={root} data-mobile-workspace data-pane-bar-host className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {focused ? renderPane(focused.tabId, focused.pane) : empty}
+      {focused
+        ? kept.map((ref) => (
+            <div key={keyOf(ref.pane.id)} className={ref.pane.id === focused.pane.id ? "contents" : "hidden"}>
+              {renderPane(ref.tabId, ref.pane)}
+            </div>
+          ))
+        : empty}
       {focused ? (
         <PaneBar
           title={titleOf(focused.pane)}
-          state={focused.pane.sessionId !== null ? stateOf(focused.pane.sessionId) : null}
+          state={focused.pane.kind === "pane" && focused.pane.sessionId !== null ? stateOf(focused.pane.sessionId) : null}
+          file={focused.pane.kind === "file"}
           index={index}
           count={panes.length}
           onPrevious={previous ? () => onFocus(previous.tabId, previous.pane.id) : null}

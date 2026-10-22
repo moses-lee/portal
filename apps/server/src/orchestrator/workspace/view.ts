@@ -5,13 +5,14 @@
  */
 import type { SessionMeta } from "../../lib/types.ts";
 import type { Workspace, WorkspaceView } from "@portal/contracts/workspace";
-import { defaultTabTitle, findTab, tabPanes } from "@portal/shared/workspace";
+import { defaultTabTitle, findTab, locatePane, tabPanes } from "@portal/shared/workspace";
 import { httpError } from "../../http/errors.ts";
 import { clip, shortId } from "../world/render.ts";
 
 /** Session titles and tab names are the user's (or an agent's) text: clipped in the sentence as the World section clips them. */
 const TITLE_MAX = 60;
 const TAB_NAME_MAX = 50;
+const PATH_MAX = 160;
 
 /** `view` from a message body, or a 400: each of `sessionId`, `tabId`, `paneId` a non-empty string or null (absent counts as null). */
 export function parseView(input: unknown): WorkspaceView {
@@ -41,6 +42,14 @@ export type ViewDescription = {
  * or a tab the workspace no longer holds.
  */
 export function describeView(view: WorkspaceView, workspace: Workspace | null, titleOf: (sessionId: string) => string | null | undefined): ViewDescription {
+  // A file pane (docs/FILES.md) has no session: the sentence names its path instead.
+  const filePane = view.sessionId === null && view.paneId && workspace ? locatePane(workspace, view.paneId) : null;
+  if (filePane && filePane.pane.kind === "file") {
+    const tab = findTab(workspace!, filePane.tabId);
+    const tabName = tab ? defaultTabTitle(tab, (id) => titleOf(id)?.trim() || null) : null;
+    const text = `the file ${clip(filePane.pane.path, PATH_MAX)}${tabName === null ? "" : `, in tab "${clip(tabName, TAB_NAME_MAX)}"`}.`;
+    return { sessionId: null, title: null, tabId: tab?.id ?? null, tabName, paneId: view.paneId, text };
+  }
   if (view.sessionId === null) return { sessionId: null, title: null, tabId: null, tabName: null, paneId: null, text: "the Portal page, no session." };
   const found = titleOf(view.sessionId);
   const title = found === undefined ? "no longer exists" : found?.trim() || "Untitled";

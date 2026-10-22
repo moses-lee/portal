@@ -17,6 +17,8 @@ export type UseSendOptions = {
   submit: (text: string) => Promise<void>;
   /** Whether a send may start right now (the agent is idle, the thread takes messages, ...). */
   canSend?: () => boolean;
+  /** Whether a send without text may go: it carries attachments (see `@/lib/attachments`). */
+  allowEmpty?: () => boolean;
   /** Runs once the server has taken a message (scroll to the end, ...). */
   onSent?: () => void;
   /** The text shown for a refused send; null shows nothing (the send was called off, not refused). */
@@ -37,7 +39,7 @@ const defaultDescribe = (error: unknown) => {
  * Text sent from elsewhere (a card's "Ask Portal") is put back into an empty draft when refused,
  * so nothing typed or clicked is lost.
  */
-export function useSend({ draftKey, historyKey, submit, canSend, onSent, describeError = defaultDescribe }: UseSendOptions) {
+export function useSend({ draftKey, historyKey, submit, canSend, allowEmpty, onSent, describeError = defaultDescribe }: UseSendOptions) {
   const [draft, setDraft] = useDraft(draftKey);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,13 +47,13 @@ export function useSend({ draftKey, historyKey, submit, canSend, onSent, describ
   const pending = useRef(false);
 
   /**
-   * Send `text` (the draft by default). Returns false at once when nothing was sent: empty text, a
-   * send already in flight, or `canSend` said no. The server's answer arrives later, in state.
+   * Send `text` (the draft by default). Returns false at once when nothing was sent: empty text
+   * (unless `allowEmpty` says yes), a send already in flight, or `canSend` said no. The server's answer arrives later, in state.
    */
   const send = useCallback(
     (text: string = readDraft(draftKey)): boolean => {
       const trimmed = text.trim();
-      if (!trimmed || pending.current || (canSend && !canSend())) return false;
+      if ((!trimmed && !allowEmpty?.()) || pending.current || (canSend && !canSend())) return false;
       pending.current = true;
       setSending(true);
       setError(null);
@@ -59,7 +61,7 @@ export function useSend({ draftKey, historyKey, submit, canSend, onSent, describ
         try {
           await submit(trimmed);
           clearSubmittedDraft(draftKey, text);
-          if (historyKey) recordPrompt(historyKey, trimmed);
+          if (historyKey && trimmed) recordPrompt(historyKey, trimmed);
           onSent?.();
         } catch (e) {
           const message = describeError(e);
@@ -75,7 +77,7 @@ export function useSend({ draftKey, historyKey, submit, canSend, onSent, describ
       })();
       return true;
     },
-    [draftKey, historyKey, submit, canSend, onSent, describeError],
+    [draftKey, historyKey, submit, canSend, allowEmpty, onSent, describeError],
   );
 
   /** Show an error that arrived after the server took the message (the reply broke off). */

@@ -11,6 +11,7 @@ import PromptQueue from "./PromptQueue";
 import Conversation from "./Conversation";
 import SessionHeader, { type PaneMenu } from "./SessionHeader";
 import SessionLinkBanner from "./SessionLinkBanner";
+import OpenFileDialog from "./files/OpenFileDialog";
 import { Button } from "@/components/ui/button";
 import { useSessions } from "./SessionsProvider";
 import { sessionUrl, useSessionStream } from "./useSessionStream";
@@ -198,6 +199,7 @@ export default function SessionPane({
   const [renameError, setRenameError] = useState<string | null>(null);
   const [showShell, setShowShell] = useState(false);
   const [shellSize, setShellSize] = useState(33);
+  const [openingFile, setOpeningFile] = useState(false);
   const rename = (title: string) => {
     if (!sessionId) return;
     setRenameError(null);
@@ -224,6 +226,7 @@ export default function SessionPane({
     send,
     stop,
     stopping,
+    attachments,
     queue,
     editingId,
     editQueued,
@@ -294,8 +297,17 @@ export default function SessionPane({
         terminalPanelId={terminalPanelId}
         renameFrom={session?.title ?? ""}
         onRename={session && !readOnly ? rename : undefined}
+        onOpenFile={session ? () => setOpeningFile(true) : undefined}
         pane={pane}
       />
+      {session && (
+        <OpenFileDialog
+          open={openingFile}
+          onOpenChange={setOpeningFile}
+          cwd={session.cwd}
+          displayCwd={session.displayCwd}
+        />
+      )}
       {renameError && (
         <p role="alert" className="border-b border-white/5 px-5 py-1.5 text-[11px] text-destructive">
           {renameError}
@@ -347,6 +359,7 @@ export default function SessionPane({
                 onAnswer={answerPermission}
                 scrollRequest={scrollRequest}
                 readOnly={readOnly}
+                cwd={session?.cwd}
               />
             )}
             {!readOnly && <div className="composer-wrap">
@@ -376,6 +389,7 @@ export default function SessionPane({
                 }
                 sending={sending || initialPending}
                 stopping={stopping}
+                attachments={attachments}
                 disabled={notFound}
                 commands={sessionState?.commands}
                 historyKey={sessionId ? sessionHistoryKey(sessionId) : undefined}

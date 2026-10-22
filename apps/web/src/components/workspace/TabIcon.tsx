@@ -5,7 +5,8 @@ import type { IconCellState } from "@/lib/workspace";
 /**
  * A tab's miniature (decision 10): one cell per pane in the layout's shape, each a status dot in the
  * state colours the sidebar uses (`.status-dot` under `data-state`, one vocabulary), a hollow dot
- * for a start page, and a ring around the whole icon when the tab has unread news. Takes the cells
+ * for a start page, a small page (a folded-corner rectangle) for a file pane (docs/FILES.md), and a
+ * ring around the whole icon when the tab has unread news. Takes the cells
  * resolved (`tabCells`), so the tab item around it can compare them by value and skip renders.
  */
 export default function TabIcon({ cells, unread }: { cells: readonly IconCellState[]; unread: boolean }) {
@@ -21,7 +22,9 @@ export default function TabIcon({ cells, unread }: { cells: readonly IconCellSta
           style={{ left: `${cell.x}%`, top: `${cell.y}%`, width: `${cell.width}%`, height: `${cell.height}%` }}
           className="absolute flex items-center justify-center border border-white/15"
         >
-          {cell.sessionId !== null ? (
+          {cell.file ? (
+            <span data-file-cell className="h-[7px] w-[5px] rounded-[1px] rounded-tr-[2.5px] bg-current opacity-60" />
+          ) : cell.sessionId !== null ? (
             // A session the list does not have is drawn as finished.
             <span data-state={cell.state ?? "finished"} className="inline-flex scale-[.66]">
               <span className="status-dot" />

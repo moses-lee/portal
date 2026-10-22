@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { Tabs } from "radix-ui";
-import type { PaneNode, Tab } from "@portal/contracts/workspace";
-import { tabPanes } from "@portal/shared/workspace";
+import type { LeafNode, Tab } from "@portal/contracts/workspace";
+import { tabLeaves } from "@portal/shared/workspace";
+import FilePane from "../files/FilePane";
 import SessionPane, { MissingConversation, type InitialSend, type StartPaneProps } from "../SessionPane";
 import { useSessions } from "../SessionsProvider";
 import { useMediaQuery } from "../useMediaQuery";
@@ -85,13 +86,21 @@ export default function WorkspaceView({
   const { tab, pane } = useMemo(() => resolveFocus(workspace, routeTabId, paneParam), [workspace, routeTabId, paneParam]);
   const focusedTabId = tab?.id ?? null;
   const focusedPaneId = pane?.id ?? null;
-  const focusedSessionId = pane?.sessionId ?? (route.kind === "session" ? route.sessionId : null);
+  const focusedSessionId = (pane?.kind === "pane" ? pane.sessionId : null) ?? (route.kind === "session" ? route.sessionId : null);
   /** Whether the device shows the whole tab or only the focused pane (unread treats the rest as hidden). */
   const scope = focusScope(tab, kind);
 
   // What this device is looking at, for the shell around the view.
   useEffect(() => {
-    const focus: WorkspaceFocus = { tabId: focusedTabId, paneId: focusedPaneId, sessionId: focusedSessionId, tab, pane, scope };
+    const focus: WorkspaceFocus = {
+      tabId: focusedTabId,
+      paneId: focusedPaneId,
+      sessionId: focusedSessionId,
+      tab,
+      pane: pane?.kind === "pane" ? pane : null,
+      leaf: pane,
+      scope,
+    };
     setFocus(focus);
   }, [setFocus, focusedTabId, focusedPaneId, focusedSessionId, tab, pane, scope]);
   useEffect(() => () => setFocus(NO_FOCUS), [setFocus]);
@@ -99,11 +108,11 @@ export default function WorkspaceView({
   /** The pane last focused in each tab, so switching back lands where the user was (memory only; a hidden tablet tab shows it too). */
   const [lastPane, setLastPane] = useState<ReadonlyMap<string, string>>(() => new Map());
   // Derived from the focus during render (no effect, no extra pass), like the focus history in `useMountedTabs`.
-  if (tab && pane && tabPanes(tab).length > 1 && lastPane.get(tab.id) !== pane.id) setLastPane(new Map(lastPane).set(tab.id, pane.id));
+  if (tab && pane && tabLeaves(tab).length > 1 && lastPane.get(tab.id) !== pane.id) setLastPane(new Map(lastPane).set(tab.id, pane.id));
   const pathOfTab = useCallback(
     (tabId: string) => {
       const target = workspace.tabs.find((t) => t.id === tabId);
-      return target && tabPanes(target).length > 1 ? tabPath(tabId, lastPane.get(tabId) ?? null) : tabPath(tabId);
+      return target && tabLeaves(target).length > 1 ? tabPath(tabId, lastPane.get(tabId) ?? null) : tabPath(tabId);
     },
     [workspace, lastPane],
   );
@@ -130,7 +139,7 @@ export default function WorkspaceView({
   useEffect(() => onRoomActivity?.(roomActivity), [onRoomActivity, roomActivity]);
 
   const titleOf = useCallback((t: Tab) => tabTitle(t, sessions), [sessions]);
-  const paneTitleOf = useCallback((p: PaneNode) => paneTitle(p, sessions), [sessions]);
+  const paneTitleOf = useCallback((p: LeafNode) => paneTitle(p, sessions), [sessions]);
   const sessionOf = useCallback((sessionId: string) => sessions.find((s) => s.id === sessionId), [sessions]);
   const stateOf = useCallback(
     (sessionId: string) => {
@@ -159,9 +168,31 @@ export default function WorkspaceView({
   const openStartTab = useCallback(() => void actions.openStartTab(), [actions]);
   const closePane = useCallback((paneId: string) => void actions.closePane(paneId), [actions]);
 
-  /** One pane's content: the session pane with its menu wired to this tab. */
-  const renderPane = (t: Tab, p: PaneNode, first: boolean): ReactNode => {
-    const count = tabPanes(t).length;
+  /** One pane's content: the session pane (or a file pane, docs/FILES.md) with its menu wired to this tab. */
+  const renderPane = (t: Tab, p: LeafNode, first: boolean): ReactNode => {
+    const count = tabLeaves(t).length;
+    const menu = {
+      // What the reducer would refuse (the pane cap, the depth cap) is disabled, not offered.
+      canSplitRight: canSplitPane(workspace, t.id, p.id, "right"),
+      canSplitDown: canSplitPane(workspace, t.id, p.id, "bottom"),
+      onSplitRight: () => void actions.splitPane(t.id, p.id, "right"),
+      onSplitDown: () => void actions.splitPane(t.id, p.id, "bottom"),
+      onMoveToTab: count > 1 ? () => void actions.moveToOwnTab(p) : null,
+      onClose: () => void actions.closePane(p.id),
+    };
+    if (p.kind === "file") {
+      return (
+        <FilePane
+          key={keyOf(p.id)}
+          paneId={p.id}
+          path={p.path}
+          showSidebarToggle={first}
+          onOpenSidebar={onOpenSidebar}
+          pane={menu}
+          onNavigate={(path) => void actions.navigateFile(p.id, path)}
+        />
+      );
+    }
     return (
       <SessionPane
         key={keyOf(p.id)}
@@ -183,21 +214,13 @@ export default function WorkspaceView({
         onNew={openStartTab}
         onSessionDeleted={onSessionDeleted}
         onActivity={reportActivity}
-        pane={{
-          // What the reducer would refuse (the pane cap, the depth cap) is disabled, not offered.
-          canSplitRight: canSplitPane(workspace, t.id, p.id, "right"),
-          canSplitDown: canSplitPane(workspace, t.id, p.id, "bottom"),
-          onSplitRight: () => void actions.splitPane(t.id, p.id, "right"),
-          onSplitDown: () => void actions.splitPane(t.id, p.id, "bottom"),
-          onMoveToTab: count > 1 ? () => void actions.moveToOwnTab(p) : null,
-          onClose: () => void actions.closePane(p.id),
-        }}
+        pane={menu}
       />
     );
   };
 
   /** The pane's content for the switcher, which hands back the tab by id. */
-  const renderPaneIn = (tabId: string, p: PaneNode): ReactNode => {
+  const renderPaneIn = (tabId: string, p: LeafNode): ReactNode => {
     const t = workspace.tabs.find((candidate) => candidate.id === tabId);
     return t ? renderPane(t, p, true) : null;
   };
@@ -289,6 +312,7 @@ export default function WorkspaceView({
           onFocus={showPane}
           onClosePane={closePane}
           onNewSession={openStartTab}
+          keyOf={keyOf}
         />
       ) : (
         <>
@@ -318,7 +342,7 @@ export default function WorkspaceView({
                 ) : (
                   // Decision 20: a tablet shows one pane of a 3- or 4-pane tab, with the switcher scoped to the tab.
                   <MobileWorkspace
-                    panes={tabPanes(t).map((p) => ({ tabId: t.id, pane: p }))}
+                    panes={tabLeaves(t).map((p) => ({ tabId: t.id, pane: p }))}
                     focused={t.id === focusedTabId ? focusedRef : paneRefIn(t, lastPane.get(t.id) ?? null)}
                     renderPane={renderPaneIn}
                     titleOf={paneTitleOf}
@@ -329,6 +353,7 @@ export default function WorkspaceView({
                     onClosePane={closePane}
                     onNewSession={openStartTab}
                     sheetDescription="The panes of this tab, in order."
+                    keyOf={keyOf}
                   />
                 )}
               </Tabs.Content>
@@ -342,7 +367,7 @@ export default function WorkspaceView({
 
 /** The tab's pane named by `paneId`, else its first, as a switcher entry (a hidden tablet tab shows where the user left it). */
 function paneRefIn(tab: Tab, paneId: string | null): PaneRef | null {
-  const panes = tabPanes(tab);
+  const panes = tabLeaves(tab);
   const pane = panes.find((p) => p.id === paneId) ?? panes[0];
   return pane ? { tabId: tab.id, pane } : null;
 }

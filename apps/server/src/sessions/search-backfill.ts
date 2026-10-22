@@ -38,11 +38,15 @@ class Stopped extends Error {}
 
 type Log = { info(obj: object, msg: string): void; warn(obj: object, msg: string): void };
 
-type Projected = { seq: number; ts: number; type: string | null; kind: string | null; text: string | null };
+type Projected = { seq: number; ts: number; type: string | null; kind: string | null; text: string | null; names: string[] | null };
 
 /** The projected row as just enough of an event for `messageRowsFrom`; anything else stands in as a run breaker. */
-function toEvent({ seq, ts, type, kind, text }: Projected): StoredEvent {
-  if (type === "user" && text !== null) return { type: "user", text, seq, ts };
+function toEvent({ seq, ts, type, kind, text, names }: Projected): StoredEvent {
+  if (type === "user" && text !== null) {
+    // Only the names are searched; the rest of each attachment stands in.
+    const attachments = (names ?? []).map((name) => ({ name, path: "", mimeType: "", size: 0 }));
+    return { type: "user", text, ...(attachments.length ? { attachments } : {}), seq, ts };
+  }
   if (type === "update" && kind === "agent_message_chunk" && text !== null) {
     return { type: "update", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } }, seq, ts } as StoredEvent;
   }
@@ -82,6 +86,11 @@ async function backfillSession(tx: Tx, sessionId: string, stopped: () => boolean
             when ${sessionEvents.body}->>'type' = 'user' then ${sessionEvents.body}->>'text'
             when ${sessionEvents.body}->'update'->>'sessionUpdate' = 'agent_message_chunk' and ${sessionEvents.body}->'update'->'content'->>'type' = 'text'
               then ${sessionEvents.body}->'update'->'content'->>'text'
+          end`,
+          // A prompt's attachment names (docs/FILES.md), which search indexes with its text.
+          names: sql<string[] | null>`case
+            when ${sessionEvents.body}->>'type' = 'user' and jsonb_typeof(${sessionEvents.body}->'attachments') = 'array'
+              then (select array_agg(a->>'name') filter (where jsonb_typeof(a->'name') = 'string') from jsonb_array_elements(${sessionEvents.body}->'attachments') as a)
           end`,
         })
         .from(sessionEvents)

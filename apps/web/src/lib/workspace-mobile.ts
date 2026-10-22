@@ -5,8 +5,8 @@
  * `visualViewport` samples, and the Agent's reply preview and sheet drag. No React, no DOM: the
  * node test runner loads this file directly.
  */
-import type { PaneNode, Tab, Workspace } from "@portal/contracts/workspace";
-import { panesOf, tabPanes } from "@portal/shared/workspace";
+import type { LeafNode, Tab, Workspace } from "@portal/contracts/workspace";
+import { leavesOf, tabLeaves } from "@portal/shared/workspace";
 import { flatPanes } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -42,7 +42,7 @@ export const TABLET_SPLIT_MAX_PANES = 2;
 export function tabRendersSplit(tab: Pick<Tab, "root">, kind: ViewportKind): boolean {
   if (kind === "desktop") return true;
   if (kind === "mobile") return false;
-  return panesOf(tab.root).length <= TABLET_SPLIT_MAX_PANES;
+  return leavesOf(tab.root).length <= TABLET_SPLIT_MAX_PANES;
 }
 
 /**
@@ -61,7 +61,8 @@ export function focusScope(tab: Pick<Tab, "root"> | null, kind: ViewportKind): F
 // The pane switcher's list
 // ---------------------------------------------------------------------------------------------
 
-export type PaneRef = { tabId: string; pane: PaneNode };
+/** A pane in the switcher: a session, start-page or file pane, and its tab. */
+export type PaneRef = { tabId: string; pane: LeafNode };
 
 /**
  * The panes the switcher moves between: on a phone every pane of every tab in flat order; on a
@@ -70,7 +71,7 @@ export type PaneRef = { tabId: string; pane: PaneNode };
  */
 export function switcherPanes(ws: Workspace, tab: Tab | null, kind: ViewportKind): PaneRef[] | null {
   if (kind === "mobile") return flatPanes(ws);
-  if (kind === "tablet" && tab && !tabRendersSplit(tab, kind)) return tabPanes(tab).map((pane) => ({ tabId: tab.id, pane }));
+  if (kind === "tablet" && tab && !tabRendersSplit(tab, kind)) return tabLeaves(tab).map((pane) => ({ tabId: tab.id, pane }));
   return null;
 }
 
@@ -82,7 +83,7 @@ export type PaneNeighbours<T> = {
 };
 
 /** Where `paneId` stands in the list and the panes either side of it; no wrapping (the ends have none). */
-export function paneNeighbours<T extends { pane: PaneNode }>(panes: readonly T[], paneId: string | null): PaneNeighbours<T> {
+export function paneNeighbours<T extends { pane: LeafNode }>(panes: readonly T[], paneId: string | null): PaneNeighbours<T> {
   const index = paneId === null ? -1 : panes.findIndex(({ pane }) => pane.id === paneId);
   if (index < 0) return { index, previous: null, next: null };
   return { index, previous: panes[index - 1] ?? null, next: panes[index + 1] ?? null };

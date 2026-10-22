@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Pencil, X } from "lucide-react";
 import IconButton from "./IconButton";
+import AttachmentList from "./files/AttachmentList";
 import { MAX_QUEUED_PROMPTS, type QueuedPrompt } from "@/lib/types";
 
 /** How long the agent may be free with prompts still queued before the queue reads as waiting. */
@@ -11,7 +12,8 @@ const HELD_AFTER_MS = 1500;
 /**
  * The prompts waiting for the agent, between the transcript and the composer: first to go out
  * first. Each can be edited in place (its text goes into the composer, and Enter saves it back
- * into the same slot) or removed. While a prompt is being edited the queue is paused: nothing
+ * into the same slot; its attachments show in the composer, where they can be removed but none
+ * added) or removed. Each shows its attachments compactly. While a prompt is being edited the queue is paused: nothing
  * goes out, and the header says so. Otherwise, while the agent is free and prompts still wait,
  * the queue is waiting (a turn failed, the agent was lost, or it is being reattached); the header
  * says so, and any change to the queue tries again. The moment between one turn's end and the
@@ -69,6 +71,7 @@ export default function PromptQueue({
             <span className="prompt-queue-text" title={item.text}>
               {item.text}
             </span>
+            {item.attachments && <AttachmentList attachments={item.attachments} compact />}
             {item.editing && (
               <span className="prompt-queue-mark">
                 {item.id === editingId ? "editing" : "editing in another tab"}

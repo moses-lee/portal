@@ -1,7 +1,7 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
-import type { PaneNode } from "@portal/contracts/workspace";
+import { FileText, Plus, X } from "lucide-react";
+import type { LeafNode } from "@portal/contracts/workspace";
 import IconButton from "../IconButton";
 import ResponsiveDialog from "../ResponsiveDialog";
 import SessionStateBadge from "../SessionStateBadge";
@@ -18,7 +18,7 @@ export type PanesSheetProps = {
   focusedPaneId: string | null;
   /** Panes with news since the device last showed them: an unread marker on their row. */
   unreadPanes: ReadonlySet<string>;
-  titleOf: (pane: PaneNode) => string;
+  titleOf: (pane: LeafNode) => string;
   stateOf: (sessionId: string) => SessionState | null;
   sessionOf: (sessionId: string) => SessionSummary | undefined;
   /** A row was tapped: show that pane (the sheet closes). */
@@ -33,7 +33,8 @@ export type PanesSheetProps = {
 
 /**
  * The bottom sheet the pane bar opens (decision 18): every pane in order, each with its state dot,
- * title, state badge, project and a close button; tapping a row shows it. "New session" at the
+ * title, state badge, project and a close button (a file pane: a file glyph, its name and folder);
+ * tapping a row shows it. "New session" at the
  * bottom opens a start-page tab. A dialog on wider screens, where `ResponsiveDialog` draws the line.
  */
 export default function PanesSheet({
@@ -55,8 +56,11 @@ export default function PanesSheet({
       <ul data-panes-sheet className="-mx-2 flex flex-col pb-2">
         {panes.map(({ tabId, pane }) => {
           const title = titleOf(pane);
-          const session = pane.sessionId !== null ? sessionOf(pane.sessionId) : undefined;
-          const state = pane.sessionId !== null ? stateOf(pane.sessionId) : null;
+          const sessionId = pane.kind === "pane" ? pane.sessionId : null;
+          const session = sessionId !== null ? sessionOf(sessionId) : undefined;
+          const state = sessionId !== null ? stateOf(sessionId) : null;
+          /** A file pane's folder (docs/FILES.md), under its name. */
+          const folder = pane.kind === "file" ? pane.path.slice(0, pane.path.lastIndexOf("/")) || "/" : null;
           const current = pane.id === focusedPaneId;
           const unread = unreadPanes.has(pane.id);
           return (
@@ -72,7 +76,9 @@ export default function PanesSheet({
                   current ? "bg-white/8" : "hover:bg-white/4"
                 }`}
               >
-                {state !== null ? (
+                {folder !== null ? (
+                  <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                ) : state !== null ? (
                   <span data-state={state} className="inline-flex shrink-0" aria-label={sessionStateLabels[state]}>
                     <span className="status-dot" />
                   </span>
@@ -89,7 +95,7 @@ export default function PanesSheet({
                   </span>
                   {(session?.project || state === null) && (
                     <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">
-                      {session?.project ? session.project.name : "Start page"}
+                      {folder ?? (session?.project ? session.project.name : "Start page")}
                     </span>
                   )}
                 </span>

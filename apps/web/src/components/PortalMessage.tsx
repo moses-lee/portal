@@ -241,7 +241,7 @@ const PortalMessage = memo(function PortalMessage({
         {bubbles.map((bubble) => (
           <Bubble key={bubble.key} variant="muted" className="max-w-[90%]" data-agent-bubble="">
             <BubbleContent className="!rounded-[20px] !border-white/8 !bg-white/[.06] !px-4 !py-3">
-              <PortalMarkdown text={bubble.text} onNavigate={onNavigate} />
+              <PortalMarkdown text={bubble.text} onNavigate={onNavigate} streaming={streaming} />
             </BubbleContent>
           </Bubble>
         ))}

@@ -18,6 +18,8 @@ export type SessionsOptions = {
   blobsDir?: string | null;
   /** Where the adapters' process groups are listed; defaults to `<portalHome>/run/adapters.json`. Null keeps no list. */
   adapterGroupsFile?: string | null;
+  /** Where prompt attachments are kept (docs/FILES.md); defaults to `<portalHome>/uploads`. Null turns uploads off. */
+  uploadsDir?: string | null;
 };
 
 export type SessionsService = AcpRuntime & {
@@ -27,6 +29,8 @@ export type SessionsService = AcpRuntime & {
   listAgents(): AgentInfo[];
   /** The files `GET /api/blobs/:name` serves; null when images stay inline. */
   blobs: BlobStore | null;
+  /** The root of `uploads/<sessionId>/`; null when uploads are off. */
+  uploadsDir: string | null;
 };
 
 export function createSessionsService(ctx: Pick<AppContext, "db" | "log"> & Partial<Pick<AppContext, "config">>, options: SessionsOptions = {}): SessionsService {
@@ -36,6 +40,7 @@ export function createSessionsService(ctx: Pick<AppContext, "db" | "log"> & Part
   const groupsFile = options.adapterGroupsFile === undefined
     ? (ctx.config ? path.join(ctx.config.portalHome, "run", "adapters.json") : null)
     : options.adapterGroupsFile;
+  const uploadsDir = options.uploadsDir === undefined ? (ctx.config ? path.join(ctx.config.portalHome, "uploads") : null) : options.uploadsDir;
   const runtime = createAcpRuntime(agents, {
     store: createPgSessionStore({ db: ctx.db }),
     initializeTimeoutMs: options.initializeTimeoutMs,
@@ -49,5 +54,6 @@ export function createSessionsService(ctx: Pick<AppContext, "db" | "log"> & Part
     getAgent: (id) => agents.find((agent) => agent.id === id),
     listAgents: () => agents.map(({ id, name }) => ({ id, name })),
     blobs,
+    uploadsDir,
   };
 }

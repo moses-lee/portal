@@ -5,7 +5,9 @@
  * `version` is the store's business, not the reducer's.
  */
 import type {
+  FilePaneNode,
   LayoutNode,
+  LeafNode,
   LayoutPreset,
   PaneNode,
   SplitEdge,
@@ -45,9 +47,32 @@ export class WorkspaceError extends Error {
 // Reading the tree
 // ---------------------------------------------------------------------------------------------
 
-/** The leaves of a layout, in reading order (left to right, top to bottom). */
+/**
+ * Vocabulary: a **leaf** is anything a pane shows (a session or start page, `PaneNode`, or a file,
+ * `FilePaneNode`, docs/FILES.md); the `*Leaves` helpers walk them all, and the pane caps, ids and
+ * focus are about leaves. The `*Panes` helpers answer only session and start-page panes, the ones
+ * that carry a `sessionId`.
+ */
+export function isLeaf(node: LayoutNode): node is LeafNode {
+  return node.kind !== "split";
+}
+
+/** Every leaf of a layout, in reading order (left to right, top to bottom). */
+export function leavesOf(node: LayoutNode): LeafNode[] {
+  return node.kind === "split" ? node.children.flatMap(leavesOf) : [node];
+}
+
+export function tabLeaves(tab: Tab): LeafNode[] {
+  return leavesOf(tab.root);
+}
+
+export function allLeaves(ws: Workspace): { tabId: string; pane: LeafNode }[] {
+  return ws.tabs.flatMap((tab) => tabLeaves(tab).map((pane) => ({ tabId: tab.id, pane })));
+}
+
+/** The session and start-page panes of a layout (file panes left out), in reading order. */
 export function panesOf(node: LayoutNode): PaneNode[] {
-  return node.kind === "pane" ? [node] : node.children.flatMap(panesOf);
+  return leavesOf(node).filter((leaf): leaf is PaneNode => leaf.kind === "pane");
 }
 
 export function tabPanes(tab: Tab): PaneNode[] {
@@ -62,8 +87,9 @@ export function findTab(ws: Workspace, tabId: string): Tab | null {
   return ws.tabs.find((tab) => tab.id === tabId) ?? null;
 }
 
-export function locatePane(ws: Workspace, paneId: string): { tabId: string; pane: PaneNode } | null {
-  return allPanes(ws).find(({ pane }) => pane.id === paneId) ?? null;
+/** The leaf with id `paneId` (a session, start-page or file pane) and its tab. */
+export function locatePane(ws: Workspace, paneId: string): { tabId: string; pane: LeafNode } | null {
+  return allLeaves(ws).find(({ pane }) => pane.id === paneId) ?? null;
 }
 
 export function locateSession(ws: Workspace, sessionId: string): WorkspaceLocation | null {
@@ -71,13 +97,36 @@ export function locateSession(ws: Workspace, sessionId: string): WorkspaceLocati
   return hit ? { tabId: hit.tabId, paneId: hit.pane.id } : null;
 }
 
-/** A pane is depth 0; a split is one more than its deepest child. */
+/**
+ * An absolute path in the one form a file pane holds, like Node's `path.posix.normalize` (this
+ * module also runs in the browser): `//` and `/./` collapse, `..` is resolved (never above the
+ * root), and a trailing slash goes, except on the root. So `/a//b`, `/a/./b` and `/a/b/` are one
+ * file (decision 16 of docs/FILES.md). Lexical only: symlinks are the files API's to resolve.
+ */
+export function normalizeFilePath(path: string): string {
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+
+/** The file pane showing `path` (the same file once normalized, decision 16 of docs/FILES.md), or null. */
+export function locateFile(ws: Workspace, path: string): WorkspaceLocation | null {
+  const wanted = normalizeFilePath(path);
+  const hit = allLeaves(ws).find(({ pane }) => pane.kind === "file" && normalizeFilePath(pane.path) === wanted);
+  return hit ? { tabId: hit.tabId, paneId: hit.pane.id } : null;
+}
+
+/** A leaf is depth 0; a split is one more than its deepest child. */
 export function depthOf(node: LayoutNode): number {
-  return node.kind === "pane" ? 0 : 1 + Math.max(...node.children.map(depthOf));
+  return node.kind === "split" ? 1 + Math.max(...node.children.map(depthOf)) : 0;
 }
 
 function findSplit(node: LayoutNode, splitId: string): SplitNode | null {
-  if (node.kind === "pane") return null;
+  if (node.kind !== "split") return null;
   if (node.id === splitId) return node;
   for (const child of node.children) {
     const hit = findSplit(child, splitId);
@@ -150,15 +199,15 @@ export function presetSlotCount(preset: LayoutPreset): number {
 
 /** Which preset a tree is, by shape alone (sizes do not matter); null for anything else. */
 export function presetOf(root: LayoutNode): LayoutPreset | null {
-  if (root.kind === "pane") return "single";
+  if (root.kind !== "split") return "single";
   const kids = root.children;
-  const allPanesFlat = kids.every((c) => c.kind === "pane");
+  const allPanesFlat = kids.every(isLeaf);
   if (root.direction === "row" && allPanesFlat) return kids.length === 2 ? "columns-2" : kids.length === 3 ? "columns-3" : null;
   if (root.direction === "column" && allPanesFlat) return kids.length === 2 ? "rows-2" : null;
-  const isRowOfTwoPanes = (n: LayoutNode) => n.kind === "split" && n.direction === "row" && n.children.length === 2 && n.children.every((c) => c.kind === "pane");
+  const isRowOfTwoPanes = (n: LayoutNode) => n.kind === "split" && n.direction === "row" && n.children.length === 2 && n.children.every(isLeaf);
   if (root.direction === "column" && kids.length === 2 && kids.every(isRowOfTwoPanes)) return "grid-2x2";
-  const isColumnOfTwoPanes = (n: LayoutNode) => n.kind === "split" && n.direction === "column" && n.children.length === 2 && n.children.every((c) => c.kind === "pane");
-  if (root.direction === "row" && kids.length === 2 && kids[0].kind === "pane" && isColumnOfTwoPanes(kids[1])) return "one-beside-two";
+  const isColumnOfTwoPanes = (n: LayoutNode) => n.kind === "split" && n.direction === "column" && n.children.length === 2 && n.children.every(isLeaf);
+  if (root.direction === "row" && kids.length === 2 && isLeaf(kids[0]) && isColumnOfTwoPanes(kids[1])) return "one-beside-two";
   return null;
 }
 
@@ -196,17 +245,23 @@ export function buildPreset(preset: LayoutPreset, sessionIds: readonly (string |
 // Titles
 // ---------------------------------------------------------------------------------------------
 
+/** The last segment of a path: what a file pane is called ("/" for the root). */
+export function fileName(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed.slice(trimmed.lastIndexOf("/") + 1);
+}
+
 /**
- * The name a tab shows (decision 25): its own `title` if set; else the session's title, "A + B" for
- * two, "N sessions" past that, and "New session" when it holds only start pages. A session with no
- * title reads "Untitled".
+ * The name a tab shows (decision 25): its own `title` if set; else the names of what it shows, a
+ * session's title or a file's name, "A + B" for two, "N sessions" past that ("N panes" when files are
+ * among them), and "New session" when it holds only start pages. A session with no title reads "Untitled".
  */
 export function defaultTabTitle(tab: Tab, titleOf: (sessionId: string) => string | null): string {
   if (tab.title !== null) return tab.title;
-  const sessions = tabPanes(tab).flatMap((pane) => (pane.sessionId === null ? [] : [pane.sessionId]));
-  if (sessions.length === 0) return "New session";
-  if (sessions.length > 2) return `${sessions.length} sessions`;
-  return sessions.map((id) => titleOf(id) ?? "Untitled").join(" + ");
+  const shown = tabLeaves(tab).filter((leaf) => leaf.kind === "file" || leaf.sessionId !== null);
+  if (shown.length === 0) return "New session";
+  if (shown.length > 2) return shown.every((leaf) => leaf.kind === "pane") ? `${shown.length} sessions` : `${shown.length} panes`;
+  return shown.map((leaf) => (leaf.kind === "file" ? fileName(leaf.path) : (titleOf(leaf.sessionId!) ?? "Untitled"))).join(" + ");
 }
 
 /** Trimmed title, or null when cleared; too long is `invalid`. */
@@ -229,7 +284,7 @@ function assertMayRename(tab: Tab, source: "user" | "portal"): void {
 
 /** The tree without `paneId`; a split left with one child collapses into it; null when nothing is left. */
 function removePane(node: LayoutNode, paneId: string): LayoutNode | null {
-  if (node.kind === "pane") return node.id === paneId ? null : node;
+  if (node.kind !== "split") return node.id === paneId ? null : node;
   const kept: LayoutNode[] = [];
   const sizes: number[] = [];
   node.children.forEach((child, i) => {
@@ -248,14 +303,14 @@ function removePane(node: LayoutNode, paneId: string): LayoutNode | null {
  * `pane` on `edge` of `paneId`: a sibling when the pane's parent already runs that way (taking half
  * of the target's share), else a new two-way split in the target's place.
  */
-function insertBeside(node: LayoutNode, paneId: string, pane: PaneNode, edge: SplitEdge, ids: () => string): LayoutNode {
+function insertBeside(node: LayoutNode, paneId: string, pane: LeafNode, edge: SplitEdge, ids: () => string): LayoutNode {
   const direction = edge === "left" || edge === "right" ? "row" : "column";
   const before = edge === "left" || edge === "top";
-  if (node.kind === "pane") {
+  if (node.kind !== "split") {
     if (node.id !== paneId) return node;
     return { kind: "split", id: ids(), direction, children: before ? [pane, node] : [node, pane], sizes: [50, 50] };
   }
-  const index = node.children.findIndex((child) => child.kind === "pane" && child.id === paneId);
+  const index = node.children.findIndex((child) => isLeaf(child) && child.id === paneId);
   if (index >= 0 && node.direction === direction) {
     const children = [...node.children];
     const sizes = [...node.sizes];
@@ -269,19 +324,20 @@ function insertBeside(node: LayoutNode, paneId: string, pane: PaneNode, edge: Sp
   return { ...node, children: node.children.map((child) => insertBeside(child, paneId, pane, edge, ids)) };
 }
 
-function setPaneSession(node: LayoutNode, paneId: string, sessionId: string | null): LayoutNode {
-  if (node.kind === "pane") return node.id === paneId ? { ...node, sessionId } : node;
-  return { ...node, children: node.children.map((child) => setPaneSession(child, paneId, sessionId)) };
+/** The tree with leaf `paneId` swapped for `leaf` (same id), e.g. a start page becoming its session. */
+function setLeaf(node: LayoutNode, paneId: string, leaf: LeafNode): LayoutNode {
+  if (node.kind !== "split") return node.id === paneId ? leaf : node;
+  return { ...node, children: node.children.map((child) => setLeaf(child, paneId, leaf)) };
 }
 
 function setSplitSizes(node: LayoutNode, splitId: string, sizes: number[]): LayoutNode {
-  if (node.kind === "pane") return node;
+  if (node.kind !== "split") return node;
   if (node.id === splitId) return { ...node, sizes };
   return { ...node, children: node.children.map((child) => setSplitSizes(child, splitId, sizes)) };
 }
 
 function assertCaps(root: LayoutNode): void {
-  const count = panesOf(root).length;
+  const count = leavesOf(root).length;
   if (count > MAX_PANES_PER_TAB) throw new WorkspaceError("refused", `A tab holds at most ${MAX_PANES_PER_TAB} panes.`);
   if (depthOf(root) > MAX_SPLIT_DEPTH) throw new WorkspaceError("refused", `Splits nest at most ${MAX_SPLIT_DEPTH} deep.`);
 }
@@ -316,6 +372,10 @@ export function applyWorkspaceOp(ws: Workspace, op: WorkspaceOp, ids: () => stri
   switch (op.op) {
     case "open":
       return open(ws, op, ids, now);
+    case "open_file":
+      return openFile(ws, op, ids, now);
+    case "replace_file":
+      return replaceFile(ws, op);
     case "replace_pane":
       return replacePane(ws, op);
     case "arrange":
@@ -346,12 +406,23 @@ function open(ws: Workspace, op: Extract<WorkspaceOp, { op: "open" }>, ids: () =
     const location = locateSession(ws, op.sessionId);
     if (location) return { workspace: ws, location, changed: false };
   }
-  const pane: PaneNode = { kind: "pane", id: ids(), sessionId: op.sessionId };
-  if (!op.target) {
+  return openLeaf(ws, { kind: "pane", id: ids(), sessionId: op.sessionId }, op.target, ids, now);
+}
+
+/** `open` for a file (docs/FILES.md, decision 16): a path already open anywhere is focused, not opened twice. */
+function openFile(ws: Workspace, op: Extract<WorkspaceOp, { op: "open_file" }>, ids: () => string, now: number): ApplyResult {
+  const location = locateFile(ws, op.path);
+  if (location) return { workspace: ws, location, changed: false };
+  return openLeaf(ws, { kind: "file", id: ids(), path: normalizeFilePath(op.path) }, op.target, ids, now);
+}
+
+/** A new leaf in a tab of its own at the end, or on `target`'s edge (within the caps). */
+function openLeaf(ws: Workspace, pane: LeafNode, target: Extract<WorkspaceOp, { op: "open" }>["target"], ids: () => string, now: number): ApplyResult {
+  if (!target) {
     const tab = newTab(pane, ids, now);
     return { workspace: { ...ws, tabs: [...ws.tabs, tab] }, location: { tabId: tab.id, paneId: pane.id }, changed: true };
   }
-  const { tabId, paneId, edge } = op.target;
+  const { tabId, paneId, edge } = target;
   const hit = locatePane(ws, paneId);
   if (!hit || hit.tabId !== tabId) throw notFound("pane", paneId);
   const tabs = ws.tabs.map((tab) => {
@@ -367,11 +438,29 @@ function replacePane(ws: Workspace, op: Extract<WorkspaceOp, { op: "replace_pane
   const hit = locatePane(ws, op.paneId);
   if (!hit) throw notFound("pane", op.paneId);
   const location = { tabId: hit.tabId, paneId: op.paneId };
-  if (hit.pane.sessionId === op.sessionId) return { workspace: ws, location, changed: false };
-  // Decision 22: the session moves here; its old pane closes first.
-  const tabs = withoutSession(ws.tabs, op.sessionId).map((tab) =>
-    tab.id === hit.tabId ? { ...tab, root: setPaneSession(tab.root, op.paneId, op.sessionId) } : tab,
-  );
+  if (hit.pane.kind === "pane" && hit.pane.sessionId === op.sessionId) return { workspace: ws, location, changed: false };
+  // Decision 22: the session moves here; its old pane closes first. A file pane becomes a session pane.
+  const leaf: PaneNode = { kind: "pane", id: op.paneId, sessionId: op.sessionId };
+  const tabs = withoutSession(ws.tabs, op.sessionId).map((tab) => (tab.id === hit.tabId ? { ...tab, root: setLeaf(tab.root, op.paneId, leaf) } : tab));
+  return { workspace: { ...ws, tabs }, location, changed: true };
+}
+
+/**
+ * A file pane moves to another path in place (a listing's entry, "Reveal folder"). A path open in
+ * another file pane is not opened twice: no change, and that pane's location (decision 16 of
+ * docs/FILES.md), so the caller focuses it. Only a file pane navigates; a session pane is `invalid`.
+ */
+function replaceFile(ws: Workspace, op: Extract<WorkspaceOp, { op: "replace_file" }>): ApplyResult {
+  const hit = locatePane(ws, op.paneId);
+  if (!hit) throw notFound("pane", op.paneId);
+  if (hit.pane.kind !== "file") throw new WorkspaceError("invalid", `Pane ${op.paneId} is not a file pane.`);
+  const location = { tabId: hit.tabId, paneId: op.paneId };
+  const path = normalizeFilePath(op.path);
+  if (normalizeFilePath(hit.pane.path) === path) return { workspace: ws, location, changed: false };
+  const elsewhere = locateFile(ws, path);
+  if (elsewhere) return { workspace: ws, location: elsewhere, changed: false };
+  const leaf: FilePaneNode = { kind: "file", id: op.paneId, path };
+  const tabs = ws.tabs.map((tab) => (tab.id === hit.tabId ? { ...tab, root: setLeaf(tab.root, op.paneId, leaf) } : tab));
   return { workspace: { ...ws, tabs }, location, changed: true };
 }
 
@@ -399,17 +488,20 @@ function arrange(ws: Workspace, op: Extract<WorkspaceOp, { op: "arrange" }>, ids
   let tab: Tab;
   if (existing) {
     tab = { ...existing, ...named, root };
-    // Sessions the old tab held that found no slot each get a tab of their own, right after it.
-    const overflow = tabPanes(existing)
-      .flatMap((pane) => (pane.sessionId === null || listed.includes(pane.sessionId) ? [] : [pane.sessionId]))
-      .map((sessionId) => newTab({ kind: "pane", id: ids(), sessionId }, ids, now));
+    // Sessions the old tab held that found no slot, and its file panes (a preset is built from
+    // sessions), each get a tab of their own, right after it, in the order the tab held them.
+    const overflow = tabLeaves(existing).flatMap((leaf): Tab[] => {
+      if (leaf.kind === "file") return [newTab({ kind: "file", id: ids(), path: leaf.path }, ids, now)];
+      if (leaf.sessionId === null || listed.includes(leaf.sessionId)) return [];
+      return [newTab({ kind: "pane", id: ids(), sessionId: leaf.sessionId }, ids, now)];
+    });
     const index = tabs.findIndex((t) => t.id === existing.id);
     tabs = [...tabs.slice(0, index), tab, ...overflow, ...tabs.slice(index + 1)];
   } else {
     tab = { ...newTab(root, ids, now), ...named };
     tabs = [...tabs, tab];
   }
-  return { workspace: { ...ws, tabs }, location: { tabId: tab.id, paneId: panesOf(root)[0].id }, changed: true };
+  return { workspace: { ...ws, tabs }, location: { tabId: tab.id, paneId: leavesOf(root)[0].id }, changed: true };
 }
 
 function moveTab(ws: Workspace, op: Extract<WorkspaceOp, { op: "move_tab" }>): ApplyResult {
@@ -465,9 +557,17 @@ function invalid(message: string): WorkspaceError {
   return new WorkspaceError("invalid", message);
 }
 
+/** Longest path a file pane takes (Linux's PATH_MAX). */
+export const MAX_FILE_PATH = 4096;
+
+/** An absolute path, no NUL, within `MAX_FILE_PATH`: what a file pane holds (resolving `~` and relative paths is the client's, through the files API). */
+export function isFilePath(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("/") && value.length <= MAX_FILE_PATH && !value.includes("\0");
+}
+
 /**
  * Checks a stored or received workspace against every invariant (shape, unique ids, one pane per
- * session, the caps, sizes) and throws `WorkspaceError("invalid")` on the first violation. The server
+ * session and per file path, the caps, sizes) and throws `WorkspaceError("invalid")` on the first violation. The server
  * guards loaded rows with it.
  */
 export function validateWorkspace(ws: unknown): asserts ws is Workspace {
@@ -475,6 +575,7 @@ export function validateWorkspace(ws: unknown): asserts ws is Workspace {
   if (!Number.isInteger(ws.version) || (ws.version as number) < 0) throw invalid("version must be a non-negative integer.");
   const ids = new Set<string>();
   const sessions = new Set<string>();
+  const paths = new Set<string>();
   const claim = (id: unknown, what: string): void => {
     if (!isId(id)) throw invalid(`A ${what} needs an id.`);
     if (ids.has(id)) throw invalid(`Duplicate id ${id}.`);
@@ -491,7 +592,14 @@ export function validateWorkspace(ws: unknown): asserts ws is Workspace {
       }
       return 1;
     }
-    if (node.kind !== "split") throw invalid("A layout node is a pane or a split.");
+    if (node.kind === "file") {
+      claim(node.id, "pane");
+      if (!isFilePath(node.path)) throw invalid(`File pane ${node.id} needs an absolute path.`);
+      if (paths.has(node.path)) throw invalid(`${node.path} is open in two panes.`);
+      paths.add(node.path);
+      return 1;
+    }
+    if (node.kind !== "split") throw invalid("A layout node is a pane, a file pane or a split.");
     claim(node.id, "split");
     if (depth >= MAX_SPLIT_DEPTH) throw invalid(`Split ${node.id} nests deeper than ${MAX_SPLIT_DEPTH}.`);
     if (node.direction !== "row" && node.direction !== "column") throw invalid(`Split ${node.id} has a bad direction.`);
@@ -520,7 +628,7 @@ export function validateWorkspace(ws: unknown): asserts ws is Workspace {
   }
 }
 
-const OPS = new Set(["open", "replace_pane", "arrange", "close_tab", "close_pane", "move_tab", "rename_tab", "resize"]);
+const OPS = new Set(["open", "open_file", "replace_file", "replace_pane", "arrange", "close_tab", "close_pane", "move_tab", "rename_tab", "resize"]);
 const EDGES = new Set<SplitEdge>(["left", "right", "top", "bottom"]);
 
 /** Structural check of an op from JSON; answers a fresh object with only the known fields, or throws `invalid`. */
@@ -549,6 +657,20 @@ export function parseWorkspaceOp(input: unknown): WorkspaceOp {
         throw invalid("open target needs tabId, paneId and an edge (left, right, top, bottom).");
       }
       return { op: "open", sessionId, target: { tabId: target.tabId, paneId: target.paneId, edge: target.edge as SplitEdge } };
+    }
+    case "open_file": {
+      if (!isFilePath(input.path)) throw invalid(`open_file needs an absolute path (at most ${MAX_FILE_PATH} characters).`);
+      const target = input.target ?? null;
+      const path = normalizeFilePath(input.path);
+      if (target === null) return { op: "open_file", path };
+      if (!isRecord(target) || !isId(target.tabId) || !isId(target.paneId) || !EDGES.has(target.edge as SplitEdge)) {
+        throw invalid("open_file target needs tabId, paneId and an edge (left, right, top, bottom).");
+      }
+      return { op: "open_file", path, target: { tabId: target.tabId, paneId: target.paneId, edge: target.edge as SplitEdge } };
+    }
+    case "replace_file": {
+      if (!isFilePath(input.path)) throw invalid(`replace_file needs an absolute path (at most ${MAX_FILE_PATH} characters).`);
+      return { op: "replace_file", paneId: id("paneId"), path: normalizeFilePath(input.path) };
     }
     case "replace_pane":
       return { op: "replace_pane", paneId: id("paneId"), sessionId: id("sessionId") };

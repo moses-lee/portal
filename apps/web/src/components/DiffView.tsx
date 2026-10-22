@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { diffLines } from "diff";
+import { ToolFileLink } from "./files/FileLink";
 
 /** An edit's before/after as a line diff; very large changes show both versions instead. */
 export default function DiffView({
@@ -26,7 +27,7 @@ export default function DiffView({
   return (
     <div className="overflow-hidden rounded-lg border border-white/5">
       <div className="break-all border-b border-white/5 px-3 py-2 font-mono text-xs text-muted-foreground">
-        {path}
+        <ToolFileLink path={path} />
       </div>
       {changes ? (
         <pre className="max-h-96 overflow-auto py-2 text-[11px] leading-6">

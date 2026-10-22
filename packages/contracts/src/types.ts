@@ -8,6 +8,7 @@ import type {
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import type { GitInfo } from "./git-info.ts";
+import type { Attachment } from "./files.ts";
 
 export type AgentInfo = { id: string; name: string };
 
@@ -340,6 +341,8 @@ export type SessionMeta = {
 export type QueuedPrompt = {
   id: string;
   text: string;
+  /** Files sent with it (docs/FILES.md); absent when none. */
+  attachments?: Attachment[];
   /** Epoch ms it was queued. */
   queuedAt: number;
   /**
@@ -428,7 +431,7 @@ export type SessionProjectsEvent = {
 export type PortalEvent =
   /** One of the agent's updates, or a background task starting or ending. */
   | { type: "update"; update: SessionUpdate | BackgroundTaskUpdate }
-  | { type: "user"; text: string }
+  | { type: "user"; text: string; attachments?: Attachment[] }
   | { type: "turn_start" }
   | { type: "turn_end"; stopReason: StopReason }
   /** The agent asked for permission; the request stays open until a `permission_response` with the same `requestId`. */

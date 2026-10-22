@@ -17,7 +17,8 @@
     "./workspace": "./src/workspace.ts",
     "./search": "./src/search.ts",
     "./room": "./src/room.ts",
-    "./monitoring": "./src/monitoring.ts"
+    "./monitoring": "./src/monitoring.ts",
+    "./files": "./src/files.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.0",
