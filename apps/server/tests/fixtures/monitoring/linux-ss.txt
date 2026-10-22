@@ -1,0 +1,2 @@
+LISTEN 0      244        127.0.0.1:5433       0.0.0.0:*    users:(("docker-proxy",pid=2211,fd=4))
+LISTEN 0      244            [::1]:5433          [::]:*    users:(("docker-proxy",pid=2218,fd=4),("docker-proxy",pid=2211,fd=5))

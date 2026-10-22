@@ -5,11 +5,15 @@ import {
   MAIL_CAP,
   QUEUE_DRAWN,
   ROBOT_CAP,
+  NEEDLE_ANGLES,
   backgroundRuns,
+  barometerLevel,
   describeObject,
   hearthLevel,
+  jarState,
   lampState,
   mailLabel,
+  liveSummary,
   mailStack,
   placeRobots,
   robotLook,
@@ -105,6 +109,8 @@ const quiet = {
   busy: false,
   lamp: "dim",
   weather: null,
+  monitoring: null,
+  now: 0,
 };
 
 test("the mail tray stacks up to twelve envelopes, sealed ones for approvals, then a pile with a number", () => {
@@ -155,4 +161,91 @@ test("the window's card is the weather and its source, with nowhere to go", () =
   assert.equal(card.hint, null);
   assert.equal(card.action, null);
   assert.equal(card.credit, true);
+});
+
+const GIB = 2 ** 30;
+const now = Date.UTC(2026, 9, 21, 12);
+
+/** A stream `monitoring` summary: 16 GB of RAM, 460 GB of disk. */
+const reading = (overrides = {}) => ({
+  at: now,
+  pressure: "normal",
+  memory: { usedBytes: 11.25 * GIB, totalBytes: 16 * GIB },
+  swap: { usedBytes: 2.5 * GIB, totalBytes: 4 * GIB },
+  disk: { path: "/Users/moses/.portal", freeBytes: 120e9, totalBytes: 460e9, level: "normal" },
+  largest: [
+    { label: "monorepo-a", path: "/w/a", bytes: 88e9 },
+    { label: "monorepo-b", path: "/w/b", bytes: 41.2e9 },
+    { label: "Database", path: null, bytes: 3.4e9 },
+    { label: "/Users/moses/.codex", path: "/Users/moses/.codex", bytes: 2.1e9 },
+    { label: "Portal images", path: "/p/blobs", bytes: 60e6 },
+    { label: "Portal logs", path: "/p/logs", bytes: 2e6 },
+  ],
+  surveyedAt: now - 4 * 60_000,
+  ...overrides,
+});
+
+test("the barometer's needle reads the memory pressure, and rests without a reading", () => {
+  assert.equal(barometerLevel(null), null);
+  assert.equal(barometerLevel(reading()), "normal");
+  assert.equal(barometerLevel(reading({ pressure: "warning" })), "warning");
+  assert.equal(barometerLevel(reading({ pressure: "critical" })), "critical");
+  // Fair on the right, Change at the top, Stormy on the left; at rest straight down, off the scale.
+  assert.ok(NEEDLE_ANGLES.normal > 0 && NEEDLE_ANGLES.warning === 0 && NEEDLE_ANGLES.critical < 0);
+  assert.equal(NEEDLE_ANGLES.rest, Math.PI);
+});
+
+test("the jar fills to the used share of the disk, its lid the disk level; empty with no reading or no disk", () => {
+  assert.deepEqual(jarState(null), { fill: null, lid: null });
+  assert.deepEqual(jarState(reading()), { fill: 0.74, lid: "normal" });
+  assert.deepEqual(jarState(reading({ disk: { path: "/", freeBytes: 12e9, totalBytes: 460e9, level: "critical" } })), { fill: 0.97, lid: "critical" });
+  assert.deepEqual(jarState(reading({ disk: null })), { fill: null, lid: null });
+  // Out-of-range readings stay in the jar.
+  assert.deepEqual(jarState(reading({ disk: { path: "/", freeBytes: 500e9, totalBytes: 460e9, level: "normal" } })), { fill: 0, lid: "normal" });
+});
+
+test("the barometer's card: memory, swap and pressure, or that there is no reading yet; a click opens Monitoring", () => {
+  const card = describeObject({ kind: "barometer", id: "barometer" }, { ...quiet, monitoring: reading({ pressure: "warning" }), now });
+  assert.equal(card.title, "Barometer");
+  assert.deepEqual(card.lines, ["Memory: 11 GB used of 16 GB", "Swap: 2.5 GB used of 4 GB", "Pressure: warning"]);
+  assert.equal(card.hint, "Click to open Monitoring");
+  assert.equal(card.action, "Open Monitoring");
+  const noSwap = describeObject({ kind: "barometer", id: "barometer" }, { ...quiet, monitoring: reading({ swap: { usedBytes: 0, totalBytes: 0 } }), now });
+  assert.equal(noSwap.lines[1], "Swap: none in use");
+  const resting = describeObject({ kind: "barometer", id: "barometer" }, { ...quiet, now });
+  assert.match(resting.lines[0], /^No reading yet/);
+  assert.equal(resting.hint, "Click to open Monitoring");
+});
+
+test("the jar's card: free and total, the five largest items, when they were measured", () => {
+  const card = describeObject({ kind: "jar", id: "jar" }, { ...quiet, monitoring: reading(), now });
+  assert.equal(card.title, "Jar");
+  assert.deepEqual(card.lines, [
+    "120 GB free of 460 GB (74% used)",
+    "monorepo-a: 88 GB",
+    "monorepo-b: 41 GB",
+    "Database: 3.4 GB",
+    "/Users/moses/.codex: 2.1 GB",
+    "Portal images: 60 MB",
+    "Sizes measured 4 min ago",
+  ]);
+  assert.equal(card.hint, "Click to open Monitoring");
+  const low = describeObject({ kind: "jar", id: "jar" }, {
+    ...quiet,
+    monitoring: reading({ disk: { path: "/", freeBytes: 20e9, totalBytes: 460e9, level: "warning" }, largest: [], surveyedAt: null }),
+    now,
+  });
+  assert.deepEqual(low.lines, ["20 GB free of 460 GB (96% used)", "Below the warning level", "Folder sizes not measured yet"]);
+  const unread = describeObject({ kind: "jar", id: "jar" }, { ...quiet, monitoring: reading({ disk: null, surveyedAt: now - 10_000 }), now });
+  assert.equal(unread.lines[0], "The disk holding Portal's home could not be read");
+  assert.equal(unread.lines.at(-1), "Sizes measured just now");
+  assert.match(describeObject({ kind: "jar", id: "jar" }, { ...quiet, now }).lines[0], /^No reading yet/);
+});
+
+test("the data-room summary reports the barometer's level and the jar's fill and lid", () => {
+  assert.deepEqual(liveSummary({ ...quiet, monitoring: reading({ pressure: "critical" }) }).barometer, "critical");
+  assert.deepEqual(liveSummary({ ...quiet, monitoring: reading() }).jar, { fill: 0.74, lid: "normal" });
+  const resting = liveSummary(quiet);
+  assert.equal(resting.barometer, null);
+  assert.deepEqual(resting.jar, { fill: null, lid: null });
 });

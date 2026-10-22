@@ -69,7 +69,10 @@ export function describeFailure(kind: ScriptKind, settings: ScriptSettings, outc
   return `The "${label}" script ${reason}.${output ? `\n${output}` : ""}`;
 }
 
-export type ScriptExec = (command: string, opts: { cwd: string; timeoutMs: number; maxBytes: number; env?: Record<string, string>; shell?: string | true }) => Promise<ExecResult>;
+export type ScriptExec = (
+  command: string,
+  opts: { cwd: string; timeoutMs: number; maxBytes: number; env?: Record<string, string>; shell?: string | true; stopGroupOnExit?: boolean },
+) => Promise<ExecResult>;
 
 /** The shell scripts run in: the user's login shell, like Portal's terminals, so their usual syntax works. */
 export function scriptShell(env: NodeJS.ProcessEnv = childEnv()): string | true {
@@ -91,6 +94,8 @@ export async function runScript(kind: ScriptKind, settings: ScriptSettings, opts
     maxBytes: SCRIPT_OUTPUT_BYTES,
     env: { PORTAL_SCRIPT: kind, ...opts.env },
     shell: scriptShell(),
+    // Nothing a script starts outlives it (docs/MONITORING.md, "Process cleanup").
+    stopGroupOnExit: true,
   });
   const outcome: Extract<ScriptOutcome, { ran: true }> = {
     ran: true,

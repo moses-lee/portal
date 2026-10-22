@@ -9,6 +9,7 @@ import type { ServerConfig } from "./config.ts";
 import type { Db } from "./db/client.ts";
 import type { LifecycleSweeper } from "./lib/lifecycle-sweep.ts";
 import type { Presence } from "./lib/presence.ts";
+import type { MonitoringService } from "./monitoring/service.ts";
 import type { OrchestratorService } from "./orchestrator/service.ts";
 import type { ProjectsService } from "./projects/service.ts";
 import type { RoomService } from "./room/service.ts";
@@ -38,4 +39,6 @@ export interface AppContext {
   searchBackfill: MessageBackfill;
   /** The room behind Portal (docs/PALACE.md): environment and census; runs with or without the orchestrator. */
   room: RoomService;
+  /** Memory, disk and the processes that use them (docs/MONITORING.md); runs with or without the orchestrator. */
+  monitoring: MonitoringService;
 }

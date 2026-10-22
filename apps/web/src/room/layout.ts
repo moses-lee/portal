@@ -92,6 +92,12 @@ export const BOOKCASE = { depth: 0.38, height: 2.45 } as const;
 /** The mail tray's shelf on the back wall between the chimney breast and the door. */
 export const MAIL_SHELF = { x: 2.55, y: 1.0, z: ROOM.back + 0.13, width: 0.44, depth: 0.26 } as const;
 
+/** The barometer on the chimney breast, above the mantel: the centre of its round wooden back, and the radii of the back and of the dial. */
+export const BAROMETER = { x: ROOM.hearth.x, y: 1.8, z: ROOM.back + ROOM.hearth.depth, back: 0.2, dial: 0.155 } as const;
+
+/** The small pantry shelf on the back wall above the stove, and the jar on it (its centre along the shelf, radius and height). */
+export const PANTRY_SHELF = { x: 0.36, y: 1.74, z: ROOM.back + 0.1, width: 0.5, depth: 0.2, thickness: 0.035, jar: { x: 0.36, radius: 0.085, height: 0.23 } } as const;
+
 /** The bay window (a milestone): how far it stands out beyond the wall, and how its sides angle in. */
 export const BAY = { depth: 0.55, cheek: 0.45 } as const;
 

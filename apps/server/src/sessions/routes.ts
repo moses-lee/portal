@@ -523,6 +523,23 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
     }
   });
 
+  /**
+   * Stop the session's agent CLI now, as the idle stop does after its clock runs out
+   * (docs/MONITORING.md, "Idle CLI stop"): nothing is deleted, the link goes offline, and the next
+   * message, or opening the session, starts it again. 409 while the agent is not running or the
+   * session is doing something (a turn, a permission prompt, background work).
+   */
+  app.post<IdParams>("/api/sessions/:id/stop-cli", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    try {
+      await ctx.sessions.stopSessionCli(req.params.id);
+      return { stopped: true };
+    } catch (err) {
+      const message = errorMessage(err);
+      return reply.code(/^no such session$/i.test(message) ? 404 : 409).send({ error: message });
+    }
+  });
+
   /** Reconnect the agent to a persisted session; progress and the outcome arrive as `meta` on the stream. */
   app.post<IdParams>("/api/sessions/:id/attach", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;

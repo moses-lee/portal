@@ -78,6 +78,7 @@ for (const [name, make] of backends) {
       orchestrator: orchestratorDefaults,
       scripts: defaultScripts,
       sessions: defaultSettings.sessions,
+      monitoring: defaultSettings.monitoring,
     });
     assert.deepEqual(await stored(), { overrides: { gitActions: { prompts: { checks: "Look at CI" } } }, keys: {}, written: true });
     assert.deepEqual(await store.read(), result);
@@ -382,12 +383,12 @@ for (const [name, make] of backends) {
     const { open, stored } = await make(t);
     const store = open();
     const one = await store.patch({ sessions: { worktrees: { removeAfterHours: 1 } } });
-    assert.deepEqual(one.sessions, { worktrees: { removeAfterHours: 1 } });
+    assert.deepEqual(one.sessions, { ...defaultSettings.sessions, worktrees: { removeAfterHours: 1 } });
     assert.deepEqual((await stored()).overrides, { sessions: { worktrees: { removeAfterHours: 1 } } });
     assert.deepEqual(await open().read(), one);
 
     const both = await store.patch({ sessions: { worktrees: { removeAfterHours: 720 } } });
-    assert.deepEqual(both.sessions, { worktrees: { removeAfterHours: 720 } });
+    assert.deepEqual(both.sessions, { ...defaultSettings.sessions, worktrees: { removeAfterHours: 720 } });
     assert.deepEqual(await open().read(), both);
     // Another section's patch keeps them.
     assert.deepEqual((await store.patch({ gitActions: { prompts: { checks: "x" } } })).sessions, both.sessions);
@@ -410,6 +411,32 @@ for (const [name, make] of backends) {
     // A bad clock rejects the whole patch, other fields included.
     await rejects400(store.patch({ gitActions: { prompts: { checks: "bad" } }, sessions: { worktrees: { removeAfterHours: 0 } } }), /removeAfterHours/);
     assert.equal((await stored()).written, false, "nothing written for rejected patches");
+  });
+
+  test(`${name}: the idle CLI stop is stored field by field, reloads, and rejects bad values with 400 before writing`, async (t) => {
+    const { open, stored } = await make(t);
+    const store = open();
+    for (const [bad, pattern] of [
+      [{ afterMinutes: 9 }, /sessions\.idleStop\.afterMinutes must be a whole number of minutes between 10 and 10080/],
+      [{ afterMinutes: 10_081 }, /afterMinutes/], [{ afterMinutes: 60.5 }, /afterMinutes/], [{ afterMinutes: "60" }, /afterMinutes/],
+      [{ enabled: "no" }, /sessions\.idleStop\.enabled must be true or false/], [{ enabled: null }, /enabled/],
+    ]) {
+      await rejects400(store.patch({ sessions: { idleStop: bad } }), pattern);
+    }
+    await rejects400(store.patch({ sessions: { idleStop: [] } }), /sessions\.idleStop must be an object/);
+    assert.equal((await stored()).written, false, "nothing written for rejected patches");
+
+    const off = await store.patch({ sessions: { idleStop: { enabled: false } } });
+    assert.deepEqual(off.sessions.idleStop, { enabled: false, afterMinutes: 120 });
+    assert.deepEqual((await stored()).overrides, { sessions: { idleStop: { enabled: false } } });
+    const longer = await store.patch({ sessions: { idleStop: { afterMinutes: 10_080 } } });
+    assert.deepEqual(longer.sessions.idleStop, { enabled: false, afterMinutes: 10_080 });
+    assert.deepEqual(await open().read(), longer);
+    // The worktree clock beside it is its own field.
+    const both = await store.patch({ sessions: { worktrees: { removeAfterHours: 24 } } });
+    assert.deepEqual(both.sessions, { worktrees: { removeAfterHours: 24 }, idleStop: { enabled: false, afterMinutes: 10_080 } });
+    await store.patch({ sessions: { worktrees: { removeAfterHours: 72 }, idleStop: { enabled: true, afterMinutes: 120 } } });
+    assert.deepEqual((await stored()).overrides, {});
   });
 
   test(`${name}: the review and hung-threshold settings survive a fresh store`, async (t) => {
@@ -539,7 +566,7 @@ test("postgres: a hand-edited overrides row is read field by field, and keys in 
   });
   assert.ok(!("intervalMinutes" in settings.orchestrator) && !("idleIntervalMinutes" in settings.orchestrator), "the old tick intervals are dropped");
   assert.deepEqual(settings.scripts.preWorktreeDelete, { ...defaultScriptSettings, command: "make clean" });
-  assert.deepEqual(settings.sessions, { worktrees: { removeAfterHours: 96 } }, "retired tracking settings are discarded");
+  assert.deepEqual(settings.sessions, { ...defaultSettings.sessions, worktrees: { removeAfterHours: 96 } }, "retired tracking settings are discarded");
   assert.equal(await store.apiKey("openai"), null, "a key in the overrides row is never used");
 
   // The next change rewrites the row without the bad values.
@@ -621,6 +648,8 @@ test("parseSettingsPatch trims and returns only the sections given", () => {
   assert.deepEqual(Object.keys(parseSettingsPatch({ orchestrator: {} })), ["orchestrator"]);
   assert.deepEqual(parseSettingsPatch({ sessions: {} }), { sessions: {} });
   assert.deepEqual(parseSettingsPatch({ sessions: { tracked: {}, worktrees: { removeAfterHours: 24 }, other: 1 } }), { sessions: { worktrees: { removeAfterHours: 24 } } });
+  assert.deepEqual(parseSettingsPatch({ sessions: { idleStop: { enabled: true, afterMinutes: 45, other: 1 } } }), { sessions: { idleStop: { enabled: true, afterMinutes: 45 } } });
+  assert.deepEqual(parseSettingsPatch({ sessions: { idleStop: {} } }), { sessions: {} });
 });
 
 test("defaultSettingsFile honours PORTAL_HOME", () => {
@@ -655,6 +684,13 @@ test("parseSettingsFile (for the importer) gives up only on non-JSON and non-obj
   });
   assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { tracked: { untrackAfterHours: 24 }, worktrees: { removeAfterHours: 721 } } })), {});
   assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { tracked: "x", worktrees: { removeAfterHours: 2.5 } } })), {});
+  // Each idle stop field on its own: a bad one falls back to its default, a good one beside it stays.
+  assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { idleStop: { enabled: "no", afterMinutes: 30 } } })), {
+    sessions: { idleStop: { afterMinutes: 30 } },
+  });
+  assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, sessions: { idleStop: { enabled: false, afterMinutes: 5 } } })), {
+    sessions: { idleStop: { enabled: false } },
+  });
   assert.deepEqual(parseSettingsFile(JSON.stringify({ version: 1, orchestrator: { reviews: { answerReadOnly: false }, stalls: { hungAfterMinutes: 30 } } })), {
     orchestrator: { reviews: { answerReadOnly: false }, stalls: { hungAfterMinutes: 30 } },
   });
@@ -676,4 +712,43 @@ test("a PATCH checks the hung threshold: whole minutes from 1 to a day", () => {
     assert.throws(() => parseSettingsPatch({ orchestrator: { stalls: { hungAfterMinutes: bad } } }), /hungAfterMinutes must be a whole number of minutes between 1 and 1440/, String(bad));
   }
   assert.throws(() => parseSettingsPatch({ orchestrator: { stalls: 5 } }), /orchestrator.stalls must be an object/);
+});
+
+test("a PATCH checks the monitoring section: whole-GB levels, absolute or ~ folders (expanded), at most 20", () => {
+  const home = "/Users/me";
+  assert.deepEqual(parseSettingsPatch({ monitoring: { disk: { warnFreeGb: 40 } } }, { home }), { monitoring: { disk: { warnFreeGb: 40 } } });
+  assert.deepEqual(
+    parseSettingsPatch({ monitoring: { watchedFolders: [" ~/.codex ", "/Users/me/.codex", "~", "/opt/cache"] } }, { home }),
+    { monitoring: { watchedFolders: ["/Users/me/.codex", "/Users/me", "/opt/cache"] } },
+    "trimmed, ~ expanded against the server's home, repeats dropped",
+  );
+  assert.deepEqual(parseSettingsPatch({ monitoring: { watchedFolders: [] } }, { home }), { monitoring: { watchedFolders: [] } });
+  for (const bad of [0, 10_001, 2.5, "30", null]) {
+    assert.throws(() => parseSettingsPatch({ monitoring: { disk: { criticalFreeGb: bad } } }), /monitoring.disk.criticalFreeGb must be a whole number of GB between 1 and 10000/, String(bad));
+  }
+  assert.throws(() => parseSettingsPatch({ monitoring: { watchedFolders: ["relative/path"] } }), /must be an absolute path or start with ~\//);
+  assert.throws(() => parseSettingsPatch({ monitoring: { watchedFolders: [42] } }), /must be an absolute path/);
+  assert.throws(() => parseSettingsPatch({ monitoring: { watchedFolders: "/a" } }), /must be a list of folders/);
+  assert.throws(() => parseSettingsPatch({ monitoring: { watchedFolders: Array.from({ length: 21 }, (_, i) => `/f${i}`) } }), /At most 20 watched folders/);
+  assert.throws(() => parseSettingsPatch({ monitoring: { disk: 5 } }), /monitoring.disk must be an object/);
+  assert.throws(() => parseSettingsPatch({ monitoring: [] }), /monitoring must be an object/);
+});
+
+test("stored monitoring overrides are read leniently", () => {
+  assert.deepEqual(parseStoredOverrides({ monitoring: { disk: { warnFreeGb: 50, criticalFreeGb: "x" }, watchedFolders: ["/a", "rel", "/a"] } }), {
+    monitoring: { disk: { warnFreeGb: 50 }, watchedFolders: ["/a"] },
+  });
+  assert.deepEqual(parseStoredOverrides({ monitoring: { disk: { warnFreeGb: 0 }, watchedFolders: [] } }), {});
+});
+
+test("the store keeps the disk warning level above the critical one, across patches", async () => {
+  const store = createMemorySettingsStore();
+  await rejects400(store.patch({ monitoring: { disk: { warnFreeGb: 15 } } }), /warning level \(15 GB\) must be above the critical level \(15 GB\)/);
+  await rejects400(store.patch({ monitoring: { disk: { warnFreeGb: 10, criticalFreeGb: 20 } } }), /must be above the critical level/);
+  const raised = await store.patch({ monitoring: { disk: { criticalFreeGb: 25 } } });
+  assert.deepEqual(raised.monitoring.disk, { warnFreeGb: 30, criticalFreeGb: 25 });
+  await rejects400(store.patch({ monitoring: { disk: { warnFreeGb: 25 } } }), /must be above the critical level \(25 GB\)/, "checked against what is stored");
+  const both = await store.patch({ monitoring: { disk: { warnFreeGb: 5, criticalFreeGb: 2 }, watchedFolders: ["/x"] } });
+  assert.deepEqual(both.monitoring, { disk: { warnFreeGb: 5, criticalFreeGb: 2 }, watchedFolders: ["/x"] });
+  assert.deepEqual((await store.read()).monitoring, both.monitoring);
 });

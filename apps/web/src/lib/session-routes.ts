@@ -119,14 +119,14 @@ export function isWorkspacePath(pathname: string): boolean {
   return isTabPath(pathname) || isResolverPath(pathname);
 }
 
-export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system";
-export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system"];
+export type PortalView = "chat" | "attention" | "watches" | "activity" | "memory" | "system" | "monitoring";
+export const portalViews: readonly PortalView[] = ["chat", "attention", "watches", "activity", "memory", "system", "monitoring"];
 
 /** Where a Portal path points; unknown paths land on the main thread. */
 export type PortalLocation =
   | { view: "chat"; threadId: string }
   | { view: "memory"; entityId: string | null; runId?: string | null }
-  | { view: "attention" | "watches" | "activity" | "system" };
+  | { view: "attention" | "watches" | "activity" | "system" | "monitoring" };
 
 function decodeSegment(segment: string): string | null {
   try {
@@ -152,7 +152,7 @@ function routeOf(pathname: string): PortalLocation {
     return { view: "memory", entityId: null, runId: segments[2] ? decodeSegment(segments[2]) : null };
   }
   if (head === "memory" && segments.length <= 2) return { view: "memory", entityId: second ? decodeSegment(second) : null };
-  if ((head === "attention" || head === "watches" || head === "activity" || head === "system") && segments.length === 1) return { view: head };
+  if ((head === "attention" || head === "watches" || head === "activity" || head === "system" || head === "monitoring") && segments.length === 1) return { view: head };
   return { view: "chat", threadId: "main" };
 }
 
@@ -190,5 +190,5 @@ export function isPalaceLinkPath(pathname: string): boolean {
 
 /** Destinations supported in stored Agent replies and item bodies; these never become browser routes. */
 export function isSurfaceLinkPath(pathname: string): boolean {
-  return /^(?:\/|\/(?:attention|watches|activity|system|palace|terminal)\/?|\/threads\/[^/]+\/?|\/memory(?:\/[^/]+|\/curation(?:\/[^/]+)?)?\/?)$/.test(pathname);
+  return /^(?:\/|\/(?:attention|watches|activity|system|monitoring|palace|terminal)\/?|\/threads\/[^/]+\/?|\/memory(?:\/[^/]+|\/curation(?:\/[^/]+)?)?\/?)$/.test(pathname);
 }

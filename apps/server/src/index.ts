@@ -1,8 +1,12 @@
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
+import { createRotatingLog, teeProcessOutput } from "./lib/log-file.ts";
 
 const config = loadConfig();
+// Everything the server prints also goes to <portalHome>/logs/server.log (docs/MONITORING.md).
+teeProcessOutput(createRotatingLog(path.join(config.portalHome, "logs", "server.log")));
 
 // Node ends the process on an unhandled rejection, which would take every agent and terminal with
 // it. Log instead and keep serving, as Next's server did for the single app: the failed operation
@@ -17,7 +21,8 @@ process.on("unhandledRejection", logError("Unhandled promise rejection"));
 process.on("uncaughtException", logError("Uncaught exception"));
 
 try {
-  app = await buildApp({ config, logger: true });
+  // Through process.stdout, not pino's own file descriptor, so the log file gets it too.
+  app = await buildApp({ config, logger: { stream: process.stdout } });
 } catch (err) {
   // Most often another server holds the database, or the legacy import failed; the message says which.
   console.error(`Portal server did not start: ${err instanceof Error ? err.message : String(err)}`);

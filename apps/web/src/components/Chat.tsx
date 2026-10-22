@@ -1147,7 +1147,7 @@ function ChatShell() {
           </div>
           {agentVisited && <AgentPage open={surface?.view === "chat"} onClose={closeSurface} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} unread={agentInbox.unread} />}
           {surface && surface.view !== "chat" ? <div key={surface.view} data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="page-overlay">
-            {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} />}
+            {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} projects={projects} onRemoveProject={sidebarRemove} />}
           </div> : null}
         </div>
         {/* The shell's third panel, beside the centre rather than in it; hidden under a page overlay as before. */}

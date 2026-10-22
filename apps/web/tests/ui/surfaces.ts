@@ -1,12 +1,13 @@
 import { expect, type Page } from "@playwright/test";
 
-type PageView = "attention" | "watches" | "activity" | "memory" | "system";
+type PageView = "attention" | "watches" | "activity" | "memory" | "system" | "monitoring";
 const titles: Record<PageView, string> = {
   attention: "Needs your attention",
   watches: "Watches",
   activity: "Activity",
   memory: "Memory",
   system: "System",
+  monitoring: "Monitoring",
 };
 
 /** Open a page through the same sidebar controls the user has, preserving the workspace URL. */

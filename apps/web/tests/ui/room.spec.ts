@@ -374,7 +374,7 @@ test("live objects: a session waiting on approval puts its robot by the door, an
         .filter((key) => !accumulated.test(key))
         .sort(),
     )
-    .toEqual(["hearth:hearth", "kettle:kettle", "lamp:lamp", "mail:mail", "robot:s1", "robot:s2", "window:window"]);
+    .toEqual(["barometer:barometer", "hearth:hearth", "jar:jar", "kettle:kettle", "lamp:lamp", "mail:mail", "robot:s1", "robot:s2", "window:window"]);
   await page.screenshot({ path: info.outputPath("live-objects.png") });
 
   // The tray's card says what is in it; a click opens Needs you.

@@ -295,7 +295,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `threads`, `approvals`, `intents`, `workspace`, and `room` (left out when the room cannot be read), then forwards every runtime event as
+   * `items`, `threads`, `approvals`, `intents`, `workspace`, `room` (left out when the room cannot be read), and `monitoring` (once there is a sample), then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter cadence of jobs that have an idle one.
    */
@@ -313,11 +313,13 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
         return null;
       }),
     ]);
+    const monitoring = ctx.monitoring.summary();
     const opening: OrchestratorEvent[] = [
       { type: "status", status }, { type: "items", items }, { type: "threads", threads },
       { type: "approvals", approvals }, { type: "intents", intents }, { type: "workspace", workspace },
       { type: "queue", queue: runtime.queue() },
       ...(room ? [{ type: "room" as const, state: room }] : []),
+      ...(monitoring ? [{ type: "monitoring" as const, summary: monitoring }] : []),
     ];
     const stream = openEventStream(req, reply);
     if (stream.closed) return reply;

@@ -23,11 +23,16 @@ export type ActivityActor = "user" | "agent" | "system";
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
  * approval.requested · approval.decided · approval.executed · world.refreshed ·
- * session.renamed · worktree.kept · worktree.removed_idle · workspace.opened ·
+ * session.renamed · session.cli_stopped_idle · worktree.kept · worktree.removed_idle · workspace.opened ·
  * workspace.closed · workspace.arranged · workspace.renamed · room.expanded
  *
  * `session.renamed` (the orchestrator's `rename_session`) carries `refs.sessionId` and
  * `detail.from`, `detail.to`.
+ *
+ * `session.cli_stopped_idle` (actor "system") is logged for every automatic idle CLI stop
+ * (docs/MONITORING.md): the session's agent was let go after `detail.idleMinutes` idle (the setting
+ * was `detail.afterMinutes`), with `detail.agentId`; it carries `refs.sessionId` and `refs.projectId`.
+ * A stop someone asked for is not logged.
  *
  * `worktree.kept` and `worktree.removed_idle` come from the lifecycle sweep (an idle worktree project
  * kept, with `detail.reason`, logged only when the reason changes; or removed, with `detail.branch`

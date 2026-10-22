@@ -323,6 +323,89 @@ test("worktrees: create, reuse, list branches, and delete with the pre-deletion 
   assert.deepEqual(runs, Array(2).fill(`feat/x ${wtPath} ${main} ${wtPath}`), "runs in the worktree project's folder, again on the forced retry");
 });
 
+test("POST /api/projects/:id/cleanup-script runs the pre-deletion script on a worktree that stays, marked manual", async (t) => {
+  const { app, root, call, useScript, sessions } = await setup(t);
+  const main = repo(root);
+  const project = (await call("POST", "/api/projects", { path: main })).json();
+  const wt = (await call("POST", `/api/projects/${project.id}/worktrees`, { branch: "feat/c", create: true })).json().project;
+  const run = (id, headers) => call("POST", `/api/projects/${id}/cleanup-script`, undefined, headers);
+
+  assert.equal((await run(wt.id, EVIL)).statusCode, 403);
+  assert.deepEqual((await run("nope")).json(), { error: "Unknown project." });
+  assert.equal((await run("nope")).statusCode, 404);
+  const plain = await run(project.id);
+  assert.equal(plain.statusCode, 400);
+  assert.deepEqual(plain.json(), { error: "This project is not a worktree." });
+  const none = await run(wt.id);
+  assert.equal(none.statusCode, 409);
+  assert.match(none.json().error, /No cleanup script is set/);
+
+  useScript({ command: 'echo "$PORTAL_SCRIPT_TRIGGER $PORTAL_SCRIPT $PORTAL_BRANCH $PORTAL_WORKTREE_PATH $PORTAL_REPO_ROOT $(pwd)"' });
+  const ran = await run(wt.id);
+  assert.equal(ran.statusCode, 200, ran.body);
+  const result = ran.json();
+  assert.deepEqual({ ...result, durationMs: undefined }, {
+    ran: true, ok: true, code: 0, stdout: `manual preWorktreeDelete feat/c ${wt.path} ${main} ${wt.path}\n`, stderr: "", timedOut: false, durationMs: undefined,
+  });
+  assert.equal(typeof result.durationMs, "number");
+  assert.ok(existsSync(wt.path), "the worktree stays");
+  assert.ok(appContext(app).projects.get(wt.id), "and so does the project");
+
+  // A failing script is a result, whatever its abort setting, not an error.
+  useScript({ command: "echo nope >&2; exit 3", abortOnFailure: false });
+  const failed = await run(wt.id);
+  assert.equal(failed.statusCode, 200, failed.body);
+  assert.deepEqual({ ok: failed.json().ok, code: failed.json().code, stderr: failed.json().stderr }, { ok: false, code: 3, stderr: "nope\n" });
+
+  // A busy session in the worktree holds it back.
+  sessions.push({ ...session("s1", wt.id, wt.path), idleSince: null });
+  const busy = await run(wt.id);
+  assert.equal(busy.statusCode, 409);
+  assert.match(busy.json().error, /busy/);
+  sessions[0].idleSince = 1;
+  assert.equal((await run(wt.id)).statusCode, 200);
+});
+
+test("a worktree's removal and its cleanup script never run at once: either refuses the other with a 409", async (t) => {
+  const { root, call, useScript } = await setup(t);
+  const main = repo(root);
+  const project = (await call("POST", "/api/projects", { path: main })).json();
+  const wt = (await call("POST", `/api/projects/${project.id}/worktrees`, { branch: "feat/busy", create: true })).json().project;
+  // The script (cleanup, and the removal's pre-deletion step) holds until the test lets it go.
+  const started = path.join(root, "started");
+  const go = path.join(root, "go");
+  useScript({ command: `touch "${started}"; while [ ! -f "${go}" ]; do sleep 0.05; done; rm -f "${started}" "${go}"` });
+  const waitFor = async (file) => {
+    for (const deadline = Date.now() + 5_000; !existsSync(file);) {
+      assert.ok(Date.now() < deadline, `Timed out waiting for ${file}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  const cleanup = () => call("POST", `/api/projects/${wt.id}/cleanup-script`);
+  const remove = () => call("DELETE", `/api/projects/${wt.id}?worktree=delete`);
+
+  const cleaning = cleanup();
+  await waitFor(started);
+  const removal = await remove();
+  assert.equal(removal.statusCode, 409);
+  assert.match(removal.json().error, /cleanup script is running/);
+  const twice = await cleanup();
+  assert.equal(twice.statusCode, 409);
+  assert.match(twice.json().error, /cleanup script is running/);
+  writeFileSync(go, "");
+  assert.equal((await cleaning).statusCode, 200);
+  assert.ok(existsSync(wt.path), "the refused removal removed nothing");
+
+  const removing = remove();
+  await waitFor(started);
+  const refused = await cleanup();
+  assert.equal(refused.statusCode, 409);
+  assert.match(refused.json().error, /being removed/);
+  writeFileSync(go, "");
+  assert.equal((await removing).statusCode, 204);
+  assert.equal(existsSync(wt.path), false);
+});
+
 test("github routes read the checkout: summary, a bad log cursor, and a fast-forward pull", async (t) => {
   const { root, call } = await setup(t);
   const main = repo(root);

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentInfo } from "@portal/contracts/types";
 import type { AppContext } from "../context.ts";
 import { type AcpRuntime, createAcpRuntime } from "../lib/acp-runtime.ts";
+import { createAdapterGroupFile } from "../lib/adapter-groups.ts";
 import { type AgentDefinition, agents as builtInAgents } from "../lib/agents.ts";
 import { type BlobStore, createBlobStore } from "../lib/blobs.ts";
 import { createPgSessionStore } from "./pg-session-store.ts";
@@ -15,6 +16,8 @@ export type SessionsOptions = {
   recentEvents?: number;
   /** Where tool-result images are kept; defaults to `<portalHome>/blobs`. Null keeps them inline (tests). */
   blobsDir?: string | null;
+  /** Where the adapters' process groups are listed; defaults to `<portalHome>/run/adapters.json`. Null keeps no list. */
+  adapterGroupsFile?: string | null;
 };
 
 export type SessionsService = AcpRuntime & {
@@ -30,11 +33,15 @@ export function createSessionsService(ctx: Pick<AppContext, "db" | "log"> & Part
   const agents = options.agents ?? builtInAgents;
   const blobsDir = options.blobsDir === undefined ? (ctx.config ? path.join(ctx.config.portalHome, "blobs") : null) : options.blobsDir;
   const blobs = blobsDir ? createBlobStore(blobsDir) : null;
+  const groupsFile = options.adapterGroupsFile === undefined
+    ? (ctx.config ? path.join(ctx.config.portalHome, "run", "adapters.json") : null)
+    : options.adapterGroupsFile;
   const runtime = createAcpRuntime(agents, {
     store: createPgSessionStore({ db: ctx.db }),
     initializeTimeoutMs: options.initializeTimeoutMs,
     recentEvents: options.recentEvents,
     blobs,
+    adapterGroups: groupsFile ? createAdapterGroupFile(groupsFile, (message) => ctx.log.warn(message)) : null,
   });
   return {
     ...runtime,

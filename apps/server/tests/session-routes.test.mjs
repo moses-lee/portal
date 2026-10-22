@@ -946,6 +946,42 @@ test("stopping a background task forwards the agent's stop request; unknown sess
   assert.deepEqual(nothing.json(), { error: "The agent had nothing to stop." });
 });
 
+test("POST /api/sessions/:id/stop-cli lets an idle agent go now; the next prompt resumes it; busy, offline, and unknown sessions are refused", async (t) => {
+  const { app, messages } = await setup(t);
+  const [idle, busy] = [await createSession(app), await createSession(app)];
+  const detail = async (id) => (await app.inject({ method: "GET", url: `/api/sessions/${id}` })).json();
+  const stopCli = (id, headers) => app.inject({ method: "POST", url: `/api/sessions/${id}/stop-cli`, headers });
+  const prompt = (id, text) => app.inject({ method: "POST", url: `/api/sessions/${id}/prompt`, payload: { text } });
+  assert.equal((await prompt(idle.id, "name:Idle")).statusCode, 202);
+  await until(async () => !(await detail(idle.id)).busy, "the first turn to end");
+  assert.equal((await prompt(busy.id, "tool")).statusCode, 202);
+  await until(async () => (await detail(busy.id)).busy, "the open turn");
+
+  assert.equal((await stopCli(idle.id, EVIL)).statusCode, 403);
+  const stopped = await stopCli(idle.id);
+  assert.equal(stopped.statusCode, 200, stopped.body);
+  assert.deepEqual(stopped.json(), { stopped: true });
+  assert.deepEqual((await detail(idle.id)).link, { status: "offline", error: null });
+  assert.equal(messages("session/close").length, 1);
+
+  const again = await stopCli(idle.id);
+  assert.equal(again.statusCode, 409);
+  assert.match(again.json().error, /not running/);
+  const refused = await stopCli(busy.id);
+  assert.equal(refused.statusCode, 409);
+  assert.match(refused.json().error, /busy/);
+  assert.deepEqual((await detail(busy.id)).link, { status: "live" });
+  const unknown = await stopCli("nope");
+  assert.equal(unknown.statusCode, 404);
+  assert.match(unknown.json().error, /no such session/i);
+
+  // The next prompt reattaches the agent and runs.
+  assert.equal((await prompt(idle.id, "name:Back")).statusCode, 202);
+  await until(async () => (await detail(idle.id)).title === "Back" && !(await detail(idle.id)).busy, "the resumed turn");
+  assert.deepEqual((await detail(idle.id)).link, { status: "live" });
+  assert.equal(messages("session/resume").length, 1);
+});
+
 test("emptying Removed keeps a record removed mid-purge whose sessions are still there", async () => {
   const projects = createMemoryProjectsStore({
     projects: [{ id: "busy", name: "busy", path: "/busy", createdAt: 1 }],

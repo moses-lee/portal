@@ -8,7 +8,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { appContext, buildApp } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import { DIRTY_REASON, OPEN_TERMINAL_REASON, STATUS_FAILED_REASON, createLifecycleSweeper, runLifecycleSweep } from "../src/lib/lifecycle-sweep.ts";
-import { RemovalSkipped, removeProject } from "../src/projects/remove-worktree.ts";
+import { RemovalSkipped, WorktreeBusy, removeProject, withWorktreeWork } from "../src/projects/remove-worktree.ts";
 import { createPgSessionStore } from "../src/sessions/pg-session-store.ts";
 import { fakeDeps, fakeSettings, fakeTimers, sessionMeta } from "./fixtures/orchestrator-fakes.mjs";
 import { temporaryDatabase } from "./helpers/db.mjs";
@@ -272,6 +272,38 @@ test("the recheck hook cancels a removal after the pre-delete script when the pr
   assert.deepEqual(state.activity, []);
   assert.equal(state.projects[0].keptReason, null);
   assert.deepEqual(state.errors, []);
+});
+
+test("a worktree whose cleanup script is running is left for the next sweep, not kept", async () => {
+  let attempts = 0;
+  const { deps, state } = fakeSweep({
+    projects: [worktreeProject("p")], sessions: [session("s", "p", ago(100))],
+    remove: async () => { attempts++; throw new WorktreeBusy("cleanup"); },
+  });
+  const failedAt = new Map();
+  assert.deepEqual(await runLifecycleSweep(deps, { failedAt }), { removed: 0, kept: 0 });
+  assert.equal(state.projects[0].keptReason, null);
+  assert.deepEqual(state.activity, []);
+  assert.equal(failedAt.size, 0, "not marked failed: the next sweep tries again");
+  await runLifecycleSweep(deps, { failedAt });
+  assert.equal(attempts, 2);
+});
+
+test("removeProject refuses a worktree with work under way, and the work it holds refuses the rest", async () => {
+  const io = {
+    getProject: () => undefined, gitRoot: async () => null, mainWorktreeOf: async () => "/", runScript: async () => {},
+    removeWorktree: async () => ({ branchDeleted: false }), hasSessions: () => false, removeProject: async () => {},
+  };
+  const project = worktreeProject("busy", { path: "/nonexistent/busy" });
+  let release;
+  const cleanup = withWorktreeWork("busy", "cleanup", () => new Promise((resolve) => { release = resolve; }));
+  await assert.rejects(removeProject(io, project, { deleteWorktree: true }), (err) => err instanceof WorktreeBusy && err.status === 409);
+  await assert.rejects(withWorktreeWork("busy", "cleanup", async () => {}), /cleanup script is running/);
+  release();
+  await cleanup;
+  // Free again; and an entry-only removal (no folder) never takes the lock.
+  await removeProject(io, project, { deleteWorktree: true });
+  await removeProject(io, project);
 });
 
 test("removeProject runs io.recheck after the pre-delete script and before git", async (t) => {

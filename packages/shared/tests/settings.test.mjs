@@ -3,13 +3,20 @@ import test from "node:test";
 import { defaultOrchestratorSettings, orchestratorProviders } from "@portal/contracts/orchestrator";
 import {
   applySettingsPatch,
+  cleanWatchedFolders,
+  defaultMonitoringSettings,
   defaultSessionsSettings,
   defaultSettings,
   gitActionKinds,
   isClockTime,
+  isDiskLevelGb,
+  idleStopLimits,
+  isIdleStopMinutes,
   isLifecycleHours,
   isOrchestratorProvider,
+  isWatchedFolder,
   mergeSettings,
+  monitoringLimits,
   orchestratorLimits,
   sessionsLimits,
   settingsOverrides,
@@ -55,6 +62,7 @@ test("mergeSettings fills in defaults and ignores blank overrides", () => {
     orchestrator: orchestratorDefaults,
     scripts: defaultScripts,
     sessions: defaultSessionsSettings,
+    monitoring: defaultMonitoringSettings,
   });
   // Non-string values are treated as absent.
   assert.deepEqual(mergeSettings({ gitActions: { prompts: { checks: 42 } } }), defaultSettings);
@@ -297,7 +305,7 @@ test("isLifecycleHours accepts whole hours from 1 to 720 only", () => {
 });
 
 test("worktree retention defaults to 72h, merges only whole hours in range, and is written only when different", () => {
-  assert.deepEqual(defaultSettings.sessions, { worktrees: { removeAfterHours: 72 } });
+  assert.deepEqual(defaultSettings.sessions.worktrees, { removeAfterHours: 72 });
   // Stored overrides from before the section existed get the defaults.
   assert.deepEqual(mergeSettings({ gitActions: { prompts: { checks: "x" } } }).sessions, defaultSessionsSettings);
   assert.deepEqual(mergeSettings({ sessions: {} }).sessions, defaultSessionsSettings);
@@ -305,22 +313,98 @@ test("worktree retention defaults to 72h, merges only whole hours in range, and 
 
   // Stored settings from the retired tracked-sessions feature no longer surface or persist.
   assert.deepEqual(mergeSettings({ sessions: { tracked: { untrackAfterHours: 1 } } }).sessions, defaultSessionsSettings);
-  assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: 720 } } }).sessions, { worktrees: { removeAfterHours: 720 } });
+  assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: 720 } } }).sessions, { ...defaultSessionsSettings, worktrees: { removeAfterHours: 720 } });
   for (const bad of [0, 721, 2.5, "24", null]) {
     assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: bad } } }).sessions, defaultSessionsSettings, String(bad));
   }
   assert.deepEqual(mergeSettings({ sessions: { worktrees: null } }).sessions, defaultSessionsSettings);
 
   const changed = applySettingsPatch(defaultSettings, { sessions: { worktrees: { removeAfterHours: 24 } } });
-  assert.deepEqual(changed.sessions, { worktrees: { removeAfterHours: 24 } });
+  assert.deepEqual(changed.sessions, { ...defaultSessionsSettings, worktrees: { removeAfterHours: 24 } });
   assert.deepEqual(settingsOverrides(changed), { sessions: { worktrees: { removeAfterHours: 24 } } });
   assert.deepEqual(mergeSettings(settingsOverrides(changed)), changed);
   // A patch about another field or section keeps it; a bad value in a patch leaves the current one.
   const both = applySettingsPatch(changed, { sessions: { worktrees: { removeAfterHours: 168 } } });
-  assert.deepEqual(both.sessions, { worktrees: { removeAfterHours: 168 } });
+  assert.deepEqual(both.sessions, { ...defaultSessionsSettings, worktrees: { removeAfterHours: 168 } });
   assert.deepEqual(applySettingsPatch(both, { orchestrator: { model: "claude-x" } }).sessions, both.sessions);
   assert.deepEqual(applySettingsPatch(both, { sessions: { worktrees: { removeAfterHours: 0 } } }).sessions, both.sessions);
   // Back to the default value means no override.
   const reset = applySettingsPatch(both, { sessions: { worktrees: { removeAfterHours: 72 } } });
   assert.deepEqual(settingsOverrides(reset), {});
+});
+
+test("the idle CLI stop defaults to on after 120 minutes, merges each field on its own, and is written only when different", () => {
+  assert.deepEqual(defaultSettings.sessions.idleStop, { enabled: true, afterMinutes: 120 });
+  assert.deepEqual(idleStopLimits, { minMinutes: 10, maxMinutes: 10_080 });
+  for (const good of [10, 120, 10_080]) assert.equal(isIdleStopMinutes(good), true, String(good));
+  for (const bad of [0, 9, 10_081, 30.5, NaN, "120", null, undefined, true]) assert.equal(isIdleStopMinutes(bad), false, String(bad));
+
+  // Stored overrides from before the field existed get the defaults.
+  assert.deepEqual(mergeSettings({ sessions: { worktrees: { removeAfterHours: 24 } } }).sessions.idleStop, defaultSessionsSettings.idleStop);
+  assert.deepEqual(mergeSettings({ sessions: { idleStop: { enabled: false } } }).sessions.idleStop, { enabled: false, afterMinutes: 120 });
+  assert.deepEqual(mergeSettings({ sessions: { idleStop: { afterMinutes: 30 } } }).sessions.idleStop, { enabled: true, afterMinutes: 30 });
+  for (const bad of [{ enabled: "no" }, { afterMinutes: 5 }, { afterMinutes: 10_081 }, { afterMinutes: 12.5 }, null, "x"]) {
+    assert.deepEqual(mergeSettings({ sessions: { idleStop: bad } }).sessions.idleStop, defaultSessionsSettings.idleStop, JSON.stringify(bad));
+  }
+  assert.notEqual(mergeSettings({}).sessions.idleStop, defaultSettings.sessions.idleStop, "returns a fresh idle stop section");
+
+  const off = applySettingsPatch(defaultSettings, { sessions: { idleStop: { enabled: false } } });
+  assert.deepEqual(off.sessions, { ...defaultSessionsSettings, idleStop: { enabled: false, afterMinutes: 120 } });
+  assert.deepEqual(settingsOverrides(off), { sessions: { idleStop: { enabled: false } } });
+  assert.deepEqual(mergeSettings(settingsOverrides(off)), off);
+  // A patch about the other field, or the worktree clock, keeps it; a bad value leaves the current one.
+  const longer = applySettingsPatch(off, { sessions: { idleStop: { afterMinutes: 240 } } });
+  assert.deepEqual(longer.sessions.idleStop, { enabled: false, afterMinutes: 240 });
+  assert.deepEqual(applySettingsPatch(longer, { sessions: { worktrees: { removeAfterHours: 24 } } }).sessions.idleStop, longer.sessions.idleStop);
+  assert.deepEqual(applySettingsPatch(longer, { sessions: { idleStop: { afterMinutes: 1 } } }).sessions.idleStop, longer.sessions.idleStop);
+  assert.deepEqual(settingsOverrides(longer), { sessions: { idleStop: { enabled: false, afterMinutes: 240 } } });
+  // Back to the defaults means no override.
+  assert.deepEqual(settingsOverrides(applySettingsPatch(longer, { sessions: { idleStop: { enabled: true, afterMinutes: 120 } } })), {});
+});
+
+test("monitoring defaults: warning at 30 GB free, critical at 15, no watched folders", () => {
+  assert.deepEqual(defaultSettings.monitoring, { disk: { warnFreeGb: 30, criticalFreeGb: 15 }, watchedFolders: [] });
+  assert.deepEqual(settingsOverrides(defaultSettings), {}, "defaults store nothing");
+  assert.notEqual(mergeSettings({}).monitoring.disk, defaultSettings.monitoring.disk, "returns a fresh disk section");
+  assert.notEqual(mergeSettings({}).monitoring.watchedFolders, defaultSettings.monitoring.watchedFolders, "returns a fresh folder list");
+});
+
+test("disk levels are whole GB from 1 to 10 000", () => {
+  for (const good of [monitoringLimits.minGb, 15, 30, monitoringLimits.maxGb]) assert.ok(isDiskLevelGb(good), String(good));
+  for (const bad of [0, -1, 1.5, 10_001, "30", null, undefined]) assert.equal(isDiskLevelGb(bad), false, String(bad));
+});
+
+test("watched folders are absolute or under ~, within the length limit, without control characters", () => {
+  for (const good of ["/", "/Users/me/.codex", "~", "~/Library/Caches/bazel"]) assert.ok(isWatchedFolder(good), good);
+  for (const bad of ["", "relative/path", "~other/x", "./x", "/a\nb", "/a\u0000b", "/" + "x".repeat(monitoringLimits.pathLength), 7, null]) {
+    assert.equal(isWatchedFolder(bad), false, JSON.stringify(bad));
+  }
+  assert.deepEqual(cleanWatchedFolders(" /a , /a, relative, ~/b ".split(",")), ["/a", "~/b"], "trimmed, repeats and malformed entries dropped");
+  assert.equal(cleanWatchedFolders("/a"), null, "not a list");
+  const many = Array.from({ length: 25 }, (_, i) => `/f${i}`);
+  assert.equal(cleanWatchedFolders(many).length, monitoringLimits.watchedFolders, "at most 20");
+});
+
+test("mergeSettings takes the disk levels only as a pair with warning above critical", () => {
+  assert.deepEqual(mergeSettings({ monitoring: { disk: { warnFreeGb: 50, criticalFreeGb: 20 } } }).monitoring.disk, { warnFreeGb: 50, criticalFreeGb: 20 });
+  assert.deepEqual(mergeSettings({ monitoring: { disk: { warnFreeGb: 40 } } }).monitoring.disk, { warnFreeGb: 40, criticalFreeGb: 15 }, "one level over the other's default");
+  assert.deepEqual(mergeSettings({ monitoring: { disk: { warnFreeGb: 10 } } }).monitoring.disk, defaultMonitoringSettings.disk, "warning at or under critical keeps both");
+  assert.deepEqual(mergeSettings({ monitoring: { disk: { warnFreeGb: 20, criticalFreeGb: 20 } } }).monitoring.disk, defaultMonitoringSettings.disk);
+  assert.deepEqual(mergeSettings({ monitoring: { disk: { warnFreeGb: "40", criticalFreeGb: 0 } } }).monitoring.disk, defaultMonitoringSettings.disk, "malformed values leave the base");
+  assert.deepEqual(mergeSettings({ monitoring: "nope" }).monitoring, defaultMonitoringSettings);
+});
+
+test("watched folders merge, round-trip through overrides, and are replaced by a patch", () => {
+  const merged = mergeSettings({ monitoring: { watchedFolders: ["/Users/me/.codex", "bad", "/Users/me/.codex", "~/.claude"] } });
+  assert.deepEqual(merged.monitoring.watchedFolders, ["/Users/me/.codex", "~/.claude"]);
+  assert.deepEqual(settingsOverrides(merged), { monitoring: { watchedFolders: ["/Users/me/.codex", "~/.claude"] } });
+  assert.deepEqual(mergeSettings(settingsOverrides(merged)), merged);
+
+  const levels = applySettingsPatch(merged, { monitoring: { disk: { criticalFreeGb: 5 } } });
+  assert.deepEqual(levels.monitoring, { disk: { warnFreeGb: 30, criticalFreeGb: 5 }, watchedFolders: merged.monitoring.watchedFolders }, "a patch without folders keeps them");
+  assert.deepEqual(settingsOverrides(levels).monitoring, { disk: { criticalFreeGb: 5 }, watchedFolders: merged.monitoring.watchedFolders });
+  const cleared = applySettingsPatch(levels, { monitoring: { watchedFolders: [] } });
+  assert.deepEqual(cleared.monitoring.watchedFolders, []);
+  assert.deepEqual(settingsOverrides(cleared).monitoring, { disk: { criticalFreeGb: 5 } });
+  assert.deepEqual(applySettingsPatch(cleared, {}).monitoring, cleared.monitoring, "sections the patch does not mention are kept");
 });

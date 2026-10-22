@@ -22,13 +22,14 @@
  *   PATCH  /api/portal/items/:id       body ItemPatch -> { item }
  *   POST   /api/portal/items/:id/actions/:index -> { sessionId?, promptError?, approvalId? }
  *   GET    /api/portal/activity        see activity.ts
- *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `workspace`, `room`
+ *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `workspace`, `room`, `monitoring`
  */
 import type { UIMessage } from "ai";
 import type { QueuedPrompt } from "./types.ts";
 import type { ActivityEntry } from "./activity.ts";
 import type { Approval } from "./approvals.ts";
 import type { Intent, JobRun } from "./jobs.ts";
+import type { MonitoringSummary } from "./monitoring.ts";
 import type { RoomState } from "./room.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -423,4 +424,6 @@ export type OrchestratorEvent =
   /** The workspace (tabs and panes) changed on any device or by the orchestrator; the whole thing. */
   | { type: "workspace"; workspace: Workspace }
   /** The room's state (docs/PALACE.md): sent on connect, then whenever the environment or census changes. */
-  | { type: "room"; state: RoomState };
+  | { type: "room"; state: RoomState }
+  /** Memory, swap and disk in brief (docs/MONITORING.md): sent on connect once there is a sample, then after every sample (60 s). */
+  | { type: "monitoring"; summary: MonitoringSummary };

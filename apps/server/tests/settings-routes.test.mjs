@@ -58,11 +58,24 @@ test("PATCH /api/settings round-trips, masks keys, and seals them under the serv
 
 test("PATCH /api/settings round-trips the sessions clocks", async (t) => {
   const { app, patch } = await setup(t);
-  const response = await patch({ sessions: { worktrees: { removeAfterHours: 168 } } });
+  const response = await patch({ sessions: { worktrees: { removeAfterHours: 168 }, idleStop: { enabled: false, afterMinutes: 30 } } });
   assert.equal(response.statusCode, 200);
   const { settings } = response.json();
-  assert.deepEqual(settings.sessions, { worktrees: { removeAfterHours: 168 } });
+  assert.deepEqual(settings.sessions, { worktrees: { removeAfterHours: 168 }, idleStop: { enabled: false, afterMinutes: 30 } });
   assert.deepEqual((await app.inject({ method: "GET", url: "/api/settings" })).json(), { settings });
+});
+
+test("PATCH /api/settings round-trips the monitoring section, expanding ~ in watched folders", async (t) => {
+  const { app, patch } = await setup(t);
+  const response = await patch({ monitoring: { disk: { warnFreeGb: 50, criticalFreeGb: 20 }, watchedFolders: ["~/.codex", "/opt/cache"] } });
+  assert.equal(response.statusCode, 200);
+  const { settings } = response.json();
+  assert.deepEqual(settings.monitoring, { disk: { warnFreeGb: 50, criticalFreeGb: 20 }, watchedFolders: [path.join(os.homedir(), ".codex"), "/opt/cache"] });
+  assert.deepEqual((await app.inject({ method: "GET", url: "/api/settings" })).json(), { settings });
+  const inverted = await patch({ monitoring: { disk: { criticalFreeGb: 60 } } });
+  assert.equal(inverted.statusCode, 400);
+  assert.match(inverted.json().error, /warning level \(50 GB\) must be above the critical level \(60 GB\)/);
+  assert.equal((await patch({ monitoring: { watchedFolders: ["relative"] } })).statusCode, 400);
 });
 
 test("PATCH /api/settings answers 400 { error } for bad bodies", async (t) => {
@@ -72,6 +85,9 @@ test("PATCH /api/settings answers 400 { error } for bad bodies", async (t) => {
     [{ orchestrator: { model: 5 } }, /model must be a string/],
     [{ orchestrator: { apiKeys: { google: "sk" } } }, /Unknown provider "google"/],
     [{ sessions: { worktrees: { removeAfterHours: 12.5 } } }, /sessions\.worktrees\.removeAfterHours must be a whole number of hours/],
+    [{ sessions: { idleStop: { afterMinutes: 5 } } }, /sessions\.idleStop\.afterMinutes must be a whole number of minutes between 10 and 10080/],
+    [{ sessions: { idleStop: { enabled: "yes" } } }, /sessions\.idleStop\.enabled must be true or false/],
+    [{ sessions: { idleStop: 1 } }, /sessions\.idleStop must be an object/],
     [[1, 2], /Expected a JSON object/],
     ["null", /Expected a JSON object/],
   ];

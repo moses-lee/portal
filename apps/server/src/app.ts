@@ -15,6 +15,8 @@ import { closeEventStreams } from "./http/sse.ts";
 import { importLegacyAtBoot } from "./import/boot.ts";
 import { type LifecycleSweepDeps, createLifecycleSweeper, liveLifecycleSweepDeps } from "./lib/lifecycle-sweep.ts";
 import { createPresence } from "./lib/presence.ts";
+import { type MonitoringOptions, createMonitoringService } from "./monitoring/service.ts";
+import { registerMonitoringRoutes } from "./monitoring/routes.ts";
 import type { Settings } from "@portal/shared/settings";
 import { type OrchestratorOptions, createOrchestratorService } from "./orchestrator/service.ts";
 import { registerOrchestratorRoutes } from "./orchestrator/routes.ts";
@@ -23,6 +25,7 @@ import { registerProjectRoutes } from "./projects/routes.ts";
 import { type RoomOptions, createRoomService } from "./room/service.ts";
 import { registerRoomRoutes } from "./room/routes.ts";
 import { registerSearchRoutes } from "./search/routes.ts";
+import { wireIdleStop } from "./sessions/idle-stop.ts";
 import { createMessageBackfill } from "./sessions/search-backfill.ts";
 import { type SessionsOptions, createSessionsService } from "./sessions/service.ts";
 import { registerSessionRoutes } from "./sessions/routes.ts";
@@ -37,7 +40,8 @@ export interface AppOptions {
   config?: ServerConfig;
   /** An open database (tests pass a throwaway one). When omitted the app connects and migrates itself. */
   database?: { db: Db; sql: AppContext["sql"]; close?: () => Promise<void> };
-  logger?: boolean;
+  /** Fastify's logger: true for the default (stdout), or a stream to write to (the entry point's, which the log file copies). */
+  logger?: boolean | { stream: NodeJS.WritableStream };
   /** Skip the orchestrator (its scheduler and model calls) — for tests of the other routes. An object swaps in fakes (model, deps, timers). */
   orchestrator?: boolean | OrchestratorOptions;
   /** Sessions overrides (tests swap in a fake ACP agent). */
@@ -56,6 +60,8 @@ export interface AppOptions {
   searchBackfill?: { start?: boolean; afterMs?: number };
   /** The room's environment lookups: tests pass a fake `fetch` and clock. */
   room?: RoomOptions;
+  /** Monitoring's probe, sampler timer and process stop: tests pass fakes and `start: false`. */
+  monitoring?: MonitoringOptions;
 }
 
 /** Each app's context, for tests that reach past the routes (swap a service, spy on a dispose). */
@@ -67,7 +73,7 @@ export function appContext(app: FastifyInstance): AppContext {
   return ctx;
 }
 
-export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true, lifecycle = {}, searchBackfill = {}, room = {} }: AppOptions = {}): Promise<FastifyInstance> {
+export async function buildApp({ config = loadConfig(), database, logger = false, orchestrator = true, sessions, singleInstance = true, lifecycle = {}, searchBackfill = {}, room = {}, monitoring = {} }: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger });
   await app.register(compress, { global: true, threshold: 1024, encodings: ["gzip"] });
 
@@ -120,6 +126,10 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   ctx.room = createRoomService(ctx, room);
   // The portal stream lives on the orchestrator's hub; without it the room routes still answer and nothing is pushed.
   const unsubscribeRoom = orchestrator ? ctx.room.subscribe((state) => ctx.orchestrator.hub.emit({ type: "room", state })) : () => {};
+  ctx.monitoring = createMonitoringService(ctx, monitoring);
+  const unsubscribeMonitoring = orchestrator ? ctx.monitoring.subscribe((summary) => ctx.orchestrator.hub.emit({ type: "monitoring", summary })) : () => {};
+  // The idle CLI stop follows the user's settings, and its automatic stops go to Activity (docs/MONITORING.md).
+  const unwireIdleStop = await wireIdleStop(ctx);
 
   app.setErrorHandler((err, _req, reply) => {
     const status = errorStatus(err) ?? (err as { statusCode?: number }).statusCode ?? 500;
@@ -134,6 +144,7 @@ export async function buildApp({ config = loadConfig(), database, logger = false
   registerTerminalRoutes(app, ctx);
   registerSearchRoutes(app, ctx);
   registerRoomRoutes(app, ctx);
+  registerMonitoringRoutes(app, ctx);
   if (orchestrator) {
     registerOrchestratorRoutes(app, ctx);
     // The workspace lives on the orchestrator's hub (it pushes over the portal stream and the agent edits it).
@@ -150,6 +161,10 @@ export async function buildApp({ config = loadConfig(), database, logger = false
     await ctx.lifecycle.dispose().catch(failed("the lifecycle sweep"));
     await ctx.searchBackfill.dispose().catch(failed("the search backfill"));
     unsubscribeRoom();
+    unsubscribeMonitoring();
+    // Stops the sampler and kills a running disk survey's `du`.
+    await ctx.monitoring.dispose().catch(failed("monitoring"));
+    unwireIdleStop();
     unsubscribeProjectTerminals();
     // A running census count may still write the room row and log a milestone through the orchestrator.
     await ctx.room.dispose().catch(failed("the room"));
