@@ -1,5 +1,5 @@
 /**
- * The orchestrator runtime: threads the user chats in (each with its own lock), the background jobs
+ * The orchestrator runtime: the chat the user talks in (one turn at a time), the background jobs
  * (the jobs service runs them, the silent hourly world refresh among them), and the events the page
  * follows. It builds the
  * hub (see `hub.ts`) over whatever store, settings, deps, clock, and model it is given (tests pass
@@ -34,15 +34,15 @@ import type {
   BulkItemStatus, Item, ItemFilter, ItemPatch, MessagePage, MessagePageQuery, OrchestratorEvent, OrchestratorMessage, OrchestratorRuntime, OrchestratorSettings,
   OrchestratorStatus, OrchestratorStore,
 } from "./types.ts";
-import { MAIN_THREAD_ID, TOOL_IO_OMITTED } from "./types.ts";
+import { TOOL_IO_OMITTED } from "./types.ts";
 import { createWorldService } from "./world/service.ts";
 
-/** Messages of the thread a chat turn sends to the model, at most. */
+/** Messages of the chat a turn sends to the model, at most. */
 export const HISTORY_WINDOW = 40;
 /** Rough tokens of history a chat turn sends; older messages beyond it are left out. */
 export const HISTORY_BUDGET_TOKENS = 12_000;
-/** Messages the stored thread keeps; older ones are dropped. */
-export const MAX_THREAD_MESSAGES = 200;
+/** Messages the stored chat keeps; older ones are dropped. */
+export const MAX_CHAT_MESSAGES = 200;
 /** What a tool part's input and output become once the message left the history window. */
 export const TRIMMED_TOOL_IO = "[trimmed from history]";
 /**
@@ -50,7 +50,7 @@ export const TRIMMED_TOOL_IO = "[trimmed from history]";
  * a refresh in the background. The turn itself never waits on it: it answers from the world it has.
  */
 export const CHAT_REFRESH_AFTER_MS = 5 * 60_000;
-/** Messages a page of a thread holds unless the request says otherwise. */
+/** Messages a page of the chat holds unless the request says otherwise. */
 export const PAGE_LIMIT = 30;
 export const MAX_PAGE_LIMIT = 200;
 /** A computed status answers every caller for this long; every event that changes it recomputes. */
@@ -133,13 +133,13 @@ export function needsChatRefresh(lastFullAt: number | null, now: number, maxAgeM
 }
 
 /**
- * The thread as it should be stored: at most `MAX_THREAD_MESSAGES`, and messages the next chat turn
+ * The chat as it should be stored: at most `MAX_CHAT_MESSAGES`, and messages the next chat turn
  * will not send any more (older than `HISTORY_WINDOW`) keep their text but lose their tool inputs and
- * outputs, which is where a thread's bulk lives. `changed` is false when nothing had to move.
+ * outputs, which is where the chat's bulk lives. `changed` is false when nothing had to move.
  */
-export function trimThread(messages: OrchestratorMessage[]): { messages: OrchestratorMessage[]; changed: boolean } {
-  let changed = messages.length > MAX_THREAD_MESSAGES;
-  const kept = messages.slice(-MAX_THREAD_MESSAGES);
+export function trimChat(messages: OrchestratorMessage[]): { messages: OrchestratorMessage[]; changed: boolean } {
+  let changed = messages.length > MAX_CHAT_MESSAGES;
+  const kept = messages.slice(-MAX_CHAT_MESSAGES);
   const outsideWindow = Math.max(0, kept.length - HISTORY_WINDOW);
   const result = kept.map((message, index) => {
     if (index >= outsideWindow) return message;
@@ -157,7 +157,7 @@ export function trimThread(messages: OrchestratorMessage[]): { messages: Orchest
 }
 
 /**
- * The message as a page serves it: tool parts without their input and output (a thread's bulk),
+ * The message as a page serves it: tool parts without their input and output (the chat's bulk),
  * marked so the browser fetches the whole message when a row is opened. Unchanged when there is
  * nothing to leave out.
  */
@@ -186,7 +186,7 @@ function messageTokens(message: OrchestratorMessage, newest: boolean): number {
 }
 
 /**
- * The thread window a chat turn sends: the newest messages, at most `HISTORY_WINDOW` and about
+ * The history window a chat turn sends: the newest messages, at most `HISTORY_WINDOW` and about
  * `HISTORY_BUDGET_TOKENS`, starting at a user message. The newest message is always kept.
  */
 export function historyWindow(messages: OrchestratorMessage[], budgetTokens = HISTORY_BUDGET_TOKENS): OrchestratorMessage[] {
@@ -209,8 +209,8 @@ export function createOrchestratorRuntime({
   activityStore = createMemoryActivityStore(), workspaceStore = createMemoryWorkspaceStore(), domains = {},
 }: OrchestratorRuntimeOptions): OrchestratorRuntime {
   const listeners = new Set<(event: OrchestratorEvent) => void>();
-  /** The chat turn running in each thread; a thread takes one turn at a time. */
-  const chatTurns = new Map<string, AbortController>();
+  /** The chat turn running, if any; the chat takes one turn at a time. */
+  let chatTurn: AbortController | null = null;
   const promptQueue: QueuedPrompt[] = [];
   const queuedViews = new Map<string, WorkspaceView | null>();
   let queueStarting: string | null = null;
@@ -252,7 +252,7 @@ export function createOrchestratorRuntime({
   } as OrchestratorHub;
   hub.activity = createActivityService({ store: activityStore, emit, now: () => timers.now() });
   hub.workspace = createWorkspaceService(hub, workspaceStore);
-  hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, { trimThread: trimStoredThread })))(hub);
+  hub.jobs = (domains.jobs ?? ((h: OrchestratorHub) => createJobsService(h, { trimChat: trimStoredChat })))(hub);
   hub.world = (domains.world ?? createWorldService)(hub);
   hub.memory = (domains.memory ?? createMemoryService)(hub);
   hub.approvals = (domains.approvals ?? createApprovalsService)(hub);
@@ -328,28 +328,28 @@ export function createOrchestratorRuntime({
   });
 
   /**
-   * Keep a stored thread bounded; runs after every persisted turn. Trims in place: rows past the
+   * Keep the stored chat bounded; runs after every persisted turn. Trims in place: rows past the
    * cap are deleted, rows whose tool traffic left the history window are updated, and the rest
    * (with their ordinals, the paging cursors) are left alone.
    */
-  async function trimStoredThread(threadId: string) {
+  async function trimStoredChat() {
     try {
-      const rows = await store.readMessageRows(threadId);
-      const { messages, changed } = trimThread(rows.map((row) => row.message));
+      const rows = await store.readMessageRows();
+      const { messages, changed } = trimChat(rows.map((row) => row.message));
       if (!changed) return;
       const dropped = rows.length - messages.length;
-      if (dropped > 0) await store.deleteMessagesThrough(threadId, rows[dropped - 1].ordinal);
+      if (dropped > 0) await store.deleteMessagesThrough(rows[dropped - 1].ordinal);
       for (const [index, message] of messages.entries()) {
         const row = rows[dropped + index];
-        if (row.message !== message) await store.replaceMessage(threadId, row.ordinal, message);
+        if (row.message !== message) await store.replaceMessage(row.ordinal, message);
       }
     } catch (err) {
-      console.error("Could not trim a Portal thread:", err);
+      console.error("Could not trim the Portal chat:", err);
     }
   }
 
-  function releaseChat(threadId: string, controller: AbortController) {
-    if (chatTurns.get(threadId) === controller) chatTurns.delete(threadId);
+  function releaseChat(controller: AbortController) {
+    if (chatTurn === controller) chatTurn = null;
   }
 
   /** The status bar's line: what is running, else what comes next (the world refresh is never either). */
@@ -386,11 +386,11 @@ export function createOrchestratorRuntime({
     const now = timers.now();
     const needsYou = live.filter((item) => needsAttention(item, now)).length;
     const running = hub.jobs.running();
-    const runs = running.map(({ id, kind, jobId, threadId, startedAt, summary }) => ({ id, kind, jobId, threadId, startedAt, summary }));
+    const runs = running.map(({ id, kind, jobId, startedAt, summary }) => ({ id, kind, jobId, startedAt, summary }));
     const nextJob = nextDue?.nextRunAt != null ? { id: nextDue.id, title: nextDue.title, at: nextDue.nextRunAt } : null;
     return {
-      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurns.size > 0, presence: presence.count(),
-      busyThreads: [...chatTurns.keys()], runs, nextJob,
+      ready: !!apiKey, provider: settings.provider, model: settings.model, busy: chatTurn !== null, presence: presence.count(),
+      runs, nextJob,
       counts: { needsYou, inbox, approvals: approvals.length, intents: intents.length },
       line: statusLine(runs, nextJob, !!apiKey),
     };
@@ -411,11 +411,11 @@ export function createOrchestratorRuntime({
   }
   /** Claims one turn at a time; edits pause the entire queue and failed turns leave it waiting. */
   function fireQueue() {
-    if (disposed || queueStarting || chatTurns.has(MAIN_THREAD_ID) || !promptQueue.length || queuePaused()) return;
+    if (disposed || queueStarting || chatTurn || !promptQueue.length || queuePaused()) return;
     const head = promptQueue[0];
     queueStarting = head.id;
     const message: OrchestratorMessage = { id: head.id, role: "user", parts: [{ type: "text", text: head.text }] };
-    void chat(message, MAIN_THREAD_ID, queuedViews.get(head.id) ?? null, head.id)
+    void chat(message, queuedViews.get(head.id) ?? null, head.id)
       .then((response) => consumeStream({ stream: response.body! }))
       .catch((err: unknown) => {
         if (queueStarting === head.id) queueStarting = null;
@@ -425,19 +425,16 @@ export function createOrchestratorRuntime({
       });
   }
 
-  async function chat(userMessage: OrchestratorMessage, threadId: string = MAIN_THREAD_ID, view: WorkspaceView | null = null, queuedId?: string): Promise<Response> {
+  async function chat(userMessage: OrchestratorMessage, view: WorkspaceView | null = null, queuedId?: string): Promise<Response> {
     await ready;
     if (disposed) throw httpError("Portal is shutting down.", 409);
-    const thread = await store.getThread(threadId);
-    if (!thread) throw httpError(`Unknown thread "${threadId}".`, 404);
-    if (thread.status !== "active") throw httpError("This thread is archived.", 409);
     const { settings, apiKey } = await settingsAndKey();
     if (!apiKey) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
     if (queuedId && (!promptQueue.some((item) => item.id === queuedId) || queuePaused())) throw httpError("The queued prompt was removed or is being edited.", 409);
-    if (!queuedId && threadId === MAIN_THREAD_ID && (queueStarting || (promptQueue.length > 0 && !queuePaused()))) throw httpError("Portal has queued prompts waiting; add this message to the queue.", 409);
-    if (chatTurns.has(threadId)) throw httpError("Portal is still answering in this thread; wait for it or cancel it.", 409);
+    if (!queuedId && (queueStarting || (promptQueue.length > 0 && !queuePaused()))) throw httpError("Portal has queued prompts waiting; add this message to the queue.", 409);
+    if (chatTurn) throw httpError("Portal is still answering; wait for it or cancel it.", 409);
     const controller = new AbortController();
-    chatTurns.set(threadId, controller);
+    chatTurn = controller;
     if (queuedId) {
       userMessage = { ...userMessage, parts: [{ type: "text", text: queuedItem(queuedId).text }] };
       promptQueue.splice(promptQueue.findIndex((item) => item.id === queuedId), 1);
@@ -450,19 +447,18 @@ export function createOrchestratorRuntime({
     const at = timers.now();
     let prepared: Awaited<ReturnType<typeof prepareTurn>> = null;
     try {
-      // Ids are the thread's React keys and the SDK's merge handle, so a client id that is already taken gets replaced.
-      const taken = new Set((await store.readMessages(threadId)).map((stored) => stored.id));
+      // Ids are the chat's React keys and the SDK's merge handle, so a client id that is already taken gets replaced.
+      const taken = new Set((await store.readMessages()).map((stored) => stored.id));
       const id = userMessage.id && !taken.has(userMessage.id) ? userMessage.id : randomUUID();
       const message: OrchestratorMessage = { ...userMessage, id, role: "user", metadata: { ...userMessage.metadata, at } };
-      await store.appendMessages([message], threadId);
-      if (queuedId) emit({ type: "chat-message", threadId, message });
+      await store.appendMessages([message]);
+      if (queuedId) emit({ type: "chat-message", message });
       // A stale world is refreshed in the background; the turn answers from the one it has (its age is in the prompt).
       void refreshIfStale("chat");
-      const recent = historyWindow(await store.readMessages(threadId));
+      const recent = historyWindow(await store.readMessages());
       const text = messageText(message);
       prepared = await prepareTurn(hub, {
-        kind: "chat", role: "chat", trigger: "user", threadId, interactive: true, query: text, touched, view,
-        summary: threadId === MAIN_THREAD_ID ? "Answering" : `Answering in ${thread.title}`,
+        kind: "chat", role: "chat", trigger: "user", interactive: true, query: text, touched, view, summary: "Answering",
       });
       if (!prepared) throw httpError(`No ${settings.provider} API key is stored. Add one in Settings to talk to Portal.`, 409);
       const turn = prepared;
@@ -493,20 +489,20 @@ export function createOrchestratorRuntime({
           if (settled) return;
           settled = true;
           if (responseMessage.parts.length > 0) {
-            await store.appendMessages([responseMessage], threadId).catch((err: unknown) => console.error("Could not save the assistant message:", err));
+            await store.appendMessages([responseMessage]).catch((err: unknown) => console.error("Could not save the assistant message:", err));
           }
-          await trimStoredThread(threadId);
+          await trimStoredChat();
           const usage = await Promise.resolve(result.totalUsage).then(runUsage, () => null);
           await turn.finish({ status: isAborted || controller.signal.aborted ? "cancelled" : failed ? "failed" : "succeeded", usage, summary: text.slice(0, 120) });
           void hub.activity.log({
             actor: "user", kind: "chat.turn", summary: `Asked: ${text.slice(0, 160)}`,
-            refs: { threadId, runId: turn.run.id }, detail: { items: [...touched] },
+            refs: { runId: turn.run.id }, detail: { items: [...touched] },
           });
-          releaseChat(threadId, controller);
-          emit({ type: "messages", threadId });
+          releaseChat(controller);
+          emit({ type: "messages" });
           void emitStatus();
           if (touched.size > 0) void emitItems();
-          continueQueue = threadId === MAIN_THREAD_ID && !failed && !isAborted && !controller.signal.aborted;
+          continueQueue = !failed && !isAborted && !controller.signal.aborted;
           if (continueQueue && !queuedId) fireQueue();
         },
         onError: (err) => {
@@ -525,10 +521,10 @@ export function createOrchestratorRuntime({
           try {
             for await (const message of readUIMessageStream<OrchestratorMessage>({ stream: updates })) {
               last = message;
-              emit({ type: "chat-message", threadId, message });
+              emit({ type: "chat-message", message });
             }
           } finally {
-            if (last) emit({ type: "chat-message", threadId, message: last, done: true });
+            if (last) emit({ type: "chat-message", message: last, done: true });
           }
           // Publish the last snapshot before the next queued user message, preserving feed order.
           if (continueQueue) fireQueue();
@@ -537,7 +533,7 @@ export function createOrchestratorRuntime({
       return createUIMessageStreamResponse({ stream: replyStream, consumeSseStream: ({ stream }) => consumeStream({ stream }) });
     } catch (err) {
       await prepared?.finish({ status: "failed", error: errorMessage(err) });
-      releaseChat(threadId, controller);
+      releaseChat(controller);
       void emitStatus();
       throw err;
     }
@@ -617,12 +613,11 @@ export function createOrchestratorRuntime({
     ready,
     hub,
     status,
-    listThreads: () => store.listThreads(),
-    async history(threadId = MAIN_THREAD_ID, { before, after, limit = PAGE_LIMIT }: Partial<MessagePageQuery> = {}): Promise<MessagePage> {
-      const page = await store.readMessagePage(threadId, { before, after, limit: Math.min(Math.max(1, limit), MAX_PAGE_LIMIT) });
+    async history({ before, after, limit = PAGE_LIMIT }: Partial<MessagePageQuery> = {}): Promise<MessagePage> {
+      const page = await store.readMessagePage({ before, after, limit: Math.min(Math.max(1, limit), MAX_PAGE_LIMIT) });
       return { ...page, messages: page.messages.map(omitToolIO) };
     },
-    message: (threadId, id) => store.getMessage(threadId, id),
+    message: (id) => store.getMessage(id),
     chat,
     queue: queueSnapshot,
     async enqueue(text, view = null) {
@@ -671,13 +666,11 @@ export function createOrchestratorRuntime({
       fireQueue();
       return { ...item };
     },
-    cancel(threadId = MAIN_THREAD_ID) {
-      const queued = threadId === MAIN_THREAD_ID ? promptQueue.splice(0) : [];
-      if (threadId === MAIN_THREAD_ID) {
-        queuedViews.clear();
-        queueChanged();
-      }
-      chatTurns.get(threadId)?.abort();
+    cancel() {
+      const queued = promptQueue.splice(0);
+      queuedViews.clear();
+      queueChanged();
+      chatTurn?.abort();
       return queued;
     },
     listItems: (filter) => store.listItems(filter),
@@ -698,7 +691,7 @@ export function createOrchestratorRuntime({
       unsubscribeSettings();
       if (statusTimer !== null) clearTimeout(statusTimer);
       if (presenceTimer !== null) timers.clearTimeout(presenceTimer);
-      for (const controller of chatTurns.values()) controller.abort();
+      chatTurn?.abort();
       await hub.jobs.dispose().catch((err: unknown) => console.error("Could not stop the job worker:", err));
     },
   };

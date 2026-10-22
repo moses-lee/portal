@@ -176,12 +176,12 @@ export function runDuration(run: Pick<JobRun, "startedAt" | "finishedAt">, now: 
 
 /**
  * The room backdrop's activity marker on Talk to Portal, matching the session pages: working while Portal
- * answers the user in any thread, waiting while an approval is pending, idle otherwise. Background
+ * answers the user, waiting while an approval is pending, idle otherwise. Background
  * jobs do not make the user wait.
  */
 export function portalActivity(status: OrchestratorStatus | null, approvals: readonly Pick<Approval, "status">[]): AgentActivity {
   if (approvals.some((approval) => approval.status === "pending")) return "waiting";
-  if (status && status.busyThreads.length > 0) return "working";
+  if (status?.busy) return "working";
   return "idle";
 }
 

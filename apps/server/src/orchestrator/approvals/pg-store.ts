@@ -12,7 +12,7 @@ type GrantRow = typeof approvalGrants.$inferSelect;
 
 const fromRow = (row: Row): Approval => ({
   id: row.id, status: row.status as Approval["status"], tool: row.tool, title: row.title, summary: row.summary, input: row.input,
-  risk: row.risk as Approval["risk"], origin: row.origin as Approval["origin"], repo: row.repo, threadId: row.threadId, runId: row.runId,
+  risk: row.risk as Approval["risk"], origin: row.origin as Approval["origin"], repo: row.repo, runId: row.runId,
   jobId: row.jobId, intentId: row.intentId, itemId: row.itemId, requestedAt: row.requestedAt, expiresAt: row.expiresAt,
   decidedAt: row.decidedAt, decision: (row.decision as Approval["decision"]) ?? null, result: row.result ?? null, error: row.error,
 });

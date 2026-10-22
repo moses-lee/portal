@@ -31,7 +31,6 @@ test("home is the start page and the unified sidebar opens Agent without a chat 
   await expect(page.getByRole("textbox", { name: "First message" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message Portal" })).toHaveCount(0);
   await openAgent(page);
-  await expect(agent(page).getByRole("tablist", { name: "Threads" })).toHaveCount(0);
   // The status line: the server's words, then the next job counted down in the browser (the
   // fixture times it seven minutes out at setup; a slow run may have shaved one off).
   const line = page.getByTestId("portal-status-line");
@@ -82,7 +81,7 @@ test("without an API key Agent asks for one and Add API key opens settings", asy
   await expect(page.locator("[data-agent-page]")).toBeAttached();
 });
 
-test("the thread renders replies, the tick label, and tool rows in prose; items live on the Needs-you page", async ({
+test("the chat renders replies, the tick label, and tool rows in prose; items live on the Needs-you page", async ({
   page,
 }, info) => {
   const fixture = await setupPortal(page);
@@ -118,7 +117,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   await expect(card.getByRole("button", { name: "Open on GitHub" })).toBeVisible();
   await expect(card.getByRole("button", { name: "Ask Portal" })).toBeVisible();
 
-  // Ask Portal from the page drafts the action's text into the main thread and goes there; nothing is sent.
+  // Ask Portal from the page drafts the action's text into the chat and goes there; nothing is sent.
   await card.getByRole("button", { name: "Ask Portal" }).click();
   await expect(page).toHaveURL(/\/$/);
   const input = page.getByRole("textbox", { name: "Message Portal" });
@@ -140,7 +139,7 @@ test("the thread renders replies, the tick label, and tool rows in prose; items 
   expect((sent[0].body as { message: { role: string } }).message.role).toBe("user");
   expect((sent[0].body as { view: unknown }).view).toEqual({ sessionId: null, tabId: null, paneId: null });
 
-  // Resolve goes through PATCH and empties the page and the badge; the thread's messages are unchanged.
+  // Resolve goes through PATCH and empties the page and the badge; the chat's messages are unchanged.
   await agent(page).getByRole("button", { name: "Close Agent" }).click();
   await foyer.click();
   await card.getByRole("button", { name: `More actions for ${portalItem.title}` }).click();
@@ -171,7 +170,7 @@ test("a refused send keeps the text in the composer and shows the server's reaso
     "Portal is running a check. Try again in a moment.",
   );
   await expect(input).toHaveValue("Which PRs are waiting on me?");
-  // The server never kept the turn, so the thread does not show it either (only the composer has the text).
+  // The server never kept the turn, so the chat does not show it either (only the composer has the text).
   await expect(
     page.getByRole("log", { name: "Messages" }).getByText("Which PRs are waiting on me?", { exact: true }),
   ).toHaveCount(0);
@@ -204,7 +203,7 @@ test("sending behaves as on a session page: the text stays, with Sending…, unt
   page,
 }) => {
   const fixture = await setupPortal(page);
-  const release = fixture.holdSends("main");
+  const release = fixture.holdSends();
   await page.goto("/");
   await openAgent(page);
   const input = page.getByRole("textbox", { name: "Message Portal" });
@@ -224,15 +223,15 @@ test("sending behaves as on a session page: the text stays, with Sending…, unt
   await expect(input).toHaveValue("What changed overnight?");
 });
 
-test("background work permits sending and the main thread's turn permits queueing", async ({
+test("background work permits sending and a chat turn permits queueing", async ({
   page,
 }) => {
   const fixture = await setupPortal(page, {
     portal: {
       status: {
-        busy: true,
+        busy: false,
         line: "Checking example/portal#42…",
-        runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", threadId: null, startedAt: Date.now() - 5000, summary: "Checking example/portal#42" }],
+        runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", startedAt: Date.now() - 5000, summary: "Checking example/portal#42" }],
       },
     },
   });
@@ -245,9 +244,9 @@ test("background work permits sending and the main thread's turn permits queuein
   await input.press("Enter");
   await expect(page.getByText("Portal reply to: Anything new?")).toBeVisible();
 
-  // A turn in this thread started elsewhere (another tab): the composer offers Stop, and a card's
+  // A chat turn started elsewhere (another tab): the composer offers Stop, and a card's
   // Ask Portal (on the Needs-you page) hands its text to the composer.
-  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
+  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true } });
   await expect(agent(page).getByRole("button", { name: "Queue message", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
   await agent(page).getByRole("button", { name: "Close Agent" }).click();
@@ -260,7 +259,7 @@ test("background work permits sending and the main thread's turn permits queuein
   await expect(input).toHaveValue("Set up a fix for example/portal#42");
   await page.getByRole("button", { name: "Stop agent" }).click();
   await expect
-    .poll(() => fixture.requests.filter((r) => r.path === "/api/portal/threads/main/cancel" && r.method === "POST").length)
+    .poll(() => fixture.requests.filter((r) => r.path === "/api/portal/cancel" && r.method === "POST").length)
     .toBe(1);
 
   // The turn ending (a `status` event) frees the composer; the draft is still there to send.
@@ -269,7 +268,7 @@ test("background work permits sending and the main thread's turn permits queuein
   await expect(input).toHaveValue("Set up a fix for example/portal#42");
 });
 
-test("a messages stream event refetches the thread and shows what was appended", async ({
+test("a messages stream event refetches the chat and shows what was appended", async ({
   page,
 }) => {
   const fixture = await setupPortal(page);
@@ -321,13 +320,13 @@ test("the daytime room sits behind every Portal view and follows the user's turn
   const room = page.locator(".room-scene");
   await expect(room).toHaveAttribute("data-scene", "day");
   await expect(room).toHaveAttribute("data-activity", "idle");
-  // A background job never colours it; a turn answering the user (in any thread) does.
+  // A background job never colours it; a turn answering the user does.
   await emitPortal(page, {
     type: "status",
-    status: { ...portalStatus, busy: true, runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", threadId: null, startedAt: Date.now(), summary: "Checking" }] },
+    status: { ...portalStatus, runs: [{ id: "r1", kind: "intent_check", jobId: "j-pr42", startedAt: Date.now(), summary: "Checking" }] },
   });
   await expect(room).toHaveAttribute("data-activity", "idle");
-  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["t-review"] } });
+  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true } });
   await expect(room).toHaveAttribute("data-activity", "working");
   // An approval waiting turns it amber, whichever view is open.
   await emitPortal(page, { type: "approvals", approvals: [approval] });
@@ -342,7 +341,7 @@ test("the daytime room sits behind every Portal view and follows the user's turn
   await expect(room).toHaveAttribute("data-activity", "idle");
 });
 
-test("a long line in a reply's code block scrolls inside the block, not the whole thread", async ({ page }) => {
+test("a long line in a reply's code block scrolls inside the block, not the whole chat", async ({ page }) => {
   const prompt = `Review this PR: <link>. ${"Rate each finding by severity with file:line evidence. ".repeat(4)}`;
   await setupPortal(page, {
     portal: {

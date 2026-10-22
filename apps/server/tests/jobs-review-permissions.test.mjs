@@ -48,7 +48,7 @@ async function reviewGoal(h, review = {}) {
     scope: { sessionIds: ["s1"], pulls: [{ repo: "acme/app", number: 1, url: url(1) }], repos: ["acme/app"] },
     fireBudget: 1, check: { type: "every", everyMs: REVIEW_CHECK_MS },
     checkPayload: { review: { repo: "acme/app", sessions: [{ pr: 1, url: url(1), sessionId: "s1", projectId: "p2" }], ...review } },
-  }, { actor: "agent", runId: "run1", threadId: "main" });
+  }, { actor: "agent", runId: "run1" });
 }
 const request = (sessionId, command) => ({ sessionId, requestId: `req-${command}`, toolCall: execute(command), options });
 

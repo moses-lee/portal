@@ -39,7 +39,7 @@ async function setup(t) {
   return { runtime, hub: runtime.hub, tabId: location.tabId, paneId: location.paneId };
 }
 
-const chatTurn = (view) => ({ kind: "chat", role: "chat", trigger: "user", threadId: "main", interactive: true, query: "", touched: new Set(), view });
+const chatTurn = (view) => ({ kind: "chat", role: "chat", trigger: "user", interactive: true, query: "", touched: new Set(), view });
 
 test("a chat turn's prompt ends with what the user is looking at: the session and its tab, or the Portal page", async (t) => {
   const { hub, tabId, paneId } = await setup(t);
@@ -79,7 +79,7 @@ test("a background turn that names the workspace writers in its tools does not g
   const { hub } = await setup(t);
   // What run_helper and a helper job build: interactive false with an explicit tool list, which the tool families treat as interactive.
   const helper = await prepareTurn(hub, {
-    kind: "helper", role: "chat", trigger: "agent", threadId: "main", interactive: false, toolNames: [...WORKSPACE_TOOLS, "list_items"], query: "", touched: new Set(),
+    kind: "helper", role: "chat", trigger: "agent", interactive: false, toolNames: [...WORKSPACE_TOOLS, "list_items"], query: "", touched: new Set(),
   });
   assert.equal(helper.turn.origin, "job");
   assert.deepEqual(Object.keys(helper.tools).sort(), ["get_workspace", "list_items"], "the writers are gated on the turn's real origin, not the overridden flag");
@@ -92,7 +92,7 @@ test("a background turn that names the workspace writers in its tools does not g
 test("background turns get no You-are-looking-at line and no workspace tools, even when a view is passed", async (t) => {
   const { hub, tabId, paneId } = await setup(t);
   const helper = await prepareTurn(hub, {
-    kind: "helper", role: "chat", trigger: "agent", threadId: null, interactive: false, query: "look", touched: new Set(), view: { sessionId: REVIEW, tabId, paneId },
+    kind: "helper", role: "chat", trigger: "agent", interactive: false, query: "look", touched: new Set(), view: { sessionId: REVIEW, tabId, paneId },
   });
   assert.doesNotMatch(helper.system, /You are looking at/);
   assert.equal(helper.turn.view, null);
@@ -100,7 +100,7 @@ test("background turns get no You-are-looking-at line and no workspace tools, ev
   assert.match(helper.system, /Workspace tabs:/, "the world's section is still there: the tabs are state, the tools are not");
 
   const named = await prepareTurn(hub, {
-    kind: "helper", role: "chat", trigger: "agent", threadId: null, interactive: false, toolNames: ["get_workspace", "list_items"], query: "", touched: new Set(),
+    kind: "helper", role: "chat", trigger: "agent", interactive: false, toolNames: ["get_workspace", "list_items"], query: "", touched: new Set(),
     view: { sessionId: REVIEW, tabId, paneId },
   });
   assert.deepEqual(Object.keys(named.tools).sort(), ["get_workspace", "list_items"], "a turn that names its tools can still read the workspace");

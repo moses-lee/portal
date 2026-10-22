@@ -19,7 +19,7 @@ Source: the read-only audit of 2026-09-27 (five subagents plus live measurements
 | 10 | List payload | Drop `liveness` and `state.commands` from the list; keep `state.modes` and `state.configOptions`. |
 | 11 | Terminal on switch | Empty panel with a "New terminal" button; no auto-create. |
 | 12 | Pane remount | Keep the remount; single-pane refactor is out of scope. |
-| 13 | Thread page size | 30 messages; tool outputs load when a row is expanded. |
+| 13 | Chat page size | 30 messages; tool outputs load when a row is expanded. |
 | 14 | Pre-chat world refresh | Presence-driven background refresh, and a chat turn never blocks on it. |
 | 15 | Background job cadence | Unchanged. |
 | 16 | Items | Perf-only in this branch (payload + index + resolve stranded rows). Retiring items is a separate follow-up, not queued yet. |
@@ -47,7 +47,7 @@ Status: implemented on branch `feat/perf-audit` (2026-09-27). See "Results" at t
 | Full world build (hourly tick) | 6 to 8 s typical, 21 s worst |
 | Chat turn (user trigger) | 13 to 163 s, includes the pre-chat refresh when stale |
 
-Benchmark fixtures: sessions `a6870eef-85bc-4bc4-bca5-99d990a657fe` (24 MB, 3,941 events), `ff1107d6-5346-4727-87b7-e5635ce65000` (10,179 events), `968ae371-0d96-4df8-b873-114b2f2cf813` (largest single events), and the main Portal thread.
+Benchmark fixtures: sessions `a6870eef-85bc-4bc4-bca5-99d990a657fe` (24 MB, 3,941 events), `ff1107d6-5346-4727-87b7-e5635ce65000` (10,179 events), `968ae371-0d96-4df8-b873-114b2f2cf813` (largest single events), and the Portal chat.
 
 ## Workstreams, in implementation order
 
@@ -93,7 +93,7 @@ Tests: `acp-runtime.test.mjs` row-count and seq assertions updated for 1a/1b; ne
 
 ### W4. Transcript rendering (shared, web)
 
-- Remove the `![content-visibility:visible]` override in `Conversation.tsx` and `PortalThread.tsx`. Manual test matrix: scroll up through a long session, jump to bottom, streaming while scrolled up, find-in-page, older-page prepend keeps position. Fallback if it misbehaves: window the turn list.
+- Remove the `![content-visibility:visible]` override in `Conversation.tsx` and `PortalChat.tsx`. Manual test matrix: scroll up through a long session, jump to bottom, streaming while scrolled up, find-in-page, older-page prepend keeps position. Fallback if it misbehaves: window the turn list.
 - Incremental reducer in `packages/shared/src/transcript.ts`: `createTurnReducer()` holds the tool and permission maps and applies one event, replacing only the block it touched. `appendEvent` becomes O(1) per event. Turns keep `firstSeq`/`lastSeq` and drop the raw `events` array once closed.
 - `SessionPane`: coalesce SSE events per animation frame before `setHistory`.
 - Streaming markdown stays formatted: the assistant block is split at the last settled paragraph; settled paragraphs are memoized on their text, only the tail re-parses per frame.
@@ -102,13 +102,13 @@ Tests: `acp-runtime.test.mjs` row-count and seq assertions updated for 1a/1b; ne
 
 ### W5. Orchestrator (server, web)
 
-- **Thread paging.** `GET /api/portal/messages?before=<ordinal>&limit=30` and the per-thread form return `{ messages, hasMore, nextBefore }`, newest page by default, using the existing `(thread_id, ordinal)` index. Tool parts ship without `output`; `GET /api/portal/threads/:id/messages/:messageId` returns the full message and the card fetches it on expand. `PortalThread` loads the newest page, prepends older pages on scroll-to-top through the scroller's prepend-preserve, and merges by id.
-- **Live updates.** The `messages` SSE event carries the appended message ids and `lastMessageAt`. The client fetches only messages newer than what it holds and merges by id; it skips the fetch when the event's run is the turn it just streamed. `reconnected` refetches the newest page and merges. `PortalPage` unmounts hidden threads that are not streaming.
+- **Chat paging.** `GET /api/portal/messages?before=<ordinal>&limit=30` returns `{ messages, hasMore, nextBefore }`, newest page by default, using the existing ordinal index. Tool parts ship without `output`; `GET /api/portal/messages/:id` returns the full message and the card fetches it on expand. `PortalChat` loads the newest page, prepends older pages on scroll-to-top through the scroller's prepend-preserve, and merges by id.
+- **Live updates.** The `messages` SSE event carries the appended message ids and `lastMessageAt`. The client fetches only messages newer than what it holds and merges by id; it skips the fetch when the event's run is the turn it just streamed. `reconnected` refetches the newest page and merges.
 - **Status.** `status()` memoized for 1 s; the stream-open handler reuses its reads instead of re-running `listItems`, `pending`, and `listIntents`; `emitStatus` debounced 250 ms and skipped with no listeners; settings and the API key cached in memory with `settings.subscribe` invalidation; `approvals.pending()` becomes read-only and expiry moves to the jobs worker tick.
 - **Items, perf-only.** `listItems({ status })` with an index on `(status, created_at)`; the UI and SSE get open and snoozed only; one-off SQL resolves the 31 stranded pre-2026-09-25 `session_*`/`pr_*` rows. Retiring items is a follow-up.
 - **World refresh.** While any tab is present, a background full refresh runs when the last one is older than 5 min (throttled to one in flight). A chat turn never awaits it: it starts on the current world and the prompt states the world's age. `GET /api/portal/world` serves the latest build and refreshes in the background.
-- **Thread persistence.** `writeMessages` stops deleting and reinserting the whole thread: targeted `DELETE` below the trim ordinal and `UPDATE` of trimmed rows; the thread is read once per turn and passed along.
-- Tests: paging and cursor tests in `orchestrator-*.test.mjs`; SSE merge tests in the web thread spec; status memo and read-only pending tests; a Playwright spec for scroll-to-top paging.
+- **Chat persistence.** `writeMessages` stops deleting and reinserting the whole chat: targeted `DELETE` below the trim ordinal and `UPDATE` of trimmed rows; the chat is read once per turn and passed along.
+- Tests: paging and cursor tests in `orchestrator-*.test.mjs`; SSE merge tests in the web chat spec; status memo and read-only pending tests; a Playwright spec for scroll-to-top paging.
 
 ### W6. Git panel cache (web, server)
 

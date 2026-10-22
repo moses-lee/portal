@@ -16,7 +16,7 @@ import { registerJobRoutes } from "./jobs/routes.ts";
 import { registerMemoryRoutes } from "./memory/routes.ts";
 import { parseItemPatch } from "./store.ts";
 import type { Item, OrchestratorEvent, OrchestratorMessage } from "./types.ts";
-import { MAIN_THREAD_ID, MAX_BULK_ITEMS } from "./types.ts";
+import { MAX_BULK_ITEMS } from "./types.ts";
 import { registerWorldRoutes } from "./world/routes.ts";
 import { parseView } from "./workspace/view.ts";
 
@@ -42,7 +42,7 @@ function parseIndex(value: string): number | null {
 }
 
 /**
- * The user message the thread will keep, rebuilt from what the client sent: its id (so the
+ * The user message the chat will keep, rebuilt from what the client sent: its id (so the
  * browser's copy and the stored one line up) and the text of its text parts, joined. Everything
  * else (other part kinds, metadata) is the server's to decide, so nothing arbitrary gets stored
  * or shown to the model. Null when there is no text.
@@ -109,20 +109,35 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
   const badPage = (reply: FastifyReply) => reply.code(400).send({ error: "Expected numeric before, after, and limit." });
 
   /**
-   * `GET /api/portal/messages?before=&after=&limit=` — one page of the main thread (see
-   * `MessagePage`): the newest 30, those before a cursor, or those after one. Tool parts come without
-   * their input and output; `GET /api/portal/threads/main/messages/:messageId` has the whole message.
+   * `GET /api/portal/messages?before=&after=&limit=` — one page of the chat (see `MessagePage`):
+   * the newest 30, those before a cursor, or those after one. Tool parts come without their input
+   * and output; `GET /api/portal/messages/:id` has the whole message.
    */
   app.get("/api/portal/messages", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     const query = pageQuery(req.query);
     if (!query) return badPage(reply);
-    return runtime.history(MAIN_THREAD_ID, query);
+    return runtime.history(query);
   });
 
-  /** Answers a chat turn in `threadId` for the request's `{ message, view? }` body. */
-  async function postMessage(req: FastifyRequest, reply: FastifyReply, threadId: string) {
+  /** `GET /api/portal/messages/:id` — one message in full `{ message }` (tool input and output included); 404 when unknown. */
+  app.get<IdParams>("/api/portal/messages/:id", async (req, reply) => {
+    const runtime = await runtimeFor(req, reply);
+    if (!runtime) return reply;
+    const message = await runtime.message(req.params.id);
+    if (!message) return reply.code(404).send({ error: "Unknown message." });
+    return { message };
+  });
+
+  /**
+   * `POST /api/portal/messages` — body `{ message, view? }`, the newest user message only (the server
+   * owns the history); only its id and text are used. `view` (`{ sessionId, tabId, paneId }`, each a
+   * string or null) is what the sending device is looking at; the turn's prompt names it. Answers
+   * with the AI SDK UI message stream; 409 (JSON) while not ready or while Portal is answering. Not
+   * compressed: gzip would hold the stream's chunks back.
+   */
+  app.post("/api/portal/messages", { compress: false }, async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
     const body = readObject(req.body);
@@ -135,53 +150,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
-    return sendWebResponse(reply, await runtime.chat(message, threadId, view));
-  }
-
-  /**
-   * `POST /api/portal/messages` — body `{ message, view? }`, the newest user message only (the server
-   * owns the history); only its id and text are used. `view` (`{ sessionId, tabId, paneId }`, each a
-   * string or null) is what the sending device is looking at; the turn's prompt names it. A turn in
-   * the main thread; answers with the AI SDK UI message stream; 409 (JSON) while not ready or while
-   * the main thread is answering. Not compressed: gzip would hold the stream's chunks back.
-   */
-  app.post("/api/portal/messages", { compress: false }, (req, reply) => postMessage(req, reply, MAIN_THREAD_ID));
-
-  /** `GET /api/portal/threads` — `{ threads }`: main first, then side threads by latest activity. */
-  app.get("/api/portal/threads", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    return { threads: await runtime.listThreads() };
-  });
-
-  /** `GET /api/portal/threads/:id/messages?before=&after=&limit=` — one page of that thread (as the main route); 404 for an unknown thread. */
-  app.get<IdParams>("/api/portal/threads/:id/messages", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    if (!(await runtime.hub.store.getThread(req.params.id))) return reply.code(404).send({ error: `Unknown thread "${req.params.id}".` });
-    const query = pageQuery(req.query);
-    if (!query) return badPage(reply);
-    return runtime.history(req.params.id, query);
-  });
-
-  /** `GET /api/portal/threads/:id/messages/:messageId` — one message in full `{ message }` (tool input and output included); 404 when unknown. */
-  app.get<{ Params: { id: string; messageId: string } }>("/api/portal/threads/:id/messages/:messageId", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    const message = await runtime.message(req.params.id, req.params.messageId);
-    if (!message) return reply.code(404).send({ error: "Unknown message." });
-    return { message };
-  });
-
-  /** `POST /api/portal/threads/:id/messages` — as `POST /api/portal/messages`, in that thread (each thread has its own lock). */
-  app.post<IdParams>("/api/portal/threads/:id/messages", { compress: false }, (req, reply) => postMessage(req, reply, req.params.id));
-
-  /** Stops that thread's chat turn. Main returns its dropped queue; side threads answer 204. */
-  app.post<IdParams>("/api/portal/threads/:id/cancel", async (req, reply) => {
-    const runtime = await runtimeFor(req, reply);
-    if (!runtime) return reply;
-    const queued = runtime.cancel(req.params.id);
-    return req.params.id === MAIN_THREAD_ID ? { queued } : reply.code(204).send();
+    return sendWebResponse(reply, await runtime.chat(message, view));
   });
 
   app.get("/api/portal/queue", async (req, reply) => {
@@ -225,7 +194,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return { item: runtime.removeQueued(req.params.id) };
   });
 
-  /** `GET /api/portal/activity?before=&limit=&kind=&threadId=&runId=` — `{ entries }`, newest first. */
+  /** `GET /api/portal/activity?before=&limit=&kind=&runId=` — `{ entries }`, newest first. */
   app.get<{ Querystring: Record<string, string | undefined> }>("/api/portal/activity", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
@@ -233,12 +202,12 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     return {
       entries: await runtime.hub.activity.list({
         before: queryInt(query.before), limit: queryInt(query.limit), kind: queryString(query.kind),
-        threadId: queryString(query.threadId), runId: queryString(query.runId),
+        runId: queryString(query.runId),
       }),
     };
   });
 
-  /** Stops the main thread's chat turn and returns its dropped queue; background jobs keep going. */
+  /** Stops the chat turn and returns its dropped queue; background jobs keep going. */
   app.post("/api/portal/cancel", async (req, reply) => {
     const runtime = await runtimeFor(req, reply);
     if (!runtime) return reply;
@@ -295,7 +264,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
 
   /**
    * `GET /api/portal/stream` — Server-Sent Events feed of the orchestrator: opens with `status`,
-   * `items`, `threads`, `approvals`, `intents`, `workspace`, `room` (left out when the room cannot be read), and `monitoring` (once there is a sample), then forwards every runtime event as
+   * `items`, `approvals`, `intents`, `workspace`, `room` (left out when the room cannot be read), and `monitoring` (once there is a sample), then forwards every runtime event as
    * it happens (see `OrchestratorEvent`). Holding it open counts the browser as present, which picks
    * the shorter cadence of jobs that have an idle one.
    */
@@ -304,8 +273,8 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     if (!runtime) return reply;
     // Read before the reply is hijacked, so a failure still answers `{ error }` with its status.
     // The browser shows open and snoozed items only; resolved ones stay in the store for the agent.
-    const [status, items, threads, approvals, intents, workspace, room] = await Promise.all([
-      runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.listThreads(), runtime.hub.approvals.pending(),
+    const [status, items, approvals, intents, workspace, room] = await Promise.all([
+      runtime.status(), runtime.listItems({ status: ["open", "snoozed"] }), runtime.hub.approvals.pending(),
       runtime.hub.jobs.listIntents({ status: ["active"] }), runtime.hub.workspace.read(),
       // The room is decoration: a census that cannot count opens the stream without it (the next push brings it).
       ctx.room.state().catch((err: unknown) => {
@@ -315,7 +284,7 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: AppContext
     ]);
     const monitoring = ctx.monitoring.summary();
     const opening: OrchestratorEvent[] = [
-      { type: "status", status }, { type: "items", items }, { type: "threads", threads },
+      { type: "status", status }, { type: "items", items },
       { type: "approvals", approvals }, { type: "intents", intents }, { type: "workspace", workspace },
       { type: "queue", queue: runtime.queue() },
       ...(room ? [{ type: "room" as const, state: room }] : []),

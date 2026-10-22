@@ -35,7 +35,7 @@ test("on start the stored job is forced into shape: active, hourly, renamed, its
   });
   await shared.claimDue({ limit: 5, leaseMs: 60 * MIN });
   await shared.insertRun({
-    id: "stale1", jobId: "tick", kind: "tick", threadId: "main", parentRunId: null, status: "running", trigger: "schedule", startedAt: T0 - 60 * MIN,
+    id: "stale1", jobId: "tick", kind: "tick", parentRunId: null, status: "running", trigger: "schedule", startedAt: T0 - 60 * MIN,
     finishedAt: null, model: null, usage: null, log: [], result: null, summary: null, error: null,
   });
   const h = await started(jobsHarness(t, { store: shared }));

@@ -93,7 +93,6 @@ const baseStatus = {
   model: "claude-opus-5-5",
   busy: false,
   presence: 1,
-  busyThreads: [],
   runs: [],
   nextJob: { id: "consolidate", title: "Curate memory", at: now + 6 * min },
   counts: { needsYou: 0, inbox: 0, approvals: 0, intents: 0 },
@@ -109,7 +108,7 @@ test("the status line keeps the server's words and adds the countdown", () => {
   });
   const running = {
     ...baseStatus,
-    runs: [{ id: "r1", kind: "helper", jobId: "j1", threadId: null, startedAt: now - min, summary: "Reading PR 42" }],
+    runs: [{ id: "r1", kind: "helper", jobId: "j1", startedAt: now - min, summary: "Reading PR 42" }],
     line: "Reading PR 42…",
   };
   assert.deepEqual(describeStatusLine(running, now), {
@@ -133,14 +132,13 @@ test("the status line keeps the server's words and adds the countdown", () => {
 });
 
 test("the room's activity marker follows the user's turn and pending approvals, never background jobs", () => {
-  const status = (busyThreads, runs = []) => ({ ready: true, busy: runs.length > 0 || busyThreads.length > 0, busyThreads, runs });
+  const status = (busy, runs = []) => ({ ready: true, busy, runs });
   assert.equal(portalActivity(null, []), "idle");
-  assert.equal(portalActivity(status([]), []), "idle");
-  assert.equal(portalActivity(status([], [{ id: "r1", kind: "intent_check" }]), []), "idle", "a job running is not the user waiting");
-  assert.equal(portalActivity(status(["main"]), []), "working");
-  assert.equal(portalActivity(status(["t-review"]), []), "working", "any thread's turn counts");
-  assert.equal(portalActivity(status(["main"]), [{ status: "pending" }]), "waiting", "an approval outranks the turn");
-  assert.equal(portalActivity(status([]), [{ status: "approved" }]), "idle");
+  assert.equal(portalActivity(status(false), []), "idle");
+  assert.equal(portalActivity(status(false, [{ id: "r1", kind: "intent_check" }]), []), "idle", "a job running is not the user waiting");
+  assert.equal(portalActivity(status(true), []), "working");
+  assert.equal(portalActivity(status(true), [{ status: "pending" }]), "waiting", "an approval outranks the turn");
+  assert.equal(portalActivity(status(false), [{ status: "approved" }]), "idle");
 });
 
 test("chat times: a clock, day dividers, and the day added only off the divider's day", () => {

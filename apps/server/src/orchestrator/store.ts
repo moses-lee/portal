@@ -6,10 +6,10 @@
  */
 import { randomBytes } from "node:crypto";
 import type {
-  Item, ItemAction, ItemKind, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, Thread, ThreadInput, ThreadPatch, TickSnapshot,
+  Item, ItemAction, ItemKind, ItemLinks, ItemPatch, OrchestratorMessage, OrchestratorStore, PullRef, Scope, TickSnapshot,
 } from "./types.ts";
 import type { LegacyTickReport } from "./jobs/legacy.ts";
-import { MAIN_THREAD_ID, emptyScope } from "./types.ts";
+import { emptyScope } from "./types.ts";
 
 /** A store operation the caller got wrong; `status` is the HTTP status to answer with. */
 export class OrchestratorStoreError extends Error {
@@ -112,7 +112,7 @@ function isPullRef(value: unknown): value is PullRef {
 
 function isItemLinks(value: unknown): value is ItemLinks {
   return isRecord(value) && isOptionalString(value.projectId) && isOptionalString(value.sessionId)
-    && isOptionalString(value.intentId) && isOptionalString(value.jobId) && isOptionalString(value.threadId) && isOptionalString(value.approvalId)
+    && isOptionalString(value.intentId) && isOptionalString(value.jobId) && isOptionalString(value.approvalId)
     && (value.pull === undefined || isPullRef(value.pull));
 }
 
@@ -156,7 +156,7 @@ export function parseItemPatch(input: unknown): ItemPatch {
     kind: { check: (v) => isString(v) && itemKindSet.has(v), expected: `one of ${oneOf(itemKindSet)}` },
     title: { check: isString, expected: "a string" },
     body: { check: isString, expected: "a string" },
-    links: { check: isItemLinks, expected: "an object of projectId, sessionId, intentId, jobId, threadId, approvalId (strings) and pull ({ repo, number, url })" },
+    links: { check: isItemLinks, expected: "an object of projectId, sessionId, intentId, jobId, approvalId (strings) and pull ({ repo, number, url })" },
     actions: { check: (v) => Array.isArray(v) && v.every(isItemAction), expected: `an array of actions of type ${Object.keys(actionFields).join(", ")} with their string fields` },
     status: { check: (v) => isString(v) && itemStatuses.has(v), expected: `one of ${oneOf(itemStatuses)}` },
     snoozedUntil: { check: isNullableEpoch, expected: "an integer (epoch ms) or null" },
@@ -216,13 +216,6 @@ export function patchItem(current: Item, allowed: ItemPatch): Item {
   return loadable("item", checkSnooze({ ...current, ...allowed, id: current.id, createdAt: current.createdAt, updatedAt: after(current.updatedAt) }), isItem);
 }
 
-export const unknownThread = (id: string) => new OrchestratorStoreError(`Unknown thread "${id}".`, 404);
-
-/** The main thread as a fresh store holds it. */
-export function mainThread(at = Date.now()): Thread {
-  return { id: MAIN_THREAD_ID, kind: "main", title: "Portal", status: "active", scope: emptyScope(), intentId: null, createdAt: at, updatedAt: at, lastMessageAt: null };
-}
-
 /** `partial` over an empty scope, every list copied and deduplicated. */
 export function normalizeScope(partial: Partial<Scope> | undefined): Scope {
   const scope = emptyScope();
@@ -247,34 +240,6 @@ export function normalizeScope(partial: Partial<Scope> | undefined): Scope {
   };
 }
 
-export function buildThread(input: ThreadInput, id: string, at = Date.now()): Thread {
-  const title = input.title.trim();
-  if (!title) throw new OrchestratorStoreError("A thread needs a title.", 400);
-  return { id, kind: "side", title, status: "active", scope: normalizeScope(input.scope), intentId: input.intentId ?? null, createdAt: at, updatedAt: at, lastMessageAt: null };
-}
-
-export function patchThread(current: Thread, patch: ThreadPatch): Thread {
-  const next: Thread = { ...current, updatedAt: after(current.updatedAt) };
-  if (patch.title !== undefined) {
-    if (!patch.title.trim()) throw new OrchestratorStoreError("A thread needs a title.", 400);
-    next.title = patch.title.trim();
-  }
-  if (patch.status !== undefined) {
-    if (patch.status !== "active" && patch.status !== "archived") throw new OrchestratorStoreError("A thread's status is active or archived.", 400);
-    if (current.kind === "main" && patch.status === "archived") throw new OrchestratorStoreError("The main thread cannot be archived.", 400);
-    next.status = patch.status;
-  }
-  if (patch.scope !== undefined) next.scope = normalizeScope(patch.scope);
-  if (patch.intentId !== undefined) next.intentId = patch.intentId;
-  return next;
-}
-
-/** Main first, then side threads by latest activity. */
-export function sortThreads(threads: Thread[]): Thread[] {
-  const activity = (thread: Thread) => thread.lastMessageAt ?? thread.createdAt;
-  return [...threads].sort((a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : activity(b) - activity(a)));
-}
-
 /** Whether an item still stands for its condition, so a new one with the same fingerprint updates it rather than creating another. */
 export const isLive = (item: Item) => item.status === "open" || item.status === "snoozed";
 
@@ -284,14 +249,12 @@ export const isLive = (item: Item) => item.status === "open" || item.status === 
 
 /** In-memory implementation; what tests and disposable runtimes use. Every change is synchronous, so no queueing is needed. */
 export function createMemoryOrchestratorStore(): OrchestratorStore {
-  /** Rows with ordinals, as the database numbers them: one counter across every thread. */
-  const messages = new Map<string, { ordinal: number; message: OrchestratorMessage }[]>();
+  /** Rows with ordinals, as the database numbers them. */
+  let rows: { ordinal: number; message: OrchestratorMessage }[] = [];
   let nextOrdinal = 1;
-  const rowsOf = (threadId: string) => messages.get(threadId) ?? [];
-  const insert = (threadId: string, next: OrchestratorMessage[]) => {
-    messages.set(threadId, [...rowsOf(threadId), ...next.map((message) => ({ ordinal: nextOrdinal++, message }))]);
+  const insert = (next: OrchestratorMessage[]) => {
+    rows = [...rows, ...next.map((message) => ({ ordinal: nextOrdinal++, message }))];
   };
-  const threads = new Map<string, Thread>([[MAIN_THREAD_ID, mainThread()]]);
   /** Newest first. */
   let items: Item[] = [];
   let snapshot: TickSnapshot | null = null;
@@ -303,63 +266,37 @@ export function createMemoryOrchestratorStore(): OrchestratorStore {
     return item;
   }
 
-  function requireThread(id: string): Thread {
-    const thread = threads.get(id);
-    if (!thread) throw unknownThread(id);
-    return thread;
-  }
-
   return {
     ready: Promise.resolve(),
 
-    async readMessages(threadId = MAIN_THREAD_ID) {
-      return rowsOf(threadId).map((row) => row.message);
+    async readMessages() {
+      return rows.map((row) => row.message);
     },
-    async readMessageRows(threadId = MAIN_THREAD_ID) {
-      return rowsOf(threadId).map((row) => ({ ...row }));
+    async readMessageRows() {
+      return rows.map((row) => ({ ...row }));
     },
-    async readMessagePage(threadId, { before, after, limit }) {
-      const rows = rowsOf(threadId).filter((row) => (before === undefined || row.ordinal < before) && (after === undefined || row.ordinal > after));
+    async readMessagePage({ before, after, limit }) {
+      const matching = rows.filter((row) => (before === undefined || row.ordinal < before) && (after === undefined || row.ordinal > after));
       const forwards = after !== undefined && before === undefined;
-      const hasMore = rows.length > limit;
-      const page = forwards ? rows.slice(0, limit) : rows.slice(Math.max(0, rows.length - limit));
+      const hasMore = matching.length > limit;
+      const page = forwards ? matching.slice(0, limit) : matching.slice(Math.max(0, matching.length - limit));
       return { messages: page.map((row) => row.message), hasMore, before: page[0]?.ordinal ?? null, after: page.at(-1)?.ordinal ?? null };
     },
-    async getMessage(threadId, id) {
-      return rowsOf(threadId).find((row) => row.message.id === id)?.message ?? null;
+    async getMessage(id) {
+      return rows.find((row) => row.message.id === id)?.message ?? null;
     },
-    async writeMessages(next, threadId = MAIN_THREAD_ID) {
-      requireThread(threadId);
-      messages.set(threadId, []);
-      insert(threadId, next);
+    async writeMessages(next) {
+      rows = [];
+      insert(next);
     },
-    async appendMessages(next, threadId = MAIN_THREAD_ID) {
-      const thread = requireThread(threadId);
-      insert(threadId, next);
-      if (next.length > 0) threads.set(threadId, { ...thread, lastMessageAt: Date.now() });
+    async appendMessages(next) {
+      insert(next);
     },
-    async deleteMessagesThrough(threadId, ordinal) {
-      messages.set(threadId, rowsOf(threadId).filter((row) => row.ordinal > ordinal));
+    async deleteMessagesThrough(ordinal) {
+      rows = rows.filter((row) => row.ordinal > ordinal);
     },
-    async replaceMessage(threadId, ordinal, message) {
-      messages.set(threadId, rowsOf(threadId).map((row) => (row.ordinal === ordinal ? { ordinal, message } : row)));
-    },
-
-    async listThreads() {
-      return sortThreads([...threads.values()]);
-    },
-    async getThread(id) {
-      return threads.get(id) ?? null;
-    },
-    async createThread(input) {
-      const thread = buildThread(input, newId((id) => threads.has(id)));
-      threads.set(thread.id, thread);
-      return thread;
-    },
-    async updateThread(id, patch) {
-      const thread = patchThread(requireThread(id), patch);
-      threads.set(id, thread);
-      return thread;
+    async replaceMessage(ordinal, message) {
+      rows = rows.map((row) => (row.ordinal === ordinal ? { ordinal, message } : row));
     },
 
     async listItems(filter) {

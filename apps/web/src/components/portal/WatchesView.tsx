@@ -9,7 +9,6 @@ import {
   CirclePause,
   Clock,
   LoaderCircle,
-  MessagesSquare,
   Pause,
   Play,
   ShieldQuestion,
@@ -89,7 +88,7 @@ function wakesLine(intent: Intent): string {
  * same with its end state, and Re-activate (`onReactivated` takes the card off the closed list).
  * The standing rule (every session Portal starts) is turned on and off instead, and never expires.
  */
-function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now: number; links: PortalLinks; onReactivated?: (intent: Intent) => void }) {
+function IntentCard({ intent, now, onReactivated }: { intent: Intent; now: number; onReactivated?: (intent: Intent) => void }) {
   const { putIntent } = usePortalLive();
   const { pending, error, run } = useRowAction();
   const closed = intent.status !== "active";
@@ -169,12 +168,6 @@ function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now
             </Collapsible>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-1">
-            {intent.threadId && (
-              <Button type="button" size="xs" variant="ghost" onClick={() => links.openThread(intent.threadId!)} className="text-muted-foreground">
-                <MessagesSquare />
-                Open thread
-              </Button>
-            )}
             {closed ? (
               <Button type="button" size="xs" variant="ghost" disabled={pending !== null} onClick={() => void setStatus("active")} className="text-muted-foreground">
                 <Play />
@@ -270,14 +263,6 @@ function JobRow({
               </button>
             </>
           )}
-          {job.threadId && (
-            <>
-              <span>·</span>
-              <button type="button" onClick={() => links.openThread(job.threadId!)} className="hover:text-foreground hover:underline">
-                reports to a thread
-              </button>
-            </>
-          )}
         </p>
         <ErrorLine>{error}</ErrorLine>
       </div>
@@ -308,7 +293,7 @@ function JobRow({
   );
 }
 
-function RunRow({ run, title, now, links }: { run: JobRun; title: string; now: number; links: PortalLinks }) {
+function RunRow({ run, title, now }: { run: JobRun; title: string; now: number }) {
   const [open, setOpen] = useState(false);
   const { pending, error, run: act } = useRowAction();
   const meta = runStatusMeta[run.status];
@@ -343,14 +328,6 @@ function RunRow({ run, title, now, links }: { run: JobRun; title: string; now: n
               )}
               <span>·</span>
               <span>{run.trigger}</span>
-              {run.threadId && (
-                <>
-                  <span>·</span>
-                  <button type="button" onClick={() => links.openThread(run.threadId!)} className="hover:text-foreground hover:underline">
-                    thread
-                  </button>
-                </>
-              )}
             </p>
             {run.error && <p className="mt-1 text-xs text-destructive">{run.error}</p>}
             <ErrorLine>{error}</ErrorLine>
@@ -549,7 +526,7 @@ export default function WatchesView({ links }: { links: PortalLinks }) {
           ) : (
             <div className="space-y-2.5">
               {[...intents].sort((a, b) => Number(b.source?.type === "portal_sessions") - Number(a.source?.type === "portal_sessions")).map((intent) => (
-                <IntentCard key={intent.id} intent={intent} now={now} links={links} />
+                <IntentCard key={intent.id} intent={intent} now={now} />
               ))}
             </div>
           )
@@ -565,7 +542,6 @@ export default function WatchesView({ links }: { links: PortalLinks }) {
                     key={intent.id}
                     intent={intent}
                     now={now}
-                    links={links}
                     onReactivated={(updated) => setClosed((prev) => (prev ?? []).filter((row) => row.id !== updated.id))}
                   />
                 ))}
@@ -606,7 +582,7 @@ export default function WatchesView({ links }: { links: PortalLinks }) {
         {runs && runs.length > 0 && (
           <ul aria-label="Recent runs" className="divide-y divide-white/5 rounded-2xl border border-white/8 bg-white/[.02]">
             {runs.map((run) => (
-              <RunRow key={run.id} run={run} title={runTitle(run)} now={now} links={links} />
+              <RunRow key={run.id} run={run} title={runTitle(run)} now={now} />
             ))}
           </ul>
         )}

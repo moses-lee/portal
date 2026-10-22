@@ -12,7 +12,7 @@ import { newId } from "../store.ts";
 
 export type ApprovalInput = Pick<
   Approval,
-  "tool" | "title" | "summary" | "input" | "risk" | "origin" | "repo" | "threadId" | "runId" | "jobId" | "intentId" | "itemId" | "requestedAt" | "expiresAt"
+  "tool" | "title" | "summary" | "input" | "risk" | "origin" | "repo" | "runId" | "jobId" | "intentId" | "itemId" | "requestedAt" | "expiresAt"
 >;
 
 export type GrantScope = ApprovalGrant["scope"];

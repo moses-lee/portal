@@ -136,11 +136,11 @@ test("a pass applies the plan: promotions, a supersession the authority rule all
   assert.equal(result.line, "Memory curation promoted 2, replaced 1, rejected 1, expired 1, rewrote 2 summaries; 1 claim of yours needs re-confirming; 1 left in the inbox.");
   assert.equal(run.summary, result.line);
 
-  // The digest line in the main thread points at the run.
+  // The digest line in the chat points at the run.
   const [message] = (await h.store.readMessages("main")).slice(-1);
   assert.equal(message.parts[0].text, result.line);
   assert.deepEqual(message.metadata.run, { id: run.id, kind: "consolidate" });
-  assert.ok(h.events.some((event) => event.type === "messages" && event.threadId === "main"));
+  assert.ok(h.events.some((event) => event.type === "messages"));
 
   // The user's overdue claim is a Needs-you item that links to the job.
   const item = await h.store.findItemByFingerprint(RECONFIRM_FINGERPRINT);

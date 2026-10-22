@@ -3,7 +3,7 @@
  * `get_workspace` (read-only), `open_in_workspace`, `arrange_tab`, `close_in_workspace`, and
  * `rename_tab`. A background turn that names its tools (a helper, a scheduled job) can get
  * `get_workspace`, never the four writers (decision 14). Every edit goes through the workspace service as `portal`, which logs it with the
- * turn's run and thread and pushes the new workspace to every page. Session ids resolve through
+ * turn's run and pushes the new workspace to every page. Session ids resolve through
  * `requireSession` (a full id or a unique 4+ character prefix); tab ids the same way through
  * `pickById`. Results that open or arrange carry the tab's id and its path (`/tabs/<id>`), which the
  * reply should link; nothing here changes what any device shows (decision 23).
@@ -37,7 +37,7 @@ export function shapeOf(node: LayoutNode): string {
 export function workspaceTools(ctx: DomainToolContext): ToolSet {
   if (!ctx.interactive) return {};
   const { deps, hub } = ctx;
-  const context = () => ({ runId: ctx.turn.runId, ...(ctx.turn.threadId ? { threadId: ctx.turn.threadId } : {}) });
+  const context = () => ({ runId: ctx.turn.runId });
   const pickTab = (workspace: Workspace, id: string): Tab => pickById(workspace.tabs, id, "tab", (tab) => tab.title, "tabId");
 
   const reading: ToolSet = {

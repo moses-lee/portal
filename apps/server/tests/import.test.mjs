@@ -175,7 +175,7 @@ test("imports every domain and reads back through the real stores", async (t) =>
   const [creds] = await db.select({ ciphertext: schema.credentials.ciphertext }).from(schema.credentials).limit(1);
   assert.ok(!creds.ciphertext.includes("sk-"), "keys are stored sealed");
 
-  // Orchestrator: thread order, invalid records dropped, first of a duplicate id kept, newest 50 ticks.
+  // Orchestrator: chat order, invalid records dropped, first of a duplicate id kept, newest 50 ticks.
   const orchestrator = createPgOrchestratorStore({ db });
   const messages = await orchestrator.readMessages();
   assert.deepEqual(messages.map((m) => m.id), ["m1", "m2"]);

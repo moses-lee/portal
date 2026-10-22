@@ -4,22 +4,18 @@ import { useLayoutEffect, useState, type RefObject } from "react";
 import { Bot, X } from "lucide-react";
 import IconButton from "../IconButton";
 import { useAgentInbox } from "../portal/AgentInbox";
-import { usePortalLive } from "../portal/PortalLive";
-import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 
 /**
  * Portal's latest reply on a phone, while Agent is closed: one line floating just above the
  * composer (over the bar's host, so it clears the composer whether or not the keyboard has hidden
- * the bar). A tap opens Agent on the reply's thread; the cross or `REPLY_PREVIEW_MS` dismisses it.
+ * the bar). A tap opens Agent; the cross or `REPLY_PREVIEW_MS` dismisses it.
  * `host` is the `data-pane-bar-host` it is positioned in.
  */
 export default function AgentReplyToast({ host }: { host: RefObject<HTMLElement | null> }) {
   const agent = useAgentInbox();
-  const { threads } = usePortalLive();
   const preview = agent?.preview ?? null;
   const bottom = useAboveComposer(host, preview !== null);
   if (!agent || !preview || bottom === null) return null;
-  const thread = preview.threadId === MAIN_THREAD_ID ? null : threads.find((t) => t.id === preview.threadId);
   return (
     <div
       key={preview.key}
@@ -30,12 +26,12 @@ export default function AgentReplyToast({ host }: { host: RefObject<HTMLElement 
     >
       <button
         type="button"
-        onClick={() => agent.openAgent(preview.threadId)}
+        onClick={() => agent.openAgent()}
         className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left focus-visible:outline-none"
       >
         <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">
-          <span className="font-medium">{thread ? `Portal in ${thread.title}:` : "Portal replied:"}</span>{" "}
+          <span className="font-medium">Portal replied:</span>{" "}
           <span className="text-foreground/80">{preview.text}</span>
         </span>
       </button>

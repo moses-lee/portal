@@ -3,8 +3,8 @@ import test from "node:test";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { FIRST_TICK_DELAY_MS } from "../src/orchestrator/jobs/tick-job.ts";
 import {
-  CHAT_REFRESH_AFTER_MS, HISTORY_BUDGET_TOKENS, HISTORY_WINDOW, MAX_THREAD_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, needsChatRefresh,
-  omitToolIO, trimThread,
+  CHAT_REFRESH_AFTER_MS, HISTORY_BUDGET_TOKENS, HISTORY_WINDOW, MAX_CHAT_MESSAGES, TRIMMED_TOOL_IO, createOrchestratorRuntime, historyWindow, needsChatRefresh,
+  omitToolIO, trimChat,
 } from "../src/orchestrator/runtime.ts";
 import { createMemoryOrchestratorStore } from "../src/orchestrator/store.ts";
 import { TOOL_IO_OMITTED } from "../src/orchestrator/types.ts";
@@ -122,7 +122,7 @@ test("a failed queued turn leaves later prompts waiting instead of draining the 
   runtime.cancel();
 });
 
-test("Stop drops the main queue and aborts its turn; cancelling a side thread leaves it alone", async (t) => {
+test("Stop drops the queue and aborts the turn", async (t) => {
   const { runtime, store } = setup(t, {
     doStream: ({ abortSignal }) => new Promise((_, reject) => abortSignal.addEventListener("abort", () => reject(abortSignal.reason))),
   });
@@ -131,8 +131,6 @@ test("Stop drops the main queue and aborts its turn; cancelling a side thread le
   const a = (await runtime.enqueue("second")).queued;
   const b = (await runtime.enqueue("third")).queued;
   runtime.beginQueueEdit(a.id);
-  assert.deepEqual(runtime.cancel("side"), []);
-  assert.equal(runtime.queue().length, 2);
   assert.deepEqual(runtime.cancel().map((item) => item.id), [a.id, b.id]);
   await response.text();
   await flush();
@@ -318,7 +316,7 @@ test("chat puts curated memory in the system prompt, never the legacy memory tex
 
 test("the history window sent to the model starts at a user message", async (t) => {
   const { runtime, store, model } = setup(t, { doStream: textStream("ok") });
-  // A thread of nothing but tick notes: the window would begin with an assistant message.
+  // A chat of nothing but tick notes: the window would begin with an assistant message.
   await store.writeMessages(Array.from({ length: HISTORY_WINDOW - 1 }, (_, i) => storedMessage(i, "assistant")));
   const response = await runtime.chat(userMessage("hi", "new"));
   await response.text();
@@ -333,22 +331,22 @@ test("the history window sent to the model starts at a user message", async (t) 
   assert.equal(historyWindow(messages.slice(0, 2)).length, 2, "without any user message the window is kept as it is");
 });
 
-test("after a turn the stored thread is capped and older tool traffic is replaced by a placeholder", async (t) => {
+test("after a turn the stored chat is capped and older tool traffic is replaced by a placeholder", async (t) => {
   const { runtime, store } = setup(t, { doStream: textStream("ok") });
-  const seeded = MAX_THREAD_MESSAGES + 30;
+  const seeded = MAX_CHAT_MESSAGES + 30;
   await store.writeMessages(Array.from({ length: seeded }, (_, i) => storedMessage(i)));
   const response = await runtime.chat(userMessage("hi", "new"));
   await response.text();
   await flush();
 
   const messages = await runtime.hub.store.readMessages();
-  assert.equal(messages.length, MAX_THREAD_MESSAGES);
+  assert.equal(messages.length, MAX_CHAT_MESSAGES);
   assert.equal(messages.at(-1).role, "assistant");
   assert.equal(messages.at(-2).id, "new");
-  assert.equal(messages[0].id, `m${seeded + 2 - MAX_THREAD_MESSAGES}`, "the oldest messages were dropped");
+  assert.equal(messages[0].id, `m${seeded + 2 - MAX_CHAT_MESSAGES}`, "the oldest messages were dropped");
 
-  const outside = messages.slice(0, MAX_THREAD_MESSAGES - HISTORY_WINDOW);
-  const inside = messages.slice(MAX_THREAD_MESSAGES - HISTORY_WINDOW);
+  const outside = messages.slice(0, MAX_CHAT_MESSAGES - HISTORY_WINDOW);
+  const inside = messages.slice(MAX_CHAT_MESSAGES - HISTORY_WINDOW);
   for (const message of outside) {
     for (const part of message.parts) {
       if (part.type !== "tool-list_sessions") continue;
@@ -364,10 +362,10 @@ test("after a turn the stored thread is capped and older tool traffic is replace
   for (const message of intact) assert.deepEqual(message.parts[1].input, { limit: 5 });
 
   // Trimming is idempotent and reports when nothing changed.
-  const again = trimThread(messages);
+  const again = trimChat(messages);
   assert.equal(again.changed, false);
   assert.deepEqual(again.messages, messages);
-  assert.equal(trimThread([]).changed, false);
+  assert.equal(trimChat([]).changed, false);
 });
 
 test("the world refresh runs while a chat turn is answering, and the status shows only the chat turn", async (t) => {
@@ -379,7 +377,7 @@ test("the world refresh runs while a chat turn is answering, and the status show
   await runtime.ready;
   const pending = runtime.chat(userMessage("work"));
   await flush();
-  assert.deepEqual((await runtime.status()).busyThreads, ["main"]);
+  assert.equal((await runtime.status()).busy, true);
   await timers.advance(FIRST_TICK_DELAY_MS);
   assert.ok((await runtime.hub.world.store.list()).some((build) => build.reason === "tick"), "the refresh did not wait for the chat turn");
   assert.deepEqual((await runtime.status()).runs.map((run) => run.kind), ["chat"]);
@@ -388,33 +386,24 @@ test("the world refresh runs while a chat turn is answering, and the status show
   await flush();
   const status = await runtime.status();
   assert.equal(status.busy, false);
-  assert.deepEqual(status.busyThreads, []);
 });
 
-test("each thread has its own lock: a side thread answers while main is busy, a second turn in a busy thread is refused, and cancel stops only its thread", async (t) => {
-  const { runtime, store } = setup(t, {
+test("the chat takes one turn at a time: a second turn is refused while Portal answers, and cancel stops it", async (t) => {
+  const { runtime } = setup(t, {
     doStream: ({ abortSignal }) => new Promise((_, reject) => {
       abortSignal.addEventListener("abort", () => reject(abortSignal.reason ?? new Error("aborted")));
     }),
   });
   await runtime.ready;
-  const side = await store.createThread({ title: "Review acme/app#7", scope: { pulls: [{ repo: "acme/app", number: 7, url: "https://github.com/acme/app/pull/7" }] } });
-  const main = await runtime.chat(userMessage("main work", "m1"));
-  const other = await runtime.chat(userMessage("side work", "s1"), side.id);
+  const first = await runtime.chat(userMessage("work", "m1"));
   await flush();
-  assert.deepEqual((await runtime.status()).busyThreads.sort(), ["main", side.id].sort());
+  assert.equal((await runtime.status()).busy, true);
   await assert.rejects(runtime.chat(userMessage("again", "m2")), (err) => err.status === 409);
-  runtime.cancel(side.id);
-  await other.text().catch(() => {});
-  await flush();
-  assert.deepEqual((await runtime.status()).busyThreads, ["main"]);
-  assert.deepEqual((await runtime.history(side.id)).messages.map((message) => message.parts[0].text), ["side work"]);
-  assert.deepEqual((await runtime.history()).messages.map((message) => message.parts[0].text), ["main work"]);
+  assert.deepEqual((await runtime.history()).messages.map((message) => message.parts[0].text), ["work"]);
   runtime.cancel();
-  await main.text().catch(() => {});
+  await first.text().catch(() => {});
   await flush();
-  assert.deepEqual((await runtime.status()).busyThreads, []);
-  await assert.rejects(runtime.chat(userMessage("nowhere", "x1"), "no-such-thread"), (err) => err.status === 404);
+  assert.equal((await runtime.status()).busy, false);
 });
 
 test("chat turns and ticks are recorded as runs and the turn's tool calls land in the activity log", async (t) => {
@@ -555,7 +544,7 @@ test("background turns name their tools and get no loader", async (t) => {
   const { runtime, model } = setup(t, { doGenerate: async () => textStep("done") });
   await runtime.ready;
   const prepared = await prepareTurn(runtime.hub, {
-    kind: "helper", role: "chat", trigger: "agent", threadId: null, interactive: false, toolNames: ["list_items", "get_pull"], query: "", touched: new Set(),
+    kind: "helper", role: "chat", trigger: "agent", interactive: false, toolNames: ["list_items", "get_pull"], query: "", touched: new Set(),
   });
   await generateTurn(prepared, { prompt: "look" });
   const names = model.doGenerateCalls[0].tools.map((tool) => tool.name);

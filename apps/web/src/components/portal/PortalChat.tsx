@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { Archive, GitPullRequest, KeyRound, LoaderCircle, Sparkles, Target } from "lucide-react";
+import { KeyRound, LoaderCircle, Sparkles } from "lucide-react";
 import ChatComposer from "../ChatComposer";
 import PromptQueue from "../PromptQueue";
 import PortalMessage from "../PortalMessage";
@@ -22,11 +22,11 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { daySections, formatDateTime } from "@/lib/orchestrator/format";
+import { daySections } from "@/lib/orchestrator/format";
 import { mergeMessages, prependOlder, replaceWithPage } from "@/lib/orchestrator/message-merge";
-import { MAIN_THREAD_ID, type MessagePage, type OrchestratorMessage, type Thread } from "@/lib/orchestrator/types";
-import { threadDraftKey } from "@/lib/orchestrator/drafts";
-import { threadRoutes } from "@/lib/orchestrator/api";
+import type { MessagePage, OrchestratorMessage } from "@/lib/orchestrator/types";
+import { agentDraftKey } from "@/lib/orchestrator/drafts";
+import { portalRoutes as routes } from "@/lib/orchestrator/api";
 import { queueEditLabel } from "@/lib/prompt-queue";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 
@@ -83,87 +83,22 @@ class Acknowledgement {
   }
 }
 
-/** What a side thread is about, above its messages: title, when Portal opened it, and its scope. */
-function ThreadIntro({ thread, onOpenWatches }: { thread: Thread; onOpenWatches: () => void }) {
-  const { scope } = thread;
-  const chips = [
-    ...scope.pulls.map((pull) => ({ key: `pr:${pull.url}`, label: `${pull.repo}#${pull.number}`, href: pull.url })),
-    ...scope.repos.map((repo) => ({ key: `repo:${repo}`, label: repo, href: undefined })),
-    ...scope.people.map((login) => ({ key: `person:${login}`, label: `@${login}`, href: undefined })),
-    ...scope.taskTypes.map((slug) => ({ key: `task:${slug}`, label: slug, href: undefined })),
-  ];
-  return (
-    <div className="rounded-2xl border border-white/8 bg-white/[.02] px-4 py-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <Sparkles className="size-3.5" />
-        <span>Portal opened this thread {formatDateTime(thread.createdAt)}</span>
-        {thread.status === "archived" && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-white/8 px-1.5 leading-4 text-foreground/70">
-            <Archive className="size-3" /> Archived
-          </span>
-        )}
-      </div>
-      <h2 className="mt-1 text-[15px] font-medium tracking-[-.01em]">{thread.title}</h2>
-      {(chips.length > 0 || thread.intentId) && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {chips.map((chip) =>
-            chip.href ? (
-              <a
-                key={chip.key}
-                href={chip.href}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 rounded-full bg-white/6 px-2 text-[11px] leading-5 text-foreground/80 hover:bg-white/10"
-              >
-                <GitPullRequest className="size-3" />
-                {chip.label}
-              </a>
-            ) : (
-              <span key={chip.key} className="rounded-full bg-white/6 px-2 text-[11px] leading-5 text-foreground/80">
-                {chip.label}
-              </span>
-            ),
-          )}
-          {thread.intentId && (
-            <button
-              type="button"
-              onClick={onOpenWatches}
-              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 text-[11px] leading-5 text-primary hover:bg-primary/15"
-            >
-              <Target className="size-3" />
-              View watch
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /**
- * One thread's conversation: its history, its composer, its own send and stop. Turns go through
- * the thread's message route (only the newest user message; the server owns history). Sending
- * behaves as on a session page (`useSend`): the text stays in the box, with "Sending…", until the
- * server has taken the message, which for Portal is the reply stream opening (by then the message
- * is stored). The composer waits only for this thread's own turn; background jobs and other threads
- * never block it. The page keeps visited threads mounted (hidden) so a reply keeps streaming while
- * the user looks elsewhere.
+ * The Agent chat: its history, its composer, its send and stop. Turns go through the message route
+ * (only the newest user message; the server owns history). Sending behaves as on a session page
+ * (`useSend`): the text stays in the box, with "Sending…", until the server has taken the message,
+ * which for Portal is the reply stream opening (by then the message is stored). The composer waits
+ * only for the chat turn; background jobs never block it. The page keeps the chat mounted (hidden)
+ * so a reply keeps streaming while the user looks elsewhere.
  */
-export default function PortalThread({
-  threadId,
-  thread,
+export default function PortalChat({
   visible,
   handlers,
-  onOpenWatches,
   onNavigate,
 }: {
-  threadId: string;
-  /** Null until the thread list arrives, or for a thread the server does not know. */
-  thread: Thread | null;
   visible: boolean;
   /** What the rows link to; only a curation run's digest line uses it. */
   handlers: Pick<ItemCardHandlers, "onOpenCurationRun">;
-  onOpenWatches: () => void;
   /** Open an internal reply link in the shell's current workspace or surface. */
   onNavigate?: (path: string) => void;
 }) {
@@ -174,8 +109,7 @@ export default function PortalThread({
   const currentView = useStableCallback((): WorkspaceView => {
     return { sessionId: focus.sessionId, tabId: focus.tabId, paneId: focus.paneId };
   });
-  const routes = useMemo(() => threadRoutes(threadId), [threadId]);
-  const key = threadDraftKey(threadId);
+  const key = agentDraftKey;
   const [ack] = useState(() => new Acknowledgement());
   const transport = useMemo(
     () =>
@@ -189,15 +123,15 @@ export default function PortalThread({
           return response;
         },
       }),
-    [routes, ack, currentView],
+    [ack, currentView],
   );
-  /** Bumped whenever the server's thread should replace the local one; the load waits for our own turn to end. */
+  /** Bumped whenever the server's chat should replace the local one; the load waits for our own turn to end. */
   const [historyRequest, setHistoryRequest] = useState(0);
   const refetchHistory = useCallback(() => setHistoryRequest((n) => n + 1), []);
   /** Shows an error that arrived after the server took the message (the reply broke off); set by `useSend` below. */
   const reportError = useRef<(message: string | null) => void>(() => {});
   const { messages, setMessages, sendMessage, stop, status: chatStatus } = useChat<OrchestratorMessage>({
-    id: `portal:${threadId}`,
+    id: "portal",
     transport,
     onFinish: ({ isError }) => {
       if (!isError) ack.accept();
@@ -206,7 +140,7 @@ export default function PortalThread({
       const message = describeChatError(error);
       // Before the acknowledgement the send itself failed (useSend shows it); after, the reply did.
       if (!ack.refuse(new Error(message))) reportError.current(message);
-      // The server did not keep this turn; reloading the thread drops the local copy.
+      // The server did not keep this turn; reloading the chat drops the local copy.
       refetchHistory();
     },
   });
@@ -216,7 +150,7 @@ export default function PortalThread({
   const [historyError, setHistoryError] = useState<string | null>(null);
   /** The newest request already answered; a failed turn is what asks for the next one. */
   const [historyServed, setHistoryServed] = useState(-1);
-  /** Where the loaded messages sit in the thread: cursors for the page before and for what arrived since. */
+  /** Where the loaded messages sit in the chat: cursors for the page before and for what arrived since. */
   const cursor = useRef<{ before: number | null; after: number | null }>({ before: null, after: null });
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -257,7 +191,7 @@ export default function PortalThread({
     };
     void load();
     return () => controller.abort();
-  }, [historyRequest, historyServed, responding, routes, setMessages, remoteSince]);
+  }, [historyRequest, historyServed, responding, setMessages, remoteSince]);
 
   /**
    * Bring in what the server appended since the newest message held (a job's note, the stored copy
@@ -278,10 +212,10 @@ export default function PortalThread({
     } catch {
       // The next event, or a reconnect, tries again.
     }
-  }, [routes, setMessages, refetchHistory, remoteSince]);
+  }, [setMessages, refetchHistory, remoteSince]);
 
   usePortalEvents((event) => {
-    if (event.type === "chat-message" && event.threadId === threadId) {
+    if (event.type === "chat-message") {
       // A history request already in flight must not erase a newer streaming snapshot.
       remoteMessages.current.set(event.message.id, { message: event.message, revision: ++remoteRevision.current, streaming: event.message.role === "assistant" && !event.done });
       if (remoteMessages.current.size > 200) remoteMessages.current.delete(remoteMessages.current.keys().next().value!);
@@ -290,7 +224,7 @@ export default function PortalThread({
       else setMessages((prev) => mergeMessages(prev, [event.message]));
       return;
     }
-    if (event.type !== "reconnected" && !(event.type === "messages" && (event.threadId ?? MAIN_THREAD_ID) === threadId)) return;
+    if (event.type !== "reconnected" && event.type !== "messages") return;
     // The SDK owns the message list while it streams; the server's copies are merged once it is done.
     if (responding) newerPending.current = true;
     else void fetchNewer();
@@ -323,7 +257,7 @@ export default function PortalThread({
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [routes, setMessages, historyLoading]);
+  }, [setMessages, historyLoading]);
 
   /** A paged message comes without its tool traffic; opening a tool row fetches the whole message once. */
   const loadingToolIO = useRef(new Set<string>());
@@ -342,14 +276,12 @@ export default function PortalThread({
         loadingToolIO.current.delete(messageId);
       }
     },
-    [routes, setMessages],
+    [setMessages],
   );
 
-  const isMain = threadId === MAIN_THREAD_ID;
   const ready = status?.ready ?? false;
-  const archived = thread?.status === "archived";
-  /** A turn in this thread that this view did not start (another tab, or one still running from before a reload). */
-  const otherTurn = !responding && !!status?.busyThreads.includes(threadId);
+  /** A turn this view did not start (another tab, or one still running from before a reload). */
+  const otherTurn = !responding && !!status?.busy;
 
   /** Start the turn; settles when the reply stream opens (taken) or the send is refused. */
   const submit = useCallback(
@@ -361,10 +293,9 @@ export default function PortalThread({
     [sendMessage, ack],
   );
   const { draft, setDraft, sending, error: chatError, send, reportError: setChatError, queue, loaded: queueLoaded, editingId, editQueued, cancelEdit, removeQueued, stop: stopTurn, stopping } = useAgentComposer({
-    threadId, draftKey: key, ready, archived, busy: responding || otherTurn,
+    draftKey: key, ready, busy: responding || otherTurn,
     submitTurn: submit,
     stopStream: stop,
-    cancelPath: routes.cancel,
     currentView,
     describeError: describeChatError,
   });
@@ -393,23 +324,19 @@ export default function PortalThread({
     ? "Connecting to Portal…"
     : !ready
       ? `Add a ${providerNames[status.provider]} API key in Settings to talk to Portal.`
-      : archived
-        ? "Portal archived this thread. Continue in the main thread."
-        : otherTurn && !isMain
-          ? "Portal is answering in this thread. You can stop it, or wait for the reply."
-          : null;
+      : null;
 
   return (
     <div
       hidden={!visible}
       className="flex min-h-0 flex-1 flex-col"
-      data-thread={threadId}
+      data-agent-chat=""
     >
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={80}>
         <MessageScroller className="flex-1">
           <MessageScrollerViewport
             data-room-passthrough
-            aria-label={isMain ? "Talk to Portal" : thread?.title ?? "Thread"}
+            aria-label="Talk to Portal"
             preserveScrollOnPrepend
             onScroll={(event) => {
               if (event.currentTarget.scrollTop < 200 && hasMore && !historyLoading && !loadingOlder) void loadOlder();
@@ -430,8 +357,7 @@ export default function PortalThread({
               aria-live="off"
               aria-label="Messages"
             >
-              {!isMain && thread && <ThreadIntro thread={thread} onOpenWatches={onOpenWatches} />}
-              {isMain && status && !ready && (
+              {status && !ready && (
                 <div className="frost flex flex-col items-start gap-3 rounded-2xl p-5">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <KeyRound className="size-4 text-amber-300" />
@@ -457,15 +383,14 @@ export default function PortalThread({
                   {historyError}
                 </p>
               )}
-              {isMain && !historyLoading && messages.length === 0 && ready && (
+              {!historyLoading && messages.length === 0 && ready && (
                 <div className="flex flex-col items-center gap-3 py-16 text-center">
                   <span className="frost rounded-2xl p-4">
                     <Sparkles className="size-7 text-foreground/80" />
                   </span>
                   <h2 className="mt-2 text-lg font-medium tracking-tight">Ask Portal what needs you.</h2>
                   <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
-                    It keeps an eye on your sessions, pull requests, and worktrees in the background,
-                    and opens a side thread when a task needs its own.
+                    It keeps an eye on your sessions, pull requests, and worktrees in the background.
                   </p>
                 </div>
               )}
@@ -493,7 +418,7 @@ export default function PortalThread({
         </MessageScroller>
       </MessageScrollerProvider>
       <div ref={composerWrap} className="composer-wrap" data-draft-key={key}>
-        {isMain && <PromptQueue queue={queue} busy={responding || otherTurn} editingId={editingId} onEdit={(item) => void editQueued(item)} onRemove={(item) => void removeQueued(item)} />}
+        <PromptQueue queue={queue} busy={responding || otherTurn} editingId={editingId} onEdit={(item) => void editQueued(item)} onRemove={(item) => void removeQueued(item)} />
         <ChatComposer
           value={draft}
           onChange={setDraft}
@@ -502,14 +427,12 @@ export default function PortalThread({
           busy={(responding && !sending) || otherTurn}
           sending={sending}
           stopping={stopping}
-          queues={isMain}
+          queues
           editing={editingId ? { label: queueEditLabel(queue, editingId), onCancel: () => void cancelEdit() } : undefined}
-          disabled={!ready || archived || !queueLoaded}
-          label={isMain ? "Message Portal" : `Message Portal in ${thread?.title ?? "this thread"}`}
+          disabled={!ready || !queueLoaded}
+          label="Message Portal"
           historyKey={key}
-          placeholder={
-            archived ? "This thread is archived" : !ready ? "Add an API key to talk to Portal" : isMain ? "Ask Portal…" : "Reply in this thread…"
-          }
+          placeholder={!ready ? "Add an API key to talk to Portal" : "Ask Portal…"}
           error={chatError}
           settings={hint ? <span className="pl-2 text-[11px] font-normal text-muted-foreground">{hint}</span> : undefined}
         />

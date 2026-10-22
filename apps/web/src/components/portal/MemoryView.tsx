@@ -9,7 +9,6 @@ import {
   History,
   Inbox,
   LoaderCircle,
-  MessagesSquare,
   Pencil,
   Pin,
   PinOff,
@@ -149,11 +148,6 @@ function SourceLine({ source, links }: { source: MemoryRecord["source"]; links: 
           <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-foreground/80 hover:text-foreground hover:underline">
             Open <ExternalLink className="size-2.5" />
           </a>
-        )}
-        {source.threadId && (
-          <button type="button" onClick={() => links.openThread(source.threadId!)} className="inline-flex items-center gap-0.5 text-foreground/80 hover:text-foreground hover:underline">
-            <MessagesSquare className="size-3" /> Thread
-          </button>
         )}
         {source.sessionId && (
           <button type="button" onClick={() => links.openSession(source.sessionId!)} className="inline-flex items-center gap-0.5 text-foreground/80 hover:text-foreground hover:underline">

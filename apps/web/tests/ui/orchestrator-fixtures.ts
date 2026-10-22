@@ -1,5 +1,5 @@
 /**
- * Sample orchestrator data for the phase 2 views (threads, watches, activity, memory, system,
+ * Sample orchestrator data for the phase 2 views (watches, activity, memory, system,
  * approvals), shaped exactly as the contracts in `@portal/contracts` say the server answers.
  * `setupPortal` serves them from route mocks; specs pass their own through its `portal` option.
  */
@@ -15,9 +15,7 @@ import type {
   MemoryEntity,
   MemoryRecord,
   MemoryRevision,
-  OrchestratorMessage,
   Scope,
-  Thread,
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
 
@@ -34,60 +32,6 @@ const scope = (extra: Partial<Scope> = {}): Scope => ({
   ...extra,
 });
 const pull42 = { repo: "example/portal", number: 42, url: "https://github.com/example/portal/pull/42" };
-
-export const mainThread: Thread = {
-  id: "main",
-  kind: "main",
-  title: "Main",
-  status: "active",
-  scope: scope(),
-  intentId: null,
-  createdAt: now - 30 * 24 * 60 * min,
-  updatedAt: now - 10 * min,
-  lastMessageAt: now - 10 * min,
-};
-
-export const reviewThread: Thread = {
-  id: "t-review",
-  kind: "side",
-  title: "Review example/portal#42",
-  status: "active",
-  scope: scope({ pulls: [pull42], repos: ["example/portal"] }),
-  intentId: "in1",
-  createdAt: now - 3 * 60 * min,
-  updatedAt: now - 20 * min,
-  lastMessageAt: now - 20 * min,
-};
-
-export const archivedThread: Thread = {
-  id: "t-old",
-  kind: "side",
-  title: "Clean up merged worktrees",
-  status: "archived",
-  scope: scope(),
-  intentId: null,
-  createdAt: now - 5 * 24 * 60 * min,
-  updatedAt: now - 4 * 24 * 60 * min,
-  lastMessageAt: now - 4 * 24 * 60 * min,
-};
-
-export const reviewThreadMessages: OrchestratorMessage[] = [
-  {
-    id: "rt1",
-    role: "assistant",
-    metadata: { at: now - 3 * 60 * min, run: { id: "run-h1", kind: "helper" } },
-    parts: [{ type: "text", text: "I started a review session for **#42** and will post the findings here." }],
-  },
-];
-
-export const archivedThreadMessages: OrchestratorMessage[] = [
-  {
-    id: "ot1",
-    role: "assistant",
-    metadata: { at: now - 4 * 24 * 60 * min },
-    parts: [{ type: "text", text: "Both merged worktrees are gone. Nothing else to do here." }],
-  },
-];
 
 export const intent: Intent = {
   id: "in1",
@@ -107,7 +51,6 @@ export const intent: Intent = {
   events: { pending: [], handled: [], seen: [] },
   renewals: 0,
   lastCheckedAt: now - 4 * min,
-  threadId: "t-review",
   createdAt: now - 3 * 60 * min,
   updatedAt: now - 4 * min,
 };
@@ -124,7 +67,6 @@ export const helperJob: Job = {
   lastRunAt: now - 3 * min,
   lastRunId: "run-h1",
   intentId: null,
-  threadId: null,
   createdBy: "agent",
   failures: 0,
   createdAt: now - 30 * 24 * 60 * min,
@@ -140,7 +82,6 @@ export const intentJob: Job = {
   status: "active",
   nextRunAt: now + 1.5 * min,
   intentId: "in1",
-  threadId: "t-review",
   createdBy: "agent",
 };
 
@@ -160,7 +101,6 @@ export const helperRun: JobRun = {
   id: "run-h1",
   jobId: "j-reviews",
   kind: "helper",
-  threadId: null,
   parentRunId: null,
   status: "succeeded",
   trigger: "schedule",
@@ -206,7 +146,7 @@ export function activityEntries(count = 3): ActivityEntry[] {
       actor: "agent",
       kind: "job.scheduled",
       summary: "Scheduled a check of example/portal#42 every 2 minutes.",
-      refs: { jobId: "j-pr42", threadId: "t-review", pull: pull42 },
+      refs: { jobId: "j-pr42", pull: pull42 },
       detail: { everyMs: 120000 },
     },
     {
@@ -269,7 +209,7 @@ const record = (extra: Partial<MemoryRecord> & Pick<MemoryRecord, "id" | "entity
   status: "active",
   scope: scope(),
   authority: "user_stated",
-  source: { kind: "message", threadId: "main", quote: "keep reviews short" },
+  source: { kind: "message", quote: "keep reviews short" },
   trust: 0.9,
   pinned: false,
   reviewBy: null,
@@ -472,7 +412,6 @@ export const approval: Approval = {
   risk: "destructive",
   origin: "job",
   repo: "example/portal",
-  threadId: "t-review",
   runId: "run-h1",
   jobId: "j-pr42",
   intentId: "in1",
@@ -495,7 +434,6 @@ export const chatApproval: Approval = {
   risk: "outbound",
   origin: "chat",
   repo: null,
-  threadId: "main",
   jobId: null,
   intentId: null,
   requestedAt: now - 30_000,

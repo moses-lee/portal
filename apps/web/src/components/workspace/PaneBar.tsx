@@ -127,12 +127,12 @@ export default function PaneBar({ title, state, file = false, index, count, onPr
 const agentActivityLabels = { working: "working", waiting: "waiting for your approval" } as const;
 
 /**
- * Agent from the bar: one tap opens its sheet on the thread it was last on. The badge says what it
- * is doing (an approval waiting, then a reply being written) and otherwise whether a thread has news.
+ * Agent from the bar: one tap opens its sheet. The badge says what it is doing (an approval
+ * waiting, then a reply being written) and otherwise whether the chat has news.
  */
 function AgentButton({ agent }: { agent: AgentInbox }) {
   const busy = agent.activity === "working" || agent.activity === "waiting" ? agent.activity : null;
-  const unread = agent.unread.size > 0;
+  const { unread } = agent;
   const label = ["Agent", busy && agentActivityLabels[busy], unread && "new messages"].filter(Boolean).join(", ");
   return (
     <IconButton

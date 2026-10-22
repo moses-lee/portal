@@ -23,7 +23,7 @@
  *   GET    /api/portal/jobs?status=<s>          { jobs }      (Upcoming: active jobs by nextRunAt; never the world refresh)
  *   PATCH  /api/portal/jobs/:id                 body JobPatch -> { job }   (404 for the world refresh)
  *   POST   /api/portal/jobs/:id/run             -> { run }    (run now; the job's schedule is unchanged; 404 for the world refresh)
- *   GET    /api/portal/runs?jobId=&threadId=&kind=&before=&limit=   { runs } (newest first; the world refresh's runs are left out)
+ *   GET    /api/portal/runs?jobId=&kind=&before=&limit=   { runs } (newest first; the world refresh's runs are left out)
  *   GET    /api/portal/runs/:id                 { run }
  *   POST   /api/portal/runs/:id/cancel          -> 204
  *   GET    /api/portal/intents?status=<s>       { intents }
@@ -47,7 +47,7 @@ export type JobSchedule =
 /**
  * - `tick`: the silent world refresh, hourly: rebuild the world (GitHub included), diff it against
  *   the previous snapshot into the change log, release dismissals whose condition cleared, and wake
- *   expired snoozes. No model, no thread post, no items. Hidden from every listing and tool.
+ *   expired snoozes. No model, no chat post, no items. Hidden from every listing and tool.
  * - `intent_check`: evaluate one intent (`payload.intentId`) and act on it when its trigger holds.
  * - `helper`: a bounded sub-turn (`payload` is a `HelperPayload`), e.g. research or summarizing.
  * - `consolidate`: the memory curation pass (phase 3).
@@ -69,8 +69,6 @@ export type Job = {
   lastRunAt: number | null;
   lastRunId: string | null;
   intentId: string | null;
-  /** Where the job reports: messages it posts go to this thread (the main thread when null). */
-  threadId: string | null;
   createdBy: "system" | "agent" | "user";
   /** Consecutive failed runs; the worker backs off and eventually marks the job `failed`. */
   failures: number;
@@ -91,7 +89,7 @@ export type HelperPayload = {
   tools?: string[];
   /** Step cap for the sub-turn (default 12, at most 24). */
   maxSteps?: number;
-  /** Post the helper's final text to its job's thread when done (default true). */
+  /** Post the helper's final text to the chat when done (default true). */
   report?: boolean;
 };
 
@@ -116,7 +114,6 @@ export type JobRun = {
   /** Null for chat turns. */
   jobId: string | null;
   kind: RunKind;
-  threadId: string | null;
   /** The run that started this one (a helper started from a chat turn). */
   parentRunId: string | null;
   status: RunStatus;
@@ -187,8 +184,6 @@ export type Intent = {
   /** The last firing's title: the server refuses a firing that only repeats it. */
   lastFiredTitle: string | null;
   lastCheckedAt: number | null;
-  /** The thread it was created from and reports to. */
-  threadId: string | null;
   /** What wakes it. */
   source: WatchSource;
   /** Session events seen, waiting, and handled (empty for other sources). */

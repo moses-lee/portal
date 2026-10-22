@@ -45,7 +45,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "list_projects", "get_project", "search_projects", "list_removed_projects", "list_directories", "list_branches", "read_file",
   "list_sessions", "list_active_sessions", "get_session", "search_sessions", "read_transcript", "get_pending_permission", "list_agents",
   "list_attention_pulls", "list_pulls", "get_pull", "get_github_status", "github_identity",
-  "list_items", "list_threads", "get_settings", "get_schedule",
+  "list_items", "get_settings", "get_schedule",
   "list_jobs", "list_runs", "list_watches",
   "get_world", "get_changes", "resolve_pull", "resolve_repo", "resolve_session",
   "get_workspace",

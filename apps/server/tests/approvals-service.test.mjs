@@ -38,7 +38,7 @@ function setup(t, { approvals: approvalStore = createMemoryApprovalStore(), stor
 
 /** The turn's tools, gated, as `prepareTurn` would build them. */
 function toolsFor(hub, turn = {}) {
-  const info = { runId: "run1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: emptyScope(), ...turn };
+  const info = { runId: "run1", kind: "chat", role: "chat", origin: "chat", jobId: null, intentId: null, scope: emptyScope(), ...turn };
   const ctx = {
     store: hub.store, settings: hub.settings, deps: hub.deps, touched: new Set(), interactive: true, now: () => hub.timers.now(),
     hub, turn: info,
@@ -74,7 +74,7 @@ test("chat: the call waits, and approving runs it and hands the result back to t
   assert.equal(approval.tool, "delete_session");
   assert.equal(approval.risk, "destructive");
   assert.equal(approval.repo, "acme/app");
-  assert.deepEqual([approval.threadId, approval.runId], ["main", "run1"]);
+  assert.equal(approval.runId, "run1");
   assert.equal(approval.expiresAt, T0 + EXPIRY_MS.chat);
   assert.deepEqual(approval.input, { sessionId: "s1" });
   assert.ok(events.some((event) => event.type === "approvals" && event.approvals.length === 1 && event.approvals[0].id === approval.id));
@@ -87,7 +87,7 @@ test("chat: the call waits, and approving runs it and hands the result back to t
   assert.deepEqual(await result, { sessionId: "s1", deleted: true });
   assert.deepEqual(state.sessions.map((session) => session.id), ["s2"]);
   assert.deepEqual(await activity(), ["approval.requested", "approval.decided", "approval.executed"]);
-  assert.deepEqual(await store.readMessages("main"), [], "the turn got the result, so no note is posted");
+  assert.deepEqual(await store.readMessages(), [], "the turn got the result, so no note is posted");
   assert.deepEqual(events.findLast((event) => event.type === "approvals").approvals, []);
   assert.equal(await hub.approvals.hasPendingFor("run1"), false);
   await assert.rejects(hub.approvals.decide(approval.id, { approve: true }), (err) => err.status === 409);
@@ -102,12 +102,12 @@ test("chat: declining returns an error the model can read, and nothing runs", as
   assert.match((await result).error, /declined this delete_session call/);
   assert.equal(state.sessions.length, 2);
   assert.deepEqual(await hub.approvals.grants(), []);
-  assert.deepEqual(await store.readMessages("main"), []);
+  assert.deepEqual(await store.readMessages(), []);
 });
 
-test("chat: after the wait the call reports pending; a later approval runs it server-side and notes it in the thread", async (t) => {
+test("chat: after the wait the call reports pending; a later approval runs it server-side and notes it in the chat", async (t) => {
   const { hub, state, store, timers, events } = setup(t);
-  const { result, approval } = await asked(hub, toolsFor(hub, { threadId: "main" }).remove_project, { id: "p1" });
+  const { result, approval } = await asked(hub, toolsFor(hub).remove_project, { id: "p1" });
   await timers.advance(CHAT_WAIT_MS);
   const pending = await result;
   assert.equal(pending.pending, true);
@@ -118,10 +118,10 @@ test("chat: after the wait the call reports pending; a later approval runs it se
   const decided = await hub.approvals.decide(approval.id, { approve: true });
   assert.deepEqual(decided.result, { id: "p1", removed: true, kept: true, branchDeleted: false });
   assert.deepEqual(state.removed, [{ id: "p1", keep: true }]);
-  const [note] = await store.readMessages("main");
+  const [note] = await store.readMessages();
   assert.equal(note.role, "assistant");
   assert.match(note.parts[0].text, /^\*\*Approved:\*\* Remove project app from Portal\. It ran\.$/);
-  assert.ok(events.some((event) => event.type === "messages" && event.threadId === "main"));
+  assert.ok(events.some((event) => event.type === "messages"));
 });
 
 test("chat: a call the replay fails on records the error and says so in the note", async (t) => {
@@ -131,7 +131,7 @@ test("chat: a call the replay fails on records the error and says so in the note
   await result;
   const decided = await hub.approvals.decide(approval.id, { approve: true });
   assert.equal(decided.error, "spawn failed");
-  assert.match((await store.readMessages("main"))[0].parts[0].text, /but it failed: spawn failed/);
+  assert.match((await store.readMessages())[0].parts[0].text, /but it failed: spawn failed/);
 });
 
 test("chat: a cancelled turn stops waiting", async (t) => {
@@ -156,7 +156,7 @@ test("grants: always covers the tool everywhere, repo only that repo, job only t
   await result;
 
   // job: a grant from job j1 covers j1 (and its intent), never j2.
-  const job1 = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: "i1", runId: "r-j1", threadId: null });
+  const job1 = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: "i1", runId: "r-j1" });
   const first = await call(job1.pull_fast_forward, { projectId: "p1" });
   assert.equal(first.pending, true);
   await hub.approvals.decide(first.approvalId, { approve: true, scope: "job" });
@@ -164,9 +164,9 @@ test("grants: always covers the tool everywhere, repo only that repo, job only t
   assert.deepEqual([jobGrant.tool, jobGrant.jobId, jobGrant.intentId, jobGrant.repo], ["pull_fast_forward", "j1", "i1", null]);
   // Covered: the call itself runs (and the fake git refuses it).
   assert.match((await call(job1.pull_fast_forward, { projectId: "p1" })).error, /pullFastForward is not available/);
-  const viaIntent = toolsFor(hub, { origin: "job", kind: "intent_check", jobId: "j9", intentId: "i1", runId: "r-i1", threadId: null });
+  const viaIntent = toolsFor(hub, { origin: "job", kind: "intent_check", jobId: "j9", intentId: "i1", runId: "r-i1" });
   assert.equal((await call(viaIntent.pull_fast_forward, { projectId: "p1" })).pending, undefined, "the intent that asked is covered");
-  const job2 = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j2", intentId: null, runId: "r-j2", threadId: null });
+  const job2 = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j2", intentId: null, runId: "r-j2" });
   assert.equal((await call(job2.pull_fast_forward, { projectId: "p1" })).pending, true);
 
   // always: delete_session anywhere, until revoked.
@@ -195,7 +195,7 @@ test("scopes are checked against the request", async (t) => {
 
 test("job: the call returns pending at once, raises a Needs-you item, and approving runs it, resolves the item, and resumes the job", async (t) => {
   const { hub, store, resumed, state, activity } = setup(t);
-  const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1", threadId: null });
+  const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1" });
   const output = await call(tools.remove_project, { id: "p2", deleteWorktree: true });
   assert.equal(output.pending, true);
   assert.match(output.note, /Needs-you item/);
@@ -221,28 +221,27 @@ test("job: the call returns pending at once, raises a Needs-you item, and approv
   assert.deepEqual(await activity(), ["approval.requested", "approval.decided", "approval.executed"]);
 });
 
-test("job: declining resolves the item, notes the thread, and tells the job it was declined", async (t) => {
+test("job: declining resolves the item, notes the chat, and tells the job it was declined", async (t) => {
   const { hub, store, resumed, state } = setup(t);
-  const side = await store.createThread({ title: "Review #7" });
-  const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1", threadId: side.id });
+  const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1" });
   const output = await call(tools.delete_session, { sessionId: "s1" });
   await hub.approvals.decide(output.approvalId, { approve: false });
   assert.equal(state.sessions.length, 2);
   assert.equal((await store.listItems())[0].status, "resolved");
   assert.deepEqual(resumed, [["j1", "denied"]]);
-  assert.match((await store.readMessages(side.id))[0].parts[0].text, /^\*\*Declined:\*\* Delete session Fix the login bug\. It did not run\.$/);
+  assert.match((await store.readMessages())[0].parts[0].text, /^\*\*Declined:\*\* Delete session Fix the login bug\. It did not run\.$/);
 });
 
 test("expiry: an unanswered request expires on its timer, resolves its item, tells its job, and can never run", async (t) => {
   const { hub, store, timers, state, activity, resumed } = setup(t);
-  const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1", threadId: "main" });
+  const tools = toolsFor(hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1" });
   const output = await call(tools.delete_session, { sessionId: "s1" });
   await timers.advance(EXPIRY_MS.job - 1);
   assert.equal((await hub.approvals.get(output.approvalId)).status, "pending");
   await timers.advance(2);
   assert.equal((await hub.approvals.get(output.approvalId)).status, "expired");
   assert.equal((await store.listItems())[0].status, "resolved");
-  assert.match((await store.readMessages("main"))[0].parts[0].text, /^\*\*Expired:\*\*/);
+  assert.match((await store.readMessages())[0].parts[0].text, /^\*\*Expired:\*\*/);
   assert.deepEqual(resumed, [["j1", "expired"]]);
   await assert.rejects(hub.approvals.decide(output.approvalId, { approve: true }), (err) => err.status === 409 && /expired/.test(err.message));
   assert.equal(state.sessions.length, 2);
@@ -281,6 +280,7 @@ test("guardAction: remove_worktree always asks; start_session and send_prompt as
   const ran = await hub.approvals.decide(start.id, { approve: true, scope: "always" });
   assert.deepEqual(ran.result, { sessionId: "s3" });
   assert.deepEqual(state.prompts, [{ id: "s3", text: "Clean up\n\nthe branch" }]);
+  assert.deepEqual(await store.readMessages(), [], "a card's request posts no note in the chat");
   assert.equal(await hub.approvals.guardAction(item, 1, item.actions[1]), null, "the always grant covers the next click");
 
   const remove = await hub.approvals.guardAction(item, 0, item.actions[0]);
@@ -300,7 +300,7 @@ test("after a restart an approval still replays: the tool is rebuilt from a plai
   const approvals = createMemoryApprovalStore();
   const store = createMemoryOrchestratorStore();
   const before = setup(t, { approvals, store });
-  const output = await call(toolsFor(before.hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1", threadId: null }).delete_session, { sessionId: "s1" });
+  const output = await call(toolsFor(before.hub, { origin: "job", kind: "helper", jobId: "j1", intentId: null, runId: "r1" }).delete_session, { sessionId: "s1" });
   await before.runtime.dispose();
 
   const after = setup(t, { approvals, store });

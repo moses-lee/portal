@@ -42,7 +42,6 @@ export type Approval = {
   origin: ApprovalOrigin;
   /** "owner/name" the call acts on, when there is one; a `repo` grant matches on it. */
   repo: string | null;
-  threadId: string | null;
   runId: string | null;
   jobId: string | null;
   intentId: string | null;

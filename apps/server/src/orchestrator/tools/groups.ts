@@ -28,7 +28,6 @@ export const TOOL_GROUPS = {
   github: { about: "pull request lists and per-project GitHub state", tools: ["list_pulls", "get_github_status", "github_identity"] },
   jobs: { about: "inspect and change jobs, runs, watches", tools: ["list_jobs", "update_job", "list_runs", "update_watch"] },
   memory: { about: "propose, explain, forget memory records", tools: ["propose_memory", "explain_memory", "forget"] },
-  threads: { about: "list and archive side threads", tools: ["list_threads", "archive_thread"] },
   settings: { about: "your schedule of jobs, stored settings", tools: ["get_schedule", "get_settings"] },
 } as const satisfies Record<string, { about: string; tools: readonly string[]; always?: true }>;
 

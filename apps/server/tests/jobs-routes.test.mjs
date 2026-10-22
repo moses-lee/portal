@@ -106,7 +106,7 @@ test("runs and intents: history with filters and paging, one run, cancel, and th
   assert.equal(refreshRun?.status, "succeeded");
   assert.deepEqual((await runtime.hub.world.store.list()).map((build) => build.reason), ["tick"]);
   timers.tick(1_000);
-  const chat = await jobs.startRun({ kind: "chat", trigger: "user", threadId: "main" });
+  const chat = await jobs.startRun({ kind: "chat", trigger: "user" });
 
   const all = (await inject(app, "GET", "/api/portal/runs")).json().runs;
   assert.deepEqual(all.map((run) => run.kind), ["chat", "helper", "helper", "helper"], "newest first, no world refresh");
@@ -117,7 +117,6 @@ test("runs and intents: history with filters and paging, one run, cancel, and th
   assert.deepEqual(listed.map((run) => run.id), helpers.map((run) => run.id).reverse());
   const page = (await inject(app, "GET", `/api/portal/runs?kind=helper&limit=2&before=${listed[0].id}`)).json().runs;
   assert.deepEqual(page.map((run) => run.id), listed.slice(1).map((run) => run.id));
-  assert.deepEqual((await inject(app, "GET", "/api/portal/runs?threadId=elsewhere")).json(), { runs: [] });
   assert.equal((await inject(app, "GET", "/api/portal/runs?kind=bogus")).statusCode, 400);
   assert.deepEqual((await inject(app, "GET", `/api/portal/runs/${helpers[0].id}`)).json().run.result, { n: 0 });
   assert.equal((await inject(app, "GET", "/api/portal/runs/nope")).statusCode, 404);
@@ -128,7 +127,7 @@ test("runs and intents: history with filters and paging, one run, cancel, and th
   }
 
   assert.equal((await inject(app, "POST", `/api/portal/runs/${helpers[0].id}/cancel`)).statusCode, 204, "already finished: nothing to do");
-  assert.equal((await inject(app, "POST", `/api/portal/runs/${chat.id}/cancel`)).statusCode, 409, "a chat turn is stopped from its thread");
+  assert.equal((await inject(app, "POST", `/api/portal/runs/${chat.id}/cancel`)).statusCode, 409, "a chat turn is stopped from the chat");
   assert.equal((await inject(app, "POST", "/api/portal/runs/nope/cancel")).statusCode, 404);
 
   const { intent } = await jobs.createIntent({ text: "watch #9", trigger: "acme/app#9 merged", action: "tell me", check: { type: "every", everyMs: 5 * MIN } }, { actor: "agent" });

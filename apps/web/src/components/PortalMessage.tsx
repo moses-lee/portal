@@ -201,8 +201,8 @@ function CurationLink({ message, onOpen }: { message: OrchestratorMessage; onOpe
 }
 
 /**
- * One message of the thread: bubbles of prose separated by tool use, with tool calls and reasoning
- * available in one collapsed Activity control. The thread is prose: the items
+ * One message of the chat: bubbles of prose separated by tool use, with tool calls and reasoning
+ * available in one collapsed Activity control. The chat is prose: the items
  * a message touched are not drawn under it (the Needs-you strip is where they are read and acted
  * on). Tick messages carry a "Scheduled check · 10:42" label instead of the Portal label. Each
  * message shows its time: a prompt when the server took it, a reply when it finished (nothing

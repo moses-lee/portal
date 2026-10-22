@@ -11,7 +11,6 @@ export type ActivityFilter = {
   limit?: number;
   /** Kind prefix: "memory." matches every memory entry; an exact kind matches itself. */
   kind?: string;
-  threadId?: string;
   runId?: string;
 };
 
@@ -49,7 +48,6 @@ export function createMemoryActivityStore(): ActivityStore {
         const entry = entries[i];
         if (filter.before !== undefined && entry.id >= filter.before) continue;
         if (!matchesKind(entry.kind, filter.kind)) continue;
-        if (filter.threadId && entry.refs.threadId !== filter.threadId) continue;
         if (filter.runId && entry.refs.runId !== filter.runId) continue;
         found.push(entry);
       }

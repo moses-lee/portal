@@ -7,7 +7,7 @@
  *
  * Idempotent: the `legacy_import` settings row marks a finished import and a second run is a no-op
  * unless forced. A forced run merges: rows whose id already exists are kept as they are, and the
- * orchestrator's thread, ticks, snapshot and memory are only written into an empty table. Old
+ * orchestrator's chat, ticks, snapshot and memory are only written into an empty table. Old
  * watches arrive as intents (with a check job while active) and old tick reports as tick runs.
  */
 import { chmod, rename, stat, writeFile } from "node:fs/promises";

@@ -17,7 +17,6 @@ const linksSchema = z.object({
   pull: pullRefSchema.optional(),
   intentId: z.string().optional(),
   jobId: z.string().optional(),
-  threadId: z.string().optional(),
 });
 
 const label = z.string().optional();

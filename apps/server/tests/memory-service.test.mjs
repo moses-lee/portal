@@ -29,7 +29,7 @@ test("remember applies at once; a restatement is a no-op; a new claim for the ke
   const log = await activity();
   assert.deepEqual(log.map((entry) => entry.kind), ["memory.remembered", "memory.remembered", "memory.superseded"]);
   assert.equal(log[0].actor, "agent");
-  assert.deepEqual(log[0].refs, { recordId: first.record.id, entityId: first.record.entityId, runId: "run1", threadId: "main" });
+  assert.deepEqual(log[0].refs, { recordId: first.record.id, entityId: first.record.entityId, runId: "run1" });
 });
 
 test("create (the browser) is user-stated but refuses a taken key with a conflict naming the holder", async (t) => {
@@ -200,7 +200,7 @@ test("retrieval: the turn's scope and the entities its text names, plus full-tex
   const kube = (await memory.remember(claim({ entity: { type: "task_type", key: "deploy" }, key: "steps", type: "procedure", body: "1. Build.\n2. Roll out to kubernetes." }), agent)).record;
   const empty = { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] };
 
-  const scoped = await memory.promptContext({ scope: { ...empty, repos: ["Acme/App"] }, query: "", threadId: null });
+  const scoped = await memory.promptContext({ scope: { ...empty, repos: ["Acme/App"] }, query: "" });
   assert.ok(scoped.retrieved.includes(`[${app.id}] convention · repo acme/app · review-style (user_stated): Review tests before code.`));
   assert.ok(scoped.retrieved.includes(global.id));
   assert.ok(!scoped.retrieved.includes(web.id));
@@ -208,17 +208,17 @@ test("retrieval: the turn's scope and the entities its text names, plus full-tex
   assert.ok(scoped.retrieved.indexOf(app.id) < scoped.retrieved.indexOf(global.id), "the repo outranks global");
   assert.match(scoped.core.text, /Keep it short/);
 
-  const named = await memory.promptContext({ scope: empty, query: "How does octocat like reviews? Also kubernetes rollout.", threadId: null });
+  const named = await memory.promptContext({ scope: empty, query: "How does octocat like reviews? Also kubernetes rollout." });
   assert.ok(named.retrieved.includes(octo.id), "a person named in the text");
   assert.ok(named.retrieved.includes(kube.id), "a full-text match on another entity");
   assert.match(named.retrieved, /procedure \(interpret it, do not paste it\)/);
   assert.ok(!named.retrieved.includes(app.id) || named.retrieved.indexOf(octo.id) < named.retrieved.indexOf(app.id));
 
-  const pulls = await memory.promptContext({ scope: { ...empty, pulls: [{ repo: "acme/web", number: 1, url: "u" }] }, query: "", threadId: null });
+  const pulls = await memory.promptContext({ scope: { ...empty, pulls: [{ repo: "acme/web", number: 1, url: "u" }] }, query: "" });
   assert.ok(pulls.retrieved.includes(web.id), "a pull's repo is in scope");
 
   for (let i = 0; i < 80; i++) await memory.remember(claim({ key: `note-${i}`, body: `Note ${i}: ${"detail ".repeat(20)}` }), agent);
-  const capped = await memory.promptContext({ scope: { ...empty, repos: ["acme/app"] }, query: "", threadId: null });
+  const capped = await memory.promptContext({ scope: { ...empty, repos: ["acme/app"] }, query: "" });
   assert.ok(Math.ceil(capped.retrieved.length / 4) <= RETRIEVED_BUDGET_TOKENS);
   assert.match(capped.retrieved, /more \(search_memory finds them\)$/);
 });

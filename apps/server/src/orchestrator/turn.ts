@@ -1,8 +1,8 @@
 /**
- * One model turn, however it started: a chat turn in a thread, a helper sub-turn, an intent check,
+ * One model turn, however it started: a chat turn, a helper sub-turn, an intent check,
  * a curation pass. `prepareTurn` does what every turn needs: resolve the role's model, record a
  * run, compose the system prompt (base prompt, CORE.md, the rendered world, for a chat turn the
- * recent changes that concern its thread, memory retrieved for the turn's scope), and build the tools (the classic set plus each domain's, redacted, gated by approvals,
+ * recent changes that concern the chat, memory retrieved for the turn's scope), and build the tools (the classic set plus each domain's, redacted, gated by approvals,
  * and logged to the activity log call by call). `generateTurn` runs a prepared turn to the end
  * without streaming, for background work.
  */
@@ -16,7 +16,6 @@ import { normalizeScope } from "./store.ts";
 import { READ_ONLY_TOOLS, createTools, currentToolName } from "./tools/index.ts";
 import { withRedaction } from "./tools/context.ts";
 import { type ToolLoader, createToolLoader, toolGroupsGuidance } from "./tools/groups.ts";
-import { threadTools } from "./tools/threads.ts";
 import { lookingAtLine } from "./workspace/view.ts";
 import { workspaceTools } from "./workspace/tools.ts";
 import type { ModelRole, Scope } from "./types.ts";
@@ -27,7 +26,6 @@ export type TurnOptions = {
   kind: RunKind;
   role: ModelRole;
   trigger: RunTrigger;
-  threadId: string | null;
   jobId?: string | null;
   intentId?: string | null;
   parentRunId?: string | null;
@@ -42,7 +40,7 @@ export type TurnOptions = {
   fullTools?: boolean;
   /** Tools only this turn has (a summarizer's report tool), offered beside the rest and logged like them. */
   extraTools?: ToolSet;
-  /** What the turn is about; defaults to the thread's scope. */
+  /** What the turn is about; empty when not given. */
   scope?: Scope;
   /** The text memory retrieval searches with (the user's message, the helper's instruction). */
   query: string;
@@ -130,7 +128,7 @@ function withActivity(hub: OrchestratorHub, turn: TurnInfo, tools: ToolSet): Too
         const failed = !!output && typeof output === "object" && "error" in output && typeof (output as { error: unknown }).error === "string";
         void hub.activity.log({
           actor: "agent", kind: "tool.call", summary: failed ? `${name} failed: ${(output as { error: string }).error}` : `Called ${name}`,
-          refs: { runId: turn.runId, ...(turn.threadId ? { threadId: turn.threadId } : {}), ...(turn.jobId ? { jobId: turn.jobId } : {}), ...(turn.intentId ? { intentId: turn.intentId } : {}) },
+          refs: { runId: turn.runId, ...(turn.jobId ? { jobId: turn.jobId } : {}), ...(turn.intentId ? { intentId: turn.intentId } : {}) },
           detail: { tool: name, input: loggedInput(input), ...(failed ? { error: (output as { error: string }).error } : {}) },
         });
         return output;
@@ -183,7 +181,7 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
   // classic tools and the domains' background tools).
   const offered: DomainToolContext = toolNames || fullTools ? { ...ctx, interactive: true } : ctx;
   const domain: ToolSet = {
-    ...threadTools(offered), ...workspaceTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered),
+    ...workspaceTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered),
   };
   const classic = createTools(offered) as unknown as ToolSet;
   let tools: ToolSet = { ...classic, ...withRedaction(ctx, domain) };
@@ -202,10 +200,9 @@ function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: read
 export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): Promise<PreparedTurn | null> {
   const model = await hub.model(options.role);
   if (!model) return null;
-  const thread = options.threadId ? await hub.store.getThread(options.threadId) : null;
-  const scope = normalizeScope(options.scope ?? thread?.scope);
+  const scope = normalizeScope(options.scope);
   const run = await hub.jobs.startRun({
-    kind: options.kind, trigger: options.trigger, jobId: options.jobId ?? null, threadId: options.threadId, parentRunId: options.parentRunId ?? null,
+    kind: options.kind, trigger: options.trigger, jobId: options.jobId ?? null, parentRunId: options.parentRunId ?? null,
     model: model.choice, summary: options.summary ?? null,
   });
   let finished = false;
@@ -220,7 +217,7 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
   try {
     const turn: TurnInfo = {
       runId: run.id, kind: options.kind, role: options.role, origin: options.interactive ? "chat" : "job",
-      threadId: options.threadId, jobId: options.jobId ?? null, intentId: options.intentId ?? null, scope,
+      jobId: options.jobId ?? null, intentId: options.intentId ?? null, scope,
       view: options.interactive ? options.view ?? null : null,
     };
     const ctx: DomainToolContext = {
@@ -235,10 +232,10 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       hub.deps.github.login().catch(() => null), hub.world.current().catch(() => null), hub.workspace.read().catch(() => null),
     ]);
     // Memory is kept per repo as much as per project or session, so retrieval gets the repos behind them too.
-    const memory = await hub.memory.promptContext({ scope: world ? widenScope(scope, world) : scope, query: options.query, threadId: options.threadId });
+    const memory = await hub.memory.promptContext({ scope: world ? widenScope(scope, world) : scope, query: options.query });
     // Only a chat turn with the user hears about changes; a failure to read them costs the section, not the turn.
     const chat = options.kind === "chat" && options.interactive;
-    const changes = chat ? await hub.world.recentChanges({ threadId: options.threadId, scope }).catch((err: unknown) => {
+    const changes = chat ? await hub.world.recentChanges({ scope }).catch((err: unknown) => {
       console.error(`Could not read the recent changes (${errorMessage(err)}).`);
       return "";
     }) : "";
@@ -247,7 +244,6 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
     const system = systemPrompt({
       login, now: hub.timers.now(), memory: memory.core.text, retrieved: memory.retrieved, chat, changes, looking,
       world: world ? hub.world.render(world, { scope, workspace }) : "",
-      thread: thread && thread.kind === "side" ? { title: thread.title } : null,
       toolGroups: loader ? toolGroupsGuidance(new Set(Object.keys(tools))) : "",
       watchRun: options.kind === "intent_check" && !!options.fullTools,
     });

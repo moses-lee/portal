@@ -88,11 +88,11 @@ export async function started(harness) {
  * `intentId` for a check. `runId` should be a real run (start one with `hub.jobs.startRun`) when a
  * test depends on the run chain.
  */
-export function toolContext(harness, { runId = "run-chat", kind = "chat", origin = kind === "chat" ? "chat" : "job", threadId = "main", jobId = null, intentId = null, interactive = origin === "chat" } = {}) {
+export function toolContext(harness, { runId = "run-chat", kind = "chat", origin = kind === "chat" ? "chat" : "job", jobId = null, intentId = null, interactive = origin === "chat" } = {}) {
   const { hub } = harness;
   return {
     store: hub.store, settings: hub.settings, deps: hub.deps, touched: new Set(), interactive, now: () => hub.timers.now(),
-    hub, turn: { runId, kind, role: "chat", origin, threadId, jobId, intentId, scope: emptyScope() },
+    hub, turn: { runId, kind, role: "chat", origin, jobId, intentId, scope: emptyScope() },
   };
 }
 

@@ -31,7 +31,7 @@ export type MemoryOptions = {
 };
 
 /** Who is acting, for revisions and the activity log. */
-export type Actor = { actor: "user" | "agent" | "system"; runId?: string | null; threadId?: string | null };
+export type Actor = { actor: "user" | "agent" | "system"; runId?: string | null };
 
 export type ChangeResult = {
   record: MemoryRecord;
@@ -44,7 +44,7 @@ export type ChangeResult = {
 };
 
 /**
- * The same source: what it points at (the session, pull, message, thread, or link) and its kind.
+ * The same source: what it points at (the session, pull, message, or link) and its kind.
  * The quote and the run that proposed it are left out: the same session read again in a later turn
  * is not a second sighting.
  */
@@ -149,7 +149,7 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
     for (const entry of entries) {
       await hub.activity.log({
         actor: who.actor, kind: entry.kind, summary: entry.summary,
-        refs: { recordId: entry.record.id, entityId: entry.record.entityId, ...(who.runId ? { runId: who.runId } : {}), ...(who.threadId ? { threadId: who.threadId } : {}) },
+        refs: { recordId: entry.record.id, entityId: entry.record.entityId, ...(who.runId ? { runId: who.runId } : {}) },
         detail: { key: entry.record.key, status: entry.record.status, authority: entry.record.authority, ...entry.detail },
       });
     }
@@ -367,7 +367,7 @@ export function createMemoryService(hub: OrchestratorHub, options: MemoryOptions
       .map((entity) => entity.id);
   }
 
-  async function promptContext({ scope, query }: { scope: Scope; query: string; threadId: string | null }): Promise<MemoryPromptContext> {
+  async function promptContext({ scope, query }: { scope: Scope; query: string }): Promise<MemoryPromptContext> {
     const coreDoc = await core();
     const entities = await store.listEntities();
     const byId = new Map(entities.map((entity) => [entity.id, entity]));

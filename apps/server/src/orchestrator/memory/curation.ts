@@ -301,7 +301,7 @@ function countsPhrase(counts: Record<CurationAction, number>): string {
   return parts.join(", ");
 }
 
-/** The line posted to the main thread (and the run's summary). */
+/** The line posted to the chat (and the run's summary). */
 export function digestLine(result: Pick<ConsolidationResult, "counts" | "refused">): string {
   if (result.refused) return `Memory curation was refused: ${result.refused}`;
   const done = countsPhrase(result.counts);
@@ -312,7 +312,7 @@ export function digestLine(result: Pick<ConsolidationResult, "counts" | "refused
   return `Memory curation ${done}${tail ? `; ${tail}` : ""}.`;
 }
 
-/** Whether a pass is worth a line in the main thread: it changed something, was refused, or needs the user. */
+/** Whether a pass is worth a line in the chat: it changed something, was refused, or needs the user. */
 export const worthPosting = (result: Pick<ConsolidationResult, "counts" | "refused">) =>
   !!result.refused || !!countsPhrase(result.counts) || result.counts.reconfirm > 0;
 

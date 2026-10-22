@@ -15,7 +15,7 @@ export type UseSendOptions = {
    * prompt was accepted, the reply stream opened); rejects with the reason when it did not.
    */
   submit: (text: string) => Promise<void>;
-  /** Whether a send may start right now (the agent is idle, the thread takes messages, ...). */
+  /** Whether a send may start right now (the agent is idle, the queue has loaded, ...). */
   canSend?: () => boolean;
   /** Whether a send without text may go: it carries attachments (see `@/lib/attachments`). */
   allowEmpty?: () => boolean;

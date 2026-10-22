@@ -107,7 +107,7 @@ test("the inbox over HTTP: approve, reject, forget, with the inbox count on stat
 
   // Retrieval on Postgres: the any-term search finds the claim from the turn's text.
   const kept = (await memory.remember(input({ entity: { type: "task_type", key: "deploy" }, key: "steps", body: "Roll out through staging." }), agent)).record;
-  const context = await memory.promptContext({ scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] }, query: "how do we roll out?", threadId: null });
+  const context = await memory.promptContext({ scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] }, query: "how do we roll out?" });
   assert.ok(context.retrieved.includes(kept.id));
 });
 

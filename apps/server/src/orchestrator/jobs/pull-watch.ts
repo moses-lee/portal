@@ -7,7 +7,6 @@
  */
 import type { Intent, Job } from "@portal/contracts/jobs";
 import type { PullStatus } from "../github-attention.ts";
-import { MAIN_THREAD_ID } from "../types.ts";
 import type { JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
 
@@ -116,7 +115,6 @@ export async function checkPull({ core, fire, close }: PullCheckParts, { job, ru
   // The first look sets the baseline; a PR already merged or closed is news once.
   const changes = watch.last ? pullChanges(watch.last, now) : ended ? pullChanges({ ...now, state: "open" }, now) : [];
   const told = changes.filter((change) => watch.events.includes(change.event));
-  const threadId = intent.threadId ?? MAIN_THREAD_ID;
   let fired = false;
   if (told.length) {
     const title = `${name} ${told.map((change) => change.text).join("; ")}`;
@@ -124,7 +122,7 @@ export async function checkPull({ core, fire, close }: PullCheckParts, { job, ru
     const touched = new Set<string>();
     const result = await fire(intent.id, { title, body }, { actor: "system", runId: run.id, touched });
     fired = result.fired;
-    if (fired) await core.postToThread(threadId, `${title}.`, run, [...touched]);
+    if (fired) await core.postToChat(`${title}.`, run, [...touched]);
   }
   if (ended) {
     await close(intent.id, "done", { actor: "system", runId: run.id, reason: `${name} was ${now.state}` });

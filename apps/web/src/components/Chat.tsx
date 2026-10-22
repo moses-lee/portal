@@ -31,7 +31,6 @@ import PortalMark from "./PortalMark";
 import { APP_NAVIGATION_EVENT } from "@/lib/surface-navigation";
 import { palaceEscapeToggles, palaceKeyState, type PalaceKeyState } from "@/lib/palace-mode";
 import { holdRoomMotion } from "@/lib/room-motion";
-import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import PortalPage from "./PortalPage";
 import WorkspaceView from "./workspace/WorkspaceView";
 import { useWorkspaceActions } from "./workspace/useWorkspaceActions";
@@ -421,8 +420,7 @@ function ChatShell() {
     setSettingsSection(section);
     setShowSettings(true);
   });
-  /** Remember the last thread and retain its conversation after Agent first opens. */
-  const [agentThreadId, setAgentThreadId] = useState(MAIN_THREAD_ID);
+  /** Retain the Agent chat after it first opens. */
   const [agentVisited, setAgentVisited] = useState(false);
   if (surface?.view === "chat" && !agentVisited) setAgentVisited(true);
   /** What search opened, newest first, per device; the dialog's Recent section. */
@@ -446,12 +444,12 @@ function ChatShell() {
       event.stopPropagation();
       if (tab === "agent") {
         if (surface?.view === "chat" && palette !== "search") closeSurface();
-        else openSurface({ view: "chat", threadId: agentThreadId });
+        else openSurface({ view: "chat" });
       } else setPalette((current) => (current === tab ? null : tab));
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [surface, agentThreadId, palette, closeSurface, openSurface]);
+  }, [surface, palette, closeSurface, openSurface]);
   /** The button that opened the sidebar sheet or the GitHub inspector sheet; focus returns there when it closes. */
   const sidebarOpener = useRef<HTMLElement | null>(null);
   const githubOpener = useRef<HTMLElement | null>(null);
@@ -704,10 +702,7 @@ function ChatShell() {
 
   const openTerminal = () => openSurface({ view: "terminal" });
   const openPortalView = (view: PortalView) => {
-    if (view === "chat") {
-      setAgentThreadId(MAIN_THREAD_ID);
-      openSurface({ view: "chat", threadId: MAIN_THREAD_ID });
-    } else openSurface(view === "memory" ? { view, entityId: null } : { view });
+    openSurface(view === "memory" ? { view, entityId: null } : { view });
   };
   // Legacy paths remain a link format inside stored replies, but never become page URLs.
   const navigateSurface = useStableCallback((path: string) => {
@@ -725,11 +720,7 @@ function ChatShell() {
       return;
     }
     if (isTerminalPath(destination.pathname)) { openTerminal(); return; }
-    const location = portalLocation(destination.pathname);
-    if (location.view === "chat") {
-      setAgentThreadId(location.threadId);
-      openSurface(location);
-    } else openSurface(location);
+    openSurface(portalLocation(destination.pathname));
   });
 
   useEffect(() => {
@@ -1069,14 +1060,11 @@ function ChatShell() {
   const roomOpenProject = useStableCallback(startIn);
   const roomHost = useMemo(() => ({ projects, openProject: roomOpenProject }), [projects, roomOpenProject]);
   /** The phone bar's Agent button and reply preview (docs/WORKSPACE.md, Mobile). */
-  const openAgent = useStableCallback((threadId?: string) => {
-    if (threadId) setAgentThreadId(threadId);
-    openSurface({ view: "chat", threadId: threadId ?? agentThreadId });
-  });
-  const agentInbox = useAgentInboxState({ open: surface?.view === "chat", threadId: agentThreadId, previews: !desktop, openAgent });
+  const openAgent = useStableCallback(() => openSurface({ view: "chat" }));
+  const agentInbox = useAgentInboxState({ open: surface?.view === "chat", previews: !desktop, openAgent });
   const restoreSearchFocus = useStableCallback(() => {
     if (surface?.view !== "chat") return false;
-    const composer = document.querySelector<HTMLTextAreaElement>(`[data-agent-page] [data-thread="${CSS.escape(agentThreadId)}"] textarea:not(:disabled)`);
+    const composer = document.querySelector<HTMLTextAreaElement>("[data-agent-page] [data-agent-chat] textarea:not(:disabled)");
     if (!composer) return false;
     composer.focus({ preventScroll: true });
     return true;
@@ -1169,7 +1157,7 @@ function ChatShell() {
               />
             </Suspense>
           </div>
-          {agentVisited && <AgentPage open={surface?.view === "chat"} onClose={closeSurface} threadId={agentThreadId} onThreadChange={setAgentThreadId} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} unread={agentInbox.unread} />}
+          {agentVisited && <AgentPage open={surface?.view === "chat"} onClose={closeSurface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} />}
           {surface && surface.view !== "chat" ? <div key={surface.view} data-page-overlay role="region" aria-label={surface.view === "removed" ? "Removed projects" : surface.view} className="page-overlay">
             {surface.view === "terminal" ? <TerminalPage onOpenSidebar={toggleSidebar} onClose={closeSurface} /> : surface.view === "removed" ? <RemovedProjects rows={removedProjects} error={removedError} onRefresh={sidebarRefreshRemoved} onRestore={sidebarRestore} onDiscard={sidebarDiscard} onBack={closeSurface} /> : <PortalPage location={surface} onNavigate={navigateSurface} onOpenSidebar={toggleSidebar} onOpenSession={sidebarSelect} onClose={closeSurface} projects={projects} onRemoveProject={sidebarRemove} />}
           </div> : null}
