@@ -145,7 +145,7 @@ export function compositeTools(ctx: ToolContext) {
               ...(answerPermissions ? {} : { answerPermissions: false }),
             },
           },
-        }, { actor: "agent", runId: domain.turn.runId, threadId: domain.turn.threadId });
+        }, { actor: "agent", runId: domain.turn.runId });
         return { sessions, watchId: intent.id, errors };
       },
     ),

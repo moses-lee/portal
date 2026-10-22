@@ -78,7 +78,6 @@ function jobRow(job: Job) {
   return {
     id: job.id, kind: job.kind, title: job.title, schedule: describeSchedule(job.schedule), status: job.status, nextRunAt: iso(job.nextRunAt),
     lastRunAt: iso(job.lastRunAt), ...(job.failures ? { failures: job.failures } : {}), ...(job.intentId ? { watchId: job.intentId } : {}),
-    ...(job.threadId ? { threadId: job.threadId } : {}),
   };
 }
 
@@ -97,7 +96,6 @@ function intentRow(intent: Intent, preview = false) {
     id: intent.id, text: intent.text, trigger: intent.trigger, action: intent.action, status: intent.status, notes,
     wakes: describeSource(intent), ...(sessions ? { sessions } : {}), fires: intent.fires, ...(intent.fireBudget === 1 ? { once: true } : {}),
     expiresAt: iso(intent.expiresAt), lastFiredAt: iso(intent.lastFiredAt), lastCheckedAt: iso(intent.lastCheckedAt),
-    ...(intent.threadId ? { threadId: intent.threadId } : {}),
   };
 }
 
@@ -173,7 +171,7 @@ function watchRunTools(core: JobsCore, intents: IntentsPart, ctx: DomainToolCont
 function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers, ctx: DomainToolContext): ToolSet {
   const { hub, store, runs } = core;
   const { turn } = ctx;
-  const how = { actor: "agent" as const, runId: turn.runId, threadId: turn.threadId };
+  const how = { actor: "agent" as const, runId: turn.runId };
   const now = () => hub.timers.now();
 
   const checkSchedule = (input: { checkEveryMinutes?: number; idleCheckEveryMinutes?: number; checkCron?: string; tz?: string }): JobSchedule | undefined => {
@@ -254,7 +252,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         const { intent, job } = await intents.create({
           text: input.text ?? `Monitor ${name} until it merges`, trigger, action: "Tell the user what changed; stop once it is merged or closed.",
           scope: { pulls: [{ repo: target.repo, number: target.number, url: target.url }], repos: [target.repo] }, fireBudget: null, cooldownMs: 0,
-          source: { type: "pull" }, expiresAt: now() + (input.expiresInDays ? Math.round(input.expiresInDays * 86_400_000) : MAX_LIFETIME_MS), threadId: turn.threadId,
+          source: { type: "pull" }, expiresAt: now() + (input.expiresInDays ? Math.round(input.expiresInDays * 86_400_000) : MAX_LIFETIME_MS),
           check: check ?? { type: "every", everyMs: DEFAULT_MONITOR_CHECK_MS }, checkNow: true,
           checkPayload: { pull: { repo: target.repo, number: target.number, url: target.url, events: chosen, last: null } },
         }, how);
@@ -286,7 +284,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         const { intent, job } = await intents.create({
           text: input.text, trigger: input.trigger, action: input.action, scope, notes: input.notes, source,
           expiresAt: expiryIn(input.expiresInHours, now()), fireBudget: input.once ? 1 : null, cooldownMs: 0,
-          threadId: turn.threadId, check, checkNow: input.checkNow,
+          check, checkNow: input.checkNow,
         }, how);
         return { ...intentRow(intent), checkJob: jobRow(job) };
       },
@@ -335,7 +333,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     schedule_job: define(
-      "Schedule a helper job: a bounded turn with your prompt that runs on a schedule (every N minutes, cron, or once) and posts its answer to this thread. For conditions to watch, use create_watch instead.",
+      "Schedule a helper job: a bounded turn with your prompt that runs on a schedule (every N minutes, cron, or once) and posts its answer to the chat. For conditions to watch, use create_watch instead.",
       z.object({
         title: z.string().min(1).max(200),
         prompt: z.string().min(1).max(8000).describe("The instruction the helper turn gets each time."),
@@ -343,10 +341,10 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         role: z.enum(["chat", "bookkeeping"]).optional(),
         tools: z.array(z.string()).max(40).optional().describe("Tool names the helper may use (default: read-only tools)."),
         maxSteps: z.number().int().min(1).max(24).optional(),
-        report: z.boolean().optional().describe("Post the answer to the thread (default true)."),
+        report: z.boolean().optional().describe("Post the answer to the chat (default true)."),
       }),
       async ({ title, prompt, schedule, role, tools, maxSteps, report }) => {
-        return jobRow(await helpers.schedule({ title, prompt, role, tools, maxSteps, report, threadId: turn.threadId, schedule: toSchedule(schedule, now()) }, { ctx }));
+        return jobRow(await helpers.schedule({ title, prompt, role, tools, maxSteps, report, schedule: toSchedule(schedule, now()) }, { ctx }));
       },
     ),
     update_job: define(
@@ -386,7 +384,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       async ({ jobId, kind, limit = 10 }) => ({ runs: (await store.listRuns({ jobId, kind, notKinds: ["tick"], limit })).map(runRow) }),
     ),
     run_helper: define(
-      "Start a bounded helper turn for a side task (research, summarizing). wait: true (chat only) runs it now and returns its answer; otherwise it runs in the background and posts its answer to this thread.",
+      "Start a bounded helper turn for a side task (research, summarizing). wait: true (chat only) runs it now and returns its answer; otherwise it runs in the background and posts its answer to the chat.",
       z.object({
         prompt: z.string().min(1).max(8000),
         role: z.enum(["chat", "bookkeeping"]).optional(),
@@ -401,7 +399,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
           return { runId, text };
         }
         const job = await helpers.schedule({ prompt, role, tools, maxSteps }, { ctx, chain: true });
-        return { jobId: job.id, scheduled: true, ...(wait ? { note: "Background turns cannot wait; the helper posts its answer to the thread." } : {}) };
+        return { jobId: job.id, scheduled: true, ...(wait ? { note: "Background turns cannot wait; the helper posts its answer to the chat." } : {}) };
       },
     ),
     get_schedule: define(

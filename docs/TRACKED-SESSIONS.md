@@ -9,7 +9,7 @@ Moses now uses Portal almost entirely through the orchestrator. The projects/ses
 1. No overview of which agent sessions are in flight or waiting on a reply.
 2. Chatting with a session directly means finding it through the projects view and leaving the orchestrator page.
 
-This spec adds an explicit "tracked sessions" set, shared by Moses and the orchestrator, and a right sidebar on the Portal views that lists tracked sessions and opens any of them in a dual view next to the orchestrator thread.
+This spec adds an explicit "tracked sessions" set, shared by Moses and the orchestrator, and a right sidebar on the Portal views that lists tracked sessions and opens any of them in a dual view next to the orchestrator chat.
 
 ## Decisions on record
 
@@ -18,11 +18,11 @@ This spec adds an explicit "tracked sessions" set, shared by Moses and the orche
 | 1 | Membership | Explicit tracking only. Both Moses and the orchestrator can track and untrack. No recency window, no "orchestrator touched it" inference. |
 | 2 | Waiting on a reply | Not stored. A tracked session that is idle and live is by definition waiting on us; a reply flips it to working. No read state, no reply timestamps. |
 | 3 | Row content | Title, project, agent logo, state badge, age. Grouped: needs approval, finished, working, connecting, offline/error/hung. |
-| 4 | Session view | Not inline. Selecting a row expands the sidebar into a wide dual view (session next to the orchestrator thread) with a back button. Full-screen takeover on mobile. |
-| 5 | Panel behaviour | One panel: the list, or the selected session (option a). Expanded width resizable and persisted, default half the space beside the sidebar, orchestrator thread never narrower than ~480 px. List width fixed. |
+| 4 | Session view | Not inline. Selecting a row expands the sidebar into a wide dual view (session next to the orchestrator chat) with a back button. Full-screen takeover on mobile. |
+| 5 | Panel behaviour | One panel: the list, or the selected session (option a). Expanded width resizable and persisted, default half the space beside the sidebar, orchestrator chat never narrower than ~480 px. List width fixed. |
 | 6 | Where it appears | Every Portal view (chat, goals, activity, memory, system). Mobile gets a sheet for the list and a full view for the session. |
 | 7 | Needs-you | The session-kind items (`session_finished`, `session_stopped`, `session_waiting`, `session_hung`, `session_offline`) are retired: no longer created, filtered from the strip, and the existing open ones resolved once at boot. |
-| 8 | Links | Item actions and thread mentions that open a session open the panel instead of navigating to `/sessions/:id`. |
+| 8 | Links | Item actions and chat mentions that open a session open the panel instead of navigating to `/sessions/:id`. |
 | 9 | Row actions | Expand, open full page, stop turn, untrack, "ask Portal about this". No hide, no delete from the row. |
 | 10 | Orchestrator tools | `track_session`, `untrack_session`, `list_tracked_sessions`. Sessions the orchestrator creates are tracked automatically. The agent may untrack on its own judgment; every track/untrack is logged to the activity view. |
 | 11 | Auto-track on manual use | No. A session Moses opens and prompts by hand is tracked only through the toggle. |
@@ -30,7 +30,7 @@ This spec adds an explicit "tracked sessions" set, shared by Moses and the orche
 | 13 | Session list state | Lift out of `Chat.tsx` into a context. |
 | 14 | Session view reuse | Extract `SessionPane` logic into a `useSessionStream` hook shared by the full page and the panel. |
 | 15 | Connections | A fourth SSE stream per tab is accepted for now. |
-| 16 | Perf follow-up | Fix the orchestrator thread's memoization problem from the 2026-09-27 audit on this branch. |
+| 16 | Perf follow-up | Fix the orchestrator chat's memoization problem from the 2026-09-27 audit on this branch. |
 | 17 | Turn-end age | Revisited in `SESSION-LIFECYCLE.md` (2026-10-04): finished rows now sort by `turnEndedAt` and show when they untrack; the group order is approval, stalled, working, background, connecting, finished. |
 
 ## Server
@@ -112,22 +112,22 @@ Two modes:
 - **List** (fixed 320 px). Header "Tracked (n)" with a collapse button. Rows grouped in the order from decision 3 with a small group label. Each row: agent logo, title (fallback: project name plus short id), project name, state badge (`Needs approval`, `Finished`, `Working`, `Connecting`, `Offline`, `Hung`), age since last prompt via `relative-age`. Row click expands. A `…` menu holds: open full page, stop turn (only while working), ask Portal about this, untrack. Empty state explains that Portal tracks sessions it starts and that any session page has a Track toggle.
 - **Session** (resizable, persisted). A header with back button, agent logo, title, state badge, "open full page" and the `…` menu. Body: `Conversation` and the link-status banner, then `ChatComposer` with `PermissionCard`s handled by `Conversation` as today. No terminal, no GitHub panel, no mode/config controls, no aurora. The resize handle is the same hand-rolled separator pattern as `Sidebar.tsx`.
 
-The main Portal pane keeps its `max-width: 840px` centring; when the panel is expanded the pane shrinks and the thread simply becomes narrower.
+The main Portal pane keeps its `max-width: 840px` centring; when the panel is expanded the pane shrinks and the chat simply becomes narrower.
 
 **Mobile.** The list is a right `Sheet`. Selecting a row swaps the sheet content for the session view at full width and height, with the back button returning to the list. Closing the sheet clears `?session=`.
 
-**"Ask Portal about this"** prefills the orchestrator composer of the current thread with `About session <id> (<title>): ` and focuses it. The draft store already supports writing from outside the composer.
+**"Ask Portal about this"** prefills the orchestrator composer with `About session <id> (<title>): ` and focuses it. The draft store already supports writing from outside the composer.
 
 ### Wiring
 
-- `PortalPage` gains `onOpenSession` behaviour that sets `?session=` instead of navigating, for item actions, thread mentions and status-line links. Full navigation remains available through "open full page".
+- `PortalPage` gains `onOpenSession` behaviour that sets `?session=` instead of navigating, for item actions, chat mentions and status-line links. Full navigation remains available through "open full page".
 - `SessionHeader` gets a Track/Untrack toggle. `ProjectsColumn` rows get the same in their menu.
 - `PortalNeedsYou` filters out the retired kinds client-side as belt and braces.
 - `usePortalViewCounts().chat` (the Needs-you badge) is unchanged; the sidebar badge for tracked sessions is the count of sessions in the needs-approval or finished groups, shown on the panel's collapsed toggle.
 
 ### Perf follow-up (decision 16)
 
-`PortalThread` refetches the whole page on every `messages` event and replaces message objects, defeating memoisation. On this branch: keep object identity for unchanged messages when merging a fetched page, and memoise the message row on message id plus `updatedAt`/part count. Measure with the React profiler before and after; numbers go in the PR.
+`PortalChat` refetches the whole page on every `messages` event and replaces message objects, defeating memoisation. On this branch: keep object identity for unchanged messages when merging a fetched page, and memoise the message row on message id plus `updatedAt`/part count. Measure with the React profiler before and after; numbers go in the PR.
 
 ## Implementation order
 
@@ -137,7 +137,7 @@ The main Portal pane keeps its `max-width: 840px` centring; when the panel is ex
 4. Web: `SessionsProvider`, `useSessionStream` extraction, `SessionPane` on the hook. No visible change; existing session page still works.
 5. Web: `TrackedPanel` list mode, URL param, preferences, toggles in `SessionHeader` and `ProjectsColumn`, Needs-you filter.
 6. Web: session mode, resize, mobile sheet, "ask Portal", link rerouting.
-7. `PortalThread` memoisation fix and profiler numbers.
+7. `PortalChat` memoisation fix and profiler numbers.
 8. Live check on a scratch instance (see the e2e recipe): track from chat, watch a session finish, expand it, reply from the panel, untrack from the agent.
 
 Commit per step as it lands green; merge to main waits for Moses.

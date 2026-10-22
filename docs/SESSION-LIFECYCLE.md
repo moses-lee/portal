@@ -174,7 +174,7 @@ Merged and clamped in `packages/shared/src/settings.ts` like `orchestrator.stall
 
 ### Needs-you
 
-`PortalNeedsYou` moves out of `MessageScrollerContent` to a sticky slot above it in `PortalThread.tsx`, collapsed by default when it holds more than 5 items.
+`PortalNeedsYou` moves out of `MessageScrollerContent` to a sticky slot above it in `PortalChat.tsx`, collapsed by default when it holds more than 5 items.
 
 ## Implementation order
 

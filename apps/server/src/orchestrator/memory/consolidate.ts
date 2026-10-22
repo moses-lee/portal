@@ -4,7 +4,7 @@
  * `submit_curation_plan` and `search_memory`); read the records again, resolve the plan by the rules
  * in `curation.ts`, and either refuse it whole or apply it in one commit; keep the Needs-you item
  * that lists the user's own claims to re-confirm in step; and answer the digest and the diff as the
- * run's `ConsolidationResult`. The job posts the digest line; this module never writes to a thread.
+ * run's `ConsolidationResult`. The job posts the digest line; this module never writes to the chat.
  */
 import type { ConsolidationResult, MemoryEntity, MemoryRecord } from "@portal/contracts/memory";
 import type { JobRun, RunTrigger } from "@portal/contracts/jobs";
@@ -116,7 +116,7 @@ export async function runCuration(hub: OrchestratorHub, { run, jobId, trigger, s
   let plan: CurationPlan = { decisions: [], summaries: [] };
   if (needsModel(before)) {
     const prepared = await prepareTurn(hub, {
-      kind: "consolidate", role: "chat", trigger, threadId: null, jobId, interactive: false, toolNames: CURATION_TOOLS, query: "",
+      kind: "consolidate", role: "chat", trigger, jobId, interactive: false, toolNames: CURATION_TOOLS, query: "",
       touched: new Set(), summary: "Curating memory",
     });
     if (!prepared) {

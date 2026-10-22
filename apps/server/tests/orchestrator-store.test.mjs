@@ -301,7 +301,7 @@ test("postgres store: one row per record; memory and snapshot are documents", as
   assert.deepEqual(documents, { memory: { text: "# Notes" }, snapshot: snapshot() });
 });
 
-test("postgres store: writeMessages replaces the thread in one transaction", async (t) => {
+test("postgres store: writeMessages replaces the chat in one transaction", async (t) => {
   const { db } = await temporaryDatabase(t);
   const store = createPgOrchestratorStore({ db });
   await store.appendMessages([message("m1"), message("m2")]);
@@ -384,39 +384,36 @@ for (const [name, make] of [
   ["memory", async () => createMemoryOrchestratorStore()],
   ["postgres", async (t) => createPgOrchestratorStore({ db: (await temporaryDatabase(t)).db })],
 ]) {
-  test(`${name} store: message pages walk the thread by ordinal, and rows are trimmed in place`, async (t) => {
+  test(`${name} store: message pages walk the chat by ordinal, and rows are trimmed in place`, async (t) => {
     const store = await make(t);
     await store.ready;
     await store.appendMessages(Array.from({ length: 7 }, (_, i) => message(`m${i}`, i % 2 ? "assistant" : "user")));
-    const side = await store.createThread({ title: "Side" });
-    await store.appendMessages([message("s0")], side.id);
 
-    const newest = await store.readMessagePage("main", { limit: 3 });
+    const newest = await store.readMessagePage({ limit: 3 });
     assert.deepEqual(newest.messages.map((m) => m.id), ["m4", "m5", "m6"]);
     assert.equal(newest.hasMore, true);
-    const older = await store.readMessagePage("main", { before: newest.before, limit: 3 });
+    const older = await store.readMessagePage({ before: newest.before, limit: 3 });
     assert.deepEqual(older.messages.map((m) => m.id), ["m1", "m2", "m3"]);
     assert.equal(older.hasMore, true);
-    const oldest = await store.readMessagePage("main", { before: older.before, limit: 3 });
+    const oldest = await store.readMessagePage({ before: older.before, limit: 3 });
     assert.deepEqual(oldest.messages.map((m) => m.id), ["m0"]);
     assert.equal(oldest.hasMore, false);
-    assert.deepEqual(await store.readMessagePage("main", { before: oldest.before, limit: 3 }), { messages: [], hasMore: false, before: null, after: null });
+    assert.deepEqual(await store.readMessagePage({ before: oldest.before, limit: 3 }), { messages: [], hasMore: false, before: null, after: null });
 
     await store.appendMessages([message("m7", "assistant"), message("m8")]);
-    const newer = await store.readMessagePage("main", { after: newest.after, limit: 10 });
+    const newer = await store.readMessagePage({ after: newest.after, limit: 10 });
     assert.deepEqual(newer.messages.map((m) => m.id), ["m7", "m8"]);
     assert.equal(newer.hasMore, false);
-    assert.equal((await store.readMessagePage("main", { after: newest.after, limit: 1 })).hasMore, true);
-    assert.deepEqual((await store.readMessagePage(side.id, { limit: 5 })).messages.map((m) => m.id), ["s0"], "pages are per thread");
-    assert.equal((await store.getMessage("main", "m3")).parts[0].text, "m3");
-    assert.equal(await store.getMessage(side.id, "m3"), null);
+    assert.equal((await store.readMessagePage({ after: newest.after, limit: 1 })).hasMore, true);
+    assert.equal((await store.getMessage("m3")).parts[0].text, "m3");
+    assert.equal(await store.getMessage("nope"), null);
 
     // Trimming: drop the head, rewrite one row, and the rest keep their ordinals (the cursors).
-    const rows = await store.readMessageRows("main");
+    const rows = await store.readMessageRows();
     assert.deepEqual(rows.map((row) => row.message.id), ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"]);
-    await store.deleteMessagesThrough("main", rows[1].ordinal);
-    await store.replaceMessage("main", rows[3].ordinal, { ...rows[3].message, parts: [{ type: "text", text: "trimmed" }] });
-    const after = await store.readMessageRows("main");
+    await store.deleteMessagesThrough(rows[1].ordinal);
+    await store.replaceMessage(rows[3].ordinal, { ...rows[3].message, parts: [{ type: "text", text: "trimmed" }] });
+    const after = await store.readMessageRows();
     assert.deepEqual(after.map((row) => row.message.id), ["m2", "m3", "m4", "m5", "m6", "m7", "m8"]);
     assert.deepEqual(after.map((row) => row.ordinal), rows.slice(2).map((row) => row.ordinal));
     assert.equal(after[1].message.parts[0].text, "trimmed");

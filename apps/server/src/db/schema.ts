@@ -146,18 +146,12 @@ export const credentials = pgTable("credentials", {
 // Orchestrator (Talk to Portal), phase 1: the existing documents as rows
 // ---------------------------------------------------------------------------------------------
 
-/** Every thread's messages, one row per UI message; a thread reads its rows in `ordinal` order. */
-export const orchestratorMessages = pgTable(
-  "orchestrator_messages",
-  {
-    ordinal: bigserial("ordinal", { mode: "number" }).primaryKey(),
-    id: text("id").notNull(),
-    /** The main thread is "main"; rows from before threads existed belong to it. */
-    threadId: text("thread_id").notNull().default("main"),
-    body: jsonb("body").$type<Record<string, unknown>>().notNull(),
-  },
-  (table) => [index("orchestrator_messages_thread_idx").on(table.threadId, table.ordinal)],
-);
+/** The chat's messages, one row per UI message, read in `ordinal` order. */
+export const orchestratorMessages = pgTable("orchestrator_messages", {
+  ordinal: bigserial("ordinal", { mode: "number" }).primaryKey(),
+  id: text("id").notNull(),
+  body: jsonb("body").$type<Record<string, unknown>>().notNull(),
+});
 
 export const orchestratorItems = pgTable(
   "orchestrator_items",
@@ -187,7 +181,7 @@ export const orchestratorDocuments = pgTable("orchestrator_documents", {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Orchestrator v2 (phase 2): threads, activity, jobs and runs, intents, world, memory, approvals.
+// Orchestrator v2 (phase 2): activity, jobs and runs, intents, world, memory, approvals.
 // Real columns rather than one `body`: these tables are queried by status, time, and owner.
 // Wire shapes are in @portal/contracts (orchestrator, activity, jobs, world, memory, approvals).
 // ---------------------------------------------------------------------------------------------
@@ -196,18 +190,6 @@ type Json = Record<string, unknown>;
 
 /** Postgres `tsvector`, for the generated full-text column of memory records. */
 const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
-
-export const threads = pgTable("threads", {
-  id: text("id").primaryKey(),
-  kind: text("kind").notNull(),
-  title: text("title").notNull(),
-  status: text("status").notNull(),
-  scope: jsonb("scope").$type<Json>().notNull(),
-  intentId: text("intent_id"),
-  createdAt: epochMs("created_at").notNull(),
-  updatedAt: epochMs("updated_at").notNull(),
-  lastMessageAt: epochMs("last_message_at"),
-});
 
 /** Append-only; nothing updates or deletes a row. */
 export const activityLog = pgTable(
@@ -221,13 +203,11 @@ export const activityLog = pgTable(
     refs: jsonb("refs").$type<Json>().notNull(),
     detail: jsonb("detail").$type<Json>(),
     /** Copied out of `refs` for the filters the views use. */
-    threadId: text("thread_id"),
     runId: text("run_id"),
   },
   (table) => [
     index("activity_log_at_idx").on(table.at),
     index("activity_log_kind_idx").on(table.kind, table.id),
-    index("activity_log_thread_idx").on(table.threadId, table.id),
     index("activity_log_run_idx").on(table.runId, table.id),
   ],
 );
@@ -245,7 +225,6 @@ export const jobs = pgTable(
     lastRunAt: epochMs("last_run_at"),
     lastRunId: text("last_run_id"),
     intentId: text("intent_id"),
-    threadId: text("thread_id"),
     createdBy: text("created_by").notNull(),
     failures: integer("failures").notNull().default(0),
     /** A claimed job is leased until this time; a worker that died loses the lease. */
@@ -262,7 +241,6 @@ export const jobRuns = pgTable(
     id: text("id").primaryKey(),
     jobId: text("job_id"),
     kind: text("kind").notNull(),
-    threadId: text("thread_id"),
     parentRunId: text("parent_run_id"),
     status: text("status").notNull(),
     trigger: text("trigger").notNull(),
@@ -299,7 +277,6 @@ export const intents = pgTable(
     lastFiredAt: epochMs("last_fired_at"),
     lastFiredTitle: text("last_fired_title"),
     lastCheckedAt: epochMs("last_checked_at"),
-    threadId: text("thread_id"),
     source: jsonb("source").$type<Json>().notNull().default({ type: "poll" }),
     events: jsonb("events").$type<Json>().notNull().default({ pending: [], handled: [], seen: [] }),
     renewals: integer("renewals").notNull().default(0),
@@ -421,7 +398,6 @@ export const approvals = pgTable(
     risk: text("risk").notNull(),
     origin: text("origin").notNull(),
     repo: text("repo"),
-    threadId: text("thread_id"),
     runId: text("run_id"),
     jobId: text("job_id"),
     intentId: text("intent_id"),

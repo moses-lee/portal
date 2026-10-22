@@ -1,10 +1,10 @@
 /**
  * The "Recent changes" section of a chat turn's system prompt: the change log (see `changes.ts`)
- * cut to what this thread should hear about. Only rows detected since the thread's previous chat
- * answer count (a thread with none looks back `RECENT_CHANGES_WINDOW_MS`), and of those a row stays
+ * cut to what the chat should hear about. Only rows detected since the previous chat answer count
+ * (a chat with none looks back `RECENT_CHANGES_WINDOW_MS`), and of those a row stays
  * when any of these holds:
  *
- * - it touches this thread: its PR, session, or project is one the thread named or acted on;
+ * - it touches the chat: its PR, session, or project is one the chat named or acted on;
  * - it is fresh and the user's own: their PR opened or pushed within `FRESH_MS`, or a session they
  *   started or prompted within it (it finished, stopped, waits on them, or lost its agent);
  * - it is a new review request for the user.
@@ -13,11 +13,11 @@
  * fingerprint the user dismissed. At most `RECENT_CHANGE_LINES` are shown, newest first, then a
  * "+N more (get_changes)" line. Everything here but the section's inputs is pure.
  *
- * What a thread "named or acted on" is read pragmatically from what is stored: its scope, the links
+ * What the chat "named or acted on" is read pragmatically from what is stored: the turn's scope, the links
  * of the items its turns touched (`itemIds`), and the text of its messages with the inputs of its
  * tool calls (ids appear there verbatim or as the World section's prefix; a PR as owner/name#n, its URL, "#n", "PR n", or a tool's
  * `"number": n`). A bare PR number counts even without its repo: a collision between two of the
- * user's repos is rarer than a thread that says "#123" and means the obvious one.
+ * user's repos is rarer than a chat that says "#123" and means the obvious one.
  */
 import { idMatches } from "../ids.ts";
 import type { Item, OrchestratorMessage, PullRef, Scope } from "../types.ts";
@@ -26,18 +26,18 @@ import { shortId } from "./render.ts";
 
 /** Lines the section shows before "+N more (get_changes)". */
 export const RECENT_CHANGE_LINES = 10;
-/** How far back a thread without an earlier chat answer looks. */
+/** How far back a chat without an earlier answer looks. */
 export const RECENT_CHANGES_WINDOW_MS = 24 * 60 * 60_000;
 /** A PR opened or pushed, or a session started or prompted, this recently is fresh. */
 export const FRESH_MS = 24 * 60 * 60_000;
 
-/** What a thread has named or acted on. */
-export type ThreadRefs = {
+/** What the chat has named or acted on. */
+export type ChatRefs = {
   sessionIds: Set<string>;
   projectIds: Set<string>;
   /** "owner/name#n", lower case. */
   pulls: Set<string>;
-  /** Repos the thread is about ("owner/name", lower case): every PR in them touches it. */
+  /** Repos the chat is about ("owner/name", lower case): every PR in them touches it. */
   repos: Set<string>;
   /** PR numbers named without a repo. */
   numbers: Set<number>;
@@ -75,9 +75,9 @@ function messageCorpus(message: OrchestratorMessage): string {
   return pieces.join("\n");
 }
 
-/** What the thread named or acted on, from its scope, its messages, and the items its turns touched. */
-export function threadRefs({ scope, messages, items }: { scope: Scope; messages: OrchestratorMessage[]; items: Pick<Item, "id" | "links">[] }): ThreadRefs {
-  const refs: ThreadRefs = {
+/** What the chat named or acted on, from the turn's scope, its messages, and the items its turns touched. */
+export function chatRefs({ scope, messages, items }: { scope: Scope; messages: OrchestratorMessage[]; items: Pick<Item, "id" | "links">[] }): ChatRefs {
+  const refs: ChatRefs = {
     sessionIds: new Set(scope.sessionIds), projectIds: new Set(scope.projectIds), pulls: new Set(scope.pulls.map(pullName)),
     repos: new Set(scope.repos.map((repo) => repo.toLowerCase())), numbers: new Set(), text: "",
   };
@@ -98,13 +98,13 @@ export function threadRefs({ scope, messages, items }: { scope: Scope; messages:
   return refs;
 }
 
-/** Whether the thread's text names `id`, in full or by the prefix the World section shows. */
+/** Whether the chat's text names `id`, in full or by the prefix the World section shows. */
 const named = (text: string, id: string | undefined) => !!id && text.includes(shortId(id).toLowerCase());
 /** Whether `ids` (a scope's or links', maybe prefixes stored before ids were kept full) hold the full id `id`. */
 const holds = (ids: Iterable<string>, id: string) => [...ids].some((ref) => idMatches(ref, id));
 
-/** Whether a change is about something the thread named or acted on. */
-export function touchesThread(change: Pick<WorldChange, "subject" | "refs">, refs: ThreadRefs): boolean {
+/** Whether a change is about something the chat named or acted on. */
+export function touchesChat(change: Pick<WorldChange, "subject" | "refs">, refs: ChatRefs): boolean {
   const { pull, sessionId, projectId } = change.refs;
   if (pull && (refs.pulls.has(pullName(pull)) || refs.repos.has(pull.repo.toLowerCase()) || refs.numbers.has(pull.number))) return true;
   if (sessionId && (holds(refs.sessionIds, sessionId) || named(refs.text, sessionId))) return true;
@@ -133,9 +133,9 @@ export type RecentChangesInput = {
   /** Change-log rows, any order. */
   rows: WorldChange[];
   now: number;
-  /** Only rows detected after this count: the thread's previous chat answer. */
+  /** Only rows detected after this count: the previous chat answer. */
   since: number;
-  refs: ThreadRefs;
+  refs: ChatRefs;
   /** Active intents. */
   intents: { scope: Scope }[];
   /** Fingerprints of dismissed items. */
@@ -147,7 +147,7 @@ export type RecentChangesInput = {
 export function selectRecentChanges({ rows, now, since, refs, intents, dismissed, limit = RECENT_CHANGE_LINES }: RecentChangesInput): { shown: WorldChange[]; more: number } {
   const kept = rows
     .filter((row) => row.at > since && !dismissed.has(row.fingerprint) && !coveredByIntent(row, intents))
-    .filter((row) => touchesThread(row, refs) || freshAndMine(row, now) || row.kind === "pr_review_requested")
+    .filter((row) => touchesChat(row, refs) || freshAndMine(row, now) || row.kind === "pr_review_requested")
     .sort((a, b) => b.at - a.at || b.id - a.id);
   return { shown: kept.slice(0, limit), more: Math.max(0, kept.length - limit) };
 }
@@ -170,9 +170,9 @@ export function renderRecentChanges({ shown, more }: { shown: WorldChange[]; mor
 }
 
 /**
- * When the thread's previous chat answer was given: the newest assistant message of a chat run
- * (or of no recorded run, from before runs were recorded) before the newest user message. Null
- * when the thread has none.
+ * When the previous chat answer was given: the newest assistant message of a chat run (or of no
+ * recorded run, from before runs were recorded) before the newest user message. Null when the chat
+ * has none.
  */
 export function previousAnswerAt(messages: OrchestratorMessage[]): number | null {
   const lastUser = messages.findLastIndex((message) => message.role === "user");

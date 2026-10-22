@@ -8,7 +8,7 @@ const MIN = 60_000;
 
 /** A chat run to hang tool calls on, as a chat turn would have. */
 async function chatRun(h) {
-  return h.jobs.startRun({ kind: "chat", trigger: "user", threadId: "main" });
+  return h.jobs.startRun({ kind: "chat", trigger: "user" });
 }
 
 test("run_helper with wait runs a sub-turn inside the chat turn, records it as a child run, and returns its answer", async (t) => {
@@ -19,8 +19,8 @@ test("run_helper with wait runs a sub-turn inside the chat turn, records it as a
   assert.equal(answer.text, "The monorepo is acme/app; PR 2367 touches billing.");
   const run = await h.jobs.getRun(answer.runId);
   assert.deepEqual(
-    { kind: run.kind, parentRunId: run.parentRunId, status: run.status, trigger: run.trigger, jobId: run.jobId, threadId: run.threadId },
-    { kind: "helper", parentRunId: parent.id, status: "succeeded", trigger: "agent", jobId: null, threadId: "main" },
+    { kind: run.kind, parentRunId: run.parentRunId, status: run.status, trigger: run.trigger, jobId: run.jobId },
+    { kind: "helper", parentRunId: parent.id, status: "succeeded", trigger: "agent", jobId: null },
   );
   assert.equal(run.summary, "The monorepo is acme/app; PR 2367 touches billing.");
   // The helper saw the read-only set, nothing that changes things, and no job tools.
@@ -31,25 +31,24 @@ test("run_helper with wait runs a sub-turn inside the chat turn, records it as a
   assert.deepEqual((await h.runtime.history()).messages, [], "an inline helper posts nothing; the chat turn answers");
 });
 
-test("run_helper without wait schedules a helper job now; it runs in the background and posts its answer to the thread", async (t) => {
+test("run_helper without wait schedules a helper job now; it runs in the background and posts its answer to the chat", async (t) => {
   const h = await started(jobsHarness(t, { doGenerate: [textStep("Found three stale worktrees.")] }));
-  const side = await h.store.createThread({ title: "Cleanup" });
-  const parent = await h.jobs.startRun({ kind: "chat", trigger: "user", threadId: side.id });
-  const tools = h.jobs.tools(toolContext(h, { runId: parent.id, threadId: side.id }));
+  const parent = await chatRun(h);
+  const tools = h.jobs.tools(toolContext(h, { runId: parent.id }));
   const scheduled = await call(tools, "run_helper", { prompt: "List stale worktrees.", tools: ["list_projects"] });
   assert.equal(scheduled.scheduled, true);
   await flush();
   const job = await h.jobs.getJob(scheduled.jobId);
   assert.deepEqual(
-    { kind: job.kind, status: job.status, threadId: job.threadId, createdBy: job.createdBy, schedule: job.schedule.type },
-    { kind: "helper", status: "done", threadId: side.id, createdBy: "agent", schedule: "at" },
+    { kind: job.kind, status: job.status, createdBy: job.createdBy, schedule: job.schedule.type },
+    { kind: "helper", status: "done", createdBy: "agent", schedule: "at" },
   );
   assert.deepEqual(job.payload, { prompt: "List stale worktrees.", tools: ["list_projects"], parentRunId: parent.id, depth: 1 });
   const [run] = await h.jobs.listRuns({ jobId: job.id });
   assert.equal(run.parentRunId, parent.id);
   assert.equal(run.status, "succeeded");
   assert.deepEqual(h.model.doGenerateCalls[0].tools.map((tool) => tool.name), ["list_projects"], "only the tools it was given");
-  const [note] = (await h.runtime.history(side.id)).messages;
+  const [note] = (await h.runtime.history()).messages;
   assert.equal(note.parts[0].text, "Found three stale worktrees.");
   assert.deepEqual(note.metadata.run, { id: run.id, kind: "helper" });
   const scheduledEntry = (await h.hub.activity.list({ kind: "job.scheduled" })).find((entry) => entry.refs.jobId === job.id);
@@ -71,8 +70,8 @@ test("a helper job stored with a tool's old name still gets that tool under its 
 test("helpers nest at most two levels; a background turn cannot wait and schedules instead", async (t) => {
   const h = await started(jobsHarness(t, { doGenerate: [textStep("level two")] }));
   const chat = await chatRun(h);
-  const one = await h.jobs.startRun({ kind: "helper", trigger: "agent", threadId: "main", parentRunId: chat.id });
-  const two = await h.jobs.startRun({ kind: "helper", trigger: "agent", threadId: "main", parentRunId: one.id });
+  const one = await h.jobs.startRun({ kind: "helper", trigger: "agent", parentRunId: chat.id });
+  const two = await h.jobs.startRun({ kind: "helper", trigger: "agent", parentRunId: one.id });
   assert.equal(MAX_HELPER_DEPTH, 2);
 
   const fromOne = h.jobs.tools(toolContext(h, { runId: one.id }));

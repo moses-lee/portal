@@ -42,7 +42,7 @@ async function harness(t, { sessions, worktreeCreated = true, git = {} } = {}) {
     scope: { sessionIds: ["s1"], pulls: [{ repo: "acme/app", number: 1, url: url(1) }], repos: ["acme/app"] },
     fireBudget: 1, check: { type: "every", everyMs: REVIEW_CHECK_MS },
     checkPayload: { review: { repo: "acme/app", sessions: [{ pr: 1, url: url(1), sessionId: "s1", projectId: "p2", worktreeCreated }] } },
-  }, { actor: "agent", runId: "run1", threadId: "main" });
+  }, { actor: "agent", runId: "run1" });
   const item = await h.store.createItem({
     kind: "review_findings", title: "Review of acme/app#1: looks good", body: "Fine.", fingerprint: "review_findings:acme/app#1:s1",
     links: { pull: { repo: "acme/app", number: 1, url: url(1) }, sessionId: "s1", projectId: "p2", intentId: intent.id },
@@ -51,7 +51,7 @@ async function harness(t, { sessions, worktreeCreated = true, git = {} } = {}) {
   return { h, item, removals, worktree };
 }
 
-test("settling a findings item removes the review worktree Portal created, deletes a branch that is on origin, and says so in the thread", async (t) => {
+test("settling a findings item removes the review worktree Portal created, deletes a branch that is on origin, and says so in the chat", async (t) => {
   const { h, item, removals } = await harness(t);
   await h.runtime.updateItem(item.id, { status: "resolved" });
   await until(() => removals.length === 1);

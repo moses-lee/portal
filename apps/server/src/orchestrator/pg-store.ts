@@ -1,5 +1,5 @@
 /**
- * Postgres-backed orchestrator store: one row per message, thread, and item, and one row each for
+ * Postgres-backed orchestrator store: one row per message and item, and one row each for
  * the snapshot and the memory text in `orchestrator_documents`. Every row keeps the
  * whole record in `body` (so reads round-trip exactly what was written) next to the columns the
  * queries filter and sort on. Changes are serialized per kind of record, as the file store did, so
@@ -10,15 +10,12 @@
 import { and, asc, desc, eq, gt, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { stripNul } from "../db/sanitize.ts";
-import { orchestratorDocuments, orchestratorItems, orchestratorMessages, threads } from "../db/schema.ts";
-import {
-  buildItem, buildThread, capMemory, mainThread, newId, parseItemPatch, patchItem, patchThread, sortThreads, unknownItem, unknownThread,
-} from "./store.ts";
-import type { Item, ItemFilter, MessagePage, MessagePageQuery, OrchestratorMessage, OrchestratorStore, Scope, Thread, TickSnapshot } from "./types.ts";
-import { MAIN_THREAD_ID } from "./types.ts";
+import { orchestratorDocuments, orchestratorItems, orchestratorMessages } from "../db/schema.ts";
+import { buildItem, capMemory, newId, parseItemPatch, patchItem, unknownItem } from "./store.ts";
+import type { Item, ItemFilter, MessagePage, MessagePageQuery, OrchestratorMessage, OrchestratorStore, TickSnapshot } from "./types.ts";
 
 type Body = Record<string, unknown>;
-type Key = "messages" | "items" | "snapshot" | "memory" | "threads";
+type Key = "messages" | "items" | "snapshot" | "memory";
 
 const SNAPSHOT = "snapshot";
 const MEMORY = "memory";
@@ -26,18 +23,6 @@ const MEMORY = "memory";
 const itemColumns = (item: Item) => ({
   status: item.status, fingerprint: item.fingerprint,
   createdAt: item.createdAt, updatedAt: item.updatedAt, snoozedUntil: item.snoozedUntil, body: item as unknown as Body,
-});
-
-type ThreadRow = typeof threads.$inferSelect;
-
-const threadFromRow = (row: ThreadRow): Thread => ({
-  id: row.id, kind: row.kind as Thread["kind"], title: row.title, status: row.status as Thread["status"], scope: row.scope as unknown as Scope,
-  intentId: row.intentId, createdAt: row.createdAt, updatedAt: row.updatedAt, lastMessageAt: row.lastMessageAt,
-});
-
-const threadColumns = (thread: Thread) => ({
-  kind: thread.kind, title: thread.title, status: thread.status, scope: thread.scope as unknown as Body, intentId: thread.intentId,
-  createdAt: thread.createdAt, updatedAt: thread.updatedAt, lastMessageAt: thread.lastMessageAt,
 });
 
 /** Items list newest first; `ordinal` breaks ties between records created in the same millisecond. */
@@ -72,40 +57,23 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
       .onConflictDoUpdate({ target: orchestratorDocuments.key, set: { body, updatedAt } });
   }
 
-  const messageRows = (messages: OrchestratorMessage[], threadId: string) =>
-    stripNul(messages).map((message) => ({ id: message.id, threadId, body: message as unknown as Body }));
-
-  async function readThread(id: string): Promise<Thread | null> {
-    const [row] = await db.select().from(threads).where(eq(threads.id, id));
-    return row ? threadFromRow(row) : null;
-  }
-
-  async function requireThread(id: string): Promise<Thread> {
-    const thread = await readThread(id);
-    if (!thread) throw unknownThread(id);
-    return thread;
-  }
-
-  // The migration seeds the main thread; this covers a database whose row was removed by hand.
-  const main = mainThread();
-  const ready = db.insert(threads).values({ id: main.id, ...threadColumns(main) }).onConflictDoNothing().then(() => {});
+  const messageRows = (messages: OrchestratorMessage[]) =>
+    stripNul(messages).map((message) => ({ id: message.id, body: message as unknown as Body }));
 
   return {
-    ready,
+    ready: Promise.resolve(),
 
-    async readMessages(threadId = MAIN_THREAD_ID) {
-      const rows = await db.select({ body: orchestratorMessages.body }).from(orchestratorMessages)
-        .where(eq(orchestratorMessages.threadId, threadId)).orderBy(asc(orchestratorMessages.ordinal));
+    async readMessages() {
+      const rows = await db.select({ body: orchestratorMessages.body }).from(orchestratorMessages).orderBy(asc(orchestratorMessages.ordinal));
       return rows.map((row) => row.body as unknown as OrchestratorMessage);
     },
-    async readMessageRows(threadId = MAIN_THREAD_ID) {
+    async readMessageRows() {
       const rows = await db.select({ ordinal: orchestratorMessages.ordinal, body: orchestratorMessages.body }).from(orchestratorMessages)
-        .where(eq(orchestratorMessages.threadId, threadId)).orderBy(asc(orchestratorMessages.ordinal));
+        .orderBy(asc(orchestratorMessages.ordinal));
       return rows.map((row) => ({ ordinal: row.ordinal, message: row.body as unknown as OrchestratorMessage }));
     },
-    async readMessagePage(threadId, { before, after, limit }: MessagePageQuery): Promise<MessagePage> {
+    async readMessagePage({ before, after, limit }: MessagePageQuery): Promise<MessagePage> {
       const where = and(
-        eq(orchestratorMessages.threadId, threadId),
         ...(before === undefined ? [] : [lt(orchestratorMessages.ordinal, before)]),
         ...(after === undefined ? [] : [gt(orchestratorMessages.ordinal, after)]),
       );
@@ -124,62 +92,35 @@ export function createPgOrchestratorStore({ db }: { db: Db }): OrchestratorStore
         after: page.at(-1)?.ordinal ?? null,
       };
     },
-    async getMessage(threadId, id) {
+    async getMessage(id) {
       const [row] = await db.select({ body: orchestratorMessages.body }).from(orchestratorMessages)
-        .where(and(eq(orchestratorMessages.threadId, threadId), eq(orchestratorMessages.id, id))).limit(1);
+        .where(eq(orchestratorMessages.id, id)).limit(1);
       return row ? (row.body as unknown as OrchestratorMessage) : null;
     },
-    deleteMessagesThrough(threadId, ordinal) {
+    deleteMessagesThrough(ordinal) {
       return serialized("messages", async () => {
-        await db.delete(orchestratorMessages).where(and(eq(orchestratorMessages.threadId, threadId), lte(orchestratorMessages.ordinal, ordinal)));
+        await db.delete(orchestratorMessages).where(lte(orchestratorMessages.ordinal, ordinal));
       });
     },
-    replaceMessage(threadId, ordinal, message) {
+    replaceMessage(ordinal, message) {
       return serialized("messages", async () => {
-        const [row] = messageRows([message], threadId);
-        await db.update(orchestratorMessages).set({ id: row.id, body: row.body })
-          .where(and(eq(orchestratorMessages.threadId, threadId), eq(orchestratorMessages.ordinal, ordinal)));
+        const [row] = messageRows([message]);
+        await db.update(orchestratorMessages).set({ id: row.id, body: row.body }).where(eq(orchestratorMessages.ordinal, ordinal));
       });
     },
-    writeMessages(messages, threadId = MAIN_THREAD_ID) {
+    writeMessages(messages) {
       return serialized("messages", async () => {
-        await requireThread(threadId);
         await db.transaction(async (tx) => {
-          await tx.delete(orchestratorMessages).where(eq(orchestratorMessages.threadId, threadId));
-          // One multi-row insert: Postgres numbers the rows in VALUES order, which is the thread order.
-          if (messages.length > 0) await tx.insert(orchestratorMessages).values(messageRows(messages, threadId));
+          await tx.delete(orchestratorMessages);
+          // One multi-row insert: Postgres numbers the rows in VALUES order, which is the chat's order.
+          if (messages.length > 0) await tx.insert(orchestratorMessages).values(messageRows(messages));
         });
       });
     },
-    appendMessages(messages, threadId = MAIN_THREAD_ID) {
+    appendMessages(messages) {
       return serialized("messages", async () => {
-        await requireThread(threadId);
         if (messages.length === 0) return;
-        await db.transaction(async (tx) => {
-          await tx.insert(orchestratorMessages).values(messageRows(messages, threadId));
-          await tx.update(threads).set({ lastMessageAt: Date.now() }).where(eq(threads.id, threadId));
-        });
-      });
-    },
-
-    async listThreads() {
-      return sortThreads((await db.select().from(threads)).map(threadFromRow));
-    },
-    getThread: readThread,
-    createThread(input) {
-      return serialized("threads", async () => {
-        let thread = buildThread(input, newId());
-        while ((await db.insert(threads).values({ id: thread.id, ...threadColumns(stripNul(thread)) }).onConflictDoNothing().returning({ id: threads.id })).length === 0) {
-          thread = { ...thread, id: newId() };
-        }
-        return thread;
-      });
-    },
-    updateThread(id, patch) {
-      return serialized("threads", async () => {
-        const thread = stripNul(patchThread(await requireThread(id), patch));
-        await db.update(threads).set(threadColumns(thread)).where(eq(threads.id, id));
-        return thread;
+        await db.insert(orchestratorMessages).values(messageRows(messages));
       });
     },
 

@@ -265,7 +265,7 @@ async function* logEvents(file: string, counts: { unreadable: number; torn: bool
 // ---------------------------------------------------------------------------------------------
 
 export type LegacyOrchestrator = {
-  /** Thread order. */
+  /** Chat order. */
   messages: OrchestratorMessage[];
   /** Oldest first (ascending createdAt), so inserting in order numbers them the way new records would be. */
   items: LegacyItem[];

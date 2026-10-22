@@ -11,7 +11,7 @@ The 2026-10-22 audit of the live DB found these problems:
 - **Checks run on a cut-down agent.** They use Sonnet 5 with 14 of about 80 tools and a 12-step cap. They still read the main agent's system prompt, which names tools they don't have.
   - The main agent wrote check notes telling the check to "use run_command/curl/gh api". Checks couldn't follow them.
   - Examples: the status-page watch never fired, the merge-queue watch was blind, and the commits watch guessed.
-- **Junk firings and closes.** Checks call `fire_watch` with the title "NO_UPDATE" or "placeholder". They call `close_watch` with reasons like "this call was a mistake". The result is junk Needs-you items, junk thread posts, and watches closed by accident.
+- **Junk firings and closes.** Checks call `fire_watch` with the title "NO_UPDATE" or "placeholder". They call `close_watch` with reasons like "this call was a mistake". The result is junk Needs-you items, junk chat posts, and watches closed by accident.
 - **Watches end too early.** Fire budgets of 1, or the model calling a watch "fulfilled", end it while the user is still working in the session.
   - HMBh0kqS closed, then 32 more prompts followed.
 - **Watches never end.** 85 of the last 90 watches had no expiry.
@@ -82,7 +82,7 @@ These come from Muse, Muse Code, CopilotKit/openmuse, nanoMuse, Claude Code, Her
   - events the user already saw
   - the current time and expiry
 - **The reply contract:**
-  - A reply of 1–3 sentences is the firing: it updates the watch's Needs-you item and posts to the thread.
+  - A reply of 1–3 sentences is the firing: it updates the watch's Needs-you item and posts to the chat.
   - A reply that starts with `[quiet]` is kept in the run's record, with no item and no post.
   - An empty reply counts as quiet.
 - `fire_watch` and `close_watch` are removed from runs. The run keeps:

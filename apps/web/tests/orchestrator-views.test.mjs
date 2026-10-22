@@ -22,8 +22,8 @@ test("activity filters are prefixes and merging dedupes newest first", () => {
 test("activity links come out most useful first", () => {
   const pull = { repo: "o/r", number: 4, url: "https://github.com/o/r/pull/4" };
   assert.deepEqual(
-    activityLinks({ threadId: "t1", pull, sessionId: "s1", projectId: "p1", itemId: "i1", recordId: "r1", entityId: "e1" }).map((l) => l.type),
-    ["thread", "pull", "session", "item", "record"],
+    activityLinks({ pull, sessionId: "s1", projectId: "p1", itemId: "i1", recordId: "r1", entityId: "e1" }).map((l) => l.type),
+    ["pull", "session", "item", "record"],
   );
   assert.deepEqual(activityLinks({ entityId: "e1", projectId: "p1" }), [
     { type: "entity", id: "e1" },

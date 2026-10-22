@@ -8,7 +8,7 @@ const T0 = 1_700_000_000_000;
 
 const request = (overrides = {}) => ({
   tool: "run_command", title: "Run git push", summary: "Run this:\n\n```sh\ngit push\n```", input: { cwd: "/repo", command: "git push" },
-  risk: "outbound", origin: "chat", repo: "acme/app", threadId: "main", runId: "run1", jobId: null, intentId: null, itemId: null,
+  risk: "outbound", origin: "chat", repo: "acme/app", runId: "run1", jobId: null, intentId: null, itemId: null,
   requestedAt: T0, expiresAt: T0 + 60_000, ...overrides,
 });
 

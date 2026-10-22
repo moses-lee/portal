@@ -26,25 +26,25 @@ const PRUNE_EVERY = 100;
 export const jobFromRow = (row: JobRow): Job => ({
   id: row.id, kind: row.kind as Job["kind"], title: row.title, schedule: row.schedule as unknown as JobSchedule, payload: row.payload,
   status: row.status as Job["status"], nextRunAt: row.nextRunAt, lastRunAt: row.lastRunAt, lastRunId: row.lastRunId, intentId: row.intentId,
-  threadId: row.threadId, createdBy: row.createdBy as Job["createdBy"], failures: row.failures, createdAt: row.createdAt, updatedAt: row.updatedAt,
+  createdBy: row.createdBy as Job["createdBy"], failures: row.failures, createdAt: row.createdAt, updatedAt: row.updatedAt,
 });
 
 /** The columns of a job (without the lease). */
 export const jobColumns = (job: Job) => ({
   kind: job.kind, title: job.title, schedule: job.schedule as unknown as Json, payload: job.payload, status: job.status, nextRunAt: job.nextRunAt,
-  lastRunAt: job.lastRunAt, lastRunId: job.lastRunId, intentId: job.intentId, threadId: job.threadId, createdBy: job.createdBy,
+  lastRunAt: job.lastRunAt, lastRunId: job.lastRunId, intentId: job.intentId, createdBy: job.createdBy,
   failures: job.failures, createdAt: job.createdAt, updatedAt: job.updatedAt,
 });
 
 export const runFromRow = (row: RunRow): JobRun => ({
-  id: row.id, jobId: row.jobId, kind: row.kind as JobRun["kind"], threadId: row.threadId, parentRunId: row.parentRunId,
+  id: row.id, jobId: row.jobId, kind: row.kind as JobRun["kind"], parentRunId: row.parentRunId,
   status: row.status as JobRun["status"], trigger: row.trigger as JobRun["trigger"], startedAt: row.startedAt, finishedAt: row.finishedAt,
   model: row.model as JobRun["model"], usage: row.usage as JobRun["usage"], log: row.log, result: row.result as JobRun["result"],
   summary: row.summary, error: row.error,
 });
 
 export const runColumns = (run: JobRun) => ({
-  jobId: run.jobId, kind: run.kind, threadId: run.threadId, parentRunId: run.parentRunId, status: run.status, trigger: run.trigger,
+  jobId: run.jobId, kind: run.kind, parentRunId: run.parentRunId, status: run.status, trigger: run.trigger,
   startedAt: run.startedAt, finishedAt: run.finishedAt, model: run.model as Json | null, usage: run.usage as Json | null, log: run.log,
   result: run.result as Json | null, summary: run.summary, error: run.error,
 });
@@ -52,14 +52,14 @@ export const runColumns = (run: JobRun) => ({
 export const intentFromRow = (row: IntentRow): Intent => ({
   id: row.id, text: row.text, trigger: row.trigger, action: row.action, notes: row.notes, scope: row.scope as unknown as Scope,
   status: row.status as Intent["status"], expiresAt: row.expiresAt, fireBudget: row.fireBudget, fires: row.fires, cooldownMs: row.cooldownMs,
-  lastFiredAt: row.lastFiredAt, lastFiredTitle: row.lastFiredTitle, lastCheckedAt: row.lastCheckedAt, threadId: row.threadId,
+  lastFiredAt: row.lastFiredAt, lastFiredTitle: row.lastFiredTitle, lastCheckedAt: row.lastCheckedAt,
   source: normalizeSource(row.source), events: normalizeEvents(row.events), renewals: row.renewals, createdAt: row.createdAt, updatedAt: row.updatedAt,
 });
 
 export const intentColumns = (intent: Intent) => ({
   text: intent.text, trigger: intent.trigger, action: intent.action, notes: intent.notes, scope: intent.scope as unknown as Json,
   status: intent.status, expiresAt: intent.expiresAt, fireBudget: intent.fireBudget, fires: intent.fires, cooldownMs: intent.cooldownMs,
-  lastFiredAt: intent.lastFiredAt, lastFiredTitle: intent.lastFiredTitle, lastCheckedAt: intent.lastCheckedAt, threadId: intent.threadId,
+  lastFiredAt: intent.lastFiredAt, lastFiredTitle: intent.lastFiredTitle, lastCheckedAt: intent.lastCheckedAt,
   source: intent.source as unknown as Json, events: intent.events as unknown as Json, renewals: intent.renewals, createdAt: intent.createdAt, updatedAt: intent.updatedAt,
 });
 
@@ -187,7 +187,6 @@ export function createPgJobsStore({ db, now = Date.now }: { db: Db; now?: () => 
     async listRuns(filter = {}) {
       const where: SQL[] = [];
       if (filter.jobId !== undefined) where.push(eq(jobRuns.jobId, filter.jobId));
-      if (filter.threadId !== undefined) where.push(eq(jobRuns.threadId, filter.threadId));
       if (filter.kind !== undefined) where.push(eq(jobRuns.kind, filter.kind));
       if (filter.notKinds?.length) where.push(notInArray(jobRuns.kind, filter.notKinds));
       if (filter.status) where.push(filter.status.length ? inArray(jobRuns.status, filter.status) : sql`false`);

@@ -54,7 +54,7 @@ function setup({ interactive = true, settings = fakeSettings(), memory = [], ...
   hub.workspace = createWorkspaceService(hub, createMemoryWorkspaceStore());
   const ctx = {
     store, deps, touched, settings, interactive, now: () => T0,
-    hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job" },
+    hub, turn: { runId: "run1", kind: "chat", origin: interactive ? "chat" : "job" },
   };
   return { tools: { ...createTools(ctx), ...workspaceTools(ctx) }, store, deps, state, touched, intents, hub, activity, events, world };
 }
@@ -557,7 +557,7 @@ test("setup_pr_reviews checks out each PR, starts a review session, and creates 
   assert.deepEqual(input.scope.projectIds, ["p1", "p2", "p3"]);
   assert.deepEqual(input.scope.pulls.map((pull) => pull.number), [1, 2]);
   assert.deepEqual(input.scope.repos, ["acme/app"]);
-  assert.deepEqual(how, { actor: "agent", runId: "run1", threadId: "main" });
+  assert.deepEqual(how, { actor: "agent", runId: "run1" });
 
   const custom = await run(tools.setup_pr_reviews, { projectId: "p1", numbers: [1], prompt: "Just summarise." });
   assert.equal(state.prompts.at(-1).text, "Just summarise.\n\nPR #1: https://github.com/acme/app/pull/1");
@@ -757,7 +757,7 @@ test("create_session and each PR review open background tabs attributed to the c
   assert.deepEqual(openBeforePrompt, [true, true, true], "every tab opens before its first prompt");
   const opened = activity.filter((entry) => entry.kind === "workspace.opened" && entry.actor === "agent");
   assert.deepEqual(opened.map((entry) => entry.refs.sessionId), ids);
-  assert.ok(opened.every((entry) => entry.refs.runId === "run1" && entry.refs.threadId === "main"));
+  assert.ok(opened.every((entry) => entry.refs.runId === "run1"));
   assert.ok(events.every((event) => event.type === "workspace"), "workspace events carry no client navigation or focus");
   assert.ok(!("focus" in workspace) && !("activeTabId" in workspace));
 });
@@ -766,11 +766,10 @@ test("Agent creation without a prompt and named job creation both open backgroun
   const { tools, hub, deps, store, activity } = setup({ projects: [project()] });
   assert.deepEqual(await run(tools.create_session, { projectId: "p1" }), { sessionId: "s1" });
   const jobTools = createTools({ store, deps, touched: new Set(), settings: fakeSettings(), interactive: true, now: () => T0,
-    hub, turn: { runId: "job-run", threadId: "review-thread", kind: "job", origin: "job" } });
+    hub, turn: { runId: "job-run", kind: "job", origin: "job" } });
   assert.deepEqual(await run(jobTools.create_session, { projectId: "p1", prompt: "Background work" }), { sessionId: "s2" });
   assert.deepEqual((await hub.workspace.read()).tabs.map((tab) => tab.root.sessionId), ["s1", "s2"]);
   assert.deepEqual(activity.at(-1).refs.runId, "job-run");
-  assert.deepEqual(activity.at(-1).refs.threadId, "review-thread");
 });
 
 test("a workspace failure preserves the created session and still sends its first prompt", async () => {
@@ -820,7 +819,7 @@ test("rename_session takes an id prefix, renames as Portal, logs session.renamed
   assert.equal(entry.kind, "session.renamed");
   assert.equal(entry.actor, "agent");
   assert.equal(entry.summary, 'Renamed "Review auth" to "Auth review: token refresh"');
-  assert.deepEqual(entry.refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" });
+  assert.deepEqual(entry.refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1" });
   assert.deepEqual(entry.detail, { from: "Review auth", to: "Auth review: token refresh", titleSource: "portal" });
 
   // The same title again changes nothing and logs nothing.
@@ -850,7 +849,7 @@ test("rename_session is a chat-turn tool in the sessions group, never in a backg
   // A job's run that names its own tools is offered everything else interactively, but not renaming.
   const { deps } = fakeDeps({});
   const jobCtx = { store: createMemoryOrchestratorStore(), deps, touched: new Set(), settings: fakeSettings(), interactive: true, now: () => T0,
-    hub: { deps, activity: { log: async () => {} }, workspace: {} }, turn: { runId: "run1", threadId: null, kind: "job", origin: "job" } };
+    hub: { deps, activity: { log: async () => {} }, workspace: {} }, turn: { runId: "run1", kind: "job", origin: "job" } };
   assert.equal(createTools(jobCtx).rename_session, undefined);
   assert.ok(createTools(jobCtx).create_session, "the rest of the session tools are there");
 });

@@ -127,6 +127,13 @@
       "when": 1792696851819,
       "tag": "0017_watch_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792703626220,
+      "tag": "0018_drop_threads",
+      "breakpoints": true
     }
   ]
 }

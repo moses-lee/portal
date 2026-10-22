@@ -144,7 +144,7 @@ test("the portal stream opens with the room's state and pushes it when the envir
     const opening = [];
     do opening.push(await next()); while (opening.at(-1).type !== "room");
     const openingTypes = opening.map((event) => event.type);
-    for (const type of ["status", "items", "threads", "approvals", "intents", "workspace"]) {
+    for (const type of ["status", "items", "approvals", "intents", "workspace"]) {
       assert.equal(openingTypes.filter((seen) => seen === type).length, 1, `the stream opens with ${type} once, before the room`);
     }
     const room = opening.at(-1);
@@ -187,8 +187,8 @@ test("the portal stream opens without the room when the room's state cannot be r
       buffer += value;
     }
     const types = buffer.split("\n\n").flatMap((frame) => frame.split("\n").filter((line) => line.startsWith("data: "))).map((line) => JSON.parse(line.slice(6)).type);
-    assert.deepEqual(types.slice(0, 6), ["status", "items", "threads", "approvals", "intents", "workspace"]);
-    assert.ok(!types.slice(0, 7).includes("room"), "no room in the opening events");
+    assert.deepEqual(types.slice(0, 5), ["status", "items", "approvals", "intents", "workspace"]);
+    assert.ok(!types.slice(0, 6).includes("room"), "no room in the opening events");
     assert.ok(warnings.some((message) => message.includes("the census could not count")), "the failure is logged");
     controller.abort();
   });

@@ -9,7 +9,6 @@ import type { ActivityActor } from "@portal/contracts/activity";
 import type { OrchestratorHub } from "../hub.ts";
 import { httpError } from "../ops.ts";
 import type { RefreshReport } from "../tick.ts";
-import { MAIN_THREAD_ID } from "../types.ts";
 import type { Runs } from "./runs.ts";
 import { describeSchedule, parseSchedule, replanned, sameSchedule } from "./schedule.ts";
 import { type JobChanges, type JobsStore, type NewJob, unknownJob } from "./store.ts";
@@ -31,7 +30,7 @@ export type JobsCore = {
   store: JobsStore;
   runs: Runs;
   tick: TickRunner;
-  trimThread(threadId: string): Promise<void>;
+  trimChat(): Promise<void>;
   /** Whether a browser is connected (the shorter cadences apply). */
   present(): boolean;
   /** Wake this process's worker (set once the worker exists). */
@@ -42,7 +41,7 @@ export type JobsCore = {
   emitIntents(): Promise<void>;
   /** Hook set by the service: the active intents as just announced. */
   onIntents?: (active: Intent[]) => void;
-  scheduleJob(input: NewJob, actor: ActivityActor, refs?: { runId?: string; threadId?: string }): Promise<Job>;
+  scheduleJob(input: NewJob, actor: ActivityActor, refs?: { runId?: string }): Promise<Job>;
   /**
    * Change a job. Cancelling it also stops its runs in progress in this process (never `runId`, the
    * run doing the cancelling); their ids are added to `stopped` when given.
@@ -56,14 +55,14 @@ export type JobsCore = {
   stopJobRuns(jobId: string, exceptRunId?: string): string[];
   /** Hook set by the intents part: a check job was cancelled, so its intent goes too. */
   onCheckJobCancelled?: (job: Job, how: { actor: ActivityActor; runId?: string; stopped?: string[] }) => Promise<void>;
-  /** Post an assistant note to a thread as `run` did. */
-  postToThread(threadId: string | null, text: string, run: Pick<JobRun, "id" | "kind">, itemIds?: string[]): Promise<void>;
+  /** Post an assistant note to the chat as `run` did. */
+  postToChat(text: string, run: Pick<JobRun, "id" | "kind">, itemIds?: string[]): Promise<void>;
 };
 
 const settable = new Set(["active", "paused", "cancelled"]);
 
-export function jobRefs(job: Pick<Job, "id" | "intentId" | "threadId">, runId?: string) {
-  return { jobId: job.id, ...(job.intentId ? { intentId: job.intentId } : {}), ...(job.threadId ? { threadId: job.threadId } : {}), ...(runId ? { runId } : {}) };
+export function jobRefs(job: Pick<Job, "id" | "intentId">, runId?: string) {
+  return { jobId: job.id, ...(job.intentId ? { intentId: job.intentId } : {}), ...(runId ? { runId } : {}) };
 }
 
 /** Reduce unknown input to a `JobPatch`, or a 400. */
@@ -83,7 +82,7 @@ export function parseJobPatch(input: unknown): JobPatch {
   return patch;
 }
 
-export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick" | "trimThread">): JobsCore {
+export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick" | "trimChat">): JobsCore {
   const { hub, store } = base;
 
   const core: JobsCore = {
@@ -110,7 +109,7 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
       const job = await store.createJob(input);
       void hub.activity.log({
         actor, kind: "job.scheduled", summary: `Scheduled "${job.title}" (${describeSchedule(job.schedule)})`,
-        refs: { ...jobRefs(job, refs.runId), ...(refs.threadId && !job.threadId ? { threadId: refs.threadId } : {}) },
+        refs: jobRefs(job, refs.runId),
         detail: { kind: job.kind, schedule: job.schedule, nextRunAt: job.nextRunAt },
       });
       core.emitJobs();
@@ -171,17 +170,13 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
       }
     },
 
-    async postToThread(threadId, text, run, itemIds = []) {
-      const target = threadId ?? MAIN_THREAD_ID;
-      const thread = await hub.store.getThread(target);
-      // A side thread that went away (or was archived) hands its notes to the main thread.
-      const id = thread && thread.status === "active" ? target : MAIN_THREAD_ID;
+    async postToChat(text, run, itemIds = []) {
       await hub.store.appendMessages([{
         id: randomUUID(), role: "assistant", parts: [{ type: "text", text }],
         metadata: { at: hub.timers.now(), run: { id: run.id, kind: run.kind }, ...(itemIds.length ? { itemIds } : {}) },
-      }], id);
-      await base.trimThread(id);
-      hub.emit({ type: "messages", threadId: id });
+      }]);
+      await base.trimChat();
+      hub.emit({ type: "messages" });
     },
   };
 

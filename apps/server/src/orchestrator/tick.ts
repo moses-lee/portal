@@ -3,8 +3,8 @@
  * world build, GitHub included, whose diff against the previous snapshot feeds the change log and
  * releases dismissals whose condition cleared (the world service does both for every full build,
  * see `world/service.ts`), and then snoozed items whose time has passed are woken. No model is
- * called, nothing is posted to a thread, and no item is created or rewritten: what changed reaches
- * the user only through chat turns, which read the change log. Nothing here takes a thread lock.
+ * called, nothing is posted to the chat, and no item is created or rewritten: what changed reaches
+ * the user only through chat turns, which read the change log. Nothing here waits on a chat turn.
  */
 import type { OrchestratorHub } from "./hub.ts";
 

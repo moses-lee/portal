@@ -15,7 +15,6 @@ export const activityFilters: readonly ActivityFilter[] = [
   { id: "job", label: "Jobs", prefix: "job." },
   { id: "intent", label: "Watches", prefix: "intent." },
   { id: "item", label: "Items", prefix: "item." },
-  { id: "thread", label: "Threads", prefix: "thread." },
   { id: "session", label: "Sessions", prefix: "session." },
   { id: "memory", label: "Memory", prefix: "memory." },
   { id: "approval", label: "Approvals", prefix: "approval." },
@@ -41,7 +40,6 @@ export function describeKind(kind: string): string {
 }
 
 export type ActivityLink =
-  | { type: "thread"; id: string }
   | { type: "item"; id: string }
   | { type: "session"; id: string }
   | { type: "pull"; repo: string; number: number; url: string }
@@ -56,7 +54,6 @@ export type ActivityLink =
 /** The links an entry offers, most useful first. A record link carries its entity so it can open in place. */
 export function activityLinks(refs: ActivityRefs): ActivityLink[] {
   const links: ActivityLink[] = [];
-  if (refs.threadId) links.push({ type: "thread", id: refs.threadId });
   if (refs.pull) links.push({ type: "pull", ...refs.pull });
   if (refs.sessionId) links.push({ type: "session", id: refs.sessionId });
   if (refs.itemId) links.push({ type: "item", id: refs.itemId });

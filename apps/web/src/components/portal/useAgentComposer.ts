@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 import type { QueuedPrompt } from "@/lib/types";
-import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
-import { portalJson, portalSend } from "@/lib/orchestrator/api";
+import { portalJson, portalSend, portalRoutes } from "@/lib/orchestrator/api";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { restoreToDraft } from "@/lib/prompt-queue";
 import { readEditing, subscribeEditing, writeEditing } from "@/lib/queue-edit";
@@ -14,25 +13,21 @@ import { usePortalEvents } from "./PortalLive";
 const queuePath = "/api/portal/queue";
 const itemPath = (id: string) => `${queuePath}/${encodeURIComponent(id)}`;
 
-/** Main-thread queue controls share the session composer's editing and draft restoration rules. */
-export function useAgentComposer({ threadId, draftKey, ready, archived, busy, submitTurn, stopStream, cancelPath, currentView, describeError }: {
-  threadId: string;
+/** The Agent chat's queue controls share the session composer's editing and draft restoration rules. */
+export function useAgentComposer({ draftKey, ready, busy, submitTurn, stopStream, currentView, describeError }: {
   draftKey: string;
   ready: boolean;
-  archived: boolean;
   busy: boolean;
   submitTurn: (text: string) => Promise<void>;
   stopStream: () => void;
-  cancelPath: string;
   currentView: () => WorkspaceView;
   describeError: (error: unknown) => string;
 }) {
-  const main = threadId === MAIN_THREAD_ID;
   const [queue, setQueue] = useState<QueuedPrompt[]>([]);
-  const [loaded, setLoaded] = useState(!main);
+  const [loaded, setLoaded] = useState(false);
   const [queueError, setQueueError] = useState<string | null>(null);
   const version = useRef(0);
-  const editingId = useSyncExternalStore(subscribeEditing, () => main ? readEditing(draftKey) : null, () => null);
+  const editingId = useSyncExternalStore(subscribeEditing, () => readEditing(draftKey), () => null);
   const readQueue = useCallback((signal?: AbortSignal) => {
     const requestedAt = version.current;
     return portalJson<{ queue: QueuedPrompt[] }>(queuePath, { signal }).then((result) => {
@@ -45,13 +40,11 @@ export function useAgentComposer({ threadId, draftKey, ready, archived, busy, su
     });
   }, [describeError]);
   useEffect(() => {
-    if (!main) return;
     const controller = new AbortController();
     void readQueue(controller.signal);
     return () => controller.abort();
-  }, [main, readQueue]);
+  }, [readQueue]);
   usePortalEvents((event) => {
-    if (!main) return;
     if (event.type === "queue") {
       version.current++;
       setQueue(event.queue);
@@ -60,11 +53,11 @@ export function useAgentComposer({ threadId, draftKey, ready, archived, busy, su
     } else if (event.type === "reconnected") void readQueue();
   });
   useEffect(() => {
-    if (main && loaded && editingId && !queue.some((item) => item.id === editingId)) writeEditing(draftKey, null);
-  }, [main, loaded, editingId, queue, draftKey]);
+    if (loaded && editingId && !queue.some((item) => item.id === editingId)) writeEditing(draftKey, null);
+  }, [loaded, editingId, queue, draftKey]);
 
   const submit = useCallback(async (text: string) => {
-    const editing = main ? readEditing(draftKey) : null;
+    const editing = readEditing(draftKey);
     if (editing) {
       const response = await fetch(itemPath(editing), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       if (!response.ok) {
@@ -73,21 +66,21 @@ export function useAgentComposer({ threadId, draftKey, ready, archived, busy, su
         throw new Error(result.error ?? "Could not save the queued prompt.");
       }
       writeEditing(draftKey, null);
-    } else if (main && (busy || (queue.length > 0 && !queue.some((item) => item.editing)))) {
+    } else if (busy || (queue.length > 0 && !queue.some((item) => item.editing))) {
       await portalSend(queuePath, "POST", { text, view: currentView() });
     } else {
       try { await submitTurn(text); }
       catch (error) {
         // Another viewer may take the turn between the status snapshot and this request.
-        if (main && /still answering in this thread|queued prompts waiting/.test(describeError(error))) {
+        if (/still answering|queued prompts waiting/.test(describeError(error))) {
           await portalSend(queuePath, "POST", { text, view: currentView() });
         } else throw error;
       }
     }
-  }, [main, draftKey, busy, queue, currentView, submitTurn, describeError]);
+  }, [draftKey, busy, queue, currentView, submitTurn, describeError]);
   const composer = useSend({
     draftKey, historyKey: draftKey, submit,
-    canSend: () => ready && !archived && loaded && (main || !busy),
+    canSend: () => ready && loaded,
     describeError,
   });
   const heldBack = useRef<string[]>([]);
@@ -105,13 +98,11 @@ export function useAgentComposer({ threadId, draftKey, ready, archived, busy, su
     setStopping(true);
     setQueueError(null);
     try {
-      const editing = main ? readEditing(draftKey) : null;
-      const result = await portalSend<{ queued: QueuedPrompt[] } | undefined>(cancelPath, "POST");
+      const editing = readEditing(draftKey);
+      const result = await portalSend<{ queued: QueuedPrompt[] } | undefined>(portalRoutes.cancel, "POST");
       stopStream();
-      if (main) {
-        takeBack((result?.queued ?? []).filter((item) => item.id !== editing).map((item) => item.text));
-        writeEditing(draftKey, null);
-      }
+      takeBack((result?.queued ?? []).filter((item) => item.id !== editing).map((item) => item.text));
+      writeEditing(draftKey, null);
     } catch (error) {
       setQueueError(describeError(error));
     } finally { setStopping(false); }

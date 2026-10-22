@@ -67,7 +67,7 @@ test("Search opens independently and Agent preserves its draft after dismissal",
 
 test("a reply continues while Agent is dismissed and is available on reopening", async ({ page }) => {
   const fixture = await setupPortal(page);
-  const release = fixture.holdSends("main");
+  const release = fixture.holdSends();
   await page.goto("/");
   await hydrated(page);
   await page.keyboard.press("ControlOrMeta+k");

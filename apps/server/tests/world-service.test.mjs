@@ -119,7 +119,7 @@ test("a store that fails does not fail the refresh", async (t) => {
 test("chat turns get all five world tools, background turns only resolve_pull and resolve_repo; the tools answer from the world", async () => {
   const { world, hub, workspace } = setup();
   await world.refresh("tick");
-  const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
+  const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
   const chat = world.tools({ interactive: true, deps: hub.deps, hub, turn });
   assert.deepEqual(Object.keys(chat).sort(), ["get_changes", "get_world", "resolve_pull", "resolve_repo", "resolve_session"]);
   const background = world.tools({ interactive: false, deps: hub.deps, hub, turn: { ...turn, origin: "job" } });
@@ -148,7 +148,7 @@ test("the guidance tells the model to resolve before asking", () => {
 });
 
 test("the changes guidance: when to mention, what never to, how, and get_changes when asked", () => {
-  assert.match(changesGuidance, /discussed in this thread/);
+  assert.match(changesGuidance, /discussed in this chat/);
   assert.match(changesGuidance, /fresh and the user's own/);
   assert.match(changesGuidance, /Do not mention old state that merely persists/);
   assert.match(changesGuidance, /at most one or two short lines at the end/);
@@ -176,7 +176,7 @@ test("get_changes: since as relative or ISO time (default a day), about as words
   await world.changes.record([change("pr:acme/monorepo#2367", 0, { summary: 'PR acme/monorepo#2367 "Speed up CI" needs attention: checks failing', refs: { pull: { repo: "acme/monorepo", number: 2367, url: "u" }, projectId: "p1" } })], T0 - 3 * 60 * MIN);
   await world.changes.record([change("session:s1", 0, { kind: "session_finished", summary: 'Session "Fix the login bug" finished its turn', refs: { sessionId: "s1", projectId: "p1" } })], T0 - 30 * MIN);
   await world.changes.record([change("folder:p9", 0, { kind: "folder_missing", summary: "The folder of project old is missing", refs: { projectId: "p9" } })], T0 - 3 * 24 * 60 * MIN);
-  const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", threadId: "main", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
+  const turn = { runId: "r1", kind: "chat", role: "chat", origin: "chat", jobId: null, intentId: null, scope: { projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] } };
   const tools = world.tools({ interactive: true, deps: hub.deps, hub, turn, now: () => timers.now() });
   const run = async (input) => {
     const parsed = tools.get_changes.inputSchema.safeParse(input);

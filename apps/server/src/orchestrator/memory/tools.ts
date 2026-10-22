@@ -2,8 +2,8 @@
  * The memory tools. A chat turn gets all five; a background turn only proposes and searches (it
  * has no user to speak for, and every schema costs tokens on each step). A curation turn (the
  * consolidator) also gets `submit_curation_plan`, the only way its decisions reach the server. `remember` and `forget`
- * speak for the user, so they need a `quote` that appears in the user's latest message of the
- * turn's thread, read from the store: text the model saw in a PR, a transcript, or a tool's output
+ * speak for the user, so they need a `quote` that appears in the user's latest message in the
+ * chat, read from the store: text the model saw in a PR, a transcript, or a tool's output
  * can never become a user-stated claim or retract one.
  */
 import { z } from "zod";
@@ -49,14 +49,14 @@ function normalize(text: string): string {
 const textOf = (message: OrchestratorMessage) => message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 
 /**
- * The user's latest message in the turn's thread, when `quote` is a real excerpt of it. Throws a
+ * The user's latest message in the chat, when `quote` is a real excerpt of it and the turn is a chat turn. Throws a
  * message the model can act on otherwise.
  */
 async function requireQuote({ hub, turn }: DomainToolContext, quote: string): Promise<{ messageId: string; quote: string }> {
   const trimmed = quote.trim().replace(/^["'“‘]+|["'”’]+$/g, "").trim();
   if (normalize(trimmed).length < 3) throw new Error("quote must be the user's own words (at least a few characters) from their latest message.");
-  if (!turn.threadId) throw new Error("This turn has no thread with a user message to quote.");
-  const messages = await hub.store.readMessages(turn.threadId);
+  if (turn.origin !== "chat") throw new Error("This turn has no user message to quote.");
+  const messages = await hub.store.readMessages();
   const latest = messages.findLast((message) => message.role === "user");
   if (!latest || !normalize(textOf(latest)).includes(normalize(trimmed))) {
     throw new Error("quote does not appear in the user's latest message. Only what the user just said can be remembered or forgotten as theirs; propose_memory the claim instead, quoting its source.");
@@ -86,7 +86,7 @@ function recordRow(record: MemoryRecord, entity?: MemoryEntity | null) {
 
 export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService): ToolSet {
   const { turn } = ctx;
-  const who: Actor = { actor: "agent", runId: turn.runId, threadId: turn.threadId };
+  const who: Actor = { actor: "agent", runId: turn.runId };
 
   const tools: ToolSet = {
     propose_memory: define(
@@ -108,7 +108,7 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
         const source = given.sessionId ? { ...given, sessionId: fuller(known, "session", given.sessionId) } : given;
         const result = await memory.propose({
           ...input, type: input.type as MemoryRecord["type"], entity: { ...input.entity, type: input.entity.type as MemoryEntity["type"] },
-          source: { ...source, runId: turn.runId, ...(turn.threadId && source.kind === "message" ? { threadId: turn.threadId } : {}) },
+          source: { ...source, runId: turn.runId },
         }, who);
         return {
           ...recordRow(result.record), ...(result.unchanged ? { unchanged: true } : {}),
@@ -169,7 +169,7 @@ export function memoryTools(ctx: DomainToolContext, memory: CuratedMemoryService
         const input = canonicalClaim(await knownIds(ctx.hub.deps), claim);
         const result = await memory.remember({
           ...input, type: input.type as MemoryRecord["type"], entity: { ...input.entity, type: input.entity.type as MemoryEntity["type"] },
-          source: { kind: "message", threadId: turn.threadId ?? undefined, messageId: excerpt.messageId, runId: turn.runId, quote: excerpt.quote },
+          source: { kind: "message", messageId: excerpt.messageId, runId: turn.runId, quote: excerpt.quote },
         }, who);
         return { ...recordRow(result.record), ...(result.superseded ? { superseded: result.superseded.id } : {}), ...(result.unchanged ? { unchanged: true } : {}) };
       },

@@ -20,7 +20,7 @@ function jobInput(overrides = {}) {
 
 function run(id, overrides = {}) {
   return {
-    id, jobId: "j1", kind: "helper", threadId: "main", parentRunId: null, status: "running", trigger: "schedule", startedAt: T0, finishedAt: null,
+    id, jobId: "j1", kind: "helper", parentRunId: null, status: "running", trigger: "schedule", startedAt: T0, finishedAt: null,
     model: null, usage: null, log: [], result: null, summary: null, error: null, ...overrides,
   };
 }
@@ -57,7 +57,7 @@ for (const [label, open] of backends) {
     assert.match(a.id, /^[A-Za-z0-9_-]{8}$/);
     assert.deepEqual(a, {
       id: a.id, kind: "helper", title: "Later job", schedule: every(10), payload: { prompt: "Summarize." }, status: "active", nextRunAt: T0 + 120_000,
-      lastRunAt: null, lastRunId: null, intentId: null, threadId: null, createdBy: "agent", failures: 0, createdAt: T0, updatedAt: T0,
+      lastRunAt: null, lastRunId: null, intentId: null, createdBy: "agent", failures: 0, createdAt: T0, updatedAt: T0,
     });
     clock.add(1);
     const b = await store.createJob(jobInput({ title: "Sooner", nextRunAt: T0 + 60_000 }));
@@ -154,7 +154,7 @@ for (const [label, open] of backends) {
     const { store } = await open(t);
     const stored = [];
     for (let i = 0; i < 6; i++) {
-      stored.push(await store.insertRun(run(`r${i}`, { startedAt: T0 + i * 1_000, jobId: i % 2 ? "j1" : "j2", kind: i === 5 ? "chat" : "helper", threadId: i < 3 ? "main" : "side" })));
+      stored.push(await store.insertRun(run(`r${i}`, { startedAt: T0 + i * 1_000, jobId: i % 2 ? "j1" : "j2", kind: i === 5 ? "chat" : "helper" })));
     }
     // Same start time: the id breaks the tie so pages never overlap.
     stored.push(await store.insertRun(run("r6", { startedAt: T0 + 5_000, jobId: null, kind: "chat" })));
@@ -166,7 +166,6 @@ for (const [label, open] of backends) {
     assert.deepEqual((await store.listRuns()).map((r) => r.id), ["r6", "r5", "r4", "r3", "r2", "r1", "r0"]);
     assert.deepEqual((await store.listRuns({ jobId: "j1" })).map((r) => r.id), ["r5", "r3", "r1"]);
     assert.deepEqual((await store.listRuns({ kind: "chat" })).map((r) => r.id), ["r6", "r5"]);
-    assert.deepEqual((await store.listRuns({ threadId: "side" })).map((r) => r.id), ["r5", "r4", "r3"]);
     assert.deepEqual((await store.listRuns({ status: ["succeeded"] })).map((r) => r.id), ["r1"]);
     const page1 = await store.listRuns({ limit: 3 });
     const page2 = await store.listRuns({ limit: 3, before: page1.at(-1).id });
@@ -195,11 +194,11 @@ for (const [label, open] of backends) {
     assert.deepEqual(intent, {
       id: intent.id, text: "Tell me when #42 merges", trigger: "acme/app#42 is merged", action: "Tell me", notes: "",
       scope: { projectIds: [], sessionIds: [], pulls: [{ repo: "acme/app", number: 42, url: "u" }], repos: [], people: [], taskTypes: [] },
-      status: "active", expiresAt: null, fireBudget: 1, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: null, threadId: null,
+      status: "active", expiresAt: null, fireBudget: 1, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: null,
       source: { type: "poll" }, events: { pending: [], handled: [], seen: [] }, renewals: 0, createdAt: T0, updatedAt: T0,
     });
     clock.add(5);
-    const unlimited = await store.createIntent(intentInput({ id: "w1", fireBudget: null, cooldownMs: 60_000, threadId: "t1", expiresAt: T0 + 1_000 }));
+    const unlimited = await store.createIntent(intentInput({ id: "w1", fireBudget: null, cooldownMs: 60_000, expiresAt: T0 + 1_000 }));
     assert.equal(unlimited.id, "w1");
     assert.deepEqual((await store.listIntents()).map((i) => i.id), ["w1", intent.id]);
     const fired = await store.updateIntent(intent.id, { fires: 1, lastFiredAt: T0 + 5, status: "done", notes: "Merged." });

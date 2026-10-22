@@ -175,7 +175,7 @@ export default function ChatComposer({
   }, [value]);
   const hasContent = !!value.trim() || attachedCount > 0;
   const draggingFiles = (event: DragEvent) => !!addFiles && event.dataTransfer.types.includes("Files");
-  // With a queue, a send while the agent works queues the text; without one (a Portal thread) it
+  // With a queue, a send while the agent works queues the text; without one (the start page) it
   // waits. Saving an edited queued prompt does not start a turn, so it goes through while busy too.
   const send = () => {
     if (!disabled && !sending && (queues || !!editing || !busy) && hasContent) onSend();

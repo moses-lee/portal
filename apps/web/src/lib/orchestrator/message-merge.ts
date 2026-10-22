@@ -1,5 +1,5 @@
 /**
- * Folding fetched pages of a Portal thread into the messages already held. The server sends fresh
+ * Folding fetched pages of the Agent chat into the messages already held. The server sends fresh
  * objects every time; a message whose content did not change keeps the object already held, so the
  * memoised rows (`PortalMessage`) skip rendering. Pure, so the unit tests pin identity and order.
  *
@@ -9,7 +9,7 @@
  * at the first difference. Messages are plain JSON and pages are small, so this stays cheap.
  *
  * `@ai-sdk/react`'s `setMessages` copies the array and notifies its subscribers whatever it is given,
- * so returning `current` does not spare `PortalThread` a render; what it buys is that every row
+ * so returning `current` does not spare `PortalChat` a render; what it buys is that every row
  * object is the one already held, so the memoised rows skip.
  */
 import type { OrchestratorMessage } from "./types.ts";

@@ -68,7 +68,6 @@ export type Authority = "user_stated" | "user_confirmed" | "observed" | "inferre
 
 export type RecordSource = {
   kind: "message" | "session" | "pull" | "import" | "tool" | "consolidator" | "ui";
-  threadId?: string;
   messageId?: string;
   sessionId?: string;
   pull?: PullRef;
@@ -179,7 +178,7 @@ export type CurationChange = {
 export type ConsolidationResult = {
   /** Short Markdown for people: what changed and what needs the user. */
   digest: string;
-  /** The one line posted to the main thread. */
+  /** The one line posted to the chat. */
   line: string;
   counts: Record<CurationAction, number>;
   changes: CurationChange[];

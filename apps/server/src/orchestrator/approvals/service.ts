@@ -9,7 +9,7 @@
  * the result, the refusal, or "pending"; a background job gets "pending" at once and a Needs-you
  * item links to the request. `decide` records the answer (and a grant for wider scopes), replays
  * the recorded call server-side on approval (rebuilding the tool from a plain context, so it works
- * after a restart too), notes the outcome in the originating thread, resolves the Needs-you item,
+ * after a restart too), notes the outcome in the chat (unless a card asked), resolves the Needs-you item,
  * and resumes the job that asked. Pending requests expire; an expired one never runs.
  */
 import { randomUUID } from "node:crypto";
@@ -103,7 +103,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
 
   const refsOf = (approval: Approval): ActivityRefs => ({
     approvalId: approval.id,
-    ...(approval.runId ? { runId: approval.runId } : {}), ...(approval.threadId ? { threadId: approval.threadId } : {}),
+    ...(approval.runId ? { runId: approval.runId } : {}),
     ...(approval.jobId ? { jobId: approval.jobId } : {}), ...(approval.intentId ? { intentId: approval.intentId } : {}),
     ...(approval.itemId ? { itemId: approval.itemId } : {}),
   });
@@ -167,7 +167,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
     for (const waiter of waiters.get(id) ?? []) waiter.claimed = true;
   }
 
-  /** Hand the final record to every waiting turn; true when one took it (so no thread note is needed). */
+  /** Hand the final record to every waiting turn; true when one took it (so no chat note is needed). */
   function settleWaiters(approval: Approval): boolean {
     const set = waiters.get(approval.id);
     if (!set || set.size === 0) return false;
@@ -176,15 +176,15 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Side effects of a request's life: thread notes, Needs-you items
+  // Side effects of a request's life: chat notes, Needs-you items
   // ---------------------------------------------------------------------------------------------
 
+  /** A card's request is answered where the card is; chat turns and jobs hear about theirs in the chat. */
   async function postNote(approval: Approval, text: string) {
-    const threadId = approval.threadId;
-    if (!threadId) return;
+    if (approval.origin === "card") return;
     try {
-      await hub.store.appendMessages([{ id: randomUUID(), role: "assistant", parts: [{ type: "text", text }], metadata: { at: now() } }], threadId);
-      hub.emit({ type: "messages", threadId });
+      await hub.store.appendMessages([{ id: randomUUID(), role: "assistant", parts: [{ type: "text", text }], metadata: { at: now() } }]);
+      hub.emit({ type: "messages" });
     } catch (err) {
       console.error("Could not post an approval note:", err);
     }
@@ -201,7 +201,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
         body: body.length > 2000 ? `${body.slice(0, 1999)}…` : body,
         links: {
           approvalId: approval.id, ...(approval.jobId ? { jobId: approval.jobId } : {}),
-          ...(approval.intentId ? { intentId: approval.intentId } : {}), ...(approval.threadId ? { threadId: approval.threadId } : {}),
+          ...(approval.intentId ? { intentId: approval.intentId } : {}),
         },
         actions: [], fingerprint: fingerprintOf(approval),
       });
@@ -226,14 +226,14 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
   // Requests
   // ---------------------------------------------------------------------------------------------
 
-  type RequestInput = Pick<Approval, "tool" | "origin" | "threadId" | "runId" | "jobId" | "intentId" | "itemId"> & { input: Record<string, unknown>; assessment: Assessment };
+  type RequestInput = Pick<Approval, "tool" | "origin" | "runId" | "jobId" | "intentId" | "itemId"> & { input: Record<string, unknown>; assessment: Assessment };
 
   /** A pending request for the call, reusing an identical pending one (a model that retries asks once). */
   async function request({ assessment, ...call }: RequestInput): Promise<Approval> {
     await expireDue();
-    const key = callKey(call.tool, call.input, [call.origin, call.threadId, call.jobId, call.intentId, call.itemId]);
+    const key = callKey(call.tool, call.input, [call.origin, call.jobId, call.intentId, call.itemId]);
     const same = (await store.list({ status: ["pending"], limit: 500 }))
-      .find((row) => callKey(row.tool, row.input, [row.origin, row.threadId, row.jobId, row.intentId, row.itemId]) === key);
+      .find((row) => callKey(row.tool, row.input, [row.origin, row.jobId, row.intentId, row.itemId]) === key);
     if (same) return same;
     const at = now();
     const approval = await store.create({
@@ -384,13 +384,13 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
     if (grant) {
       void hub.activity.log({
         actor: "system", kind: "approval.granted", summary: `Allowed by a ${grant.scope} grant: ${assessment.title}`,
-        refs: { runId: turn.runId, ...(turn.threadId ? { threadId: turn.threadId } : {}), ...(turn.jobId ? { jobId: turn.jobId } : {}), approvalId: grant.approvalId },
+        refs: { runId: turn.runId, ...(turn.jobId ? { jobId: turn.jobId } : {}), approvalId: grant.approvalId },
         detail: { tool: name, grantId: grant.id, scope: grant.scope },
       });
       return execute(input, toolOptions);
     }
     const approval = await request({
-      tool: name, input: asRecord(input), assessment, origin: turn.origin, threadId: turn.threadId, runId: turn.runId,
+      tool: name, input: asRecord(input), assessment, origin: turn.origin, runId: turn.runId,
       jobId: turn.jobId, intentId: turn.intentId, itemId: null,
     });
     if (turn.origin === "job") {
@@ -429,7 +429,7 @@ export function createApprovalsService(hub: OrchestratorHub, options: ApprovalsO
     const assessment = await assessCardAction(hub.deps, action).catch(() => null) ?? fallbackAssessment(action.type, action);
     return request({
       tool: action.type, input: { itemId: item.id, actionIndex, action: { ...action } }, assessment, origin: "card",
-      threadId: null, runId: null, jobId: null, intentId: null, itemId: item.id,
+      runId: null, jobId: null, intentId: null, itemId: item.id,
     });
   }
 

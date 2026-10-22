@@ -75,8 +75,8 @@ test("create_watch without sessions makes a poll watch at the agent's cadence th
   const { created } = await withIntent(h, { idleCheckEveryMinutes: 15 });
   const intent = await h.jobs.getIntent(created.id);
   assert.deepEqual(
-    { source: intent.source, status: intent.status, fireBudget: intent.fireBudget, cooldownMs: intent.cooldownMs, expiresAt: intent.expiresAt, threadId: intent.threadId },
-    { source: { type: "poll" }, status: "active", fireBudget: null, cooldownMs: 0, expiresAt: T0 + DEFAULT_LIFETIME_MS, threadId: "main" },
+    { source: intent.source, status: intent.status, fireBudget: intent.fireBudget, cooldownMs: intent.cooldownMs, expiresAt: intent.expiresAt },
+    { source: { type: "poll" }, status: "active", fireBudget: null, cooldownMs: 0, expiresAt: T0 + DEFAULT_LIFETIME_MS },
   );
   assert.equal(created.wakes, "checked on a schedule");
   assert.equal(created.expiresAt, new Date(T0 + DEFAULT_LIFETIME_MS).toISOString(), "the answer says when it expires");
@@ -97,7 +97,7 @@ test("create_watch without sessions makes a poll watch at the agent's cadence th
   for (const gone of ["fireBudget", "cooldownMinutes", "role", "expiresAt"]) assert.ok(!(gone in tools.create_watch.inputSchema.shape), gone);
 });
 
-test("a poll watch's run is a full agent turn on the watch model; its reply fires: a Needs-you item and a note in the thread", async (t) => {
+test("a poll watch's run is a full agent turn on the watch model; its reply fires: a Needs-you item and a note in the chat", async (t) => {
   const h = await started(jobsHarness(t, {
     doGenerate: [
       toolStep("run_command", { command: "curl -s https://status.example.com/api/v2/status.json", cwd: "/repo" }, "c1"),
@@ -126,7 +126,7 @@ test("a poll watch's run is a full agent turn on the watch model; its reply fire
   const [item] = await h.store.listItems();
   assert.deepEqual(
     { kind: item.kind, title: item.title, fingerprint: item.fingerprint, links: item.links },
-    { kind: "intent_update", title: "The status page shows the incident resolved at 14:02.", fingerprint: `intent_update:${intent.id}`, links: { intentId: intent.id, threadId: "main", pull } },
+    { kind: "intent_update", title: "The status page shows the incident resolved at 14:02.", fingerprint: `intent_update:${intent.id}`, links: { intentId: intent.id, pull } },
   );
   const [note] = (await h.runtime.history()).messages;
   assert.equal(note.parts[0].text, "The status page shows the incident resolved at 14:02. Codex should work again.");
@@ -290,7 +290,7 @@ test("a session watch runs only when its session finishes a turn, reads what the
   assert.equal(after.fires, 1);
   assert.deepEqual(after.events.pending, []);
   const [item] = await h.store.listItems();
-  assert.deepEqual(item.links, { intentId: intent.id, threadId: "main", sessionId: "s1" });
+  assert.deepEqual(item.links, { intentId: intent.id, sessionId: "s1" });
   assert.deepEqual(item.actions, [{ type: "open_session", sessionId: "s1", label: "Open session" }]);
   assert.equal((await h.runtime.history()).messages.length, 1);
   assert.equal((await h.jobs.getJob(job.id)).nextRunAt, null, "back to waiting");
@@ -572,7 +572,7 @@ test("a run repairs a scope stored with prefixes, and its item's links, once; a 
   assert.deepEqual(intent.scope.sessionIds, [REVIEW]);
   assert.deepEqual(intent.scope.projectIds, [PORTAL, "gone0000"], "what names nothing is left as it is");
   const item = await h.store.getItem(old.id);
-  assert.deepEqual(item.links, { intentId: created.id, threadId: "main", sessionId: REVIEW });
+  assert.deepEqual(item.links, { intentId: created.id, sessionId: REVIEW });
   assert.deepEqual(item.actions, [{ type: "open_session", sessionId: REVIEW, label: "Open session" }]);
   assert.match(JSON.stringify(h.model.doGenerateCalls[0].prompt), /Review auth\W+\[17329ac6\] in portal/, "the run's World shows the session in focus");
 });

@@ -9,8 +9,7 @@ Step 1 (commit "Lay the phase 2 foundation") already landed the shared pieces de
 - Portal is a coordinator that never blocks: chat turns and background jobs run independently.
 - Cadence is 100% the agent's: it creates and cancels jobs and intents itself.
 - No Ideas list (the web and item cleanup removes it). Needs-you stays; Goals/Upcoming is new.
-- Observed facts go to the memory inbox; facts the user states apply at once; only the agent can
-  open side threads; procedures in memory are interpreted by the orchestrator, never pasted.
+- Observed facts go to the memory inbox; facts the user states apply at once; procedures in memory are interpreted by the orchestrator, never pasted.
 - Memory entities: global, person (GitHub login), repo (owner/name), project, session, task type.
   Portal should be able to reach everything the user can see in the UI.
 - Approvals: deterministic server code, never a chat message. A "job" grant covers the job or
@@ -27,7 +26,7 @@ Step 1 (commit "Lay the phase 2 foundation") already landed the shared pieces de
   world,memory,approvals}.ts`, imported as `@portal/contracts/<name>`. Each file's header lists its
   HTTP surface; implement exactly that surface (all routes under `/api/portal/`).
 - Schema: `apps/server/src/db/schema.ts`, all phase 2 tables already exist (migration
-  `0002_orchestrator_v2.sql`): `threads`, `activity_log`, `jobs`, `job_runs`, `intents`,
+  `0002_orchestrator_v2.sql`): `activity_log`, `jobs`, `job_runs`, `intents`,
   `world_snapshots`, `memory_entities`, `memory_records` (generated `search` tsvector, partial unique
   index on `(entity_id, key)` where active), `memory_revisions`, `approvals`, `approval_grants`.
 - The hub: `apps/server/src/orchestrator/hub.ts`. Every domain service is built as
@@ -39,7 +38,7 @@ Step 1 (commit "Lay the phase 2 foundation") already landed the shared pieces de
 - Stubs to replace: `src/orchestrator/{jobs,world,memory,approvals}/{service,routes}.ts`.
 - Turns: `src/orchestrator/turn.ts`. `prepareTurn(hub, options)` resolves the role's model, records
   a run through `hub.jobs.startRun`, composes the system prompt (base + CORE.md + rendered world +
-  retrieved memory), and builds the tools: classic tools, thread tools, then
+  retrieved memory), and builds the tools: classic tools, then
   `hub.jobs.tools(ctx)`, `hub.world.tools(ctx)`, `hub.memory.tools(ctx)`, redacted, gated by
   `hub.approvals.gate`, and logged per call as `tool.call` activity. `generateTurn(prepared, ...)`
   runs it to the end for background work. Use these for every model call; never build an agent by hand.
@@ -47,8 +46,6 @@ Step 1 (commit "Lay the phase 2 foundation") already landed the shared pieces de
   `scheduler.ts` until the jobs agent replaces that.
 - Activity: `hub.activity.log({ actor, kind, summary, refs, detail })`. Every action that changes
   state writes one entry (kinds listed in `contracts/src/activity.ts`; add kinds within your prefix).
-- Threads: `hub.store` has `listThreads/getThread/createThread/updateThread` and per-thread messages;
-  `tools/threads.ts` gives the agent `open_thread`, `post_to_thread`, `list_threads`, `archive_thread`.
 
 ## Conventions (the existing code follows them; so must yours)
 
@@ -56,7 +53,7 @@ Step 1 (commit "Lay the phase 2 foundation") already landed the shared pieces de
   parameter properties, no namespaces).
 - Stores: an interface, an in-memory implementation, and a Postgres implementation, with one shared
   behaviour test run against both (see `tests/orchestrator-store.test.mjs` and
-  `tests/orchestrator-threads-activity.test.mjs`). Strip NUL (`stripNul`) before writing. Ids from
+  `tests/orchestrator-activity.test.mjs`). Strip NUL (`stripNul`) before writing. Ids from
   `newId()` (short, model-friendly) for records the model addresses.
 - Routes: a Fastify plugin function `register<Domain>Routes(app, ctx)`; every route calls
   `rejectCrossOrigin(req, reply)` first (see `src/orchestrator/routes.ts` `runtimeFor`), errors carry

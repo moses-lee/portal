@@ -28,7 +28,7 @@ async function reviewGoal(h, overrides = {}) {
     scope: { sessionIds: ["s1", "s2"], pulls: reviewSessions.map((entry) => ({ repo: "acme/app", number: entry.pr, url: entry.url })), repos: ["acme/app"] },
     fireBudget: 1, check: { type: "every", everyMs: REVIEW_CHECK_MS }, checkNow: true,
     checkPayload: { review: { repo: "acme/app", sessions: reviewSessions, memoryIds: ["m1"] } }, ...overrides,
-  }, { actor: "agent", threadId: "main" });
+  }, { actor: "agent" });
 }
 
 test("sessionProgress reads a finished turn, a working or waiting session, and the ways a review can end without finishing", async () => {
@@ -104,7 +104,7 @@ test("a review goal waits without a model call, then summarizes the reviews into
   assert.equal(first.title, "Review of acme/app#1: needs changes (1 blocking, 1 nit)");
   assert.match(first.body, /^The token is never refreshed\.\n\n\*\*Blocking\*\*\n- Token never refreshed \(`src\/auth.ts:42`\): Sessions expire after an hour\./);
   assert.match(first.body, /_Brief written from memory: m1_/);
-  assert.deepEqual(first.links, { pull: { repo: "acme/app", number: 1, url: url(1) }, sessionId: "s1", projectId: "p2", intentId: intent.id, threadId: "main" });
+  assert.deepEqual(first.links, { pull: { repo: "acme/app", number: 1, url: url(1) }, sessionId: "s1", projectId: "p2", intentId: intent.id });
   assert.deepEqual(first.actions, [{ type: "open_url", url: url(1), label: "Open PR" }, { type: "open_session", sessionId: "s1", label: "Open review" }]);
   assert.equal(items.find((item) => item.links.pull.number === 2).title, "Review of acme/app#2: looks good (1 nit)");
   assert.equal((await h.store.listItems()).filter((item) => item.kind === "intent_update").length, 0, "no generic goal item beside the findings");
@@ -118,7 +118,7 @@ test("a review goal waits without a model call, then summarizes the reviews into
   assert.equal(helper.parentRunId, run.id, "the summarizer is a child run of the check");
   assert.deepEqual(helper.model, { provider: "anthropic", model: "claude-opus-5-5" }, "summaries use the chat model");
   const note = (await h.store.readMessages()).at(-1);
-  assert.equal(note.parts[0].text, run.summary, "the thread gets the same sentence, not a list");
+  assert.equal(note.parts[0].text, run.summary, "the chat gets the same sentence, not a list");
   assert.deepEqual(note.metadata.itemIds.sort(), items.map((item) => item.id).sort());
   assert.deepEqual(await h.hub.workspace.read(), reviewTabs, "reporting findings preserves the review tabs");
 });
@@ -216,7 +216,7 @@ test("a hung review keeps the goal open and raises no item; the check's summary 
   assert.equal(run.result.sessions.s1.state, "stalled");
 });
 
-test("the thread's verdict is prose: one sentence per goal, counts spelled out, no list", () => {
+test("the chat's verdict is prose: one sentence per goal, counts spelled out, no list", () => {
   const report = (pr, verdict, findings = []) => ({ pr, verdict, summary: "s", findings: findings.map((severity) => ({ severity, title: "t" })) });
   assert.equal(reviewProse("acme/app", [report(1, "approve")]), "The review of acme/app#1 finished: it looks good. The findings are in Needs you.");
   assert.equal(

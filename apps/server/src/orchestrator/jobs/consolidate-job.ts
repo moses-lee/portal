@@ -3,7 +3,7 @@
  * in the server's time zone from the settings, kept in step with them, and moved up when the inbox
  * passes its threshold (no sooner than the settings' interval after the last run started). With the
  * nightly run off the job stays active but unscheduled, so the inbox trigger and "Run now" still
- * work. A run is one curation pass (`memory/consolidate.ts`); its digest line goes to the main thread.
+ * work. A run is one curation pass (`memory/consolidate.ts`); its digest line goes to the chat.
  */
 import type { JobSchedule } from "@portal/contracts/jobs";
 import type { ConsolidationSettings } from "@portal/contracts/orchestrator";
@@ -120,7 +120,7 @@ export function createConsolidation(core: JobsCore) {
     });
   }
 
-  /** One firing: the pass, the digest line in the main thread, and no next run while the nightly run is off. */
+  /** One firing: the pass, the digest line in the chat, and no next run while the nightly run is off. */
   async function run({ job, run: jobRun, trigger, signal }: KindContext): Promise<KindResult> {
     const queued = queuedFor;
     queuedFor = null;
@@ -130,7 +130,7 @@ export function createConsolidation(core: JobsCore) {
     try {
       const outcome = await runCuration(hub, { run: jobRun, jobId: job.id, trigger, signal });
       if (!outcome.skipped && worthPosting(outcome.result)) {
-        await core.postToThread(null, outcome.result.line, jobRun).catch((err: unknown) => console.error("Could not post the curation digest:", err));
+        await core.postToChat(outcome.result.line, jobRun).catch((err: unknown) => console.error("Could not post the curation digest:", err));
       }
       return {
         status: outcome.status, result: outcome.result as unknown as Record<string, unknown>, log: [why, ...outcome.log], summary: outcome.result.line,
