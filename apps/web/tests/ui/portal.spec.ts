@@ -856,9 +856,11 @@ test("settings sections live in a sidebar, the last one viewed is remembered, an
     "Git actions",
     "Talk to Portal",
     "Sessions",
+    "Monitoring",
     "Scripts",
     "Data",
     "Room",
+    "Import & Export",
   ]);
   // Opening with nothing remembered lands on the first section; only its pane is on screen.
   await expect(dialog.getByRole("heading", { name: "Git actions" })).toBeVisible();

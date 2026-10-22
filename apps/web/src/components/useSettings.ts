@@ -16,6 +16,11 @@ export type UseSettings = {
    * On failure revert and rethrow an Error with a user-facing message so a field can show it.
    */
   update(patch: SettingsPatch): Promise<Settings>;
+  /**
+   * `PUT /api/settings`: replace every setting with `exported` (an export's shape, checked by the
+   * server). Not optimistic; rejects with the server's message so the import box can show it.
+   */
+  importSettings(exported: unknown): Promise<Settings>;
   /** Refetch. Never rejects; failures land in `error`. */
   refresh(): Promise<void>;
 };
@@ -110,12 +115,29 @@ async function update(patch: SettingsPatch): Promise<Settings> {
   return saved;
 }
 
+async function importSettings(exported: unknown): Promise<Settings> {
+  let r: Response;
+  try {
+    r = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exported),
+    });
+  } catch {
+    throw new Error(NETWORK_ERROR);
+  }
+  if (!r.ok) throw await readError(r, "Could not import settings. Try again.");
+  const { settings: saved } = (await r.json()) as { settings: Settings };
+  publish({ settings: saved });
+  return saved;
+}
+
 export function useSettings(): UseSettings {
   const { settings, loading, error } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   useEffect(() => {
     ensureLoaded();
   }, []);
-  return { settings, loading, error, update, refresh };
+  return { settings, loading, error, update, importSettings, refresh };
 }
 
 /*
@@ -125,8 +147,8 @@ export function useSettings(): UseSettings {
  */
 
 /** Sections of the settings dialog a caller can ask to land on. */
-export type SettingsSection = "gitActions" | "orchestrator" | "sessions" | "monitoring" | "scripts" | "data" | "room";
-export const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator", "sessions", "monitoring", "scripts", "data", "room"];
+export type SettingsSection = "gitActions" | "orchestrator" | "sessions" | "monitoring" | "scripts" | "data" | "room" | "importExport";
+export const settingsSections: readonly SettingsSection[] = ["gitActions", "orchestrator", "sessions", "monitoring", "scripts", "data", "room", "importExport"];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
   return typeof value === "string" && (settingsSections as readonly string[]).includes(value);

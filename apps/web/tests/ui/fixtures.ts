@@ -771,6 +771,11 @@ export async function setupPortal(
     if (path === "/api/settings") {
       if (options.realSettings) return route.fallback();
       // Parallel tests share the server's settings; the defaults keep them independent of each other.
+      // An import answers what was pasted; only its version is checked here (the server's own tests cover the rest).
+      if (method === "PUT") {
+        if (body?.version !== 1) return json({ error: "version is missing; an import must include every setting." }, 400);
+        return json({ settings: { ...body, orchestrator: { ...body.orchestrator, apiKeys: defaultSettings.orchestrator.apiKeys } } });
+      }
       return json({
         settings:
           method === "PATCH"

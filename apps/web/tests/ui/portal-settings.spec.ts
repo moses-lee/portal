@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { defaultSettings, exportSettings } from "../../src/lib/settings";
 import { setupPortal } from "./fixtures";
 import { showSettings } from "./surfaces";
 
@@ -44,4 +45,41 @@ test("the review-session toggle saves on change and reports it", async ({ page }
     .poll(() => fixture.requests.filter((r) => r.path === "/api/settings" && r.method === "PATCH").map((r) => r.body).at(-1))
     .toEqual({ orchestrator: { reviews: { answerReadOnly: false } } });
   await expect(dialog.locator("#reviews-answer-read-only-status")).toHaveText("Saved");
+});
+
+test("Import & Export shows every setting as JSON without keys and applies a pasted export", async ({ page }, info) => {
+  const fixture = await setupPortal(page);
+  await page.goto("/");
+  const dialog = await showSettings(page, "Import & Export");
+  await expect(dialog.getByRole("heading", { name: "Import & Export" })).toBeVisible();
+  const exported = dialog.getByRole("textbox", { name: "Export" });
+  const text = await exported.inputValue();
+  expect(JSON.parse(text)).toEqual(exportSettings(defaultSettings));
+  expect(text).not.toContain("apiKeys");
+  await dialog.screenshot({ animations: "disabled", path: info.outputPath("settings-import-export.png") });
+
+  const input = dialog.getByRole("textbox", { name: "Import" });
+  const apply = dialog.getByRole("button", { name: "Apply" });
+  await expect(apply).toBeDisabled();
+  const puts = () => fixture.requests.filter((r) => r.path === "/api/settings" && r.method === "PUT");
+
+  // Not JSON: refused in the browser, nothing sent.
+  await input.fill("{ nope");
+  await apply.click();
+  await expect(dialog.getByRole("alert")).toContainText("Not valid JSON");
+  expect(puts()).toHaveLength(0);
+
+  // The server's refusal is shown as it gave it.
+  await input.fill(JSON.stringify({ sessions: defaultSettings.sessions }));
+  await apply.click();
+  await expect(dialog.getByRole("alert")).toHaveText("version is missing; an import must include every setting.");
+
+  const changed = exportSettings(defaultSettings);
+  changed.sessions.idleStop.afterMinutes = 45;
+  await input.fill(JSON.stringify(changed));
+  await apply.click();
+  await expect(dialog.getByRole("status").filter({ hasText: "Settings imported." })).toBeVisible();
+  expect(puts().at(-1)?.body).toEqual(changed);
+  await expect(input).toHaveValue("");
+  await expect.poll(async () => JSON.parse(await exported.inputValue())).toEqual(changed);
 });

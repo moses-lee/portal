@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
+import { checkSettingsImport } from "../lib/settings-store.ts";
 import { parseLastUsedPatch } from "./last-used.ts";
 
 /**
@@ -18,6 +19,15 @@ export function registerSettingsRoutes(app: FastifyInstance, ctx: AppContext): v
     if (rejectCrossOrigin(req, reply)) return reply;
     const body: unknown = req.body;
     if (body === undefined) return reply.code(400).send({ error: "Expected a JSON body." });
+    return { settings: await ctx.settings.patch(body) };
+  });
+
+  /** Import: every setting at once, in the export's shape (see `checkSettingsImport`); API keys are left as they are. */
+  app.put("/api/settings", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    const body: unknown = req.body;
+    if (body === undefined) return reply.code(400).send({ error: "Expected a JSON body." });
+    checkSettingsImport(body);
     return { settings: await ctx.settings.patch(body) };
   });
 
