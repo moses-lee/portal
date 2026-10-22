@@ -9,8 +9,8 @@
  */
 import type { Scope } from "@portal/contracts/orchestrator";
 import type { WorldProject, WorldRepo, WorldSession, WorldState } from "@portal/contracts/world";
-import type { PaneNode, Workspace } from "@portal/contracts/workspace";
-import { defaultTabTitle, tabPanes } from "@portal/shared/workspace";
+import type { LeafNode, Workspace } from "@portal/contracts/workspace";
+import { defaultTabTitle, tabLeaves } from "@portal/shared/workspace";
 import { attentionReasons, pullKey } from "../github-attention.ts";
 import { findById } from "../ids.ts";
 import type { PullAttention } from "../types.ts";
@@ -179,8 +179,9 @@ export type RenderOptions = {
   workspace?: Workspace | null;
 };
 
-/** One pane of a tab: the session's short id and state, or "new session" for a start page. */
-function paneText(pane: PaneNode, sessionsById: Map<string, WorldSession>): string {
+/** One pane of a tab: the session's short id and state, "new session" for a start page, or "file <path>" (docs/FILES.md). */
+function paneText(pane: LeafNode, sessionsById: Map<string, WorldSession>): string {
+  if (pane.kind === "file") return `file ${clip(pane.path, 100)}`;
   if (pane.sessionId === null) return "new session";
   const session = sessionsById.get(pane.sessionId);
   return `${shortId(pane.sessionId)} (${session ? session.liveness ?? session.activity : "unknown"})`;
@@ -239,7 +240,7 @@ export function renderWorld(world: WorldState, { budgetTokens = DEFAULT_BUDGET_T
   if (workspace && workspace.tabs.length > 0) {
     const titleOf = (id: string) => sessionsById.get(id)?.title ?? null;
     const tabRows = workspace.tabs.slice(0, caps.workspaceTabs).map((tab) =>
-      `- ${quoted(defaultTabTitle(tab, titleOf), 50)} [${shortId(tab.id)}]: ${tabPanes(tab).map((pane) => paneText(pane, sessionsById)).join(", ")}`);
+      `- ${quoted(defaultTabTitle(tab, titleOf), 50)} [${shortId(tab.id)}]: ${tabLeaves(tab).map((pane) => paneText(pane, sessionsById)).join(", ")}`);
     if (workspace.tabs.length > caps.workspaceTabs) tabRows.push(`- and ${workspace.tabs.length - caps.workspaceTabs} more`);
     out.section("Workspace tabs:", tabRows, { reserve });
   }

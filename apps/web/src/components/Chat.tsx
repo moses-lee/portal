@@ -12,6 +12,12 @@ import { portalActivity } from "@/lib/orchestrator/format";
 import { usePreference } from "./usePreference";
 import { clearSubmittedDraft, startKey, writeDraft } from "@/lib/drafts";
 import {
+  clearAttachments,
+  moveAttachments,
+  readAttachments,
+  uploadAttachments,
+} from "@/lib/attachments";
+import {
   forgetPromptHistory,
   recordPrompt,
   sessionHistoryKey,
@@ -748,11 +754,13 @@ function ChatShell() {
    * Start a session in `projectId`, first turning a non-Original `choice` into its worktree project.
    * It opens in `paneId` (the start-page pane that asked, decision 9), else in a new tab. `key` is
    * the asking start page's `startKey`: its draft, and where the spinner and any error show.
+   * A first message (`firstPrompt` given, even empty) takes the start page's attachments: they
+   * move to the new session's composer, upload there, and go out with the text (docs/FILES.md).
    */
   const newSession = async (
     projectId: string = selectedProjectId,
     choice: WorktreeChoice = ORIGINAL,
-    firstPrompt = "",
+    firstPromptText?: string,
     paneId: string | null = null,
     key: string = startKey(null),
   ) => {
@@ -764,6 +772,11 @@ function ChatShell() {
       !projectId
     )
       return;
+    const firstPrompt = firstPromptText ?? "";
+    // "Start an empty conversation" passes no text and sends nothing; any attachments still move to the session's composer.
+    const firstSend =
+      !!firstPrompt.trim() ||
+      (firstPromptText !== undefined && readAttachments(key).length > 0);
     creatingRef.current = true;
     setCreatingIn(key);
     setCreateError(null);
@@ -804,10 +817,15 @@ function ChatShell() {
       // The worktree choice was for this start only; the next start page begins at Original again.
       setWorktreePick(null);
       putSession({ ...session, liveness: session.liveness.state });
-      if (firstPrompt.trim()) {
+      if (firstSend) {
         writeDraft(session.id, firstPrompt);
         clearSubmittedDraft(key, firstPrompt);
+        // The session's composer is keyed by its id: a failed upload or send leaves the chips there to retry.
+        moveAttachments(key, session.id);
         setInitialSend({ sessionId: session.id, pending: true, error: null });
+      } else {
+        // The start page goes with its key; its chips (and their previews) would be left behind there.
+        moveAttachments(key, session.id);
       }
       await placeNewSession(session.id, paneId);
       setShowSidebar(false);
@@ -833,14 +851,18 @@ function ChatShell() {
         });
         return;
       }
-      if (firstPrompt.trim()) {
+      if (firstSend) {
         try {
+          const { attachments, ids } = await uploadAttachments(session.id, session.id);
           const response = await fetch(
             `/api/sessions/${encodeURIComponent(session.id)}/prompt`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text: firstPrompt.trim() }),
+              body: JSON.stringify({
+                text: firstPrompt.trim(),
+                ...(attachments.length ? { attachments } : {}),
+              }),
             },
           );
           if (!response.ok) {
@@ -853,7 +875,8 @@ function ChatShell() {
             );
           }
           clearSubmittedDraft(session.id, firstPrompt);
-          recordPrompt(sessionHistoryKey(session.id), firstPrompt);
+          clearAttachments(session.id, ids);
+          if (firstPrompt.trim()) recordPrompt(sessionHistoryKey(session.id), firstPrompt);
           setInitialSend(null);
         } catch (error) {
           setInitialSend({
@@ -929,8 +952,9 @@ function ChatShell() {
     () => new Set(allPanes(workspace).flatMap(({ pane }) => (pane.sessionId === null || pane.sessionId === active ? [] : [pane.sessionId]))),
     [workspace, active],
   );
-  // Decision: the document title is the page overlay's, else the focused session's display title, else "Portal".
-  const activeTitle = surface ? surface.view === "chat" ? "Agent" : surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : activeSession ? sessionDisplayTitle(activeSession.title) : null;
+  // Decision: the document title is the page overlay's, else the focused file's name or session's display title, else "Portal".
+  const focusedFile = focus.leaf?.kind === "file" ? focus.leaf.path : null;
+  const activeTitle = surface ? surface.view === "chat" ? "Agent" : surface.view === "attention" ? "Foyer" : surface.view === "removed" ? "Removed projects" : surface.view[0].toUpperCase() + surface.view.slice(1) : focusedFile !== null ? focusedFile.split("/").pop() || focusedFile : activeSession ? sessionDisplayTitle(activeSession.title) : null;
   useEffect(() => {
     document.title = activeTitle ?? "Portal";
   }, [activeTitle]);

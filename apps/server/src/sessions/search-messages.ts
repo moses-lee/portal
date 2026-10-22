@@ -1,6 +1,6 @@
 /**
- * What of a session's log global search reads (docs/SEARCH.md): user prompts and the agent's reply
- * text. Thoughts, tool calls and their output, and everything else are left out.
+ * What of a session's log global search reads (docs/SEARCH.md): user prompts (with the names of
+ * their attachments) and the agent's reply text. Thoughts, tool calls and their output, and everything else are left out.
  *
  * One reply is one row. Adjacent reply chunks in the events given here join into one row covering
  * `firstSeq..seq` (the run's first and last event), with the first chunk's time. That covers old
@@ -28,6 +28,12 @@ export function replyText(event: StoredEvent): string | null {
   return update.content.text;
 }
 
+/** What search reads of a prompt: its text, then the names of the files sent with it, one per line. */
+export function promptSearchText(event: Extract<StoredEvent, { type: "user" }>): string {
+  const names = (event.attachments ?? []).map((attachment) => attachment.name).filter(Boolean);
+  return [event.text, ...names].filter((part) => part.trim()).join("\n");
+}
+
 function row(firstSeq: number, seq: number, role: MessageRow["role"], ts: number, text: string): MessageRow | null {
   return text.trim() ? { seq, firstSeq, role, ts, text: text.slice(0, MESSAGE_TEXT_MAX) } : null;
 }
@@ -51,7 +57,7 @@ export function messageRowsFrom(events: StoredEvent[]): MessageRow[] {
     close(run);
     run = null;
     if (event.type === "user") {
-      const prompt = row(event.seq, event.seq, "user", event.ts, event.text);
+      const prompt = row(event.seq, event.seq, "user", event.ts, promptSearchText(event));
       if (prompt) rows.push(prompt);
     }
   }

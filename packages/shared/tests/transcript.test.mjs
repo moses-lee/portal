@@ -158,3 +158,11 @@ test("a prompt keeps its logged time and a turn records when it ended", () => {
   // A turn that ended at an unknown time is still ended.
   assert.equal(segment([user(0, "a"), { seq: 1, ts: 0, type: "turn_end", stopReason: "end_turn" }])[0].endedAt, 0);
 });
+
+test("a user block carries the prompt's attachments, and has none when the event has none", () => {
+  const shot = { path: "/home/me/.portal/uploads/s1/ab12cd34-shot.png", name: "shot.png", mimeType: "image/png", size: 2048 };
+  const [withFiles] = reduce([{ ...user(0, ""), attachments: [shot] }]);
+  assert.deepEqual(withFiles, { kind: "user", text: "", at: 0, attachments: [shot] });
+  const [plain] = reduce([{ ...user(0, "hi"), attachments: [] }]);
+  assert.equal("attachments" in plain, false, "an empty list adds no field");
+});

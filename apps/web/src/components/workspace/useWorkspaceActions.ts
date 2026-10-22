@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import type { LayoutPreset, PaneNode, SplitEdge, Tab, WorkspaceLocation } from "@portal/contracts/workspace";
-import { locateSession } from "@portal/shared/workspace";
+import type { LayoutPreset, LeafNode, SplitEdge, Tab, WorkspaceLocation } from "@portal/contracts/workspace";
+import { findTab, locateSession, tabLeaves } from "@portal/shared/workspace";
 import { useWorkspace } from "../WorkspaceProvider";
 import { useStableCallback } from "@/hooks/use-stable-callback";
+import { confirmDiscard } from "@/lib/files";
 import { currentPath, navigateTo, replacePath } from "@/lib/navigation";
 import { startPath, tabPath } from "@/lib/session-routes";
 import { arrangeOp, locationPath, neighbourTab, startPaneIn, staysInTab } from "@/lib/workspace";
@@ -16,7 +17,8 @@ import { arrangeOp, locationPath, neighbourTab, startPaneIn, staysInTab } from "
  * the result is. History: a pane change inside the focused tab replaces the entry, a move to
  * another tab (or a new one) pushes one (`staysInTab`). Rejections are swallowed: the provider's
  * `error` reports them. The callbacks are stable (they always read the latest workspace and
- * focus), so memoised rows can hold them.
+ * focus), so memoised rows can hold them. Whatever would close or remount a file pane with unsaved
+ * edits asks first (`confirmDiscard`, docs/FILES.md).
  */
 export function useWorkspaceActions() {
   const { workspace, apply, focus } = useWorkspace();
@@ -98,13 +100,15 @@ export function useWorkspaceActions() {
     },
   );
 
-  /** The pane's session (or a fresh start page) in a tab of its own; the pane closes. */
+  /** The pane's session (or a fresh start page, or its file) in a tab of its own; the pane closes. */
   const moveToOwnTab = useStableCallback(
-    async (pane: PaneNode) => {
-      if (pane.sessionId !== null) return moveToNewTab(pane.sessionId);
+    async (pane: LeafNode) => {
+      if (pane.kind === "pane" && pane.sessionId !== null) return moveToNewTab(pane.sessionId);
+      // A file pane remounts in its new tab: unsaved edits would go.
+      if (!confirmDiscard([pane.id])) return;
       try {
         await apply({ op: "close_pane", paneId: pane.id });
-        const { workspace: next, location } = await apply({ op: "open", sessionId: null });
+        const { workspace: next, location } = await apply(pane.kind === "file" ? { op: "open_file", path: pane.path } : { op: "open", sessionId: null });
         if (location) navigateTo(locationPath(next, location));
       } catch {
         // Reported by the provider.
@@ -112,8 +116,19 @@ export function useWorkspaceActions() {
     },
   );
 
+  /** A file pane moves to `path` in place (a listing's entry, "Reveal folder"); a path open elsewhere is focused instead. */
+  const navigateFile = useStableCallback(async (paneId: string, path: string) => {
+    try {
+      const { workspace: next, location } = await apply({ op: "replace_file", paneId, path });
+      if (location && location.paneId !== paneId) navigateTo(locationPath(next, location), { replace: staysInTab(focus.tabId, location) });
+    } catch {
+      // Reported by the provider.
+    }
+  });
+
   const closePane = useStableCallback(
     async (paneId: string) => {
+      if (!confirmDiscard([paneId])) return;
       try {
         await apply({ op: "close_pane", paneId });
       } catch {
@@ -130,6 +145,8 @@ export function useWorkspaceActions() {
    */
   const closeTab = useStableCallback(
     async (tabId: string) => {
+      const closing = findTab(workspace, tabId);
+      if (closing && !confirmDiscard(tabLeaves(closing).map((pane) => pane.id))) return;
       const focused = focus.tabId === tabId;
       const before = focused ? currentPath() : null;
       if (focused) {
@@ -147,6 +164,7 @@ export function useWorkspaceActions() {
   /** Close every other tab, this one focused first so no closing tab is the URL's. */
   const closeOtherTabs = useStableCallback(
     async (tabId: string) => {
+      if (!confirmDiscard(workspace.tabs.flatMap((tab) => (tab.id === tabId ? [] : tabLeaves(tab).map((pane) => pane.id))))) return;
       if (focus.tabId !== tabId) navigateTo(tabPath(tabId), { replace: true });
       for (const tab of workspace.tabs) {
         if (tab.id === tabId) continue;
@@ -180,9 +198,11 @@ export function useWorkspaceActions() {
     },
   );
 
-  /** Rebuild the tab as the preset with its sessions in order (extra sessions move to tabs of their own). */
+  /** Rebuild the tab as the preset with its sessions in order (extra sessions, and file panes, move to tabs of their own). */
   const arrangeTab = useStableCallback(
     async (tab: Tab, preset: LayoutPreset) => {
+      // Its file panes are rebuilt in tabs of their own, so they remount.
+      if (!confirmDiscard(tabLeaves(tab).flatMap((pane) => (pane.kind === "file" ? [pane.id] : [])))) return;
       try {
         const { workspace: next, location } = await apply(arrangeOp(tab, preset));
         if (location && focus.tabId === tab.id) navigateTo(locationPath(next, location), { replace: true });
@@ -193,8 +213,8 @@ export function useWorkspaceActions() {
   );
 
   return useMemo(
-    () => ({ openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, closePane, closeTab, closeOtherTabs, moveTab, renameTab, arrangeTab }),
-    [openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, closePane, closeTab, closeOtherTabs, moveTab, renameTab, arrangeTab],
+    () => ({ openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, navigateFile, closePane, closeTab, closeOtherTabs, moveTab, renameTab, arrangeTab }),
+    [openSession, openStartTab, openBeside, moveToNewTab, splitPane, moveToOwnTab, navigateFile, closePane, closeTab, closeOtherTabs, moveTab, renameTab, arrangeTab],
   );
 }
 

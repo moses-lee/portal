@@ -2,9 +2,10 @@
  * Deleting a session for good, the same way from every caller (the HTTP routes and the
  * orchestrator's `delete_session`): the runtime drops the session and its log and fires the list's
  * `deleted` event, its Portal terminals close, and a removed project left with no sessions is
- * forgotten, since a Removed row only exists to hold conversations.
+ * forgotten, since a Removed row only exists to hold conversations. Its uploads are removed too.
  */
 import type { AppContext } from "../context.ts";
+import { removeSessionUploads } from "../files/uploads.ts";
 
 export type SessionDeletion = Pick<AppContext, "sessions" | "projects" | "terminals">;
 
@@ -14,6 +15,9 @@ export async function deleteSessionFully(ctx: SessionDeletion, id: string): Prom
   const projectId = ctx.sessions.getSession(id)?.projectId;
   if (!(await ctx.sessions.deleteSession(id))) return false;
   ctx.terminals.closeSession(id);
+  // Its uploads go with it (docs/FILES.md, decision 17); a failure leaves files, not a broken delete.
+  const uploads = ctx.sessions.uploadsDir;
+  if (uploads) await removeSessionUploads(uploads, id).catch((err: unknown) => console.error(`Could not remove the uploads of session ${id}:`, err));
   if (projectId) await forgetIfEmpty(ctx, projectId);
   return true;
 }

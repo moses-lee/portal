@@ -6,9 +6,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type ReactNode,
 } from "react";
-import { ArrowUp, LoaderCircle, Square, X } from "lucide-react";
+import { ArrowUp, LoaderCircle, Paperclip, Square, X } from "lucide-react";
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import CommandPalette, {
   commandInsertText,
@@ -23,6 +24,9 @@ import {
   InputGroupTextarea,
 } from "@/components/ui/input-group";
 import { atHistoryEdge, readPromptHistory } from "@/lib/prompt-history";
+import type { ComposerAttachments } from "@/lib/attachments";
+import { cn } from "cn";
+import AttachmentRow from "./files/AttachmentRow";
 import { useMediaQuery } from "./useMediaQuery";
 
 const noCommands: AvailableCommand[] = [];
@@ -47,6 +51,7 @@ export default function ChatComposer({
   historyKey,
   paletteId = "command-palette",
   editing,
+  attachments,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -78,8 +83,18 @@ export default function ChatComposer({
   historyKey?: string;
   /** The command palette's element id; multiple session and Agent composers need different ones. */
   paletteId?: string;
+  /**
+   * Files sent with the message (docs/FILES.md): a 📎 button, paste and drop add them, a row above
+   * the text shows them, and a send with attachments needs no text. Without it, none of that shows.
+   */
+  attachments?: ComposerAttachments;
 }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
+  /** Files are dragged over the composer: it highlights as a drop target. Counts nested enter/leave pairs. */
+  const [dragDepth, setDragDepth] = useState(0);
+  const addFiles = disabled ? undefined : attachments?.add;
+  const attachedCount = attachments?.items.length ?? 0;
   // A touch keyboard's return key has no Shift to hold, so there it types a new line and only the button sends.
   const touch = useMediaQuery("(pointer: coarse)");
   const [caret, setCaret] = useState(0);
@@ -158,10 +173,12 @@ export default function ChatComposer({
     textarea.current?.focus();
     textarea.current?.setSelectionRange(position, position);
   }, [value]);
+  const hasContent = !!value.trim() || attachedCount > 0;
+  const draggingFiles = (event: DragEvent) => !!addFiles && event.dataTransfer.types.includes("Files");
   // With a queue, a send while the agent works queues the text; without one (a Portal thread) it
   // waits. Saving an edited queued prompt does not start a turn, so it goes through while busy too.
   const send = () => {
-    if (!disabled && !sending && (queues || !!editing || !busy) && value.trim()) onSend();
+    if (!disabled && !sending && (queues || !!editing || !busy) && hasContent) onSend();
   };
   const sendLabel = editing ? "Save queued prompt" : busy && queues ? "Queue message" : "Send message";
   // The edit line describes the textarea too, so assistive tech hears that Enter now saves a queued prompt.
@@ -185,8 +202,34 @@ export default function ChatComposer({
             event.preventDefault();
             send();
           }}
+          onDragEnter={(event) => {
+            if (!draggingFiles(event)) return;
+            event.preventDefault();
+            setDragDepth((depth) => depth + 1);
+          }}
+          onDragOver={(event) => {
+            if (!draggingFiles(event)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDragLeave={(event) => {
+            if (!draggingFiles(event)) return;
+            setDragDepth((depth) => Math.max(0, depth - 1));
+          }}
+          onDrop={(event) => {
+            if (!draggingFiles(event)) return;
+            event.preventDefault();
+            setDragDepth(0);
+            const files = Array.from(event.dataTransfer.files);
+            if (files.length) addFiles?.(files);
+          }}
         >
-          <InputGroup className="composer frost !ring-0">
+          <InputGroup
+            className={cn(
+              "composer frost !ring-0",
+              dragDepth > 0 && "!border-accent-line shadow-[0_0_0_3px_var(--accent-soft)]",
+            )}
+          >
             {editing && (
               <InputGroupAddon
                 align="block-start"
@@ -202,6 +245,15 @@ export default function ChatComposer({
                 >
                   <X className="size-3.5" />
                 </IconButton>
+              </InputGroupAddon>
+            )}
+            {attachments && attachments.items.length > 0 && (
+              <InputGroupAddon align="block-start" className="!px-3 !pt-0 !pb-0">
+                <AttachmentRow
+                  items={attachments.items}
+                  onRemove={attachments.remove}
+                  disabled={sending}
+                />
               </InputGroupAddon>
             )}
             <InputGroupTextarea
@@ -228,6 +280,16 @@ export default function ChatComposer({
               }}
               onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
               onBlur={() => setPaletteClosed(true)}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files);
+                if (!addFiles || files.length === 0) return;
+                // Office and some browsers put an image of rich text beside the text itself; that
+                // pastes as text. A screenshot, a copied image, or a file copied in Finder attaches.
+                const types = event.clipboardData.types;
+                if (types.includes("text/plain") && types.includes("text/html")) return;
+                event.preventDefault();
+                addFiles(files);
+              }}
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) return;
                 if (paletteOpen) {
@@ -275,6 +337,35 @@ export default function ChatComposer({
               }}
             />
             <InputGroupAddon align="block-end">
+              {attachments && (
+                <>
+                  <input
+                    ref={filePicker}
+                    type="file"
+                    multiple
+                    hidden
+                    tabIndex={-1}
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? []);
+                      // Cleared so picking the same file again still fires a change.
+                      event.target.value = "";
+                      if (files.length) addFiles?.(files);
+                    }}
+                  />
+                  <IconButton
+                    label={
+                      editing && !attachments.add
+                        ? "Files cannot be added to a queued prompt"
+                        : "Attach files"
+                    }
+                    className="size-9 flex-none rounded-full text-muted-foreground"
+                    disabled={!addFiles || sending}
+                    onClick={() => filePicker.current?.click()}
+                  >
+                    <Paperclip className="size-4" />
+                  </IconButton>
+                </>
+              )}
               <div className="min-w-0 flex-1">
                 {settings ??
                   (!touch && (
@@ -307,7 +398,7 @@ export default function ChatComposer({
                   type="submit"
                   aria-label={sending ? "Sending message" : sendLabel}
                   title={sendLabel}
-                  disabled={disabled || sending || !value.trim()}
+                  disabled={disabled || sending || !hasContent}
                   className="composer-send !p-0"
                 >
                   {sending ? (
@@ -321,6 +412,11 @@ export default function ChatComposer({
           </InputGroup>
         </form>
       </div>
+      {attachments?.notice && (
+        <p role="status" className="px-3 pt-2 text-xs leading-relaxed text-amber-200/80">
+          {attachments.notice}
+        </p>
+      )}
       {error && (
         <p
           role="alert"

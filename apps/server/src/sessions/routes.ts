@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.ts";
 import { errorMessage } from "../http/errors.ts";
+import { validateAttachments } from "../files/uploads.ts";
 import { rejectCrossOrigin } from "../http/origin.ts";
 import { openEventStream } from "../http/sse.ts";
 import { toMeta, type SessionListChange } from "../lib/acp-runtime.ts";
@@ -380,20 +381,34 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   /**
    * Send a prompt. With `queue: true` a busy session queues it instead of refusing (202 with the
    * queued item and its position; it goes out once the turn ends, after earlier queued prompts);
-   * a free session sends it at once either way. 409 when the session is busy without `queue`,
-   * the queue is full, or the agent could not be reached.
+   * a free session sends it at once either way. `attachments` are files uploaded to this session
+   * (`POST .../uploads`); with some, `text` may be empty. 400 for an attachment from anywhere
+   * else; 409 when the session is busy without `queue`, the queue is full, or the agent could not
+   * be reached.
    */
   app.post<IdParams>("/api/sessions/:id/prompt", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
-    const { text, queue } = (req.body ?? {}) as { text?: unknown; queue?: unknown };
-    if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "empty prompt" });
+    const { text, queue, attachments: rawAttachments } = (req.body ?? {}) as { text?: unknown; queue?: unknown; attachments?: unknown };
+    if (typeof text !== "string") return reply.code(400).send({ error: "empty prompt" });
+    if (!text.trim() && !(Array.isArray(rawAttachments) && rawAttachments.length > 0)) return reply.code(400).send({ error: "empty prompt" });
     if (await projectRemoved(req.params.id, reply)) return reply;
+    const uploads = ctx.sessions.uploadsDir;
+    // With uploads off no attachment can be one of this session's, so any is refused.
+    if (!uploads && rawAttachments !== undefined && rawAttachments !== null && !(Array.isArray(rawAttachments) && rawAttachments.length === 0)) {
+      return reply.code(400).send({ error: "Attachments are not available: uploads are off." });
+    }
+    let attachments;
+    try {
+      attachments = uploads ? await validateAttachments(uploads, req.params.id, rawAttachments) : [];
+    } catch (err) {
+      return reply.code(400).send({ error: errorMessage(err) });
+    }
     try {
       if (queue === true) {
-        const { queued, position } = await ctx.sessions.sendOrQueue(req.params.id, text);
+        const { queued, position } = await ctx.sessions.sendOrQueue(req.params.id, text, attachments);
         return reply.code(202).send(queued ? { ok: true, queued, position } : { ok: true, queued: null });
       }
-      await ctx.sessions.sendPrompt(req.params.id, text);
+      await ctx.sessions.sendPrompt(req.params.id, text, attachments);
       return reply.code(202).send({ ok: true, queued: null });
     } catch (err) {
       return reply.code(409).send({ error: errorMessage(err) });
@@ -401,21 +416,26 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
   });
 
   /**
-   * Save a queued prompt's new text. The prompt keeps its slot, and the edit begun with
-   * `POST .../edit` ends (`editing: false`), so the queue resumes. 404 once it has gone out or was
-   * removed.
+   * Save a queued prompt's new text, and with `attachments` the ones it keeps (some of those it
+   * had; adding is a 400). The prompt keeps its slot, and the edit begun with `POST .../edit` ends
+   * (`editing: false`), so the queue resumes. 400 when nothing is left; 404 once it has gone out
+   * or was removed.
    */
   app.patch<IdParams & { Params: { itemId: string } }>("/api/sessions/:id/queue/:itemId", async (req, reply) => {
     if (rejectCrossOrigin(req, reply)) return reply;
-    const { text } = (req.body ?? {}) as { text?: unknown };
-    if (typeof text !== "string" || !text.trim()) return reply.code(400).send({ error: "empty prompt" });
+    const { text, attachments } = (req.body ?? {}) as { text?: unknown; attachments?: unknown };
+    if (typeof text !== "string") return reply.code(400).send({ error: "empty prompt" });
+    if (attachments !== undefined && (!Array.isArray(attachments)
+      || !attachments.every((item) => item && typeof item === "object" && typeof (item as { path?: unknown }).path === "string"))) {
+      return reply.code(400).send({ error: "attachments must be the queued prompt's own attachments." });
+    }
     if (await projectRemoved(req.params.id, reply)) return reply;
     await ready();
     if (!ctx.sessions.getSession(req.params.id)) return reply.code(404).send({ error: "Unknown session." });
     try {
-      return { item: await ctx.sessions.updateQueued(req.params.id, req.params.itemId, text) };
+      return { item: await ctx.sessions.updateQueued(req.params.id, req.params.itemId, text, attachments as { path: string }[] | undefined) };
     } catch (err) {
-      return reply.code(404).send({ error: errorMessage(err) });
+      return reply.code(errorStatus(err) === 400 ? 400 : 404).send({ error: errorMessage(err) });
     }
   });
 

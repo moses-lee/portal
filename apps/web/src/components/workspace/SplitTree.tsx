@@ -2,8 +2,8 @@
 
 import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import { Group, Panel, Separator, useGroupRef, type Layout, type LayoutChangedMeta } from "react-resizable-panels";
-import type { LayoutNode, PaneNode, SplitNode } from "@portal/contracts/workspace";
-import { panesOf } from "@portal/shared/workspace";
+import type { LayoutNode, LeafNode, SplitNode } from "@portal/contracts/workspace";
+import { leavesOf } from "@portal/shared/workspace";
 import { closeSizes, layoutOf, sizesFromLayout } from "@/lib/workspace";
 
 /** How long after the pointer is released a drag's sizes are sent as a `resize` op. */
@@ -14,7 +14,7 @@ export type SplitTreeProps = {
   /** The focused pane; it gets the ring in a split (none in a single-pane tab). */
   focusedPaneId: string | null;
   /** The pane's content; `first` is true for the tab's first pane in reading order (it carries the sidebar toggle). */
-  renderPane: (pane: PaneNode, first: boolean) => ReactNode;
+  renderPane: (pane: LeafNode, first: boolean) => ReactNode;
   /** Pointer down or focus landed in the pane. */
   onFocusPane: (paneId: string) => void;
   /** A split's sizes after the user dragged a separator (debounced). */
@@ -26,18 +26,18 @@ export type SplitTreeProps = {
 /**
  * A tab's layout tree with nested resizable groups: each split is a `Group` keyed by its node id,
  * seeded with the stored sizes, reporting drags as `resize` ops, and following server pushes through
- * the group's imperative `setLayout`. Each pane is a `Panel` around the pane's content.
+ * the group's imperative `setLayout`. Each pane (a session's or a file's) is a `Panel` around its content.
  */
 export default function SplitTree({ root, focusedPaneId, renderPane, onFocusPane, onResize, keyOf }: SplitTreeProps) {
-  if (root.kind === "pane") {
+  if (root.kind !== "split") {
     return (
       <PaneFrame pane={root} focused={false} multi={false} onFocus={onFocusPane}>
         {renderPane(root, true)}
       </PaneFrame>
     );
   }
-  const firstPaneId = panesOf(root)[0]?.id;
-  const paneContent = (pane: PaneNode) => renderPane(pane, pane.id === firstPaneId);
+  const firstPaneId = leavesOf(root)[0]?.id;
+  const paneContent = (pane: LeafNode) => renderPane(pane, pane.id === firstPaneId);
   return <SplitGroup node={root} focusedPaneId={focusedPaneId} paneContent={paneContent} onFocusPane={onFocusPane} onResize={onResize} keyOf={keyOf} />;
 }
 
@@ -51,7 +51,7 @@ function SplitGroup({
 }: {
   node: SplitNode;
   focusedPaneId: string | null;
-  paneContent: (pane: PaneNode) => ReactNode;
+  paneContent: (pane: LeafNode) => ReactNode;
   onFocusPane: (paneId: string) => void;
   onResize: (splitId: string, sizes: number[]) => void;
   keyOf: (id: string) => string;
@@ -108,7 +108,7 @@ function SplitGroup({
             />
           )}
           <Panel id={keyOf(child.id)} minSize="10%" className="flex h-full min-h-0 min-w-0 flex-col">
-            {child.kind === "pane" ? (
+            {child.kind !== "split" ? (
               <PaneFrame pane={child} focused={child.id === focusedPaneId} multi onFocus={onFocusPane}>
                 {paneContent(child)}
               </PaneFrame>
@@ -130,7 +130,7 @@ function PaneFrame({
   onFocus,
   children,
 }: {
-  pane: PaneNode;
+  pane: LeafNode;
   focused: boolean;
   /** Whether the pane shares its tab: only then is focus tracked and shown. */
   multi: boolean;

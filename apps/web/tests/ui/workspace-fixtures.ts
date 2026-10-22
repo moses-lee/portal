@@ -1,4 +1,4 @@
-import type { LayoutNode, PaneNode, SplitNode, Tab, Workspace } from "@portal/contracts/workspace";
+import type { FilePaneNode, LayoutNode, PaneNode, SplitNode, Tab, Workspace } from "@portal/contracts/workspace";
 
 /**
  * Builders for the workspace `setupPortal({ workspace })` seeds and `pushWorkspace` delivers. Ids are
@@ -22,4 +22,9 @@ export function tab(id: string, root: LayoutNode, named?: { title: string; title
 
 export function workspaceOf(tabs: Tab[], version = 1): Workspace {
   return { tabs, version };
+}
+
+/** A file pane (docs/FILES.md): a file or directory on the host, by absolute path. */
+export function filePane(id: string, path: string): FilePaneNode {
+  return { kind: "file", id, path };
 }

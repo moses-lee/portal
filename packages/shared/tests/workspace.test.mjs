@@ -3,19 +3,25 @@ import test from "node:test";
 import {
   EMPTY_WORKSPACE,
   WorkspaceError,
+  allLeaves,
   allPanes,
   applyWorkspaceOp,
   buildPreset,
   defaultTabTitle,
   depthOf,
+  fileName,
   findTab,
+  leavesOf,
+  locateFile,
   locatePane,
   locateSession,
+  normalizeFilePath,
   normalizeSizes,
   panesOf,
   parseWorkspaceOp,
   presetOf,
   presetSlotCount,
+  tabLeaves,
   tabPanes,
   validateWorkspace,
 } from "../src/workspace.ts";
@@ -628,4 +634,157 @@ test("the reducer never mutates its input, shares untouched tabs, and leaves ver
   const opened = applyWorkspaceOp(start, { op: "open", sessionId: "s9" }, ids, NOW).workspace;
   assert.equal(opened.tabs[0], start.tabs[0], "untouched tabs are shared, not copied");
   assert.equal(opened.tabs[1], start.tabs[1]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// File panes (docs/FILES.md)
+// ---------------------------------------------------------------------------------------------
+
+const file = (id, path) => ({ kind: "file", id, path });
+
+test("open_file with no target appends a one-pane tab holding the path", () => {
+  const before = ws(tab("t1", pane("p1", "s1")));
+  const { workspace, location, changed } = apply(before, { op: "open_file", path: "/tmp/a.md" });
+  assert.equal(changed, true);
+  assert.deepEqual(workspace.tabs[1].root, file("n1", "/tmp/a.md"));
+  assert.deepEqual(location, { tabId: "n2", paneId: "n1" });
+  validateWorkspace(workspace);
+});
+
+test("open_file of a path already open changes nothing and answers where it is (decision 16)", () => {
+  const before = ws(tab("t1", split("x", "row", [pane("p1", "s1"), file("f1", "/tmp/a.md")])));
+  const result = apply(before, { op: "open_file", path: "/tmp/a.md" });
+  assert.equal(result.changed, false);
+  assert.equal(result.workspace.tabs.length, 1);
+  assert.deepEqual(result.location, { tabId: "t1", paneId: "f1" });
+  // Another path is another pane; the same path as a session's file is unrelated to sessions.
+  assert.equal(apply(before, { op: "open_file", path: "/tmp/b.md" }).changed, true);
+});
+
+test("open_file with a target splits that pane, and counts toward the 4-pane cap", () => {
+  const before = ws(tab("t1", pane("p1", "s1")));
+  const { workspace, location } = apply(before, { op: "open_file", path: "/a", target: { tabId: "t1", paneId: "p1", edge: "right" } });
+  assert.deepEqual(location, { tabId: "t1", paneId: "n1" });
+  assert.equal(workspace.tabs[0].root.kind, "split");
+  assert.deepEqual(workspace.tabs[0].root.children[1], file("n1", "/a"));
+  const full = ws(tab("t1", split("g", "column", [split("r1", "row", [pane("p1", "s1"), file("f1", "/a")]), split("r2", "row", [file("f2", "/b"), pane("p2", null)])])));
+  throwsCode(() => apply(full, { op: "open_file", path: "/c", target: { tabId: "t1", paneId: "f1", edge: "right" } }), "refused");
+  throwsCode(() => apply(full, { op: "open", sessionId: null, target: { tabId: "t1", paneId: "f1", edge: "right" } }), "refused");
+});
+
+test("a file pane can be split beside, closed, and collapses its split like any pane", () => {
+  const before = ws(tab("t1", file("f1", "/a")));
+  const opened = apply(before, { op: "open", sessionId: null, target: { tabId: "t1", paneId: "f1", edge: "bottom" } }).workspace;
+  assert.equal(presetOf(opened.tabs[0].root), "rows-2");
+  const closed = apply(opened, { op: "close_pane", paneId: "f1" }).workspace;
+  assert.deepEqual(closed.tabs[0].root, pane("n1", null));
+  assert.deepEqual(apply(before, { op: "close_pane", paneId: "f1" }).workspace.tabs, []);
+});
+
+test("replace_file navigates a file pane in place; a path open elsewhere is focused instead", () => {
+  const before = ws(tab("t1", file("f1", "/repo")), tab("t2", file("f2", "/repo/docs")));
+  const moved = apply(before, { op: "replace_file", paneId: "f1", path: "/repo/README.md" });
+  assert.equal(moved.changed, true);
+  assert.deepEqual(moved.workspace.tabs[0].root, file("f1", "/repo/README.md"));
+  assert.deepEqual(moved.location, { tabId: "t1", paneId: "f1" });
+  const same = apply(before, { op: "replace_file", paneId: "f1", path: "/repo" });
+  assert.equal(same.changed, false);
+  const elsewhere = apply(before, { op: "replace_file", paneId: "f1", path: "/repo/docs" });
+  assert.equal(elsewhere.changed, false);
+  assert.deepEqual(elsewhere.location, { tabId: "t2", paneId: "f2" });
+  throwsCode(() => apply(ws(tab("t1", pane("p1", "s1"))), { op: "replace_file", paneId: "p1", path: "/a" }), "invalid");
+  throwsCode(() => apply(before, { op: "replace_file", paneId: "nope", path: "/a" }), "not_found");
+});
+
+test("file paths are normalized, so spellings of one path open one pane", () => {
+  for (const [input, want] of [
+    ["/a//b", "/a/b"], ["/a/./b", "/a/b"], ["/a/b/", "/a/b"], ["/a/c/../b", "/a/b"], ["/", "/"], ["//", "/"], ["/..", "/"], ["/a/../..", "/"], ["/a/b", "/a/b"],
+  ]) assert.equal(normalizeFilePath(input), want, input);
+  assert.equal(parseWorkspaceOp({ op: "open_file", path: "/a//b/" }).path, "/a/b");
+  assert.equal(parseWorkspaceOp({ op: "open_file", path: "/a/./b", target: { tabId: "t1", paneId: "p1", edge: "left" } }).path, "/a/b");
+  assert.equal(parseWorkspaceOp({ op: "replace_file", paneId: "f1", path: "/x/y/../z/" }).path, "/x/z");
+
+  const before = ws(tab("t1", file("f1", "/a/b")), tab("t2", file("f2", "/c")));
+  for (const path of ["/a//b", "/a/./b", "/a/b/"]) {
+    const result = apply(before, { op: "open_file", path });
+    assert.equal(result.changed, false, path);
+    assert.deepEqual(result.location, { tabId: "t1", paneId: "f1" });
+  }
+  assert.deepEqual(locateFile(before, "/a/x/../b"), { tabId: "t1", paneId: "f1" });
+  assert.equal(apply(before, { op: "replace_file", paneId: "f1", path: "/a/b/" }).changed, false);
+  const elsewhere = apply(before, { op: "replace_file", paneId: "f1", path: "//c" });
+  assert.deepEqual([elsewhere.changed, elsewhere.location], [false, { tabId: "t2", paneId: "f2" }]);
+  // Applied without parsing, the stored path is still the normal one.
+  assert.equal(apply(before, { op: "open_file", path: "/d/./e/" }).workspace.tabs[2].root.path, "/d/e");
+  assert.equal(apply(before, { op: "replace_file", paneId: "f2", path: "/d//e" }).workspace.tabs[1].root.path, "/d/e");
+});
+
+test("replace_pane over a file pane makes it the session's pane", () => {
+  const before = ws(tab("t1", split("x", "row", [pane("p1", "s1"), file("f1", "/a")])));
+  const { workspace } = apply(before, { op: "replace_pane", paneId: "f1", sessionId: "s2" });
+  assert.deepEqual(workspace.tabs[0].root.children[1], pane("f1", "s2"));
+});
+
+test("arrange of a tab with file panes moves them to tabs of their own after it, like displaced sessions", () => {
+  const before = ws(tab("t1", split("x", "row", [file("f1", "/a"), pane("p1", "s1"), pane("p2", "s2")])), tab("t9", pane("p9", "s9")));
+  const { workspace, location } = apply(before, { op: "arrange", tabId: "t1", preset: "single", sessionIds: ["s1"] });
+  assert.deepEqual(workspace.tabs.map((t) => t.id), ["t1", "n3", "n5", "t9"]);
+  // Ids: the preset's pane, then each overflow tab's pane and tab.
+  assert.deepEqual(workspace.tabs[0].root, pane("n1", "s1"));
+  assert.deepEqual(workspace.tabs[1].root, file("n2", "/a"));
+  assert.deepEqual(workspace.tabs[2].root, pane("n4", "s2"));
+  assert.deepEqual(location, { tabId: "t1", paneId: "n1" });
+  validateWorkspace(workspace);
+});
+
+test("leaves vs panes: file panes are leaves, not session panes; locatePane and locateFile find them", () => {
+  const w = ws(tab("t1", split("x", "row", [pane("p1", "s1"), file("f1", "/a")])));
+  assert.deepEqual(panesOf(w.tabs[0].root).map((p) => p.id), ["p1"]);
+  assert.deepEqual(leavesOf(w.tabs[0].root).map((p) => p.id), ["p1", "f1"]);
+  assert.deepEqual(tabLeaves(w.tabs[0]).map((p) => p.kind), ["pane", "file"]);
+  assert.deepEqual(allLeaves(w).map(({ pane: p }) => p.id), ["p1", "f1"]);
+  assert.deepEqual(allPanes(w).map(({ pane: p }) => p.id), ["p1"]);
+  assert.deepEqual(locatePane(w, "f1"), { tabId: "t1", pane: file("f1", "/a") });
+  assert.deepEqual(locateFile(w, "/a"), { tabId: "t1", paneId: "f1" });
+  assert.equal(locateFile(w, "/b"), null);
+  assert.equal(depthOf(file("f", "/a")), 0);
+  assert.equal(presetOf(file("f", "/a")), "single");
+  assert.equal(presetOf(w.tabs[0].root), "columns-2");
+  assert.equal(fileName("/repo/docs/PLAN.md"), "PLAN.md");
+  assert.equal(fileName("/repo/docs/"), "docs");
+  assert.equal(fileName("/"), "/");
+});
+
+test("defaultTabTitle names file panes by file name", () => {
+  const titleOf = (id) => ({ s1: "Fix bug" })[id] ?? null;
+  assert.equal(defaultTabTitle(tab("t", file("f", "/repo/PLAN.md")), titleOf), "PLAN.md");
+  assert.equal(defaultTabTitle(tab("t", split("x", "row", [pane("p", "s1"), file("f", "/a/b.txt")])), titleOf), "Fix bug + b.txt");
+  assert.equal(defaultTabTitle(tab("t", split("x", "row", [pane("p", "s1"), file("f", "/a"), file("g", "/b")])), titleOf), "3 panes");
+  assert.equal(defaultTabTitle(tab("t", split("x", "row", [pane("p", null), file("f", "/a")])), titleOf), "a");
+});
+
+test("validateWorkspace checks file panes: absolute path, one pane per path, ids shared with panes", () => {
+  validateWorkspace(ws(tab("t1", split("x", "row", [pane("p1", "s1"), file("f1", "/a")]))));
+  throwsCode(() => validateWorkspace(ws(tab("t1", file("f1", "relative/a")))), "invalid");
+  throwsCode(() => validateWorkspace(ws(tab("t1", file("f1", "")))), "invalid");
+  throwsCode(() => validateWorkspace(ws(tab("t1", file("f1", "/a")), tab("t2", file("f2", "/a")))), "invalid");
+  throwsCode(() => validateWorkspace(ws(tab("t1", split("x", "row", [pane("p1", "s1"), file("p1", "/a")])))), "invalid");
+  throwsCode(() => validateWorkspace(ws(tab("t1", { kind: "file", id: "f1" }))), "invalid");
+});
+
+test("parseWorkspaceOp accepts open_file and replace_file, and rejects paths that are not absolute", () => {
+  assert.deepEqual(parseWorkspaceOp({ op: "open_file", path: "/a", extra: 1 }), { op: "open_file", path: "/a" });
+  assert.deepEqual(parseWorkspaceOp({ op: "open_file", path: "/a", target: { tabId: "t", paneId: "p", edge: "left", x: 1 } }), {
+    op: "open_file",
+    path: "/a",
+    target: { tabId: "t", paneId: "p", edge: "left" },
+  });
+  assert.deepEqual(parseWorkspaceOp({ op: "replace_file", paneId: "p", path: "/b" }), { op: "replace_file", paneId: "p", path: "/b" });
+  throwsCode(() => parseWorkspaceOp({ op: "open_file", path: "a.md" }), "invalid");
+  throwsCode(() => parseWorkspaceOp({ op: "open_file", path: "~/a.md" }), "invalid");
+  throwsCode(() => parseWorkspaceOp({ op: "open_file" }), "invalid");
+  throwsCode(() => parseWorkspaceOp({ op: "open_file", path: "/a\0b" }), "invalid");
+  throwsCode(() => parseWorkspaceOp({ op: "open_file", path: `/${"a".repeat(5000)}` }), "invalid");
+  throwsCode(() => parseWorkspaceOp({ op: "open_file", path: "/a", target: { tabId: "t", paneId: "p", edge: "middle" } }), "invalid");
+  throwsCode(() => parseWorkspaceOp({ op: "replace_file", path: "/a" }), "invalid");
 });

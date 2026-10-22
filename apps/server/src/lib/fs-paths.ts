@@ -1,6 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { displayPath } from "./git-info.ts";
 import type { DirEntry, DirListing } from "@portal/contracts/types";
 
@@ -56,6 +57,47 @@ export async function resolveDirectory(input: string, home?: string): Promise<st
   }
   if (!info.isDirectory()) throw new PathError(`Not a directory: ${displayPath(resolved)}`, 400);
   return real;
+}
+
+/**
+ * Turn a file path the browser sent into the absolute path it names (docs/FILES.md, "Paths"):
+ * `file://` URLs are decoded, `~` and `~/…` expanded, and a relative path is resolved against
+ * `cwd` (itself absolute or `~/…`), which it then requires. Symlinks are resolved: the target
+ * itself when it exists, else its nearest existing ancestor, with the missing rest joined back on,
+ * so a file about to be created has the same path it will have once it exists. Any path on the
+ * host is allowed (no sandbox). Throws a 400 PathError for input it cannot read as a path.
+ */
+export async function resolveFilePath(input: string, cwd?: string | null, home?: string): Promise<string> {
+  if (typeof input !== "string" || !input || input.includes("\0")) throw new PathError("Expected a path.", 400);
+  let raw = input;
+  if (/^file:/i.test(raw)) {
+    try {
+      raw = fileURLToPath(raw);
+    } catch {
+      throw new PathError("Not a local file URL.", 400);
+    }
+    // `%00` decodes to a NUL, which no path may hold.
+    if (raw.includes("\0")) throw new PathError("Expected a path.", 400);
+  }
+  let target = expandHome(raw, home);
+  if (!path.isAbsolute(target)) {
+    if (!cwd) throw new PathError("A relative path needs a working directory (cwd).", 400);
+    const base = expandHome(cwd, home);
+    if (!path.isAbsolute(base) || base.includes("\0")) throw new PathError("The working directory must be absolute (or start with ~/).", 400);
+    target = path.resolve(base, target);
+  }
+  target = path.resolve(target);
+  // Walk up to the nearest ancestor that exists (the root always does), then put the rest back.
+  const rest: string[] = [];
+  for (let at = target; ; at = path.dirname(at)) {
+    try {
+      return path.join(await realpath(at), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(at);
+      if (parent === at) return target;
+      rest.push(path.basename(at));
+    }
+  }
 }
 
 /** The parent of `dir`, or null at the filesystem root. */

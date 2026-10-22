@@ -16,6 +16,21 @@ import { restoreToDraft } from "@/lib/prompt-queue";
 import { readDraft, writeDraft } from "@/lib/drafts";
 import { readEditing, subscribeEditing, writeEditing } from "@/lib/queue-edit";
 import { applyConfigChange } from "@/lib/session-config";
+import {
+  clearAttachments,
+  clearEditRemovals,
+  editKey,
+  readAttachments,
+  readEditRemovals,
+  removeFromEdit,
+  restoreAttachments,
+  storedAttachmentItems,
+  subscribeAttachments,
+  uploadAttachments,
+  useComposerAttachments,
+  type ComposerAttachments,
+} from "@/lib/attachments";
+import type { Attachment } from "@portal/contracts/files";
 import { agentActivity } from "@/lib/agent-activity";
 import { sessionState as deriveSessionState } from "@/lib/session-state";
 import { sessionStatusLabel } from "@/lib/session-status";
@@ -57,15 +72,21 @@ async function queueRequestError(response: Response, fallback: string) {
 }
 
 /**
- * `PATCH /queue/:itemId` with the composer's text: the prompt keeps its place in the queue and
- * the edit (with the queue's pause) ends. A prompt that has gone meanwhile (404) ends the edit
- * too; the text stays in the composer, and the error says why.
+ * `PATCH /queue/:itemId` with the composer's text, and with the attachments kept when the prompt
+ * has any (an edit can remove them, not add): the prompt keeps its place in the queue and the edit
+ * (with the queue's pause) ends. A prompt that has gone meanwhile (404) ends the edit too; the
+ * text stays in the composer, and the error says why.
  */
-async function saveQueuedEdit(sessionId: string, itemId: string, text: string) {
+async function saveQueuedEdit(
+  sessionId: string,
+  itemId: string,
+  text: string,
+  attachments: Attachment[] | undefined,
+) {
   const response = await fetch(queueItemUrl(sessionId, itemId), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(attachments ? { text, attachments } : { text }),
   });
   if (response.status === 404) {
     writeEditing(sessionId, null);
@@ -74,6 +95,7 @@ async function saveQueuedEdit(sessionId: string, itemId: string, text: string) {
   if (!response.ok)
     throw await queueRequestError(response, "Could not save the queued prompt. Your text is still here; try again.");
   writeEditing(sessionId, null);
+  clearEditRemovals(editKey(sessionId, itemId));
 }
 
 export type SessionStreamOptions = {
@@ -363,8 +385,23 @@ export function useSessionStream(
     setHistory((previous) => appendEvent(previous, event));
   };
 
+  const draftKey = sessionId ?? "new";
+
   /**
-   * `POST /prompt` with `queue`: resolves once the server has the prompt, sent (its `turn_start`
+   * The attachments a queued prompt being edited keeps (its own, less those removed in the
+   * composer); undefined when it has none, or the queue does not hold it yet (just after a
+   * reload), so a save leaves them as they are.
+   */
+  const keptInEdit = useStableCallback((itemId: string): Attachment[] | undefined => {
+    const all = queue.find((item) => item.id === itemId)?.attachments;
+    if (!sessionId || !all?.length) return undefined;
+    const removed = readEditRemovals(editKey(sessionId, itemId));
+    return all.filter((attachment) => !removed.includes(attachment.path));
+  });
+
+  /**
+   * `POST /prompt` with `queue`: uploads the composer's attachments first (see
+   * `@/lib/attachments`), then resolves once the server has the prompt, sent (its `turn_start`
    * follows on the stream) or, while the agent works, queued (it shows up in `queue`). While a
    * queued prompt is being edited, the text saves into that prompt's slot instead (see
    * `saveQueuedEdit`); `useSend` then clears the draft as after any send.
@@ -374,12 +411,17 @@ export function useSessionStream(
       if (!sessionId) throw new Error("No active session.");
       if (readOnly) throw new Error("Project removed");
       const editing = readEditing(sessionId);
-      if (editing) return saveQueuedEdit(sessionId, editing, text);
+      if (editing) return saveQueuedEdit(sessionId, editing, text, keptInEdit(editing));
       submitted(sessionId);
+      const { attachments, ids } = await uploadAttachments(draftKey, sessionId);
       const response = await fetch(sessionUrl(sessionId, "/prompt"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, queue: true }),
+        body: JSON.stringify({
+          text,
+          queue: true,
+          ...(attachments.length ? { attachments } : {}),
+        }),
       });
       if (!response.ok) {
         const result = (await response.json().catch(() => ({}))) as {
@@ -390,10 +432,10 @@ export function useSessionStream(
             "Could not send your message. Your draft is saved; try again.",
         );
       }
+      clearAttachments(draftKey, ids);
     },
-    [sessionId, submitted, readOnly],
+    [sessionId, submitted, readOnly, draftKey, keptInEdit],
   );
-  const draftKey = sessionId ?? "new";
   const {
     draft,
     setDraft,
@@ -405,6 +447,11 @@ export function useSessionStream(
     historyKey: sessionId ? sessionHistoryKey(sessionId) : undefined,
     submit: submitPrompt,
     canSend: () => !!sessionId && !sendBlocked && !readOnly,
+    // While a queued prompt is edited, only its kept attachments count; the draft's wait for after.
+    allowEmpty: () =>
+      sessionId && readEditing(sessionId)
+        ? !!keptInEdit(readEditing(sessionId)!)?.length
+        : readAttachments(draftKey).length > 0,
     onSent: () => setScrollRequest((request) => request + 1),
   });
 
@@ -453,7 +500,14 @@ export function useSessionStream(
       // The prompt this composer is editing is already in it (with any changes), so it is not handed
       // back twice; an emptied composer gets it back, so the text is not lost.
       const editing = readDraft(draftKey).trim() ? readEditing(sessionId) : null;
-      takeBack((result.queued ?? []).filter((item) => item.id !== editing).map((item) => item.text));
+      const returned = (result.queued ?? []).filter((item) => item.id !== editing);
+      takeBack(returned.map((item) => item.text));
+      // Their files come back too, as chips already uploaded, to go out with the next send; the
+      // edited prompt's text stays in the composer, so its files do too (less those removed in the edit).
+      const edited = editing ? result.queued?.find((item) => item.id === editing) : undefined;
+      const removedInEdit = edited ? readEditRemovals(editKey(sessionId, edited.id)) : [];
+      const keptByEdit = (edited?.attachments ?? []).filter((attachment) => !removedInEdit.includes(attachment.path));
+      restoreAttachments(draftKey, [...keptByEdit, ...returned.flatMap((item) => item.attachments ?? [])]);
     } catch (error) {
       if (currentIdRef.current !== sessionId) return;
       setStopping(false);
@@ -502,6 +556,7 @@ export function useSessionStream(
       if (previous && previous !== item.id)
         await fetch(queueItemUrl(sessionId, previous, "/edit"), { method: "DELETE" }).catch(() => undefined);
       if (currentIdRef.current !== sessionId) return;
+      clearEditRemovals(editKey(sessionId, item.id));
       writeEditing(sessionId, item.id);
       // The server's copy is current (another viewer may have saved an edit); a queued prompt is never blank.
       takeBack([result.item?.text || item.text]);
@@ -520,6 +575,7 @@ export function useSessionStream(
       const response = await fetch(queueItemUrl(sessionId, itemId, "/edit"), { method: "DELETE" });
       if (!response.ok) throw await queueRequestError(response, "Could not cancel the edit. Try again.");
       writeEditing(sessionId, null);
+      clearEditRemovals(editKey(sessionId, itemId));
     } catch (error) {
       if (currentIdRef.current === sessionId)
         showRequestError(error instanceof Error ? error.message : "Could not cancel the edit. Try again.");
@@ -533,6 +589,29 @@ export function useSessionStream(
     if (!sessionId || !editingId || !queueLive) return;
     if (!queue.some((item) => item.id === editingId)) writeEditing(sessionId, null);
   }, [sessionId, editingId, queueLive, queue]);
+
+  /**
+   * What the composer shows as attachments: the draft's pending files, or, while a queued prompt
+   * is edited, that prompt's own (removable, nothing can be added; the draft's wait for after).
+   */
+  const draftAttachments = useComposerAttachments(draftKey);
+  const editRemovalKey = sessionId && editingId ? editKey(sessionId, editingId) : null;
+  const editRemovals = useSyncExternalStore(
+    subscribeAttachments,
+    () => (editRemovalKey ? readEditRemovals(editRemovalKey) : null),
+    () => null,
+  );
+  const editedAttachments = editingId ? queue.find((item) => item.id === editingId)?.attachments : undefined;
+  const editAttachments = useMemo<ComposerAttachments | null>(() => {
+    if (!editRemovalKey) return null;
+    const kept = (editedAttachments ?? []).filter((attachment) => !editRemovals?.includes(attachment.path));
+    return {
+      items: storedAttachmentItems(kept),
+      remove: (path: string) => removeFromEdit(editRemovalKey, path),
+      notice: null,
+    };
+  }, [editRemovalKey, editedAttachments, editRemovals]);
+  const attachments = editAttachments ?? draftAttachments;
 
   /** Ask the server to reconnect the agent; the outcome arrives as `meta.link` on the stream. */
   const retryAttach = async () => {
@@ -665,6 +744,8 @@ export function useSessionStream(
     send,
     stop,
     stopping,
+    /** The composer's attachments (see `ComposerAttachments`). */
+    attachments,
     /** The prompts waiting for the agent, first to go out first. */
     queue,
     /** The queued prompt this composer is editing (Enter saves it in place), or null. */

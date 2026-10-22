@@ -85,3 +85,29 @@ test("apply still answers not_found before writing when a session is already gon
   assert.ok(location.tabId);
   assert.equal(events.length, 1);
 });
+
+test("file panes (docs/FILES.md): open_file opens and logs with the path, again focuses, replace_file navigates unlogged, close_pane logs the path", async () => {
+  const { workspace, activity, events } = setup(createMemoryWorkspaceStore());
+  const opened = await workspace.apply({ op: "open_file", path: "/tmp/notes.md" }, "user");
+  assert.equal(opened.changed, true);
+  assert.deepEqual(opened.workspace.tabs[0].root, { kind: "file", id: opened.location.paneId, path: "/tmp/notes.md" });
+  assert.equal(activity.at(-1).kind, "workspace.opened");
+  assert.equal(activity.at(-1).detail.path, "/tmp/notes.md");
+  assert.equal(activity.at(-1).refs.sessionId, undefined);
+
+  const again = await workspace.apply({ op: "open_file", path: "/tmp/notes.md" }, "user");
+  assert.equal(again.changed, false);
+  assert.deepEqual(again.location, opened.location);
+
+  const pushes = events.length;
+  const entries = activity.length;
+  const moved = await workspace.apply({ op: "replace_file", paneId: opened.location.paneId, path: "/tmp" }, "user");
+  assert.equal(moved.workspace.tabs[0].root.path, "/tmp");
+  assert.equal(events.length, pushes + 1, "pushed");
+  assert.equal(activity.length, entries, "browsing is not logged");
+
+  await workspace.apply({ op: "close_pane", paneId: opened.location.paneId }, "user");
+  assert.equal(activity.at(-1).kind, "workspace.closed");
+  assert.equal(activity.at(-1).detail.path, "/tmp");
+  assert.deepEqual((await workspace.read()).tabs, []);
+});
