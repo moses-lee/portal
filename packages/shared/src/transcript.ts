@@ -5,8 +5,9 @@
  * streamed event updates only the block it touches, as a new object, so memoised renderers of the
  * other blocks are left alone and a long turn costs the same per event at its end as at its start.
  */
-import type { PermissionOption, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { PermissionOption, ToolCallContent, ToolCallLocation, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { StoredEvent, PermissionAnswerer } from "@portal/contracts/types";
+import type { Attachment } from "@portal/contracts/files";
 import { terminalOutputDelta } from "./tool-output.ts";
 
 export type PermissionResponse =
@@ -28,12 +29,14 @@ export type ToolBlock = {
   toolKind?: string | null;
   status?: string | null;
   content: ToolCallContent[];
+  /** The files the call touches, as the agent reported them (shown as file links). */
+  locations?: ToolCallLocation[];
   rawInput?: unknown;
   rawOutput?: unknown;
 };
 export type Block =
-  /** `at`: when the prompt was logged (epoch ms; 0 when unknown). */
-  | { kind: "user"; text: string; at: number }
+  /** `at`: when the prompt was logged (epoch ms; 0 when unknown). `attachments`: files sent with it, when any. */
+  | { kind: "user"; text: string; at: number; attachments?: Attachment[] }
   | { kind: "assistant"; text: string }
   | { kind: "thought"; text: string }
   | ToolBlock
@@ -96,7 +99,7 @@ export function createTurnReducer(): TurnReducer {
   function reduceOne(ev: StoredEvent): boolean {
     switch (ev.type) {
       case "user":
-        push({ kind: "user", text: ev.text, at: ev.ts || 0 });
+        push({ kind: "user", text: ev.text, at: ev.ts || 0, ...(ev.attachments?.length ? { attachments: ev.attachments } : {}) });
         return true;
       case "turn_end":
         closeOpenPermissions();
@@ -148,6 +151,7 @@ export function createTurnReducer(): TurnReducer {
               toolKind: u.kind,
               status: u.status ?? "pending",
               content: u.content ?? [],
+              ...(u.locations?.length ? { locations: u.locations } : {}),
               rawInput: u.rawInput,
               rawOutput: terminalOutputDelta(u) ?? u.rawOutput,
             });
@@ -162,6 +166,7 @@ export function createTurnReducer(): TurnReducer {
             if (u.kind) b.toolKind = u.kind;
             if (u.status) b.status = u.status;
             if (u.content) b.content = u.content;
+            if (u.locations) b.locations = u.locations;
             if (u.rawInput !== undefined) b.rawInput = u.rawInput;
             if (u.rawOutput !== undefined) b.rawOutput = u.rawOutput;
             const delta = terminalOutputDelta(u);

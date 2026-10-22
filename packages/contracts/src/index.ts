@@ -2,3 +2,4 @@ export * from "./types.ts";
 export type { GitInfo } from "./git-info.ts";
 export * from "./shell-types.ts";
 export * from "./workspace.ts";
+export * from "./files.ts";

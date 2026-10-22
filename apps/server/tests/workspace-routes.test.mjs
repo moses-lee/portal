@@ -120,6 +120,7 @@ test("400 for a malformed op, 404 for an unknown session, tab, or pane, 409 when
     [{ op: "open", sessionId: "s1", target: { tabId: "t" } }, "open target needs tabId, paneId and an edge (left, right, top, bottom)."],
     [{ op: "arrange", sessionIds: ["s1"], preset: "cols" }, "arrange needs a preset: single, columns-2, columns-3, rows-2, grid-2x2, one-beside-two."],
     [{ op: "rename_tab", tabId: "t", title: "x", source: "me" }, 'rename_tab needs source "user" or "portal".'],
+    [{ op: "open_file", path: "docs/PLAN.md" }, "open_file needs an absolute path (at most 4096 characters)."],
   ]) {
     const response = await post(body);
     assert.equal(response.statusCode, 400, JSON.stringify(body));

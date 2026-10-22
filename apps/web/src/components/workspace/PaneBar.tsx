@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Bot, Layers } from "lucide-react";
+import { Bot, FileText, Layers } from "lucide-react";
 import IconButton from "../IconButton";
 import { useAgentInbox, type AgentInbox } from "../portal/AgentInbox";
 import { sessionStateLabels, type SessionState } from "@/lib/session-state";
@@ -10,8 +10,10 @@ import { paneCounter, swipeOutcome, viewportAfterResize, type ViewportSample } f
 export type PaneBarProps = {
   /** The current pane's name. */
   title: string;
-  /** Its session's state for the dot; null for a start page (drawn hollow). */
+  /** Its session's state for the dot; null for a start page (drawn hollow) or a file pane. */
   state: SessionState | null;
+  /** A file pane (docs/FILES.md): a file glyph instead of the dot. */
+  file?: boolean;
   /** The pane's position in the switcher's list (0-based) and the list's length: "2 of 7". */
   index: number;
   /** 0 on a phone's empty start page: no counter, no sheet, no swipe; the bar is there for Agent. */
@@ -32,7 +34,7 @@ export type PaneBarProps = {
  * the composer's hint hides on touch. Nothing outside the bar listens to gestures: swiping the
  * transcript does nothing.
  */
-export default function PaneBar({ title, state, index, count, onPrevious, onNext, onOpenSheet }: PaneBarProps) {
+export default function PaneBar({ title, state, file = false, index, count, onPrevious, onNext, onOpenSheet }: PaneBarProps) {
   const keyboardUp = useKeyboardUp();
   const agent = useAgentInbox();
   /** The gesture in flight: where it started and how far it has drifted vertically. */
@@ -95,7 +97,9 @@ export default function PaneBar({ title, state, index, count, onPrevious, onNext
         }}
         className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
       >
-        {state !== null ? (
+        {file ? (
+          <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        ) : state !== null ? (
           <span data-state={state} className="inline-flex shrink-0" aria-label={sessionStateLabels[state]}>
             <span className="status-dot" />
           </span>

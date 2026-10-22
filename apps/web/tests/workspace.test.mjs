@@ -488,3 +488,51 @@ test("split beside, then split the new pane within one round trip: the second op
   assert.equal(keyOf(realSplit2.children[1].id), tmpSplit2.children[1].id);
   assert.equal(keyOf(server1.location.paneId), tmpPane1);
 });
+
+// ---------------------------------------------------------------------------------------------
+// File panes (docs/FILES.md)
+// ---------------------------------------------------------------------------------------------
+
+test("file panes: titled by file name, drawn as file cells, listed flat, focusable, and counted for ?pane=", () => {
+  const ws = build([{ op: "open", sessionId: "a" }, { op: "open_file", path: "/repo/PLAN.md" }]);
+  const [sessionTab, fileTab] = ws.tabs;
+  assert.equal(paneTitle(fileTab.root, sessions), "PLAN.md");
+  assert.equal(tabTitle(fileTab, sessions), "PLAN.md");
+  assert.deepEqual(
+    iconCells(fileTab.root).map((cell) => [cell.file, cell.sessionId]),
+    [[true, null]],
+  );
+  const cells = tabCells(fileTab.root, () => "working");
+  assert.equal(cells[0].state, null, "a file has no state");
+  assert.equal(sameCells(cells, tabCells(fileTab.root, () => null)), true);
+  assert.deepEqual(flatPanes(ws).map(({ pane }) => pane.kind), ["pane", "file"]);
+  assert.equal(resolveFocus(ws, fileTab.id, null).pane, fileTab.root);
+  const split = applyWorkspaceOp(ws, { op: "open_file", path: "/repo/b.ts", target: { tabId: sessionTab.id, paneId: sessionTab.root.id, edge: "right" } }, ids(), 1000);
+  assert.equal(paneInPath(split.workspace, split.location), true);
+  assert.equal(visiblePaneIds(split.workspace, sessionTab.id, null).has(split.location.paneId), true);
+});
+
+test("file panes: open_file and replace_file name their ids for the optimistic rewrite; a file overflow tab pairs by path", () => {
+  assert.deepEqual(opIds({ op: "open_file", path: "/a" }), []);
+  assert.deepEqual(opIds({ op: "open_file", path: "/a", target: { tabId: "t", paneId: "p", edge: "right" } }), ["t", "p"]);
+  assert.deepEqual(opIds({ op: "replace_file", paneId: "p", path: "/a" }), ["p"]);
+  const idOf = (id) => `real-${id}`;
+  assert.deepEqual(rewriteOpIds({ op: "replace_file", paneId: "p", path: "/a" }, idOf), { op: "replace_file", paneId: "real-p", path: "/a" });
+  assert.deepEqual(rewriteOpIds({ op: "open_file", path: "/a", target: { tabId: "t", paneId: "p", edge: "left" } }, idOf), {
+    op: "open_file",
+    path: "/a",
+    target: { tabId: "real-t", paneId: "real-p", edge: "left" },
+  });
+  // Rebuilding a tab that holds a file pane: the file moves to a tab of its own, paired with the server's by path.
+  const base = build([{ op: "open", sessionId: "a" }]);
+  const withFile = applyWorkspaceOp(base, { op: "open_file", path: "/x", target: { tabId: base.tabs[0].id, paneId: base.tabs[0].root.id, edge: "right" } }, prefixed("f"), 1000).workspace;
+  const arrange = { op: "arrange", tabId: withFile.tabs[0].id, preset: "single", sessionIds: ["a"] };
+  const mine = outcome(withFile, arrange, "tmp");
+  const theirs = outcome(withFile, arrange, "real");
+  const aliases = idAliases(withFile, mine, theirs);
+  const myFileTab = mine.workspace.tabs[1];
+  const theirFileTab = theirs.workspace.tabs[1];
+  assert.equal(myFileTab.root.kind, "file");
+  assert.equal(aliases.get(theirFileTab.id), myFileTab.id);
+  assert.equal(aliases.get(theirFileTab.root.id), myFileTab.root.id);
+});

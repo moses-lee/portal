@@ -9,7 +9,7 @@
  *   POST /api/workspace/ops   body WorkspaceOp -> { workspace, location? }; 400 malformed, 404 unknown session, 409 refused
  *
  * Invariants (the reducer enforces them, `validateWorkspace` checks loaded data): a session id is in
- * at most one pane; at most 4 panes per tab; split depth at most 2; a split has 2 or more children;
+ * at most one pane, and a file path in at most one file pane; at most 4 panes per tab; split depth at most 2; a split has 2 or more children;
  * `sizes` has one entry per child, each at least 10, summing to 100.
  */
 
@@ -19,7 +19,13 @@ export type PaneNode = { kind: "pane"; id: string; sessionId: string | null };
 /** Divides its space among `children`, side by side (`row`) or stacked (`column`); `sizes` are percents summing to 100. */
 export type SplitNode = { kind: "split"; id: string; direction: "row" | "column"; children: LayoutNode[]; sizes: number[] };
 
-export type LayoutNode = PaneNode | SplitNode;
+/** A file or directory on the host, by absolute path (docs/FILES.md). A path is in at most one file pane. */
+export type FilePaneNode = { kind: "file"; id: string; path: string };
+
+/** A leaf of the layout: what a pane shows. */
+export type LeafNode = PaneNode | FilePaneNode;
+
+export type LayoutNode = LeafNode | SplitNode;
 
 /** `title` null: the UI derives one from the panes' sessions. `titleSource` says who named it; `user` outranks `portal`. */
 export type Tab = { id: string; title: string | null; titleSource: "user" | "portal" | null; root: LayoutNode; createdAt: number };
@@ -46,6 +52,9 @@ export type WorkspaceView = { sessionId: string | null; tabId: string | null; pa
 
 /**
  * One edit, applied whole. `op` is the discriminant.
+ * - `open_file`: like `open`, for a file pane on an absolute `path`; already open: no change, its location.
+ * - `replace_file`: the file pane `paneId` shows `path` instead (browsing a directory, "Reveal folder");
+ *   a path already open in another file pane: no change, that pane's location (decision 16 of docs/FILES.md).
  * - `open`: a session (or null, a start page). Already open: no change, its location. No `target`: a new
  *   tab at the end. With `target`: a new pane on that `edge` of the pane.
  * - `replace_pane`: the pane shows `sessionId` (a start page becoming its session, or "open here"). A
@@ -60,6 +69,8 @@ export type WorkspaceView = { sessionId: string | null; tabId: string | null; pa
  */
 export type WorkspaceOp =
   | { op: "open"; sessionId: string | null; target?: { tabId: string; paneId: string; edge: SplitEdge } | null }
+  | { op: "open_file"; path: string; target?: { tabId: string; paneId: string; edge: SplitEdge } | null }
+  | { op: "replace_file"; paneId: string; path: string }
   | { op: "replace_pane"; paneId: string; sessionId: string }
   | {
       op: "arrange";

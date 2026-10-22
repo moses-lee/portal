@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState, type ComponentProps } from "react";
+import { memo, useContext, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   Check,
@@ -11,8 +11,6 @@ import {
   Workflow,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import { Button } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
@@ -36,9 +34,16 @@ import {
 } from "@/components/ui/message-scroller";
 import AgentLogo from "./AgentLogo";
 import { DayDivider, MessageTime } from "./ChatTime";
-import CodeBlock from "./CodeBlock";
 import CopyButton from "./CopyButton";
+import AttachmentList from "./files/AttachmentList";
 import PermissionCard from "./PermissionCard";
+import {
+  markdownComponents,
+  markdownRehypePlugins,
+  markdownRemarkPlugins,
+} from "./PortalMarkdown";
+import { FileLinkContext, ToolFileLink } from "./files/FileLink";
+import { keepMarkdownUrl } from "@/lib/file-links";
 import dynamic from "next/dynamic";
 
 // The diff library is only needed once an edit's card is opened.
@@ -46,16 +51,6 @@ const DiffView = dynamic(() => import("./DiffView"));
 import type { Block, History, ToolBlock, Turn } from "@/lib/transcript";
 import { daySections } from "@/lib/orchestrator/format";
 
-const markdownComponents = {
-  pre: CodeBlock,
-  a: ({ children, ...props }: ComponentProps<"a">) => (
-    <a {...props} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
-};
-const remarkPlugins = [remarkGfm];
-const rehypePlugins = [rehypeHighlight];
 /**
  * Where a reply still streaming can be cut so the settled part renders once: after the last blank
  * line that is not inside a fenced code block. Everything before it is parsed and highlighted
@@ -73,17 +68,32 @@ export function splitSettled(text: string): [string, string] {
   return cut === -1 ? ["", text] : [text.slice(0, cut), text.slice(cut)];
 }
 
-const Markdown = memo(function Markdown({ text }: { text: string }) {
+/**
+ * A reply's Markdown, with links and paths resolved against the session's cwd (docs/FILES.md).
+ * Paths found in the text are checked for existence only once the reply has stopped streaming.
+ */
+const Markdown = memo(function Markdown({
+  text,
+  streaming = false,
+}: {
+  text: string;
+  streaming?: boolean;
+}) {
+  const { cwd } = useContext(FileLinkContext);
+  const files = useMemo(() => ({ cwd, check: !streaming }), [cwd, streaming]);
   return (
-    <div className="conversation-markdown">
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={markdownComponents}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
+    <FileLinkContext value={files}>
+      <div className="conversation-markdown">
+        <ReactMarkdown
+          remarkPlugins={markdownRemarkPlugins}
+          rehypePlugins={markdownRehypePlugins}
+          components={markdownComponents}
+          urlTransform={keepMarkdownUrl}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    </FileLinkContext>
   );
 });
 
@@ -136,6 +146,15 @@ const ToolCard = memo(function ToolCard({ block }: { block: ToolBlock }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="space-y-3 border-t border-white/5 p-3">
+          {!!block.locations?.length && (
+            <ul className="space-y-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              {block.locations.map((location, i) => (
+                <li key={i} className="break-all">
+                  <ToolFileLink path={location.path} line={location.line} />
+                </li>
+              ))}
+            </ul>
+          )}
           {block.rawInput !== undefined && (
             <div>
               <p className="mb-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
@@ -394,11 +413,17 @@ const TurnView = memo(function TurnView({
           return (
             <Message key={`user-${i}`} align="end">
               <MessageContent className="gap-1.5">
-                <Bubble variant="secondary" className="max-w-[90%]">
-                  <BubbleContent className="!rounded-[20px] !border-bubble-border !bg-bubble !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
-                    {segment.text}
-                  </BubbleContent>
-                </Bubble>
+                {segment.attachments && (
+                  <AttachmentList attachments={segment.attachments} className="max-w-[90%] self-end" />
+                )}
+                {/* A prompt may be only its attachments. */}
+                {segment.text && (
+                  <Bubble variant="secondary" className="max-w-[90%]">
+                    <BubbleContent className="!rounded-[20px] !border-bubble-border !bg-bubble !px-4 !py-3 !text-[14px] !leading-7 whitespace-pre-wrap">
+                      {segment.text}
+                    </BubbleContent>
+                  </Bubble>
+                )}
                 {segment.at > 0 && (
                   <MessageFooter className="!px-2">
                     <MessageTime at={segment.at} day={day || segment.at} />
@@ -430,8 +455,8 @@ const TurnView = memo(function TurnView({
                     )}
                   </div>
                 )}
-                {settled && <Markdown text={settled} />}
-                {tail && <Markdown text={tail} />}
+                {settled && <Markdown text={settled} streaming={working} />}
+                {tail && <Markdown text={tail} streaming={working} />}
                 {!working && (
                   <MessageFooter className="!px-0">
                     <CopyButton
@@ -509,6 +534,7 @@ export default function Conversation({
   onAnswer,
   scrollRequest,
   readOnly = false,
+  cwd = null,
 }: {
   history: History;
   loading: boolean;
@@ -521,117 +547,122 @@ export default function Conversation({
   onAnswer: (requestId: string, optionId: string) => Promise<void>;
   scrollRequest: number;
   readOnly?: boolean;
+  /** The session's working directory: what relative paths in replies resolve against. */
+  cwd?: string | null;
 }) {
+  const files = useMemo(() => ({ cwd, check: true }), [cwd]);
   /** Where the day dividers go, and the day each turn sits under (0 before the first known time). */
   const days = useMemo(() => daySections(history.turns.map(turnTime)), [history.turns]);
   return (
-    <MessageScrollerProvider
-      autoScroll
-      defaultScrollPosition="end"
-      scrollEdgeThreshold={80}
-    >
-      <MessageScroller className="flex-1">
-        <ScrollOnSend request={scrollRequest} />
-        <MessageScrollerViewport
-          data-room-passthrough
-          aria-label="Conversation"
-          preserveScrollOnPrepend
-          onScroll={(event) => {
-            if (
-              event.currentTarget.scrollTop < 200 &&
-              history.hasMore &&
-              !loading &&
-              !loadingOlder
-            )
-              loadOlder();
-          }}
-        >
-          {/* Keep pagination outside the message list so its first item remains a stable scroll anchor. */}
-          {(history.hasMore || loadingOlder) && (
-            <div className="flex justify-center px-6 pt-4">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={loadOlder}
-                disabled={loadingOlder}
-              >
-                {loadingOlder ? (
-                  <LoaderCircle className="size-3 animate-spin" />
-                ) : null}
-                {loadingOlder
-                  ? "Loading earlier messages…"
-                  : "Load earlier messages"}
-              </Button>
-            </div>
-          )}
-          <MessageScrollerContent
-            className="conversation-content !gap-10"
-            role="log"
-            aria-live="off"
-            aria-label="Messages"
+    <FileLinkContext value={files}>
+      <MessageScrollerProvider
+        autoScroll
+        defaultScrollPosition="end"
+        scrollEdgeThreshold={80}
+      >
+        <MessageScroller className="flex-1">
+          <ScrollOnSend request={scrollRequest} />
+          <MessageScrollerViewport
+            data-room-passthrough
+            aria-label="Conversation"
+            preserveScrollOnPrepend
+            onScroll={(event) => {
+              if (
+                event.currentTarget.scrollTop < 200 &&
+                history.hasMore &&
+                !loading &&
+                !loadingOlder
+              )
+                loadOlder();
+            }}
           >
-            {loading && (
-              <p
-                role="status"
-                className="flex items-center justify-center gap-2 py-12 text-xs text-muted-foreground"
-              >
-                <LoaderCircle className="size-4 animate-spin" />
-                Opening conversation…
-              </p>
-            )}
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            {!loading && !history.turns.length && (
-              <div className="flex flex-col items-center gap-3 py-16 text-center">
-                <span className="frost rounded-2xl p-4">
-                  <AgentLogo agentId={agentId} className="!size-7" />
-                </span>
-                <h2 className="mt-2 text-lg font-medium tracking-tight">
-                  {readOnly ? "No messages yet." : "Ready when you are."}
-                </h2>
-                <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
-                  {readOnly ? "This conversation has no saved messages." : <>Give {agentName} a task, ask a question, or explore an idea together.</>}
-                </p>
+            {/* Keep pagination outside the message list so its first item remains a stable scroll anchor. */}
+            {(history.hasMore || loadingOlder) && (
+              <div className="flex justify-center px-6 pt-4">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={loadOlder}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? (
+                    <LoaderCircle className="size-3 animate-spin" />
+                  ) : null}
+                  {loadingOlder
+                    ? "Loading earlier messages…"
+                    : "Load earlier messages"}
+                </Button>
               </div>
             )}
-            {history.turns.map((turn, i) => {
-              const { divider, day } = days[i];
-              return (
-                <MessageScrollerItem key={turn.key} messageId={`turn-${turn.key}`}>
-                  {divider !== null && <DayDivider at={divider} className="mb-10" />}
-                  <TurnView
-                    turn={turn}
-                    agentId={agentId}
-                    agentName={agentName}
-                    working={busy && i === history.turns.length - 1}
-                    day={day}
-                    onAnswer={onAnswer}
-                    readOnly={readOnly}
-                  />
-                </MessageScrollerItem>
-              );
-            })}
-            {busy && (
-              <WorkingIndicator
-                turn={history.turns.at(-1)}
-                agentName={agentName}
-              />
-            )}
-          </MessageScrollerContent>
-        </MessageScrollerViewport>
-        <MessageScrollerButton
-          size="sm"
-          className="frost !rounded-full !px-3 !text-xs"
-          aria-label="Jump to latest message"
-        >
-          <ArrowDown className="size-3.5" />
-          Jump to latest
-        </MessageScrollerButton>
-      </MessageScroller>
-    </MessageScrollerProvider>
+            <MessageScrollerContent
+              className="conversation-content !gap-10"
+              role="log"
+              aria-live="off"
+              aria-label="Messages"
+            >
+              {loading && (
+                <p
+                  role="status"
+                  className="flex items-center justify-center gap-2 py-12 text-xs text-muted-foreground"
+                >
+                  <LoaderCircle className="size-4 animate-spin" />
+                  Opening conversation…
+                </p>
+              )}
+              {error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+              {!loading && !history.turns.length && (
+                <div className="flex flex-col items-center gap-3 py-16 text-center">
+                  <span className="frost rounded-2xl p-4">
+                    <AgentLogo agentId={agentId} className="!size-7" />
+                  </span>
+                  <h2 className="mt-2 text-lg font-medium tracking-tight">
+                    {readOnly ? "No messages yet." : "Ready when you are."}
+                  </h2>
+                  <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
+                    {readOnly ? "This conversation has no saved messages." : <>Give {agentName} a task, ask a question, or explore an idea together.</>}
+                  </p>
+                </div>
+              )}
+              {history.turns.map((turn, i) => {
+                const { divider, day } = days[i];
+                return (
+                  <MessageScrollerItem key={turn.key} messageId={`turn-${turn.key}`}>
+                    {divider !== null && <DayDivider at={divider} className="mb-10" />}
+                    <TurnView
+                      turn={turn}
+                      agentId={agentId}
+                      agentName={agentName}
+                      working={busy && i === history.turns.length - 1}
+                      day={day}
+                      onAnswer={onAnswer}
+                      readOnly={readOnly}
+                    />
+                  </MessageScrollerItem>
+                );
+              })}
+              {busy && (
+                <WorkingIndicator
+                  turn={history.turns.at(-1)}
+                  agentName={agentName}
+                />
+              )}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton
+            size="sm"
+            className="frost !rounded-full !px-3 !text-xs"
+            aria-label="Jump to latest message"
+          >
+            <ArrowDown className="size-3.5" />
+            Jump to latest
+          </MessageScrollerButton>
+        </MessageScroller>
+      </MessageScrollerProvider>
+    </FileLinkContext>
   );
 }

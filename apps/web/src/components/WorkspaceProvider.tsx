@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname } from "next/navigation";
-import type { PaneNode, Tab, Workspace, WorkspaceLocation, WorkspaceOp } from "@portal/contracts/workspace";
+import type { LeafNode, PaneNode, Tab, Workspace, WorkspaceLocation, WorkspaceOp } from "@portal/contracts/workspace";
 import { applyWorkspaceOp, EMPTY_WORKSPACE, locateSession, WorkspaceError } from "@portal/shared/workspace";
 import { usePortalEvents } from "./portal/PortalLive";
 import { useSessions } from "./SessionsProvider";
@@ -40,7 +40,10 @@ export type WorkspaceFocus = {
   /** The focused pane's session; on `/sessions/<id>` while it resolves, that id. */
   sessionId: string | null;
   tab: Tab | null;
+  /** The focused pane when it is a session or start-page pane; null when it is a file pane (see `leaf`). */
   pane: PaneNode | null;
+  /** The focused pane whatever it shows, a file pane included (docs/FILES.md). */
+  leaf: LeafNode | null;
   /**
    * Which of the tab's panes the device shows: all of them (`tab`), or only the focused one (`pane`:
    * a phone, or a tablet tab too big for a split). The others count as hidden for unread.
@@ -48,7 +51,7 @@ export type WorkspaceFocus = {
   scope: FocusScope;
 };
 
-export const NO_FOCUS: WorkspaceFocus = { tabId: null, paneId: null, sessionId: null, tab: null, pane: null, scope: "tab" };
+export const NO_FOCUS: WorkspaceFocus = { tabId: null, paneId: null, sessionId: null, tab: null, pane: null, leaf: null, scope: "tab" };
 
 export type WorkspaceApplied = {
   /** The server's workspace after the op. */
@@ -347,6 +350,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [workspace, loaded, pending, error, dismissError, apply, locate, focus, unread, unreadPanes, keyOf],
   );
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+}
+
+/** The workspace, or null outside a `WorkspaceProvider` (a component that also renders elsewhere, like a file link). */
+export function useOptionalWorkspace(): WorkspaceContextValue | null {
+  return useContext(WorkspaceContext);
 }
 
 export function useWorkspace(): WorkspaceContextValue {

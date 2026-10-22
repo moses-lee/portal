@@ -260,3 +260,13 @@ test("shapeOf, describeView, and parseView", () => {
     assert.throws(() => parseView(bad), (err) => err.status === 400 && /view/.test(err.message), JSON.stringify(bad));
   }
 });
+
+test("file panes (docs/FILES.md): the shape says file, and a view focused on one names its path", async () => {
+  const { describeView } = await import("../src/orchestrator/workspace/view.ts");
+  const file = { kind: "file", id: "f1", path: "/repo/PLAN.md" };
+  assert.equal(shapeOf({ kind: "split", id: "s", direction: "row", sizes: [50, 50], children: [{ kind: "pane", id: "p", sessionId: null }, file] }), "row[pane, file]");
+  const workspace = { tabs: [{ id: "t1", title: null, titleSource: null, createdAt: 0, root: file }], version: 1 };
+  const described = describeView({ sessionId: null, tabId: "t1", paneId: "f1" }, workspace, () => null);
+  assert.equal(described.text, 'the file /repo/PLAN.md, in tab "PLAN.md".');
+  assert.equal(describeView({ sessionId: null, tabId: null, paneId: null }, workspace, () => null).text, "the Portal page, no session.");
+});

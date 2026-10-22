@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
+  FileText,
   GitBranch,
   LayoutPanelLeft,
   PanelLeft,
@@ -56,6 +57,7 @@ export default function SessionHeader({
   terminalPanelId,
   renameFrom,
   onRename,
+  onOpenFile,
   pane,
 }: {
   title: string;
@@ -84,6 +86,8 @@ export default function SessionHeader({
   terminalPanelId?: string;
   /** The pane menu: split, move to a tab, close. */
   pane?: PaneMenu;
+  /** "Open file…" in the pane menu, for a session pane (docs/FILES.md). */
+  onOpenFile?: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
@@ -101,6 +105,15 @@ export default function SessionHeader({
   };
   const paneItems = pane && (
     <>
+      {onOpenFile && (
+        <>
+          <MenuItem onSelect={onOpenFile}>
+            <FileText />
+            Open file…
+          </MenuItem>
+          <MenuSeparator />
+        </>
+      )}
       <MenuItem disabled={!pane.canSplitRight} onSelect={pane.onSplitRight}>
         <SquareSplitHorizontal />
         Split right

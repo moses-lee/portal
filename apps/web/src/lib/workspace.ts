@@ -9,7 +9,7 @@
 import type {
   LayoutNode,
   LayoutPreset,
-  PaneNode,
+  LeafNode,
   SplitEdge,
   SplitNode,
   Tab,
@@ -18,12 +18,14 @@ import type {
   WorkspaceOp,
 } from "@portal/contracts/workspace";
 import {
-  allPanes,
+  allLeaves,
   applyWorkspaceOp,
   defaultTabTitle,
+  fileName,
   findTab,
   locateSession,
   presetSlotCount,
+  tabLeaves,
   tabPanes,
   WorkspaceError,
 } from "@portal/shared/workspace";
@@ -44,8 +46,9 @@ export function tabTitle(tab: Tab, sessions: readonly { id: string; title: strin
   return defaultTabTitle(tab, (sessionId) => sessionTitleIn(sessions, sessionId));
 }
 
-/** One pane's name: its session's display title, or "New session" for a start page. */
-export function paneTitle(pane: PaneNode, sessions: readonly { id: string; title: string | null }[]): string {
+/** One pane's name: its session's display title, "New session" for a start page, or a file pane's file name. */
+export function paneTitle(pane: LeafNode, sessions: readonly { id: string; title: string | null }[]): string {
+  if (pane.kind === "file") return fileName(pane.path);
   return pane.sessionId === null ? "New session" : sessionTitleIn(sessions, pane.sessionId);
 }
 
@@ -63,15 +66,15 @@ export const presetLabels: Record<LayoutPreset, string> = {
 // The tab icon
 // ---------------------------------------------------------------------------------------------
 
-/** One cell of a tab's miniature: its pane and its box in percent of the icon (equal division, sizes do not matter). */
-export type IconCell = { paneId: string; sessionId: string | null; x: number; y: number; width: number; height: number };
+/** One cell of a tab's miniature: its pane and its box in percent of the icon (equal division, sizes do not matter). `file` marks a file pane. */
+export type IconCell = { paneId: string; sessionId: string | null; file: boolean; x: number; y: number; width: number; height: number };
 
 /** The icon's cells from a layout tree, in reading order. */
 export function iconCells(root: LayoutNode): IconCell[] {
   const out: IconCell[] = [];
   const walk = (node: LayoutNode, x: number, y: number, width: number, height: number) => {
-    if (node.kind === "pane") {
-      out.push({ paneId: node.id, sessionId: node.sessionId, x, y, width, height });
+    if (node.kind !== "split") {
+      out.push({ paneId: node.id, sessionId: node.kind === "pane" ? node.sessionId : null, file: node.kind === "file", x, y, width, height });
       return;
     }
     const count = node.children.length;
@@ -84,7 +87,7 @@ export function iconCells(root: LayoutNode): IconCell[] {
   return out;
 }
 
-/** An icon cell with its session's state drawn in (null for a start page, or a session the list lacks). */
+/** An icon cell with its session's state drawn in (null for a start page, a file pane, or a session the list lacks). */
 export type IconCellState = IconCell & { state: string | null };
 
 /** The cells with their states: what a tab item needs to draw its icon, as plain values so it can skip renders. */
@@ -101,6 +104,7 @@ export function sameCells(a: readonly IconCellState[], b: readonly IconCellState
       return (
         cell.paneId === other.paneId &&
         cell.sessionId === other.sessionId &&
+        cell.file === other.file &&
         cell.state === other.state &&
         cell.x === other.x &&
         cell.y === other.y &&
@@ -115,19 +119,19 @@ export function sameCells(a: readonly IconCellState[], b: readonly IconCellState
 // Flat order (mobile) and focus
 // ---------------------------------------------------------------------------------------------
 
-/** Every pane of every tab, tab order then tree order: the phone's flat list (decision 18). */
-export function flatPanes(ws: Workspace): { tabId: string; pane: PaneNode }[] {
-  return allPanes(ws);
+/** Every pane (file panes too) of every tab, tab order then tree order: the phone's flat list (decision 18). */
+export function flatPanes(ws: Workspace): { tabId: string; pane: LeafNode }[] {
+  return allLeaves(ws);
 }
 
 /**
- * What the URL's tab and pane name in this workspace: the tab (null when gone), and its focused pane,
- * the named one when the tab holds it, else the tab's first pane.
+ * What the URL's tab and pane name in this workspace: the tab (null when gone), and its focused pane
+ * (a session, start-page or file pane), the named one when the tab holds it, else the tab's first pane.
  */
-export function resolveFocus(ws: Workspace, tabId: string | null, paneId: string | null): { tab: Tab | null; pane: PaneNode | null } {
+export function resolveFocus(ws: Workspace, tabId: string | null, paneId: string | null): { tab: Tab | null; pane: LeafNode | null } {
   const tab = tabId ? findTab(ws, tabId) : null;
   if (!tab) return { tab: null, pane: null };
-  const panes = tabPanes(tab);
+  const panes = tabLeaves(tab);
   return { tab, pane: panes.find((pane) => pane.id === paneId) ?? panes[0] ?? null };
 }
 
@@ -140,7 +144,7 @@ export function startPaneIn(tab: Tab): WorkspaceLocation | null {
 /** Whether a location's path should carry `?pane=`: only in a split (decision 7). */
 export function paneInPath(ws: Workspace, location: WorkspaceLocation): boolean {
   const tab = findTab(ws, location.tabId);
-  return !!tab && tabPanes(tab).length > 1;
+  return !!tab && tabLeaves(tab).length > 1;
 }
 
 /** The URL for a location: `/tabs/<tabId>`, with `?pane=` when the tab is a split. */
@@ -183,7 +187,8 @@ export function sessionIdsOf(tab: Tab): string[] {
 
 /**
  * Rebuild `tab` as `preset` with its sessions in order. Only as many as the preset holds are listed:
- * the rest, which the tab still holds, each move to a new tab after it (the reducer's overflow rule).
+ * the rest, which the tab still holds, each move to a new tab after it (the reducer's overflow rule),
+ * as do its file panes.
  */
 export function arrangeOp(tab: Tab, preset: LayoutPreset): WorkspaceOp {
   return { op: "arrange", tabId: tab.id, preset, sessionIds: sessionIdsOf(tab).slice(0, presetSlotCount(preset)) };
@@ -256,7 +261,7 @@ export function advancedSessions(prev: ReadonlyMap<string, SessionSignal>, next:
 export function visiblePaneIds(ws: Workspace, tabId: string | null, onlyPaneId: string | null): ReadonlySet<string> {
   if (onlyPaneId !== null) return new Set([onlyPaneId]);
   const tab = tabId ? findTab(ws, tabId) : null;
-  return new Set(tab ? tabPanes(tab).map((pane) => pane.id) : []);
+  return new Set(tab ? tabLeaves(tab).map((pane) => pane.id) : []);
 }
 
 /**
@@ -292,7 +297,7 @@ export function withoutUnread(unread: ReadonlySet<string>, paneIds: Iterable<str
 export function unreadTabIds(ws: Workspace, unreadPanes: ReadonlySet<string>): ReadonlySet<string> {
   const out = new Set<string>();
   if (unreadPanes.size === 0) return out;
-  for (const tab of ws.tabs) if (tabPanes(tab).some((pane) => unreadPanes.has(pane.id))) out.add(tab.id);
+  for (const tab of ws.tabs) if (tabLeaves(tab).some((pane) => unreadPanes.has(pane.id))) out.add(tab.id);
   return out;
 }
 
@@ -384,11 +389,11 @@ export function idAliases(base: Workspace, mine: OpOutcome, theirs: OpOutcome, k
     if (a !== b && fresh(a) && fresh(b) && !aliases.has(b)) aliases.set(b, a);
   };
   const walk = (a: LayoutNode, b: LayoutNode) => {
-    if (a.kind === "pane" && b.kind === "pane") {
-      if (a.sessionId === b.sessionId) pair(a.id, b.id);
+    if (a.kind !== "split" || b.kind !== "split") {
+      if (sameContent(a, b)) pair(a.id, b.id);
       return;
     }
-    if (a.kind === "split" && b.kind === "split" && a.direction === b.direction && a.children.length === b.children.length) {
+    if (a.direction === b.direction && a.children.length === b.children.length) {
       pair(a.id, b.id);
       a.children.forEach((child, i) => walk(child, b.children[i]));
     }
@@ -400,17 +405,23 @@ export function idAliases(base: Workspace, mine: OpOutcome, theirs: OpOutcome, k
   const myTab = findTab(mine.workspace, myTabId);
   const theirTab = findTab(theirs.workspace, theirTabId);
   if (myTab && theirTab) walk(myTab.root, theirTab.root);
-  // Overflow tabs (one session each, right after the arranged tab) by their session.
+  // Overflow tabs (one session or file each, right after the arranged tab) by what they show.
   for (const tab of mine.workspace.tabs) {
-    if (tab.id === myTabId || tab.root.kind !== "pane" || tab.root.sessionId === null || !fresh(tab.id)) continue;
-    const sessionId = tab.root.sessionId;
-    const match = theirs.workspace.tabs.find((t) => t.id !== theirTabId && t.root.kind === "pane" && t.root.sessionId === sessionId && fresh(t.id));
+    const root = tab.root;
+    if (tab.id === myTabId || root.kind === "split" || (root.kind === "pane" && root.sessionId === null) || !fresh(tab.id)) continue;
+    const match = theirs.workspace.tabs.find((t) => t.id !== theirTabId && sameContent(t.root, root) && fresh(t.id));
     if (match) {
       pair(tab.id, match.id);
       pair(tab.root.id, match.root.id);
     }
   }
   return aliases;
+}
+
+/** Whether two leaves show the same thing: the same session (or both a start page), or the same file. */
+function sameContent(a: LayoutNode, b: LayoutNode): boolean {
+  if (a.kind === "pane" && b.kind === "pane") return a.sessionId === b.sessionId;
+  return a.kind === "file" && b.kind === "file" && a.path === b.path;
 }
 
 /** The ids an optimistic op generates; the server's replace them when it answers. */
@@ -429,8 +440,10 @@ export function replayIds(made: readonly string[], fresh: () => string): () => s
 export function opIds(op: WorkspaceOp): string[] {
   switch (op.op) {
     case "open":
+    case "open_file":
       return op.target ? [op.target.tabId, op.target.paneId] : [];
     case "replace_pane":
+    case "replace_file":
     case "close_pane":
       return [op.paneId];
     case "arrange":
@@ -450,8 +463,10 @@ export function rewriteOpIds(op: WorkspaceOp, idOf: (id: string) => string): Wor
   if (ids.every((id) => idOf(id) === id)) return op;
   switch (op.op) {
     case "open":
+    case "open_file":
       return op.target ? { ...op, target: { ...op.target, tabId: idOf(op.target.tabId), paneId: idOf(op.target.paneId) } } : op;
     case "replace_pane":
+    case "replace_file":
     case "close_pane":
       return { ...op, paneId: idOf(op.paneId) };
     case "arrange":

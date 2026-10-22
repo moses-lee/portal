@@ -6,6 +6,7 @@ import ProjectPicker from "./ProjectPicker";
 import ContextBar from "./ContextBar";
 import AgentLogo from "./AgentLogo";
 import PortalMark from "./PortalMark";
+import { useComposerAttachments } from "@/lib/attachments";
 import ChatComposer from "./ChatComposer";
 import SessionControls from "./SessionControls";
 import { useDraft } from "./useDraft";
@@ -66,6 +67,7 @@ export default function StartPage({
   draftKey = "new",
 }: StartPageProps) {
   const [draft, setDraft] = useDraft(draftKey);
+  const attachments = useComposerAttachments(draftKey);
   /** Per instance: two start pages may be open at once (one per pane), and ids and radio group names must not collide. */
   const uid = useId();
   const titleId = `${uid}-title`;
@@ -145,6 +147,7 @@ export default function StartPage({
         value={draft}
         onChange={setDraft}
         onSend={() => onCreate(draft)}
+        attachments={attachments}
         sending={creating}
         disabled={!ready && !creating}
         label="First message"
