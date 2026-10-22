@@ -10,6 +10,7 @@ import { normalizeScope } from "../store.ts";
 import type { Item, PullRef, TickReason } from "../types.ts";
 import { TICK_JOB_ID } from "./core.ts";
 import { DEFAULT_CHECK_MS, checkTitle } from "./intents.ts";
+import { noEvents } from "./store.ts";
 
 export const LEGACY_TRIGGER = "Something the notes are waiting for has happened: the user is needed, or the request is fulfilled.";
 export const LEGACY_ACTION = "Tell the user what changed and what they need to do; close the intent once the request is fulfilled.";
@@ -59,7 +60,7 @@ export function intentFromWatch(watch: LegacyWatch, now: number): { intent: Inte
     id: watch.id, text: watch.intent.trim() || "(no description)", trigger: LEGACY_TRIGGER, action: LEGACY_ACTION, notes: watch.notes,
     scope: normalizeScope({ projectIds: watch.links?.projectIds, sessionIds: watch.links?.sessionIds, pulls, repos: pulls.map((pull) => pull.repo) }),
     status, expiresAt: null, fireBudget: null, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: watch.lastCheckedAt, threadId: null,
-    createdAt: watch.createdAt, updatedAt: watch.updatedAt,
+    source: { type: "poll" }, events: noEvents(), renewals: 0, createdAt: watch.createdAt, updatedAt: watch.updatedAt,
   };
   const job: Job | null = status !== "active" ? null : {
     id: legacyCheckJobId(watch.id), kind: "intent_check", title: checkTitle(intent.text), schedule: { type: "every", everyMs: DEFAULT_CHECK_MS },

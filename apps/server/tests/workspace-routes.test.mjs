@@ -303,3 +303,36 @@ test("cross-origin requests to the workspace routes are refused with 403", async
   }
   assert.deepEqual(await read(), { tabs: [], version: 0 });
 });
+
+test("POST /api/workspace/focus records what a device shows: the watches read it, a bad body is a 400", async (t) => {
+  const { ctx, inject } = await setup(t);
+  assert.equal(ctx.presence.watching("s1"), false);
+  const ok = await inject("POST", "/api/workspace/focus", { deviceId: "tab-a", sessionId: "s1", visible: true });
+  assert.equal(ok.statusCode, 200);
+  assert.deepEqual(ok.json(), { ok: true });
+  assert.equal(ctx.presence.watching("s1"), true);
+  assert.equal(ctx.orchestrator.hub.presence.watching("s1"), true, "the orchestrator reads the same presence");
+  await inject("POST", "/api/workspace/focus", { deviceId: "tab-a", sessionId: "s1", visible: false });
+  assert.equal(ctx.presence.watching("s1"), false, "a hidden tab shows nothing");
+  await inject("POST", "/api/workspace/focus", { deviceId: "tab-b", sessionId: "s1", visible: true });
+  await inject("POST", "/api/workspace/focus", { deviceId: "tab-b", sessionId: null, visible: true });
+  assert.equal(ctx.presence.watching("s1"), false);
+  for (const body of [{ sessionId: "s1", visible: true }, { deviceId: "x", sessionId: 3, visible: true }, { deviceId: "x", sessionId: null }]) {
+    const bad = await inject("POST", "/api/workspace/focus", body);
+    assert.equal(bad.statusCode, 400, JSON.stringify(body));
+    assert.match(bad.json().error, /deviceId|sessionId|visible/);
+  }
+  const cross = await inject("POST", "/api/workspace/focus", { deviceId: "x", sessionId: null, visible: true }, { origin: "https://evil.example" });
+  assert.equal(cross.statusCode, 403);
+});
+
+test("a device's report lapses without a heartbeat", async () => {
+  const { createPresence, FOCUS_TTL_MS } = await import("../src/lib/presence.ts");
+  let now = 1_000;
+  const presence = createPresence({ now: () => now });
+  presence.focus("tab-a", { sessionId: "s1", visible: true });
+  now += FOCUS_TTL_MS;
+  assert.equal(presence.watching("s1"), true);
+  now += 1;
+  assert.equal(presence.watching("s1"), false);
+});

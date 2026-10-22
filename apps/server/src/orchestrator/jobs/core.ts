@@ -4,7 +4,7 @@
  * announces `jobs`, and wakes the workers (NOTIFY) the same way.
  */
 import { randomUUID } from "node:crypto";
-import type { Job, JobPatch, JobRun } from "@portal/contracts/jobs";
+import type { Intent, Job, JobPatch, JobRun } from "@portal/contracts/jobs";
 import type { ActivityActor } from "@portal/contracts/activity";
 import type { OrchestratorHub } from "../hub.ts";
 import { httpError } from "../ops.ts";
@@ -40,6 +40,8 @@ export type JobsCore = {
   notify(): void;
   emitJobs(): void;
   emitIntents(): Promise<void>;
+  /** Hook set by the service: the active intents as just announced. */
+  onIntents?: (active: Intent[]) => void;
   scheduleJob(input: NewJob, actor: ActivityActor, refs?: { runId?: string; threadId?: string }): Promise<Job>;
   /**
    * Change a job. Cancelling it also stops its runs in progress in this process (never `runId`, the
@@ -96,7 +98,9 @@ export function createCore(base: Pick<JobsCore, "hub" | "store" | "runs" | "tick
     emitJobs: () => hub.emit({ type: "jobs" }),
     async emitIntents() {
       try {
-        hub.emit({ type: "intents", intents: await store.listIntents({ status: ["active"] }) });
+        const active = await store.listIntents({ status: ["active"] });
+        core.onIntents?.(active);
+        hub.emit({ type: "intents", intents: active });
       } catch (err) {
         console.error("Could not announce the intents:", err);
       }

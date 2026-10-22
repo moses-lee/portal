@@ -6,16 +6,27 @@
  */
 type Listener = (count: number) => void;
 
+/** How long a device's report of what it shows holds without a heartbeat. */
+export const FOCUS_TTL_MS = 90_000;
+
+/** What one device shows: the session in its focused pane (null for none) and whether its window is visible. */
+export type DeviceFocus = { sessionId: string | null; visible: boolean };
+
 export type Presence = {
   count(): number;
   /** Marks one connection open; call the returned function exactly once when it closes. */
   open(): () => void;
   subscribe(listener: Listener): () => void;
+  /** A device reports what it shows (on every change and as a heartbeat). */
+  focus(deviceId: string, focus: DeviceFocus): void;
+  /** Whether some device shows `sessionId` in its focused pane, visible, as of a report still fresh. */
+  watching(sessionId: string): boolean;
 };
 
-export function createPresence(): Presence {
+export function createPresence({ now = Date.now }: { now?: () => number } = {}): Presence {
   let count = 0;
   const listeners = new Set<Listener>();
+  const devices = new Map<string, DeviceFocus & { at: number }>();
 
   function notify() {
     for (const listener of listeners) {
@@ -39,6 +50,20 @@ export function createPresence(): Presence {
     subscribe(listener) {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
+    },
+    focus(deviceId, focus) {
+      devices.set(deviceId, { ...focus, at: now() });
+    },
+    watching(sessionId) {
+      const t = now();
+      for (const [deviceId, device] of devices) {
+        if (t - device.at > FOCUS_TTL_MS) {
+          devices.delete(deviceId);
+          continue;
+        }
+        if (device.visible && device.sessionId === sessionId) return true;
+      }
+      return false;
     },
   };
 }

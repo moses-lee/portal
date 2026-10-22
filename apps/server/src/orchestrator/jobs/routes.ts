@@ -107,7 +107,7 @@ export function registerJobRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { intents: await jobs.listIntents(status ? { status } : {}) };
   });
 
-  /** `PATCH /api/portal/intents/:id` — body `IntentPatch` ({ status: "cancelled" | "active" }) -> `{ intent }`. */
+  /** `PATCH /api/portal/intents/:id` — body `IntentPatch` ({ status: "cancelled" | "active" }, or { renew: true } for another week) -> `{ intent }`. */
   app.patch<IdParams>("/api/portal/intents/:id", async (req, reply) => {
     const jobs = await jobsFor(req, reply);
     if (!jobs) return reply;
@@ -116,6 +116,7 @@ export function registerJobRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (body.status !== undefined && body.status !== "cancelled" && body.status !== "active") {
       return reply.code(400).send({ error: 'intent patch: "status" must be active or cancelled.' });
     }
-    return { intent: await jobs.updateIntent(req.params.id, body.status === undefined ? {} : { status: body.status }, "user") };
+    if (body.renew !== undefined && body.renew !== true) return reply.code(400).send({ error: 'intent patch: "renew" must be true.' });
+    return { intent: await jobs.updateIntent(req.params.id, { ...(body.status === undefined ? {} : { status: body.status }), ...(body.renew ? { renew: true as const } : {}) }, "user") };
   });
 }

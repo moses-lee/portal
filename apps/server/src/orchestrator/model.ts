@@ -7,9 +7,10 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { JSONValue, LanguageModel } from "ai";
 import type { ModelChoice, ModelRole, OrchestratorProvider, OrchestratorSettings } from "./types.ts";
 
-/** The provider and model a role uses: chat is the top-level pair, bookkeeping its own. */
+/** The provider and model a role uses: chat is the top-level pair, bookkeeping and watch their own. */
 export function roleChoice(settings: OrchestratorSettings, role: ModelRole): ModelChoice {
-  return role === "chat" ? { provider: settings.provider, model: settings.model } : { ...settings.bookkeeping };
+  if (role === "chat") return { provider: settings.provider, model: settings.model };
+  return role === "watch" ? { ...settings.watch } : { ...settings.bookkeeping };
 }
 
 /** Provider-specific call options, keyed by provider (the AI SDK's `providerOptions`). */

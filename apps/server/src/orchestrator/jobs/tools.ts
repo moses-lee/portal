@@ -1,7 +1,8 @@
 /**
  * The job tools. A chat turn (or a helper that names them) gets the scheduling set: jobs, runs,
- * watches, helpers, and the schedule. An intent check gets only what acts on its own intent
- * (fire_watch, close_watch, update_watch). Intents are called watches wherever the model (or the
+ * watches, helpers, and the schedule. A watch's run gets only what acts on its own watch
+ * (update_watch, and end_watch or renew_watch where they apply) and list_watches: it never starts
+ * background work, and its final reply, not a tool, is its firing. Intents are called watches wherever the model (or the
  * user) reads about them: tool names, descriptions, and result keys say "watch"; the code, the
  * tables, and the REST paths keep "intent". Other background turns get none: their tool schemas
  * would be paid for on every step. The world refresh job (`TICK_JOB_ID`) is Portal's plumbing and
@@ -18,7 +19,8 @@ import { pullRefSchema } from "../tools/items.ts";
 import { type JobsCore, isRefreshJob } from "./core.ts";
 import type { createHelpers } from "./helpers.ts";
 import { resolvePull } from "../world/resolve.ts";
-import { DEFAULT_CHECK_MS, type IntentsPart } from "./intents.ts";
+import { sessionEventKinds } from "@portal/contracts/jobs";
+import { DEFAULT_CHECK_MS, type IntentsPart, MAX_LIFETIME_MS, MIN_LIFETIME_MS, RENEW_WINDOW_MS, describeSource } from "./intents.ts";
 import { DEFAULT_MONITOR_CHECK_MS, DEFAULT_PULL_EVENTS, type PullEvent, pullEvents, pullWatchOf } from "./pull-watch.ts";
 import { MIN_EVERY_MS, describeSchedule, parseSchedule } from "./schedule.ts";
 
@@ -90,37 +92,80 @@ function runRow(run: JobRun) {
 
 function intentRow(intent: Intent, preview = false) {
   const notes = preview && intent.notes.length > NOTES_PREVIEW ? `${intent.notes.slice(0, NOTES_PREVIEW)}…` : intent.notes;
+  const sessions = intent.source.type === "session" || intent.source.type === "portal_sessions" ? intent.source.sessionIds : null;
   return {
     id: intent.id, text: intent.text, trigger: intent.trigger, action: intent.action, status: intent.status, notes,
-    fires: intent.fires, fireBudget: intent.fireBudget, cooldownMinutes: intent.cooldownMs / 60_000, expiresAt: iso(intent.expiresAt),
-    lastFiredAt: iso(intent.lastFiredAt), lastCheckedAt: iso(intent.lastCheckedAt), ...(intent.threadId ? { threadId: intent.threadId } : {}),
+    wakes: describeSource(intent), ...(sessions ? { sessions } : {}), fires: intent.fires, ...(intent.fireBudget === 1 ? { once: true } : {}),
+    expiresAt: iso(intent.expiresAt), lastFiredAt: iso(intent.lastFiredAt), lastCheckedAt: iso(intent.lastCheckedAt),
+    ...(intent.threadId ? { threadId: intent.threadId } : {}),
   };
 }
 
+/** `hours` from now as an expiry, clamped to what a watch may live; null (the default week) when not given. */
+function expiryIn(hours: number | undefined, now: number): number | null {
+  if (hours === undefined) return null;
+  return now + Math.min(MAX_LIFETIME_MS, Math.max(MIN_LIFETIME_MS, Math.round(hours * 3_600_000)));
+}
+
 export function jobTools(core: JobsCore, intents: IntentsPart, helpers: Helpers, ctx: DomainToolContext): ToolSet {
-  if (ctx.turn.kind === "intent_check") return ctx.turn.intentId ? intentCheckTools(intents, ctx, ctx.turn.intentId) : {};
+  if (ctx.turn.kind === "intent_check") return ctx.turn.intentId ? watchRunTools(core, intents, ctx, ctx.turn.intentId) : {};
   if (!ctx.interactive) return {};
   return schedulingTools(core, intents, helpers, ctx);
 }
 
-/** In an intent check only: act on that one intent. */
-function intentCheckTools(intents: IntentsPart, ctx: DomainToolContext, intentId: string): ToolSet {
+/**
+ * In a watch's run only: act on that one watch. end_watch ends a poll watch (an event watch ends
+ * with its sessions or its expiry); renew_watch extends, once, a watch within a day of expiring.
+ * Both refuse when they do not apply, since the tool set is built before the watch is read.
+ */
+function watchRunTools(core: JobsCore, intents: IntentsPart, ctx: DomainToolContext, intentId: string): ToolSet {
   const how = { actor: "agent" as const, runId: ctx.turn.runId };
   return {
-    fire_watch: define(
-      "Something new happened that the watch's trigger names: record the firing and put a Needs-you item in front of the user. The server refuses a repeat of the last firing's title, during the cooldown, past the budget, or after expiry; then stop.",
-      z.object({ title: z.string().min(1).max(200).describe("One line for the user: what happened."), body: z.string().max(2000).describe("One to three sentences: what you saw, what to do.") }),
-      async ({ title, body }) => intents.fire(intentId, { title, body }, { ...how, touched: ctx.touched }),
-    ),
-    close_watch: define(
-      "End this watch: done when it is fulfilled, cancelled when it can never fire or no longer applies.",
-      z.object({ status: z.enum(["done", "cancelled"]), reason: z.string().max(500) }),
-      async ({ status, reason }) => ({ closed: (await intents.close(intentId, status, { ...how, reason })).status }),
-    ),
     update_watch: define(
-      "Rewrite this watch's notes: what you saw and what is left. Keep them short.",
+      "Rewrite this watch's notes: what you saw and reported, and what is left. Keep them short.",
       z.object({ notes: z.string().max(4000) }),
       async ({ notes }) => intentRow(await intents.update(intentId, { notes }, how), true),
+    ),
+    list_watches: define(
+      "Watches by status (default active), newest first.",
+      z.object({ status: z.enum(["active", "done", "cancelled", "expired"]).optional() }),
+      async ({ status = "active" }) => {
+        const { rows, truncated } = capped(await core.store.listIntents({ status: [status] }));
+        return { watches: rows.map((row) => intentRow(row, true)), truncated };
+      },
+    ),
+    end_watch: define(
+      "End this watch when it checks a condition on a schedule (not one woken by session events): done when it is fulfilled, cancelled when it can never fire. Give the evidence (what you saw, where) as well as the reason.",
+      z.object({ status: z.enum(["done", "cancelled"]), reason: z.string().min(1).max(500), evidence: z.string().min(1).max(1000) }),
+      async ({ status, reason, evidence }) => {
+        const intent = await intents.requireIntent(intentId);
+        if (intent.source.type !== "poll") return { error: "This watch ends by itself when its sessions or PR are gone, or when it expires; reply [quiet] if nothing is worth telling." };
+        if (!evidence.trim()) return { error: "Give the evidence that the watch is fulfilled or can never fire." };
+        const when = await intents.requestEnd(intentId, status, { ...how, reason: `${reason} (evidence: ${evidence.trim()})` });
+        return when === "after_reply" ? { ending: status, note: "It ends once your reply is delivered; still reply with what the user should hear." } : { closed: status };
+      },
+    ),
+    renew_watch: define(
+      "Extend this watch once, by up to 168 hours from now, when it expires within a day and what it waits for is still ahead.",
+      z.object({ hours: z.number().min(1).max(168), reason: z.string().min(1).max(300) }),
+      async ({ hours, reason }) => {
+        const now = core.hub.timers.now();
+        const expiresAt = now + Math.round(hours * 3_600_000);
+        let refused: string | null = null;
+        const stored = await core.store.updateIntent(intentId, (current) => {
+          if (current.status !== "active") refused = `This watch is ${current.status}.`;
+          else if (current.renewals >= 1) refused = "This watch was renewed once already; the user can re-activate it after it expires.";
+          else if (current.expiresAt === null || current.expiresAt - now >= RENEW_WINDOW_MS) refused = "This watch does not expire within a day; nothing to renew yet.";
+          return refused ? null : { expiresAt, renewals: current.renewals + 1 };
+        });
+        if (refused) return { error: refused };
+        void core.hub.activity.log({
+          actor: "agent", kind: "intent.updated", summary: `Renewed the watch "${stored.text.slice(0, 80)}" until ${iso(expiresAt)} (${reason})`,
+          refs: { intentId, runId: ctx.turn.runId }, detail: { fields: ["expiresAt"] },
+        });
+        await core.emitIntents();
+        return intentRow(stored, true);
+      },
     ),
   };
 }
@@ -181,7 +226,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         text: z.string().max(2000).optional().describe("What the user asked, in their words."),
         events: z.array(z.enum(pullEvents)).min(1).optional().describe("Which changes to report (default all but comments)."),
         comments: z.boolean().optional().describe("Also report new reviews and comments."),
-        expiresInDays: z.number().min(1).max(90).optional().describe("Stop watching after this many days (default: until it merges or closes)."),
+        expiresInDays: z.number().min(1).max(30).optional().describe("Stop watching after this many days (default 30) if it has not merged or closed by then."),
         ...cadence,
       }),
       async (input) => {
@@ -209,7 +254,7 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         const { intent, job } = await intents.create({
           text: input.text ?? `Monitor ${name} until it merges`, trigger, action: "Tell the user what changed; stop once it is merged or closed.",
           scope: { pulls: [{ repo: target.repo, number: target.number, url: target.url }], repos: [target.repo] }, fireBudget: null, cooldownMs: 0,
-          expiresAt: input.expiresInDays ? now() + Math.round(input.expiresInDays * 86_400_000) : null, threadId: turn.threadId,
+          source: { type: "pull" }, expiresAt: now() + (input.expiresInDays ? Math.round(input.expiresInDays * 86_400_000) : MAX_LIFETIME_MS), threadId: turn.threadId,
           check: check ?? { type: "every", everyMs: DEFAULT_MONITOR_CHECK_MS }, checkNow: true,
           checkPayload: { pull: { repo: target.repo, number: target.number, url: target.url, events: chosen, last: null } },
         }, how);
@@ -217,34 +262,37 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
       },
     ),
     create_watch: define(
-      "Create a watch: a standing request of the user (\"tell me when #42 merges\"): text in the user's words, a precise trigger, the action when it fires, and how often to check. A check job evaluates the trigger; firing puts a Needs-you item in front of the user.",
+      "Create a watch: a standing request of the user (\"tell me when the #42 session finishes\"): text in the user's words, a precise trigger, the action when it fires. With sessions, Portal sees their turn ends, permission waits, and stalls as they happen and runs the watch only then. Without, its runs check the trigger on the cadence you choose. Each run has every tool you have; its reply is what the user hears. It expires after expiresInHours (the answer says when).",
       z.object({
         text: z.string().min(1).max(2000).describe("What the user asked, in their words."),
-        trigger: z.string().min(1).max(1000).describe("The exact condition, e.g. \"PR acme/app#42 is merged or closed\"."),
-        action: z.string().min(1).max(1000).describe("What to do when it fires, e.g. \"tell me, and offer to remove the worktree\"."),
+        trigger: z.string().min(1).max(1000).describe("The exact condition, e.g. \"the #3313 session finishes its rebase\" or \"status.openai.com shows the Codex incident resolved\"."),
+        action: z.string().min(1).max(1000).describe("What to do when it fires, e.g. \"tell me the findings in brief; never prompt the session\"."),
+        sessions: z.array(z.string()).max(20).optional().describe("Session ids to watch for events (turn ends, permission waits, stalls)."),
+        on: z.array(z.enum(sessionEventKinds)).min(1).optional().describe("Which session events wake it (default all three)."),
+        once: z.boolean().optional().describe("Fire only once, then end (\"tell me when it finishes\"). Default false: it keeps reporting until it expires."),
+        expiresInHours: z.number().min(1).max(720).optional().describe("How long it lives (default 168, a week; at most 720)."),
         scope: scopeSchema.optional(),
         notes: z.string().max(4000).optional().describe("Your plan and what you know so far."),
-        expiresAt: z.string().optional().describe("ISO 8601 time after which the watch lapses."),
-        fireBudget: z.number().int().min(1).nullable().optional().describe("How many times it may fire (default 1; null for unlimited)."),
-        cooldownMinutes: z.number().min(0).optional().describe("Least time between two firings (default 0)."),
         ...cadence,
-        checkNow: z.boolean().optional().describe("Run the first check right away instead of after one interval."),
-        role: z.enum(["chat", "bookkeeping"]).optional().describe("The model that checks it (default bookkeeping, the cheap one)."),
+        checkNow: z.boolean().optional().describe("Without sessions: run the first check right away instead of after one interval."),
       }),
       async (input) => {
-        const check = checkSchedule(input) ?? { type: "every", everyMs: DEFAULT_CHECK_MS };
+        const known = await knownIds(hub.deps);
         // Stored scopes hold full ids: a prefix is expanded, and one that names nothing or several is refused.
-        const scope = input.scope && canonicalScope(input.scope, await knownIds(hub.deps));
+        const sessionIds = input.sessions?.length ? canonicalScope({ sessionIds: input.sessions }, known).sessionIds : [];
+        const scope = canonicalScope({ ...input.scope, sessionIds: [...(input.scope?.sessionIds ?? []), ...sessionIds] }, known);
+        const source = sessionIds.length ? { type: "session" as const, sessionIds, on: input.on ?? [...sessionEventKinds] } : undefined;
+        const check = checkSchedule(input) ?? { type: "every", everyMs: DEFAULT_CHECK_MS };
         const { intent, job } = await intents.create({
-          text: input.text, trigger: input.trigger, action: input.action, scope, notes: input.notes,
-          expiresAt: parseTime(input.expiresAt, "expiresAt") ?? null, fireBudget: input.fireBudget, cooldownMs: Math.round((input.cooldownMinutes ?? 0) * 60_000),
-          threadId: turn.threadId, check, checkNow: input.checkNow, role: input.role,
+          text: input.text, trigger: input.trigger, action: input.action, scope, notes: input.notes, source,
+          expiresAt: expiryIn(input.expiresInHours, now()), fireBudget: input.once ? 1 : null, cooldownMs: 0,
+          threadId: turn.threadId, check, checkNow: input.checkNow,
         }, how);
         return { ...intentRow(intent), checkJob: jobRow(job) };
       },
     ),
     update_watch: define(
-      "Change an active watch: its notes (your current understanding), trigger, action, scope, expiry, budget, cooldown, or check cadence.",
+      "Change an active watch: its notes (your current understanding), trigger, action, scope, expiry, or (for a watch without sessions) check cadence.",
       z.object({
         id: z.string().min(1),
         text: z.string().min(1).max(2000).optional(),
@@ -252,19 +300,16 @@ function schedulingTools(core: JobsCore, intents: IntentsPart, helpers: Helpers,
         action: z.string().min(1).max(1000).optional(),
         notes: z.string().max(4000).optional(),
         scope: scopeSchema.optional(),
-        expiresAt: z.string().nullable().optional().describe("ISO 8601 time, or null for no expiry."),
-        fireBudget: z.number().int().min(1).nullable().optional(),
-        cooldownMinutes: z.number().min(0).optional(),
+        expiresInHours: z.number().min(1).max(720).optional().describe("It now expires this many hours from now."),
         ...cadence,
       }),
-      async ({ id, text, trigger, action, notes, scope, expiresAt, fireBudget, cooldownMinutes, ...rest }) => {
+      async ({ id, text, trigger, action, notes, scope, expiresInHours, ...rest }) => {
         // Ids already stored pass even when they no longer resolve; new ones must name one session or project.
         const current = scope !== undefined ? (await intents.requireIntent(id)).scope : null;
         const changes = {
           ...(text !== undefined ? { text } : {}), ...(trigger !== undefined ? { trigger } : {}), ...(action !== undefined ? { action } : {}),
           ...(notes !== undefined ? { notes } : {}), ...(current ? { scope: canonicalScope({ ...current, ...scope }, await knownIds(hub.deps), current) } : {}),
-          ...(expiresAt !== undefined ? { expiresAt: parseTime(expiresAt, "expiresAt") ?? null } : {}), ...(fireBudget !== undefined ? { fireBudget } : {}),
-          ...(cooldownMinutes !== undefined ? { cooldownMs: Math.round(cooldownMinutes * 60_000) } : {}),
+          ...(expiresInHours !== undefined ? { expiresAt: expiryIn(expiresInHours, now()) } : {}),
         };
         return intentRow(await intents.update(id, changes, { ...how, check: checkSchedule(rest) }));
       },

@@ -25,8 +25,10 @@ test("Watches lists the active intents, upcoming jobs by next run, and recent ru
   const card = view.getByRole("article", { name: intent.text });
   await expect(card.getByText(intent.trigger)).toBeVisible();
   await expect(card.getByText(intent.action)).toBeVisible();
-  await expect(card.getByText("0 of 1 fired")).toBeVisible();
+  await expect(card.getByText("Checked on a schedule")).toBeVisible();
+  await expect(card.getByText("fires once")).toBeVisible();
   await expect(card.getByText(/checked 4 min ago/)).toBeVisible();
+  await expect(card.getByRole("button", { name: "Renew for a week" })).toBeVisible();
   await card.getByRole("button", { name: "Portal’s notes" }).click();
   await expect(card.getByText("green")).toBeVisible();
 

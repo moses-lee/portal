@@ -11,7 +11,8 @@ import { intents, jobRuns, jobs } from "../../db/schema.ts";
 import { newId } from "../store.ts";
 import type { Scope } from "../types.ts";
 import {
-  type JobsStore, MAX_RUNS, buildIntent, buildJob, cappedRun, clampRunLimit, patchIntent, patchJob, unknownIntent, unknownJob,
+  type JobsStore, MAX_RUNS, buildIntent, buildJob, cappedRun, clampRunLimit, normalizeEvents, normalizeSource, patchIntent, patchJob, unknownIntent,
+  unknownJob,
 } from "./store.ts";
 
 type Json = Record<string, unknown>;
@@ -51,13 +52,15 @@ export const runColumns = (run: JobRun) => ({
 export const intentFromRow = (row: IntentRow): Intent => ({
   id: row.id, text: row.text, trigger: row.trigger, action: row.action, notes: row.notes, scope: row.scope as unknown as Scope,
   status: row.status as Intent["status"], expiresAt: row.expiresAt, fireBudget: row.fireBudget, fires: row.fires, cooldownMs: row.cooldownMs,
-  lastFiredAt: row.lastFiredAt, lastFiredTitle: row.lastFiredTitle, lastCheckedAt: row.lastCheckedAt, threadId: row.threadId, createdAt: row.createdAt, updatedAt: row.updatedAt,
+  lastFiredAt: row.lastFiredAt, lastFiredTitle: row.lastFiredTitle, lastCheckedAt: row.lastCheckedAt, threadId: row.threadId,
+  source: normalizeSource(row.source), events: normalizeEvents(row.events), renewals: row.renewals, createdAt: row.createdAt, updatedAt: row.updatedAt,
 });
 
 export const intentColumns = (intent: Intent) => ({
   text: intent.text, trigger: intent.trigger, action: intent.action, notes: intent.notes, scope: intent.scope as unknown as Json,
   status: intent.status, expiresAt: intent.expiresAt, fireBudget: intent.fireBudget, fires: intent.fires, cooldownMs: intent.cooldownMs,
-  lastFiredAt: intent.lastFiredAt, lastFiredTitle: intent.lastFiredTitle, lastCheckedAt: intent.lastCheckedAt, threadId: intent.threadId, createdAt: intent.createdAt, updatedAt: intent.updatedAt,
+  lastFiredAt: intent.lastFiredAt, lastFiredTitle: intent.lastFiredTitle, lastCheckedAt: intent.lastCheckedAt, threadId: intent.threadId,
+  source: intent.source as unknown as Json, events: intent.events as unknown as Json, renewals: intent.renewals, createdAt: intent.createdAt, updatedAt: intent.updatedAt,
 });
 
 const jobOrder = [sql`${jobs.nextRunAt} asc nulls last`, desc(jobs.createdAt), asc(jobs.id)];

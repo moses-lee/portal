@@ -20,7 +20,7 @@ export function isServerAction(action: ItemAction): action is ServerAction {
  * is the card it came from, or null when the card is gone by the time an approval replays it.
  */
 export async function runItemAction(
-  hub: Pick<OrchestratorHub, "deps" | "activity" | "workspace">,
+  hub: Pick<OrchestratorHub, "deps" | "activity" | "workspace"> & { jobs?: Pick<OrchestratorHub["jobs"], "sessionStarted"> },
   item: Pick<Item, "id" | "title" | "links"> | null,
   action: ServerAction,
   extraRefs: { approvalId?: string } = {},
@@ -33,6 +33,8 @@ export async function runItemAction(
       outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt }, {
         workspace: hub.workspace, context: { actor: "user", ...(item?.links.threadId ? { threadId: item.links.threadId } : {}) },
       });
+      // Portal started it for the user, so the standing watch rule takes it on.
+      if (outcome.sessionId) await hub.jobs?.sessionStarted?.(outcome.sessionId);
       break;
     case "send_prompt":
       // Cards stored before ids were kept full may carry a prefix.

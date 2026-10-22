@@ -207,7 +207,12 @@ export function sessionTools(ctx: ToolContext) {
     create_session: define(
       "Start a new session in a project, optionally sending a first prompt right away; it opens in a background workspace tab without changing what the user is viewing. title names it for what it is for (otherwise the first prompt does). Returns the session id.",
       z.object({ projectId: z.string().min(1), agentId: z.string().optional(), prompt: z.string().optional(), title: sessionTitle.optional() }),
-      (input) => startSession(deps, input, destination),
+      async (input) => {
+        const started = await startSession(deps, input, destination);
+        // The standing watch rule reports on every session Portal starts.
+        await domain?.hub.jobs.sessionStarted?.(started.sessionId);
+        return started;
+      },
     ),
     // Chat turns only: renaming is for when the user is in the loop, never background work.
     ...(domain?.turn.origin === "chat" ? {

@@ -27,11 +27,14 @@ import { followsPresence, nextRunAt, replanned } from "./schedule.ts";
 import { type JobChanges, type JobFilter, type JobsStore, type RunFilter, createMemoryJobsStore } from "./store.ts";
 import { createConsolidation } from "./consolidate-job.ts";
 import { ensureTickJob, runTickJob } from "./tick-job.ts";
+import { createWatchEvents } from "./watch-events.ts";
 import { jobTools } from "./tools.ts";
 import { type Execution, type WorkerOptions, createWorker } from "./worker.ts";
 
 /** Consecutive failed runs after which a job is marked failed (the world refresh keeps going). */
 export const MAX_FAILURES = 5;
+/** A watch's job gives up sooner, and says so with a Needs-you item rather than going quiet. */
+export const MAX_WATCH_FAILURES = 3;
 /** Delay after the first failure; it doubles with each further one, up to `MAX_BACKOFF_MS`. */
 export const BACKOFF_BASE_MS = 60_000;
 export const MAX_BACKOFF_MS = 60 * 60_000;
@@ -68,6 +71,10 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     tick: options.tick ?? ((report, { signal }) => performRefresh(hub, report, { signal })),
   });
   const intents = createIntents(core);
+  const watchEvents = createWatchEvents(core, intents);
+  intents.bindEvents(watchEvents);
+  // Every announcement of the active watches refreshes what the event engine listens for.
+  core.onIntents = (active) => watchEvents.remember(active);
   const helpers = createHelpers(core);
   const consolidation = createConsolidation(core);
   const kinds: Record<JobKind, (ctx: KindContext) => Promise<KindResult>> = {
@@ -172,12 +179,13 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
       // Paused, cancelled, or finished while it ran: that decision stands.
     } else if (result.jobStatus) {
       changes.status = result.jobStatus;
-    } else if (failed && latest.kind !== "tick" && latest.kind !== "consolidate" && failures >= MAX_FAILURES) {
+    } else if (failed && latest.kind !== "tick" && latest.kind !== "consolidate" && failures >= (latest.kind === "intent_check" ? MAX_WATCH_FAILURES : MAX_FAILURES)) {
       changes.status = "failed";
       void hub.activity.log({
         actor: "system", kind: "job.failed", summary: `"${latest.title}" failed ${failures} times in a row and was stopped`,
         refs: jobRefs(latest, run.id), detail: { error: run.error },
       });
+      if (latest.intentId) await raiseWatchFailing(latest, run).catch((err: unknown) => console.error("Could not raise the failing watch's item:", err));
     } else if (run.status === "awaiting_approval") {
       // Unscheduled until the user decides (see resumeAfterApproval), so a recurring job does not ask the same thing again meanwhile.
       changes.nextRunAt = null;
@@ -198,6 +206,23 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     }
     await store.release(job.id, changes);
     core.emitJobs();
+  }
+
+  /** A watch whose job failed too often in a row: one item, so it never stops silently. */
+  async function raiseWatchFailing(job: Job, run: JobRun): Promise<void> {
+    const intent = job.intentId ? await store.getIntent(job.intentId) : null;
+    if (!intent) return;
+    const fingerprint = `intent_failing:${intent.id}`;
+    const fields = {
+      title: `Watch stopped after failing: ${intent.text.length > 150 ? `${intent.text.slice(0, 149)}…` : intent.text}`,
+      body: `Its last ${MAX_WATCH_FAILURES} runs failed${run.error ? ` (last error: ${run.error.slice(0, 300)})` : ""}. It runs again once you resume its job, or ask Portal to look into it.`,
+      links: { intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) },
+      actions: [{ type: "ask_portal" as const, text: `The watch "${intent.text.slice(0, 200)}" (${intent.id}) stopped after failing. Find out why and fix it.`, label: "Ask Portal" }],
+    };
+    const existing = await hub.store.findItemByFingerprint(fingerprint);
+    if (existing) await hub.store.updateItem(existing.id, { ...fields, status: "open" });
+    else await hub.store.createItem({ ...fields, kind: "intent_update", fingerprint });
+    hub.emit({ type: "items", items: await hub.store.listItems() });
   }
 
   /** Presence changed: jobs whose cadence follows it are replanned. */
@@ -274,6 +299,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   }
 
   async function updateIntent(id: string, patch: IntentPatch, actor: ActivityActor) {
+    if (patch.renew && patch.status === undefined) return intents.renew(id, { actor });
     if (patch.status === undefined) return intents.requireIntent(id);
     if (patch.status === "cancelled") return intents.close(id, "cancelled", { actor });
     if (patch.status === "active") return intents.reopen(id, { actor });
@@ -290,9 +316,11 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
         hub.memory.subscribe(() => { void consolidation.inboxChanged().catch((err: unknown) => console.error("Could not check the memory inbox:", err)); }),
       );
       worker.start();
+      void ready.then(() => (disposed ? undefined : watchEvents.start())).catch((err: unknown) => console.error("Could not start the session watches:", err));
     },
     async dispose() {
       disposed = true;
+      watchEvents.stop();
       for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
       for (const { controller } of controllers.values()) controller.abort();
       helpers.abortAll();
@@ -320,5 +348,6 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     getIntent: (id) => store.getIntent(id),
     createIntent: (input, how) => intents.create(input, how),
     updateIntent,
+    sessionStarted: (sessionId) => watchEvents.sessionStarted(sessionId).catch((err: unknown) => console.error("Could not add the session to the standing watch rule:", err)),
   };
 }

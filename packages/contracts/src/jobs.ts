@@ -27,7 +27,7 @@
  *   GET    /api/portal/runs/:id                 { run }
  *   POST   /api/portal/runs/:id/cancel          -> 204
  *   GET    /api/portal/intents?status=<s>       { intents }
- *   PATCH  /api/portal/intents/:id              body IntentPatch -> { intent }
+ *   PATCH  /api/portal/intents/:id              body IntentPatch ({ status } or { renew: true }) -> { intent }
  * Live: `jobs` (invalidate), `intents` (full list of active ones), and `run` events (none for the world refresh).
  */
 import type { ModelChoice, Scope } from "./orchestrator.ts";
@@ -141,6 +141,29 @@ export type JobRun = {
 
 export type IntentStatus = "active" | "done" | "cancelled" | "expired";
 
+/** What happened in a watched session: a turn ended, it waits on a permission, or it stalled (hung, or its agent was lost). */
+export type SessionEventKind = "turn_end" | "permission" | "stalled";
+export const sessionEventKinds: readonly SessionEventKind[] = ["turn_end", "permission", "stalled"];
+
+/**
+ * What wakes a watch. Code evaluates every source but `poll`:
+ * - `session`: events of the sessions named (Portal sees them as they happen); no model runs until one does.
+ * - `portal_sessions`: the standing rule, the same for every session Portal starts (it adds each one).
+ * - `pull` / `review`: the deterministic PR monitor and review watch (their state is on the check job).
+ * - `poll`: a condition only a model can check (a status page, a merge queue), checked on the job's schedule.
+ */
+export type WatchSource =
+  | { type: "session" | "portal_sessions"; sessionIds: string[]; on: SessionEventKind[] }
+  | { type: "pull" }
+  | { type: "review" }
+  | { type: "poll" };
+
+/** One event of a watched session; `key` is stable, so an event is handled once whatever reports it. */
+export type WatchEvent = { key: string; kind: SessionEventKind; sessionId: string; at: number };
+
+/** A watch's events: waiting for its next run, already handled (the newest keys), and the ones the user saw happen. */
+export type WatchEvents = { pending: WatchEvent[]; handled: string[]; seen: WatchEvent[] };
+
 export type Intent = {
   id: string;
   /** What the user asked for, in their words: "monitor #42 until it merges". */
@@ -166,9 +189,18 @@ export type Intent = {
   lastCheckedAt: number | null;
   /** The thread it was created from and reports to. */
   threadId: string | null;
+  /** What wakes it. */
+  source: WatchSource;
+  /** Session events seen, waiting, and handled (empty for other sources). */
+  events: WatchEvents;
+  /** Times its run extended it before it expired (at most once). */
+  renewals: number;
   createdAt: number;
   updatedAt: number;
 };
 
-/** The UI may only cancel (or re-activate) an intent; the agent edits the rest through tools. */
-export type IntentPatch = Partial<Pick<Intent, "status">>;
+/**
+ * The UI may only cancel (or re-activate) an intent, or renew an active one for another week
+ * (`renew: true`); the agent edits the rest through tools.
+ */
+export type IntentPatch = Partial<Pick<Intent, "status">> & { renew?: true };

@@ -10,7 +10,9 @@
  */
 import type { LanguageModel, Tool } from "ai";
 import type { Approval } from "@portal/contracts/approvals";
-import type { Intent, IntentPatch, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus, RunTrigger, RunUsage } from "@portal/contracts/jobs";
+import type {
+  Intent, IntentPatch, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus, RunTrigger, RunUsage, WatchEvents, WatchSource,
+} from "@portal/contracts/jobs";
 import type { CoreDocument, MemoryEntity, MemoryRecord } from "@portal/contracts/memory";
 import type { WorldState } from "@portal/contracts/world";
 import type { Workspace, WorkspaceView } from "@portal/contracts/workspace";
@@ -26,7 +28,12 @@ import type { Item, ItemAction, ModelChoice, ModelRole, OrchestratorEvent, Orche
 
 export type ToolSet = Record<string, Tool>;
 
-export type PresenceSource = { count(): number; subscribe(listener: (count: number) => void): () => void };
+export type PresenceSource = {
+  count(): number;
+  subscribe(listener: (count: number) => void): () => void;
+  /** Whether a device shows the session in its focused, visible pane; fakes may leave it out (then nobody is). */
+  watching?(sessionId: string): boolean;
+};
 
 /** A role's model, ready to call: what the settings chose and the key the settings store holds. */
 export type ResolvedModel = { role: ModelRole; choice: ModelChoice; model: LanguageModel; providerOptions?: ProviderOptions };
@@ -82,6 +89,10 @@ export type IntentInput = Pick<Intent, "text" | "trigger" | "action"> & Partial<
   checkNow?: boolean;
   /** The model that checks it (default bookkeeping). */
   role?: ModelRole;
+  /** What wakes it (default: a poll watch, or the PR monitor or review watch its payload names). */
+  source?: WatchSource;
+  /** The events it starts from (default: its sessions' current events, all handled). */
+  events?: WatchEvents;
   /**
    * Extra fields for the check job's payload. A `review` or `pull` watch there makes the check
    * deterministic (see `jobs/review-watch.ts` and `jobs/pull-watch.ts`) instead of a model turn.
@@ -133,6 +144,8 @@ export interface JobsService {
   createIntent(input: IntentInput, how: { actor: "user" | "agent" | "system"; runId?: string; threadId?: string | null }): Promise<{ intent: Intent; job: Job }>;
   /** The UI's intent patch: cancel it, or re-activate it. */
   updateIntent(id: string, patch: IntentPatch, actor: "user" | "agent" | "system"): Promise<Intent>;
+  /** Portal started this session for the user (create_session, a card's start action): the standing watch rule takes it on while it is on. */
+  sessionStarted(sessionId: string): Promise<void>;
 }
 
 /** What a full refresh did beside building the world: its diff against the previous snapshot. */

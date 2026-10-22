@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { portalJson, portalSend, query } from "@/lib/orchestrator/api";
 import { describeSchedule, describeUsage, formatDuration, runDuration } from "@/lib/orchestrator/format";
-import type { Intent, IntentStatus, Job, JobKind, JobRun, RunStatus } from "@/lib/orchestrator/types";
+import type { Intent, IntentStatus, Job, JobKind, JobRun, RunStatus, SessionEventKind } from "@/lib/orchestrator/types";
 
 const jobKindLabels: Partial<Record<JobKind | "chat", string>> = {
   intent_check: "Watch check",
@@ -63,25 +63,47 @@ const intentStatusMeta: Record<IntentStatus, { label: string; tone: Tone }> = {
   expired: { label: "Expired", tone: "amber" },
 };
 
+const eventLabels: Record<SessionEventKind, string> = { turn_end: "turn ends", permission: "permission waits", stalled: "stalls" };
+
+/** What wakes a watch, in words. */
+function wakesLine(intent: Intent): string {
+  const source = intent.source;
+  switch (source.type) {
+    case "session": {
+      const count = source.sessionIds.length;
+      return `Wakes on ${source.on.map((kind) => eventLabels[kind]).join(", ")} of ${count === 1 ? "its session" : `${count} sessions`}`;
+    }
+    case "portal_sessions":
+      return `Every session Portal starts reports its ${source.on.map((kind) => eventLabels[kind]).join(", ")} (${source.sessionIds.length} so far)`;
+    case "pull":
+      return "Wakes on changes of its PR";
+    case "review":
+      return "Reports once its reviews finish";
+    default:
+      return "Checked on a schedule";
+  }
+}
+
 /**
- * One watch. Active: what triggers it, what it does, how it has gone, and Cancel. Closed: the same
- * with its end state, and Re-activate (`onReactivated` takes the card off the closed list).
+ * One watch. Active: what wakes it, what it does, how it has gone, Renew, and Cancel. Closed: the
+ * same with its end state, and Re-activate (`onReactivated` takes the card off the closed list).
+ * The standing rule (every session Portal starts) is turned on and off instead, and never expires.
  */
 function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now: number; links: PortalLinks; onReactivated?: (intent: Intent) => void }) {
   const { putIntent } = usePortalLive();
   const { pending, error, run } = useRowAction();
   const closed = intent.status !== "active";
-  const setStatus = (status: "cancelled" | "active") =>
-    run(status, async () => {
-      const { intent: updated } = await portalSend<{ intent: Intent }>(
-        `/api/portal/intents/${encodeURIComponent(intent.id)}`,
-        "PATCH",
-        { status },
-      );
+  const rule = intent.source.type === "portal_sessions";
+  const evented = intent.source.type === "session" || rule;
+  const patch = (name: string, body: { status: "cancelled" | "active" } | { renew: true }) =>
+    run(name, async () => {
+      const { intent: updated } = await portalSend<{ intent: Intent }>(`/api/portal/intents/${encodeURIComponent(intent.id)}`, "PATCH", body);
       putIntent(updated);
-      if (status === "active") onReactivated?.(updated);
+      if ("status" in body && body.status === "active") onReactivated?.(updated);
     });
-  const fires = intent.fireBudget === null ? `${intent.fires} fired` : `${intent.fires} of ${intent.fireBudget} fired`;
+  const setStatus = (status: "cancelled" | "active") => patch(status, { status });
+  const fires = intent.fireBudget === 1 && intent.fires === 0 ? "fires once" : intent.fireBudget === null || intent.fireBudget === 1 ? `${intent.fires} fired` : `${intent.fires} of ${intent.fireBudget} fired`;
+  const seen = intent.events?.seen.length ?? 0;
   return (
     <article aria-label={intent.text} className="frost rounded-2xl p-4 text-[13px]">
       <div className="flex items-start gap-3">
@@ -89,6 +111,7 @@ function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now
         <div className="min-w-0 flex-1">
           <h3 className="text-[14px] font-medium leading-snug tracking-[-.01em]">{intent.text}</h3>
           {closed && <Badge tone={intentStatusMeta[intent.status].tone} className="mt-1">{intentStatusMeta[intent.status].label}</Badge>}
+          <p className="mt-1 text-[11px] text-muted-foreground">{wakesLine(intent)}</p>
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted-foreground">When</dt>
             <dd className="text-foreground/85">{intent.trigger}</dd>
@@ -99,8 +122,20 @@ function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now
             <span>{fires}</span>
             <span>·</span>
             <span>
-              {intent.lastCheckedAt ? <When at={intent.lastCheckedAt} now={now} prefix="checked" past /> : "not checked yet"}
+              {intent.lastCheckedAt ? (
+                <When at={intent.lastCheckedAt} now={now} prefix={evented ? "last ran" : "checked"} past />
+              ) : evented ? (
+                "waiting for an event"
+              ) : (
+                "not checked yet"
+              )}
             </span>
+            {seen > 0 && (
+              <>
+                <span>·</span>
+                <span>{seen} watched live, not reported</span>
+              </>
+            )}
             {intent.lastFiredAt && (
               <>
                 <span>·</span>
@@ -143,10 +178,23 @@ function IntentCard({ intent, now, links, onReactivated }: { intent: Intent; now
             {closed ? (
               <Button type="button" size="xs" variant="ghost" disabled={pending !== null} onClick={() => void setStatus("active")} className="text-muted-foreground">
                 <Play />
-                Re-activate
+                {rule ? "Turn on" : "Re-activate"}
+              </Button>
+            ) : rule ? (
+              <Button type="button" size="xs" variant="ghost" disabled={pending !== null} onClick={() => void setStatus("cancelled")} className="text-muted-foreground">
+                <Pause />
+                Turn off
               </Button>
             ) : (
-              <ConfirmButton label="Cancel watch" confirmLabel="Confirm cancel" disabled={pending !== null} onConfirm={() => void setStatus("cancelled")} />
+              <>
+                {intent.expiresAt !== null && (
+                  <Button type="button" size="xs" variant="ghost" disabled={pending !== null} onClick={() => void patch("renew", { renew: true })} className="text-muted-foreground">
+                    <Clock />
+                    Renew for a week
+                  </Button>
+                )}
+                <ConfirmButton label="Cancel watch" confirmLabel="Confirm cancel" disabled={pending !== null} onConfirm={() => void setStatus("cancelled")} />
+              </>
             )}
             {pending && <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />}
           </div>
@@ -500,7 +548,7 @@ export default function WatchesView({ links }: { links: PortalLinks }) {
             </Empty>
           ) : (
             <div className="space-y-2.5">
-              {intents.map((intent) => (
+              {[...intents].sort((a, b) => Number(b.source?.type === "portal_sessions") - Number(a.source?.type === "portal_sessions")).map((intent) => (
                 <IntentCard key={intent.id} intent={intent} now={now} links={links} />
               ))}
             </div>

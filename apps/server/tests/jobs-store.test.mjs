@@ -196,7 +196,7 @@ for (const [label, open] of backends) {
       id: intent.id, text: "Tell me when #42 merges", trigger: "acme/app#42 is merged", action: "Tell me", notes: "",
       scope: { projectIds: [], sessionIds: [], pulls: [{ repo: "acme/app", number: 42, url: "u" }], repos: [], people: [], taskTypes: [] },
       status: "active", expiresAt: null, fireBudget: 1, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: null, threadId: null,
-      createdAt: T0, updatedAt: T0,
+      source: { type: "poll" }, events: { pending: [], handled: [], seen: [] }, renewals: 0, createdAt: T0, updatedAt: T0,
     });
     clock.add(5);
     const unlimited = await store.createIntent(intentInput({ id: "w1", fireBudget: null, cooldownMs: 60_000, threadId: "t1", expiresAt: T0 + 1_000 }));

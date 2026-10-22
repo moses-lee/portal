@@ -86,9 +86,11 @@ test("cancel_watch stops a check of the intent in progress and says so", async (
   assert.equal((await h.jobs.getRun(run.id)).status, "cancelled");
 });
 
-test("a check that closes its own intent is not stopped by that", async (t) => {
+test("a watch's run that ends its own watch is not stopped by that", async (t) => {
   const h = await started(jobsHarness(t, {
-    doGenerate: async ({ prompt }) => (JSON.stringify(prompt).includes("tool-result") ? textStep("NO_UPDATE") : toolStep("close_watch", { status: "cancelled", reason: "It can never fire." })),
+    doGenerate: async ({ prompt }) => (JSON.stringify(prompt).includes("tool-result")
+      ? textStep("[quiet] It can never fire.")
+      : toolStep("end_watch", { status: "cancelled", reason: "It can never fire.", evidence: "The page it watches is gone (404)." })),
   }));
   const tools = h.jobs.tools(toolContext(h));
   const created = await call(tools, "create_watch", { text: "Watch it", trigger: "Never", action: "Tell the user", checkNow: true });

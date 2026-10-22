@@ -35,6 +35,11 @@ export type TurnOptions = {
   interactive: boolean;
   /** When given, only these tools (classic and domain) are offered. */
   toolNames?: readonly string[];
+  /**
+   * A background turn with every tool a chat turn has, offered from the start (a watch's run): no
+   * tool groups to load, and each domain decides by the turn's kind what it adds or holds back.
+   */
+  fullTools?: boolean;
   /** Tools only this turn has (a summarizer's report tool), offered beside the rest and logged like them. */
   extraTools?: ToolSet;
   /** What the turn is about; defaults to the thread's scope. */
@@ -172,10 +177,11 @@ function withJobGuard(hub: OrchestratorHub, turn: TurnInfo, tools: ToolSet): Too
 }
 
 /** The turn's tools: classic plus domain, redacted, cut to `toolNames`, gated, checked against a cancelled job, and logged. */
-function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: readonly string[] | undefined, extra: ToolSet = {}): ToolSet {
-  // An explicit list decides on its own; otherwise each tool family offers what suits the turn
-  // (a background turn gets the background subset of the classic tools and the domains' background tools).
-  const offered: DomainToolContext = toolNames ? { ...ctx, interactive: true } : ctx;
+function turnTools(hub: OrchestratorHub, ctx: DomainToolContext, toolNames: readonly string[] | undefined, extra: ToolSet = {}, fullTools = false): ToolSet {
+  // An explicit list decides on its own, and a full-tools turn gets what a chat turn gets; otherwise
+  // each tool family offers what suits the turn (a background turn gets the background subset of the
+  // classic tools and the domains' background tools).
+  const offered: DomainToolContext = toolNames || fullTools ? { ...ctx, interactive: true } : ctx;
   const domain: ToolSet = {
     ...threadTools(offered), ...workspaceTools(offered), ...hub.jobs.tools(offered), ...hub.world.tools(offered), ...hub.memory.tools(offered),
   };
@@ -221,7 +227,7 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       store: hub.store, settings: hub.settings, deps: hub.deps, touched: options.touched, interactive: options.interactive,
       now: () => hub.timers.now(), hub, turn,
     };
-    let tools = turnTools(hub, ctx, options.toolNames, options.extraTools);
+    let tools = turnTools(hub, ctx, options.toolNames, options.extraTools, options.fullTools);
     // A chat turn starts with the common tools and loads the rest by group; background turns name their tools.
     const loader = options.interactive && !options.toolNames ? createToolLoader(tools) : null;
     if (loader) tools = { ...tools, ...loader.tool };
@@ -243,6 +249,7 @@ export async function prepareTurn(hub: OrchestratorHub, options: TurnOptions): P
       world: world ? hub.world.render(world, { scope, workspace }) : "",
       thread: thread && thread.kind === "side" ? { title: thread.title } : null,
       toolGroups: loader ? toolGroupsGuidance(new Set(Object.keys(tools))) : "",
+      watchRun: options.kind === "intent_check" && !!options.fullTools,
     });
     return { run, turn, model, tools, system, loader, finish };
   } catch (err) {

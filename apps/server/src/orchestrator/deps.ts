@@ -76,6 +76,8 @@ export type OrchestratorDeps = {
     liveness?(id: string): Promise<SessionLiveness | null>;
     /** Called with the id of every session deleted, by anyone; answers the unsubscribe function. Fakes may leave it out. */
     onDeleted?(listener: (id: string) => void): () => void;
+    /** Called with the id of every session created, changed (a turn started or ended, a permission, liveness), or deleted; answers the unsubscribe function. Fakes may leave it out. */
+    onChange?(listener: (id: string, change: "created" | "updated" | "deleted") => void): () => void;
   };
   agents: {
     list(): Promise<AgentInfo[]>;
@@ -220,6 +222,9 @@ export function liveDeps(ctx: OrchestratorServices): OrchestratorDeps {
       },
       onDeleted: (listener) => ctx.sessions.onSessionsChange((change) => {
         if (change.type === "deleted") listener(change.id);
+      }),
+      onChange: (listener) => ctx.sessions.onSessionsChange((change) => {
+        listener(change.type === "created" ? change.session.id : change.id, change.type);
       }),
     },
     // The sessions service's agents, not the built-in list: the orchestrator must offer only agents it can start.

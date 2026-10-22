@@ -52,7 +52,19 @@ const emptyState = () => ({ modes: null, configOptions: [], commands: [] });
  * and `state.lastSettings[agentId]` for the settings `agents.lastSettings` answers.
  */
 export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = [], terminals = [], github = {}, fs = {}, scripts = {}, ...git } = {}) {
-  const state = { sessions, projects, events, pulls, terminals, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null, permissionAdvisor: null, answered: [], lastSettings: {} };
+  const changeListeners = new Set();
+  const state = {
+    sessions, projects, events, pulls, terminals, prompts: [], created: [], removed: [], added: [], searches: [], scripts: [], promptFailure: null, permissionAdvisor: null, answered: [], lastSettings: {},
+    /** Tell `onChange` subscribers a session changed, as the runtime does after a turn ends, a permission opens, or a deletion. */
+    change(id, type = "updated") {
+      for (const listener of changeListeners) listener(id, type);
+    },
+    /** Replace a session's fields and announce the change. */
+    patchSession(id, patch) {
+      state.sessions = state.sessions.map((session) => (session.id === id ? { ...session, ...patch } : session));
+      state.change(id, "updated");
+    },
+  };
   const reject = (what) => async () => { throw new Error(`${what} is not available in this test.`); };
   const deps = {
     sessions: {
@@ -94,6 +106,10 @@ export function fakeDeps({ sessions = [], projects = [], events = {}, pulls = []
         const before = state.sessions.length;
         state.sessions = state.sessions.filter((session) => session.id !== id);
         return state.sessions.length < before;
+      },
+      onChange: (listener) => {
+        changeListeners.add(listener);
+        return () => changeListeners.delete(listener);
       },
     },
     agents: {
@@ -180,8 +196,8 @@ export function fakeSettings({ key = "sk-test", ...overrides } = {}) {
   return {
     read,
     orchestrator: async () => (await read()).orchestrator,
-    // The key serves whichever providers the two model roles use.
-    apiKey: async (provider) => (provider === orchestrator.provider || provider === orchestrator.bookkeeping.provider ? key : null),
+    // The key serves whichever providers the model roles use.
+    apiKey: async (provider) => (provider === orchestrator.provider || provider === orchestrator.bookkeeping.provider || provider === orchestrator.watch?.provider ? key : null),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -234,8 +250,14 @@ export function fakeTimers(start = T0) {
 export function fakePresence(initial = 0) {
   let count = initial;
   const listeners = new Set();
+  /** Sessions a device shows in its focused, visible pane (`setWatching`). */
+  let shown = new Set();
   return {
     count: () => count,
+    watching: (sessionId) => shown.has(sessionId),
+    setWatching(ids) {
+      shown = new Set(ids);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

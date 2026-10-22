@@ -47,6 +47,8 @@ export type OrchestratorSettings = {
   model: string;
   /** The bookkeeping role (intent checks and other cheap background turns): a cheap model, possibly on another provider. */
   bookkeeping: ModelChoice;
+  /** The watch role: the turns a watch runs when something it watches happens (the full agent, on its own model). */
+  watch: ModelChoice;
   /** When the memory curation pass runs. */
   consolidation: ConsolidationSettings;
   /** How Portal treats the review sessions it starts. */
@@ -97,6 +99,7 @@ export type OrchestratorSettingsPatch = {
   provider?: OrchestratorProvider;
   model?: string;
   bookkeeping?: Partial<ModelChoice>;
+  watch?: Partial<ModelChoice>;
   consolidation?: Partial<ConsolidationSettings>;
   reviews?: Partial<ReviewSettings>;
   stalls?: Partial<StallSettings>;
@@ -107,23 +110,27 @@ export const defaultOrchestratorSettings: OrchestratorSettings = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   bookkeeping: { provider: "anthropic", model: "claude-sonnet-5" },
+  watch: { provider: "anthropic", model: "claude-sonnet-5-5" },
   consolidation: { nightlyAt: "03:00", inboxThreshold: 10, minIntervalMinutes: 60 },
   reviews: { answerReadOnly: true },
   stalls: { hungAfterMinutes: 15 },
   apiKeys: { openai: false, anthropic: false },
 };
 
-/** The two jobs a model does: talking with the user and curating (frontier), and background bookkeeping such as intent checks (cheap). */
-export type ModelRole = "chat" | "bookkeeping";
-export const modelRoles: readonly ModelRole[] = ["chat", "bookkeeping"];
+/**
+ * The jobs a model does: talking with the user and curating (frontier), background bookkeeping
+ * such as helpers (cheap), and the turns watches run when something they watch happens.
+ */
+export type ModelRole = "chat" | "bookkeeping" | "watch";
+export const modelRoles: readonly ModelRole[] = ["chat", "bookkeeping", "watch"];
 
 /** A provider and one of its model ids. */
 export type ModelChoice = { provider: OrchestratorProvider; model: string };
 
 /** The model each role uses on a provider unless the user picked another one. */
 export const defaultModels: Record<OrchestratorProvider, Record<ModelRole, string>> = {
-  anthropic: { chat: "claude-opus-5-5", bookkeeping: "claude-sonnet-5" },
-  openai: { chat: "gpt-5", bookkeeping: "gpt-5-mini" },
+  anthropic: { chat: "claude-opus-5-5", bookkeeping: "claude-sonnet-5", watch: "claude-sonnet-5-5" },
+  openai: { chat: "gpt-5", bookkeeping: "gpt-5-mini", watch: "gpt-5" },
 };
 
 // ---------------------------------------------------------------------------------------------

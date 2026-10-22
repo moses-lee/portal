@@ -134,7 +134,7 @@ function mergePrompts(base: GitActionPrompts, given: Partial<Record<GitActionKin
  * else leaves it. Key strings become the wire form's booleans (non-blank means "a key is stored").
  */
 function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettingsPatch | undefined): OrchestratorSettings {
-  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, consolidation: { ...base.consolidation }, reviews: { ...base.reviews }, stalls: { ...base.stalls }, apiKeys: { ...base.apiKeys } };
+  const next: OrchestratorSettings = { ...base, bookkeeping: { ...base.bookkeeping }, watch: { ...base.watch }, consolidation: { ...base.consolidation }, reviews: { ...base.reviews }, stalls: { ...base.stalls }, apiKeys: { ...base.apiKeys } };
   if (!given) return next;
   // A provider change without a model takes that provider's default: a model id never outlives its provider.
   if (isOrchestratorProvider(given.provider) && given.provider !== base.provider) {
@@ -148,6 +148,13 @@ function mergeOrchestrator(base: OrchestratorSettings, given: OrchestratorSettin
       next.bookkeeping = { provider, model: defaultModels[provider].bookkeeping };
     }
     if (typeof model === "string" && model.trim()) next.bookkeeping.model = model;
+  }
+  if (given.watch && typeof given.watch === "object") {
+    const { provider, model } = given.watch;
+    if (isOrchestratorProvider(provider) && provider !== base.watch.provider) {
+      next.watch = { provider, model: defaultModels[provider].watch };
+    }
+    if (typeof model === "string" && model.trim()) next.watch.model = model;
   }
   next.consolidation = mergeConsolidation(base.consolidation, given.consolidation);
   if (given.reviews && typeof given.reviews === "object" && typeof given.reviews.answerReadOnly === "boolean") {
@@ -212,6 +219,9 @@ export function settingsOverrides(settings: Settings): SettingsPatch {
   if (given.model !== base.model) orchestrator.model = given.model;
   if (given.bookkeeping.provider !== base.bookkeeping.provider || given.bookkeeping.model !== base.bookkeeping.model) {
     orchestrator.bookkeeping = { ...given.bookkeeping };
+  }
+  if (given.watch.provider !== base.watch.provider || given.watch.model !== base.watch.model) {
+    orchestrator.watch = { ...given.watch };
   }
   const consolidation: Partial<ConsolidationSettings> = {};
   for (const field of ["nightlyAt", "inboxThreshold", "minIntervalMinutes"] as const) {

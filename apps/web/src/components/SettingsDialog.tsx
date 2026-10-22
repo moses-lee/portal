@@ -52,9 +52,11 @@ import {
 } from "@/lib/orchestrator/curation";
 import {
   defaultModels,
+  modelRoles,
   orchestratorProviders,
   type ModelRole,
   type OrchestratorProvider,
+  type OrchestratorSettings,
 } from "@/lib/orchestrator/types";
 import {
   isScriptEnabled,
@@ -163,21 +165,64 @@ const providerLabels: Record<OrchestratorProvider, string> = {
   anthropic: "Anthropic",
 };
 
+/** What the Settings dialog shows and saves for each model role. */
+const roleFields: Record<
+  ModelRole,
+  {
+    modelField: OrchestratorTextField;
+    providerKey: "provider" | "bookkeepingProvider" | "watchProvider";
+    title: string;
+    about: string;
+    providerLabel: string;
+  }
+> = {
+  chat: {
+    modelField: "model",
+    providerKey: "provider",
+    title: "Chat and curation",
+    about: "Talks with you, runs helper turns, and curates memory. A frontier model works best.",
+    providerLabel: "Chat provider",
+  },
+  bookkeeping: {
+    modelField: "bookkeepingModel",
+    providerKey: "bookkeepingProvider",
+    title: "Bookkeeping",
+    about: "Runs cheap background helpers. A fast, inexpensive model is enough.",
+    providerLabel: "Bookkeeping provider",
+  },
+  watch: {
+    modelField: "watchModel",
+    providerKey: "watchProvider",
+    title: "Watches",
+    about: "Runs a watch when something it watches happens, with every tool the chat has.",
+    providerLabel: "Watch provider",
+  },
+};
+
+/** The provider and model a role uses: chat is the top-level pair, the others their own. */
+const roleChoiceOf = (orchestrator: OrchestratorSettings, role: ModelRole) =>
+  role === "chat"
+    ? { provider: orchestrator.provider, model: orchestrator.model }
+    : orchestrator[role];
+
 /** Talk to Portal fields that are typed into and saved when the user leaves them. */
 type OrchestratorTextField =
   | "model"
   | "bookkeepingModel"
+  | "watchModel"
   | ConsolidationField
   | "hungAfterMinutes";
 const orchestratorTextFields: readonly OrchestratorTextField[] = [
   "model",
   "bookkeepingModel",
+  "watchModel",
   ...consolidationFields,
   "hungAfterMinutes",
 ];
 const orchestratorTextLabels: Record<OrchestratorTextField, string> = {
   model: "Chat model",
   bookkeepingModel: "Bookkeeping model",
+  watchModel: "Watch model",
   nightlyAt: "Curate every night at",
   inboxThreshold: "Also curate when the inbox holds … proposals",
   minIntervalMinutes: "At most one inbox-started run every … minutes",
@@ -206,6 +251,7 @@ type FieldKey =
   | GitActionKind
   | "provider"
   | "bookkeepingProvider"
+  | "watchProvider"
   | OrchestratorTextField
   | "reviews.answerReadOnly"
   | SessionsField
@@ -479,13 +525,19 @@ export default function SettingsDialog({
       const current =
         field === "model"
           ? settings.orchestrator.model
-          : settings.orchestrator.bookkeeping.model;
+          : field === "watchModel"
+            ? settings.orchestrator.watch.model
+            : settings.orchestrator.bookkeeping.model;
       if (trimmed === current) {
         clearOrchestratorDraft(field);
         return;
       }
       patch =
-        field === "model" ? { model: trimmed } : { bookkeeping: { model: trimmed } };
+        field === "model"
+          ? { model: trimmed }
+          : field === "watchModel"
+            ? { watch: { model: trimmed } }
+            : { bookkeeping: { model: trimmed } };
     }
     const ok = await run(
       field,
@@ -512,20 +564,18 @@ export default function SettingsDialog({
    */
   const saveProvider = async (role: ModelRole, provider: OrchestratorProvider) => {
     if (!settings) return;
-    const chat = role === "chat";
-    const current = chat
-      ? settings.orchestrator.provider
-      : settings.orchestrator.bookkeeping.provider;
+    const current = roleChoiceOf(settings.orchestrator, role).provider;
     if (provider === current) return;
-    const modelField: OrchestratorTextField = chat ? "model" : "bookkeepingModel";
+    const { modelField, providerKey } = roleFields[role];
     const typed = orchestratorDrafts[modelField]?.trim();
     const model =
       typed && typed.length <= orchestratorLimits.modelLength ? typed : undefined;
-    const patch: SettingsPatch["orchestrator"] = chat
-      ? { provider, ...(model ? { model } : {}) }
-      : { bookkeeping: { provider, ...(model ? { model } : {}) } };
+    const patch: SettingsPatch["orchestrator"] =
+      role === "chat"
+        ? { provider, ...(model ? { model } : {}) }
+        : { [role]: { provider, ...(model ? { model } : {}) } };
     const ok = await run(
-      chat ? "provider" : "bookkeepingProvider",
+      providerKey,
       () => update({ orchestrator: patch }),
       "Could not save the provider.",
     );
@@ -736,33 +786,18 @@ export default function SettingsDialog({
           <SectionHeading id="settings-orchestrator" section="orchestrator" />
           {settings && (
             <>
-              {(["chat", "bookkeeping"] as const).map((role) => {
-                const chat = role === "chat";
-                const modelField: OrchestratorTextField = chat
-                  ? "model"
-                  : "bookkeepingModel";
-                const providerKey = chat ? "provider" : "bookkeepingProvider";
-                const choice = chat
-                  ? {
-                      provider: settings.orchestrator.provider,
-                      model: settings.orchestrator.model,
-                    }
-                  : settings.orchestrator.bookkeeping;
+              {modelRoles.map((role) => {
+                const { modelField, providerKey, title, about, providerLabel } = roleFields[role];
+                const choice = roleChoiceOf(settings.orchestrator, role);
                 return (
                   <div key={role} className="space-y-3 rounded-xl border border-border/60 p-4">
                     <div className="space-y-1">
-                      <p className="text-xs font-medium">
-                        {chat ? "Chat and curation" : "Bookkeeping"}
-                      </p>
-                      <p className="text-xs leading-relaxed text-muted-foreground">
-                        {chat
-                          ? "Talks with you, runs helper turns, and curates memory. A frontier model works best."
-                          : "Turns what changed between checks into items. A fast, inexpensive model is enough."}
-                      </p>
+                      <p className="text-xs font-medium">{title}</p>
+                      <p className="text-xs leading-relaxed text-muted-foreground">{about}</p>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <ProviderField
-                        label={chat ? "Chat provider" : "Bookkeeping provider"}
+                        label={providerLabel}
                         value={choice.provider}
                         saving={!!saving[providerKey]}
                         status={status[providerKey] ?? null}

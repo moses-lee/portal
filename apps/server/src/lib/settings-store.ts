@@ -57,6 +57,7 @@ export type SettingsFile = {
     provider?: OrchestratorProvider;
     model?: string;
     bookkeeping?: { provider?: OrchestratorProvider; model?: string };
+    watch?: { provider?: OrchestratorProvider; model?: string };
     consolidation?: Partial<ConsolidationSettings>;
     reviews?: { answerReadOnly?: boolean };
     stalls?: { hungAfterMinutes?: number };
@@ -226,6 +227,13 @@ function parseOrchestratorPatch(given: unknown): OrchestratorSettingsPatch {
     if (given.bookkeeping.model !== undefined) bookkeeping.model = required(checkModel(given.bookkeeping.model));
     patch.bookkeeping = bookkeeping;
   }
+  if (given.watch !== undefined) {
+    if (!isPlainObject(given.watch)) throw new SettingsError("orchestrator.watch must be an object.", 400);
+    const watch: NonNullable<OrchestratorSettingsPatch["watch"]> = {};
+    if (given.watch.provider !== undefined) watch.provider = required(checkProvider(given.watch.provider));
+    if (given.watch.model !== undefined) watch.model = required(checkModel(given.watch.model));
+    patch.watch = watch;
+  }
   if (given.consolidation !== undefined) {
     if (!isPlainObject(given.consolidation)) throw new SettingsError("orchestrator.consolidation must be an object.", 400);
     const consolidation: Partial<ConsolidationSettings> = {};
@@ -332,6 +340,14 @@ function parseOrchestratorFile(given: unknown): SettingsFile["orchestrator"] {
     const roleModel = checkModel(role.model);
     if ("value" in roleModel) bookkeeping.model = roleModel.value;
     if (Object.keys(bookkeeping).length > 0) section.bookkeeping = bookkeeping;
+  }
+  if (isPlainObject(given.watch)) {
+    const watch: NonNullable<NonNullable<SettingsFile["orchestrator"]>["watch"]> = {};
+    const roleProvider = checkProvider(given.watch.provider);
+    if ("value" in roleProvider) watch.provider = roleProvider.value;
+    const roleModel = checkModel(given.watch.model);
+    if ("value" in roleModel) watch.model = roleModel.value;
+    if (Object.keys(watch).length > 0) section.watch = watch;
   }
   if (isPlainObject(given.consolidation)) {
     const consolidation: Partial<ConsolidationSettings> = {};

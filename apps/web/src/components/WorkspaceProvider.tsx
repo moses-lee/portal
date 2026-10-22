@@ -16,6 +16,7 @@ import { applyWorkspaceOp, EMPTY_WORKSPACE, locateSession, WorkspaceError } from
 import { usePortalEvents } from "./portal/PortalLive";
 import { useSessions } from "./SessionsProvider";
 import { tabFromPath } from "@/lib/session-routes";
+import { useFocusReport } from "./workspace/useFocusReport";
 import {
   advancedSessions,
   idAliases,
@@ -340,6 +341,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const read = withoutUnread(unreadPanes, visible);
   if (read !== unreadPanes) setUnreadPanes(read);
   const unread = useMemo(() => unreadTabIds(workspace, unreadPanes), [workspace, unreadPanes]);
+
+  // What this tab shows, for the watches: a page surface over the workspace hides the session.
+  useFocusReport(covered ? null : focus.sessionId);
 
   const pending = inFlight > 0;
   const value = useMemo<WorkspaceContextValue>(

@@ -7,7 +7,10 @@
  * until its worker releases it with the next run time. A worker that died loses its claim once the
  * lease runs out, and the job becomes claimable again.
  */
-import type { Intent, IntentStatus, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus } from "@portal/contracts/jobs";
+import { sessionEventKinds } from "@portal/contracts/jobs";
+import type {
+  Intent, IntentStatus, Job, JobKind, JobRun, JobSchedule, JobStatus, RunKind, RunStatus, SessionEventKind, WatchEvent, WatchEvents, WatchSource,
+} from "@portal/contracts/jobs";
 import { httpError } from "../ops.ts";
 import { newId, normalizeScope } from "../store.ts";
 import type { Scope } from "../types.ts";
@@ -72,6 +75,8 @@ export type NewIntent = {
   cooldownMs?: number;
   threadId?: string | null;
   lastCheckedAt?: number | null;
+  source?: WatchSource;
+  events?: WatchEvents;
 };
 
 export type IntentChanges = Partial<Omit<Intent, "id" | "createdAt" | "updatedAt">>;
@@ -174,6 +179,45 @@ function text(value: string, what: string, max: number): string {
   return trimmed;
 }
 
+/** Handled event keys a watch keeps (the newest), events waiting for its run, and events the user saw. */
+export const MAX_HANDLED_EVENTS = 300;
+export const MAX_PENDING_EVENTS = 50;
+export const MAX_SEEN_EVENTS = 20;
+
+const isEventKind = (value: unknown): value is SessionEventKind => sessionEventKinds.includes(value as SessionEventKind);
+
+/** A stored source read leniently: anything malformed is a `poll` watch (what every watch was before sources). */
+export function normalizeSource(value: unknown): WatchSource {
+  const raw = value as Partial<{ type: string; sessionIds: unknown; on: unknown }> | null;
+  if (!raw || typeof raw !== "object") return { type: "poll" };
+  if (raw.type === "session" || raw.type === "portal_sessions") {
+    const sessionIds = Array.isArray(raw.sessionIds) ? [...new Set(raw.sessionIds.filter((id): id is string => typeof id === "string" && !!id))] : [];
+    const on = Array.isArray(raw.on) ? [...new Set(raw.on.filter(isEventKind))] : [];
+    return { type: raw.type, sessionIds, on: on.length ? on : [...sessionEventKinds] };
+  }
+  if (raw.type === "pull" || raw.type === "review") return { type: raw.type };
+  return { type: "poll" };
+}
+
+function eventList(value: unknown): WatchEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((event): event is WatchEvent => !!event && typeof event === "object" && typeof event.key === "string"
+    && isEventKind(event.kind) && typeof event.sessionId === "string" && typeof event.at === "number");
+}
+
+/** Stored events read leniently and capped (the oldest handled keys and seen events go first). */
+export function normalizeEvents(value: unknown): WatchEvents {
+  const raw = value as Partial<Record<keyof WatchEvents, unknown>> | null;
+  const handled = raw && Array.isArray(raw.handled) ? raw.handled.filter((key): key is string => typeof key === "string") : [];
+  return {
+    pending: eventList(raw?.pending).slice(-MAX_PENDING_EVENTS),
+    handled: [...new Set(handled)].slice(-MAX_HANDLED_EVENTS),
+    seen: eventList(raw?.seen).slice(-MAX_SEEN_EVENTS),
+  };
+}
+
+export const noEvents = (): WatchEvents => ({ pending: [], handled: [], seen: [] });
+
 function checkIntent(intent: Intent): Intent {
   if (!intentStatuses.includes(intent.status)) throw httpError(`Unknown intent status "${intent.status}".`, 400);
   if (intent.fireBudget !== null && (!Number.isSafeInteger(intent.fireBudget) || intent.fireBudget < 1)) throw httpError("fireBudget is a positive whole number or null.", 400);
@@ -187,7 +231,8 @@ export function buildIntent(input: NewIntent, id: string, at: number): Intent {
     id, text: text(input.text, "text", 2000), trigger: text(input.trigger, "trigger", 1000), action: text(input.action, "action", 1000),
     notes: input.notes ?? "", scope: normalizeScope(input.scope), status: input.status ?? "active", expiresAt: input.expiresAt ?? null,
     fireBudget: input.fireBudget === undefined ? 1 : input.fireBudget, fires: 0, cooldownMs: input.cooldownMs ?? 0, lastFiredAt: null, lastFiredTitle: null,
-    lastCheckedAt: input.lastCheckedAt ?? null, threadId: input.threadId ?? null, createdAt: at, updatedAt: at,
+    lastCheckedAt: input.lastCheckedAt ?? null, threadId: input.threadId ?? null, source: normalizeSource(input.source),
+    events: normalizeEvents(input.events ?? noEvents()), renewals: 0, createdAt: at, updatedAt: at,
   });
 }
 
@@ -197,6 +242,8 @@ export function patchIntent(current: Intent, changes: IntentChanges, at: number)
   if (changes.trigger !== undefined) next.trigger = text(changes.trigger, "trigger", 1000);
   if (changes.action !== undefined) next.action = text(changes.action, "action", 1000);
   if (changes.scope !== undefined) next.scope = normalizeScope(changes.scope);
+  if (changes.source !== undefined) next.source = normalizeSource(changes.source);
+  if (changes.events !== undefined) next.events = normalizeEvents(changes.events);
   return checkIntent(next);
 }
 

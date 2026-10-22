@@ -7,6 +7,9 @@
  * the body said.
  *
  *   GET  /api/workspace       -> { workspace }
+ *   POST /api/workspace/focus body: { deviceId, sessionId: string | null, visible } -> { ok: true }
+ *                                what one device shows, sent on every change and every 30 s; a watch
+ *                                does not report a session event while a device shows that session
  *   POST /api/workspace/ops   body: one WorkspaceOp -> { workspace, location? }
  *                                400 for a malformed op, 404 for an unknown session, tab, or pane,
  *                                409 when the reducer refuses (a cap reached, a session listed twice,
@@ -39,6 +42,17 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const workspace = await workspaceFor(req, reply);
     if (!workspace) return reply;
     return { workspace: await workspace.read() };
+  });
+
+  app.post("/api/workspace/focus", async (req, reply) => {
+    if (rejectCrossOrigin(req, reply)) return reply;
+    const body = (req.body ?? {}) as { deviceId?: unknown; sessionId?: unknown; visible?: unknown };
+    const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim() : "";
+    if (!deviceId || deviceId.length > 100) return reply.code(400).send({ error: "deviceId must be a non-empty string of at most 100 characters." });
+    if (body.sessionId !== null && typeof body.sessionId !== "string") return reply.code(400).send({ error: "sessionId must be a string or null." });
+    if (typeof body.visible !== "boolean") return reply.code(400).send({ error: "visible must be a boolean." });
+    ctx.presence.focus(deviceId, { sessionId: body.sessionId || null, visible: body.visible });
+    return { ok: true };
   });
 
   app.post("/api/workspace/ops", async (req, reply) => {

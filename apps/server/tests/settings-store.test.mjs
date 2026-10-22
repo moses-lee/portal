@@ -156,6 +156,7 @@ for (const [name, make] of backends) {
       provider: "anthropic",
       model: "claude-x",
       bookkeeping: orchestratorDefaults.bookkeeping,
+      watch: orchestratorDefaults.watch,
       consolidation: { ...orchestratorDefaults.consolidation, minIntervalMinutes: 90 },
       reviews: orchestratorDefaults.reviews,
       stalls: orchestratorDefaults.stalls,
