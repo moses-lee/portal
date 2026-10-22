@@ -63,6 +63,18 @@ export type SettingsPatch = {
   monitoring?: MonitoringSettingsPatch;
 };
 
+/**
+ * What the settings dialog's Import & Export carries: every setting, defaults included, and no API
+ * keys. Keys are stored and replaced on their own; an export never says which are stored.
+ */
+export type SettingsExport = Omit<Settings, "orchestrator"> & { orchestrator: Omit<OrchestratorSettings, "apiKeys"> };
+
+export function exportSettings(settings: Settings): SettingsExport {
+  const orchestrator: Partial<OrchestratorSettings> = { ...settings.orchestrator };
+  delete orchestrator.apiKeys;
+  return { ...settings, orchestrator: orchestrator as SettingsExport["orchestrator"] };
+}
+
 export const gitActionKinds: readonly GitActionKind[] = ["checks", "conflicts", "review"];
 
 /**

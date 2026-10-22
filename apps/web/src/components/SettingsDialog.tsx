@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Bot, Castle, Database, Gauge, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, Bot, Castle, Database, Gauge, GitBranch, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -68,6 +68,7 @@ import {
 } from "@/lib/scripts";
 import {
   defaultSettings,
+  exportSettings,
   gitActionKinds,
   idleStopLimits,
   isDiskLevelGb,
@@ -85,6 +86,7 @@ import {
 import type { RemovedProjectSummary } from "@/lib/types";
 import { missingWatchedFolders } from "@/lib/monitoring";
 import type { FolderCheckResult } from "@portal/contracts/monitoring";
+import { copyText } from "@/lib/clipboard";
 import { isAbort, portalJson, portalSend } from "@/lib/orchestrator/api";
 import type { RoomEnvironment, RoomState, RoomWeather } from "@portal/contracts/room";
 import { LAYOUT_VERSION } from "@portal/shared/room";
@@ -143,6 +145,12 @@ const sectionMeta: Record<
     description:
       "The room behind Portal: where it is, the weather through its window, and how its furniture is laid out. Portal looks the location up from the server's own address unless PORTAL_LOCATION sets it.",
     icon: Castle,
+  },
+  importExport: {
+    label: "Import & Export",
+    description:
+      "Every setting as JSON, to copy elsewhere or paste back. API keys are never included; add them in Talk to Portal.",
+    icon: ArrowLeftRight,
   },
 };
 
@@ -1187,6 +1195,27 @@ export default function SettingsDialog({
         </section>
       )}
 
+      {active === "importExport" && (
+        <section aria-labelledby="settings-import-export" className="space-y-4">
+          <SectionHeading id="settings-import-export" section="importExport" />
+          {settings && (
+            <ImportExportSettings
+              settings={settings}
+              onImported={() => {
+                // Unsaved edits from before the import must not overwrite it when the dialog closes.
+                resetFeedback();
+                setDrafts({});
+                setOrchestratorDrafts({});
+                setScriptDrafts({});
+                setSessionsDrafts({});
+                setIdleStopDraft(undefined);
+                setMonitoringDrafts({});
+              }}
+            />
+          )}
+        </section>
+      )}
+
       {active === "scripts" && (
         <section aria-labelledby="settings-scripts" className="space-y-6">
           <SectionHeading id="settings-scripts" section="scripts" />
@@ -1815,6 +1844,140 @@ function RoomSettings() {
 }
 
 /** A section pane's heading: the same label as its nav entry, then what the section is for. */
+/**
+ * The Import & Export section: every setting as JSON to copy, and a box to paste one into. Apply
+ * checks the paste is JSON; the server then refuses anything but a full export with valid values
+ * (`PUT /api/settings`) before replacing every setting. API keys are part of neither.
+ */
+function ImportExportSettings({
+  settings,
+  onImported,
+}: {
+  settings: Settings;
+  onImported: () => void;
+}) {
+  const { importSettings } = useSettings();
+  const id = useId();
+  const exported = JSON.stringify(exportSettings(settings), null, 2);
+  const [copyResult, setCopyResult] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
+
+  const copy = async () => {
+    setCopyResult(
+      (await copyText(exported))
+        ? "Copied."
+        : "Could not copy. Select the text and copy it instead.",
+    );
+  };
+
+  const apply = async () => {
+    setError(null);
+    setApplied(false);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      setError(`Not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await importSettings(parsed);
+      setText("");
+      setApplied(true);
+      onImported();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not import settings. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-3 rounded-xl border border-border/60 p-4">
+        <div className="space-y-1">
+          <label htmlFor={`${id}-export`} className="text-xs font-medium">
+            Export
+          </label>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            The current settings, defaults included.
+          </p>
+        </div>
+        <Textarea
+          id={`${id}-export`}
+          rows={10}
+          readOnly
+          value={exported}
+          spellCheck={false}
+          wrap="off"
+          className="max-h-64 font-mono text-[11px]"
+          onFocus={(e) => e.currentTarget.select()}
+        />
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" variant="secondary" onClick={() => void copy()}>
+            Copy
+          </Button>
+          {copyResult && (
+            <p role="status" className="text-[11px] text-muted-foreground">
+              {copyResult}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-xl border border-border/60 p-4">
+        <div className="space-y-1">
+          <label htmlFor={`${id}-import`} className="text-xs font-medium">
+            Import
+          </label>
+          <p id={`${id}-import-description`} className="text-xs leading-relaxed text-muted-foreground">
+            Paste a full export. Apply replaces every setting with it; nothing changes unless all of it is valid.
+          </p>
+        </div>
+        <Textarea
+          id={`${id}-import`}
+          rows={10}
+          value={text}
+          disabled={busy}
+          spellCheck={false}
+          placeholder={'{\n  "version": 1,\n  …\n}'}
+          wrap="off"
+          className="max-h-64 font-mono text-[11px]"
+          aria-describedby={`${id}-import-description${error ? ` ${id}-import-error` : ""}`}
+          aria-invalid={!!error || undefined}
+          onChange={(e) => {
+            setText(e.target.value);
+            setApplied(false);
+          }}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={busy || !text.trim()}
+          onClick={() => void apply()}
+        >
+          {busy ? "Applying…" : "Apply"}
+        </Button>
+        {error && (
+          <p id={`${id}-import-error`} role="alert" className="text-[11px] text-destructive">
+            {error}
+          </p>
+        )}
+        {applied && (
+          <p role="status" className="text-[11px] text-muted-foreground">
+            Settings imported.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SectionHeading({
   id,
   section,

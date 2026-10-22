@@ -5,7 +5,7 @@ import type { OrchestratorProvider, OrchestratorSettings, OrchestratorSettingsPa
 import type { ConsolidationSettings } from "@portal/contracts/orchestrator";
 import { gitActionKinds, idleStopLimits, isClockTime, isHungAfterMinutes, isIdleStopMinutes, isLifecycleHours, isOrchestratorProvider, orchestratorLimits, sessionsLimits } from "@portal/shared/settings";
 import type { GitActionKind, MonitoringSettingsPatch, SessionsSettingsPatch, Settings, SettingsPatch } from "@portal/shared/settings";
-import { cleanWatchedFolders, isDiskLevelGb, isWatchedFolder, monitoringLimits } from "@portal/shared/settings";
+import { cleanWatchedFolders, defaultSettings, exportSettings, isDiskLevelGb, isWatchedFolder, monitoringLimits } from "@portal/shared/settings";
 import { expandHome } from "@portal/shared/monitoring";
 import { isScriptKind, scriptFields, scriptKinds, scriptLimits } from "@portal/shared/scripts";
 import type { ScriptKind, ScriptSettingsPatch, ScriptsPatch } from "@portal/shared/scripts";
@@ -368,6 +368,33 @@ export function parseSettingsPatch(input: unknown, { home = os.homedir() }: { ho
   if (input.sessions !== undefined) patch.sessions = parseSessionsPatch(input.sessions);
   if (input.monitoring !== undefined) patch.monitoring = parseMonitoringPatch(input.monitoring, home);
   return patch;
+}
+
+/**
+ * Check an import (`PUT /api/settings`) against the export's shape: every section and field present,
+ * nothing else, and no API keys. The values are checked afterwards, as a PATCH body's are.
+ */
+export function checkSettingsImport(input: unknown): void {
+  if (!isPlainObject(input)) throw new SettingsError("Expected a JSON object.", 400);
+  if (isPlainObject(input.orchestrator) && Object.hasOwn(input.orchestrator, "apiKeys")) {
+    throw new SettingsError("API keys cannot be imported; add them in the Talk to Portal section.", 400);
+  }
+  checkImportShape(exportSettings(defaultSettings), input, "");
+  if (input.version !== 1) throw new SettingsError("version must be 1.", 400);
+}
+
+function checkImportShape(template: Record<string, unknown>, given: Record<string, unknown>, at: string): void {
+  const where = (key: string) => (at ? `${at}.${key}` : key);
+  for (const [key, expected] of Object.entries(template)) {
+    if (!Object.hasOwn(given, key)) throw new SettingsError(`${where(key)} is missing; an import must include every setting.`, 400);
+    if (!isPlainObject(expected)) continue;
+    const value = given[key];
+    if (!isPlainObject(value)) throw new SettingsError(`${where(key)} must be an object.`, 400);
+    checkImportShape(expected, value, where(key));
+  }
+  for (const key of Object.keys(given)) {
+    if (!Object.hasOwn(template, key)) throw new SettingsError(`Unknown setting ${where(key)}.`, 400);
+  }
 }
 
 /** The scripts section of a settings file, field by field like the others; a bad value falls back to its default. */
