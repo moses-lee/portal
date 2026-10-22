@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { openPage, showPage } from "./surfaces";
 import { emitPortal, portalItem, setupPortal, tabUrl } from "./fixtures";
-import { activityEntries, mainThread, octoEntity, reviewThread } from "./orchestrator-fixtures";
+import { activityEntries, octoEntity } from "./orchestrator-fixtures";
 
 test("Activity shows the log newest first with its links, and filters by kind prefix", async ({ page }, info) => {
   await setupPortal(page, {
-    portal: { threads: [mainThread, reviewThread], activity: activityEntries(), entities: [octoEntity] },
+    portal: { activity: activityEntries(), entities: [octoEntity] },
   });
   const searches: string[] = [];
   page.on("request", (request) => {
@@ -17,7 +17,6 @@ test("Activity shows the log newest first with its links, and filters by kind pr
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText("Proposed: octocat prefers squash merges.");
   await expect(rows.nth(1)).toContainText("Scheduled a check of example/portal#42 every 2 minutes.");
-  await expect(rows.nth(1).getByRole("button", { name: reviewThread.title })).toBeVisible();
   await expect(rows.nth(1).getByRole("link", { name: /example\/portal#42/ })).toHaveAttribute("href", "https://github.com/example/portal/pull/42");
   await rows.nth(1).getByRole("button", { name: "Show details" }).click();
   await expect(rows.nth(1).getByText('"everyMs": 120000')).toBeVisible();
@@ -61,9 +60,9 @@ test("live entries are prepended when they match the filter, and Load older page
   expect(urls.some((search) => search.includes("kind=tool."))).toBe(true);
 });
 
-test("activity links open the thread, the item, the session, and memory", async ({ page }) => {
+test("activity links open the item, the session, and memory", async ({ page }) => {
   await setupPortal(page, {
-    portal: { threads: [mainThread, reviewThread], activity: activityEntries(), entities: [octoEntity] },
+    portal: { activity: activityEntries(), entities: [octoEntity] },
   });
   await openPage(page, "activity");
   const rows = page.getByRole("list", { name: "Activity log" }).getByRole("listitem");
@@ -77,14 +76,6 @@ test("activity links open the thread, the item, the session, and memory", async 
   await rows.nth(0).getByRole("button", { name: "Memory record" }).click();
   await expect(page).toHaveURL("/");
   await expect(page.getByRole("region", { name: "octocat", exact: true })).toBeVisible();
-  await showPage(page, "activity");
-
-  await rows.nth(1).getByRole("button", { name: reviewThread.title }).click();
-  const agent = page.getByRole("main", { name: "Agent", exact: true });
-  await expect(agent).toBeVisible();
-  await expect(agent.getByRole("tab", { name: reviewThread.title, exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page).toHaveURL("/");
-  await agent.getByRole("button", { name: "Close Agent" }).click();
   await showPage(page, "activity");
 
   // A session link dismisses the page and opens the room in a workspace tab.

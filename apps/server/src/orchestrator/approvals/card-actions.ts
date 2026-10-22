@@ -31,7 +31,7 @@ export async function runItemAction(
     case "start_session":
       // The session exists even when its prompt failed; the caller gets both facts. Its background tab is opened before the first prompt.
       outcome = await startSession(deps, { projectId: action.projectId, agentId: action.agentId, prompt: action.prompt }, {
-        workspace: hub.workspace, context: { actor: "user", ...(item?.links.threadId ? { threadId: item.links.threadId } : {}) },
+        workspace: hub.workspace, context: { actor: "user" },
       });
       // Portal started it for the user, so the standing watch rule takes it on.
       if (outcome.sessionId) await hub.jobs?.sessionStarted?.(outcome.sessionId);

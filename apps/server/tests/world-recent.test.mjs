@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyScope } from "../src/orchestrator/types.ts";
 import {
-  FRESH_MS, RECENT_CHANGE_LINES, coveredByIntent, freshAndMine, previousAnswerAt, renderRecentChanges, selectRecentChanges, threadRefs, touchesThread,
+  FRESH_MS, RECENT_CHANGE_LINES, chatRefs, coveredByIntent, freshAndMine, previousAnswerAt, renderRecentChanges, selectRecentChanges, touchesChat,
 } from "../src/orchestrator/world/recent.ts";
 import { T0 } from "./fixtures/orchestrator-fakes.mjs";
 
@@ -21,11 +21,11 @@ function row(overrides = {}) {
   };
 }
 
-const noRefs = () => threadRefs({ scope: emptyScope(), messages: [], items: [] });
+const noRefs = () => chatRefs({ scope: emptyScope(), messages: [], items: [] });
 const select = (rows, overrides = {}) => selectRecentChanges({ rows, now: T0, since: T0 - HOUR, refs: noRefs(), intents: [], dismissed: new Set(), ...overrides });
 const message = (role, text, metadata = {}) => ({ id: `${role}-${text}`, role, parts: [{ type: "text", text }], metadata: { at: T0, ...metadata } });
 
-test("threadRefs reads what a thread named: scope, touched items' links, PRs and ids in its text and tool inputs", () => {
+test("chatRefs reads what the chat named: scope, touched items' links, PRs and ids in its text and tool inputs", () => {
   const scope = { ...emptyScope(), sessionIds: ["s-scope"], repos: ["Acme/Lib"] };
   const messages = [
     message("user", "How is acme/app#12 doing? And PR 34, pull request #56, https://github.com/acme/web/pull/78"),
@@ -34,22 +34,22 @@ test("threadRefs reads what a thread named: scope, touched items' links, PRs and
       { type: "tool-get_session", toolCallId: "c2", state: "output-available", input: { id: "0f3c9a2e-session" }, output: {} },
     ] },
   ];
-  const refs = threadRefs({ scope, messages, items: [{ id: "i1", links: { projectId: "p-item", pull: { repo: "acme/app", number: 3, url: "u" } } }] });
+  const refs = chatRefs({ scope, messages, items: [{ id: "i1", links: { projectId: "p-item", pull: { repo: "acme/app", number: 3, url: "u" } } }] });
   assert.deepEqual([...refs.sessionIds], ["s-scope"]);
   assert.deepEqual([...refs.projectIds], ["p-item"]);
   assert.deepEqual([...refs.repos], ["acme/lib"]);
   assert.ok(refs.pulls.has("acme/app#3") && refs.pulls.has("acme/app#12") && refs.pulls.has("acme/web#78"));
   for (const number of [12, 34, 56, 90]) assert.ok(refs.numbers.has(number), `#${number}`);
-  assert.ok(touchesThread({ subject: "session:0f3c9a2e-session", refs: { sessionId: "0f3c9a2e-session" } }, refs), "an id in a tool input");
-  assert.ok(touchesThread(row({ number: 34 }), refs), "a bare PR number");
-  assert.ok(touchesThread({ ...row({ number: 5 }), refs: { pull: { repo: "acme/lib", number: 5, url: "u" } } }, refs), "a repo in the thread's scope");
-  assert.ok(!touchesThread(row({ number: 35 }), refs));
+  assert.ok(touchesChat({ subject: "session:0f3c9a2e-session", refs: { sessionId: "0f3c9a2e-session" } }, refs), "an id in a tool input");
+  assert.ok(touchesChat(row({ number: 34 }), refs), "a bare PR number");
+  assert.ok(touchesChat({ ...row({ number: 5 }), refs: { pull: { repo: "acme/lib", number: 5, url: "u" } } }, refs), "a repo in the turn's scope");
+  assert.ok(!touchesChat(row({ number: 35 }), refs));
   // A project speaks for its own worktree and folder, not for every session in it.
-  assert.ok(touchesThread({ subject: "worktree:p-item", refs: { projectId: "p-item" } }, refs));
-  assert.ok(!touchesThread({ subject: "session:other", refs: { sessionId: "other", projectId: "p-item" } }, refs));
+  assert.ok(touchesChat({ subject: "worktree:p-item", refs: { projectId: "p-item" } }, refs));
+  assert.ok(!touchesChat({ subject: "session:other", refs: { sessionId: "other", projectId: "p-item" } }, refs));
 });
 
-test("the keep rules: touching the thread, fresh and the user's own, or a new review request; nothing else", () => {
+test("the keep rules: touching the chat, fresh and the user's own, or a new review request; nothing else", () => {
   const touching = row({ number: 12 });
   const freshMine = row({ number: 20, mine: true, activeAt: T0 - 2 * HOUR });
   const staleMine = row({ number: 21, mine: true, activeAt: T0 - FRESH_MS - MIN });
@@ -57,7 +57,7 @@ test("the keep rules: touching the thread, fresh and the user's own, or a new re
   const review = row({ number: 30, subject: "review:acme/app#30", kind: "pr_review_requested", fingerprint: "pr_review_requested:acme/app" });
   const others = row({ number: 40 });
   const dirty = row({ subject: "worktree:w1", kind: "worktree_dirty", fingerprint: "worktree_dirty:w1", refs: { projectId: "w1" } });
-  const refs = threadRefs({ scope: emptyScope(), messages: [message("user", "what about #12?")], items: [] });
+  const refs = chatRefs({ scope: emptyScope(), messages: [message("user", "what about #12?")], items: [] });
   const { shown, more } = select([touching, freshMine, staleMine, freshSession, review, others, dirty], { refs });
   assert.deepEqual(shown.map((entry) => entry.subject).sort(), [touching, freshMine, freshSession, review].map((entry) => entry.subject).sort());
   assert.equal(more, 0);
@@ -67,7 +67,7 @@ test("the keep rules: touching the thread, fresh and the user's own, or a new re
   assert.equal(freshAndMine({ ...dirty, mine: true, activeAt: T0 }, T0), false, "worktrees are never fresh news");
 });
 
-test("rows from before the thread's previous answer, rows an active intent covers, and dismissed rows are dropped", () => {
+test("rows from before the previous chat answer, rows an active intent covers, and dismissed rows are dropped", () => {
   const mine = { mine: true, activeAt: T0 - HOUR };
   const old = row({ number: 1, ...mine, at: T0 - 2 * HOUR });
   const watched = row({ number: 2, ...mine });
@@ -93,7 +93,7 @@ test("at most RECENT_CHANGE_LINES rows, newest first, then a +N more line; nothi
   assert.equal(renderRecentChanges(select([]), T0), "");
 });
 
-test("previousAnswerAt is the thread's last chat answer before the newest user message; job notes and old tick notes do not count", () => {
+test("previousAnswerAt is the last chat answer before the newest user message; job notes and old tick notes do not count", () => {
   assert.equal(previousAnswerAt([message("user", "hi")]), null);
   const messages = [
     message("user", "one", { at: T0 - 5 * HOUR }),
@@ -106,14 +106,14 @@ test("previousAnswerAt is the thread's last chat answer before the newest user m
   assert.equal(previousAnswerAt([message("assistant", "from before runs", { at: T0 - HOUR }), message("user", "x")]), T0 - HOUR);
 });
 
-test("a scope's id prefix and the World section's short id in the thread's text both name the full id of a change", () => {
+test("a scope's id prefix and the World section's short id in the chat's text both name the full id of a change", () => {
   const id = "17329ac6-0c1e-4c4f-9a57-3d2b1f0e9a01";
   const change = { subject: `session:${id}`, refs: { sessionId: id } };
-  const scoped = threadRefs({ scope: { ...emptyScope(), sessionIds: ["17329ac6"] }, messages: [], items: [] });
-  assert.ok(touchesThread(change, scoped), "a prefix stored in the scope");
-  const said = threadRefs({ scope: emptyScope(), messages: [message("assistant", "The review [17329ac6] is still working.")], items: [] });
-  assert.ok(touchesThread(change, said), "the short id the model saw and repeated");
-  assert.ok(!touchesThread(change, threadRefs({ scope: { ...emptyScope(), sessionIds: ["173"] }, messages: [], items: [] })), "too short to count");
+  const scoped = chatRefs({ scope: { ...emptyScope(), sessionIds: ["17329ac6"] }, messages: [], items: [] });
+  assert.ok(touchesChat(change, scoped), "a prefix stored in the scope");
+  const said = chatRefs({ scope: emptyScope(), messages: [message("assistant", "The review [17329ac6] is still working.")], items: [] });
+  assert.ok(touchesChat(change, said), "the short id the model saw and repeated");
+  assert.ok(!touchesChat(change, chatRefs({ scope: { ...emptyScope(), sessionIds: ["173"] }, messages: [], items: [] })), "too short to count");
   assert.ok(coveredByIntent(change, [{ scope: { ...emptyScope(), sessionIds: ["17329ac6"] } }]));
   assert.ok(!coveredByIntent(change, [{ scope: { ...emptyScope(), sessionIds: ["5e0f1b2c"] } }]));
 });

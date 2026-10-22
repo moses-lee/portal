@@ -340,7 +340,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (advanced.length === 0) return;
     setUnreadPanes((prev) => unreadAfter(prev, workspaceRef.current, advanced, visible));
   }, [sessions, visible]);
-  // Showing a pane reads it: derived during render, the way the Portal page clears a thread's mark.
+  // Showing a pane reads it: derived during render, the way opening Agent clears the chat's mark.
   const read = withoutUnread(unreadPanes, visible);
   if (read !== unreadPanes) setUnreadPanes(read);
   const unread = useMemo(() => unreadTabIds(workspace, unreadPanes), [workspace, unreadPanes]);

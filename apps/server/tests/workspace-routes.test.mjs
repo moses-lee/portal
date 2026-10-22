@@ -218,9 +218,9 @@ test("GET /api/portal/stream opens with the workspace after the intent list and 
     }
   }
   const opening = [];
-  for (let i = 0; i < 6; i++) opening.push(await next());
-  assert.deepEqual(opening.map((event) => event.type), ["status", "items", "threads", "approvals", "intents", "workspace"]);
-  assert.deepEqual(opening[5].workspace, initial);
+  for (let i = 0; i < 5; i++) opening.push(await next());
+  assert.deepEqual(opening.map((event) => event.type), ["status", "items", "approvals", "intents", "workspace"]);
+  assert.deepEqual(opening[4].workspace, initial);
 
   // No keep-alive, or closing the app waits for the idle socket to time out.
   const posted = await fetch(`http://127.0.0.1:${port}/api/workspace/ops`, {
@@ -285,7 +285,7 @@ test("POST /api/portal/messages takes a view beside the message: the turn's prom
   assert.match(system(), /\nYou are looking at: session s1 \(Fix the login bug\), in tab "Fix the login bug \+ Untitled"\.$/);
   assert.match(system(), /Workspace tabs:\n- "Fix the login bug \+ Untitled" \[[0-9a-f]{8}\]: s1 \(idle\), s2 \(idle\)/, "the World section lists the tabs");
 
-  const page = await inject("POST", "/api/portal/threads/main/messages", { message: message("u2"), view: { sessionId: null, tabId: null, paneId: null } });
+  const page = await inject("POST", "/api/portal/messages", { message: message("u2"), view: { sessionId: null, tabId: null, paneId: null } });
   assert.equal(page.statusCode, 200, page.body);
   await flush();
   assert.match(system(), /\nYou are looking at: the Portal page, no session\.$/);

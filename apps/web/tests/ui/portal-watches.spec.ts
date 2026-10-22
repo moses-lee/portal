@@ -2,13 +2,12 @@ import { expect, test } from "@playwright/test";
 import { openPage } from "./surfaces";
 import { emitPortal, portalStatus, setupPortal } from "./fixtures";
 import type { Intent } from "../../src/lib/orchestrator/types";
-import { orchestratorFixtureTime, failedRun, helperJob, helperRun, intent, intentJob, mainThread, nightlyJob, reviewThread } from "./orchestrator-fixtures";
+import { orchestratorFixtureTime, failedRun, helperJob, helperRun, intent, intentJob, nightlyJob } from "./orchestrator-fixtures";
 
 // Fixture timestamps are created at module load; the full suite may reach this file minutes later.
 test.beforeEach(async ({ page }) => { await page.clock.setFixedTime(orchestratorFixtureTime); });
 
 const portal = () => ({
-  threads: [mainThread, reviewThread],
   intents: [intent],
   jobs: [helperJob, intentJob, nightlyJob],
   runs: [helperRun, failedRun],

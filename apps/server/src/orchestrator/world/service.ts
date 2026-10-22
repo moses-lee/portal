@@ -9,13 +9,13 @@
  * the network. Local rebuilds are kept in memory only; the store holds full builds.
  */
 import type { WorldResponse, WorldState } from "@portal/contracts/world";
-import { MAIN_THREAD_ID, type Scope } from "@portal/contracts/orchestrator";
+import type { Scope } from "@portal/contracts/orchestrator";
 import { type DismissalOutcome, diffSnapshots } from "../digest.ts";
 import type { OrchestratorHub, WorldRefresh, WorldService } from "../hub.ts";
 import { type WorldCache, buildWorld, createWorldCache } from "./builder.ts";
 import { type ChangeStore, MAX_CHANGE_LIMIT, createMemoryChangeStore, recordChanges } from "./changes.ts";
 import { createPgChangeStore, createPgWorldStore } from "./pg-store.ts";
-import { RECENT_CHANGES_WINDOW_MS, previousAnswerAt, renderRecentChanges, selectRecentChanges, threadRefs } from "./recent.ts";
+import { RECENT_CHANGES_WINDOW_MS, chatRefs, previousAnswerAt, renderRecentChanges, selectRecentChanges } from "./recent.ts";
 import { type RenderOptions, estimateTokens, renderWorld } from "./render.ts";
 import type { PullLookupOptions } from "./resolve.ts";
 import { KEEP_WORLD_BUILDS, type WorldBuild, type WorldStore, createMemoryWorldStore } from "./store.ts";
@@ -157,16 +157,16 @@ export function createWorldService(hub: OrchestratorHub, options: WorldOptions =
 
   const render = (world: WorldState, opts?: RenderOptions) => renderWorld(world, opts);
 
-  async function recentChanges({ threadId, scope }: { threadId: string | null; scope: Scope }): Promise<string> {
+  async function recentChanges({ scope }: { scope: Scope }): Promise<string> {
     const now = hub.timers.now();
-    const messages = await hub.store.readMessages(threadId ?? MAIN_THREAD_ID);
+    const messages = await hub.store.readMessages();
     const since = previousAnswerAt(messages) ?? now - RECENT_CHANGES_WINDOW_MS;
     const [rows, items, intents] = await Promise.all([
       changes.list({ since, limit: MAX_CHANGE_LIMIT }), hub.store.listItems(), hub.jobs.listIntents({ status: ["active"] }),
     ]);
     if (rows.length === 0) return "";
     const dismissed = new Set(items.filter((item) => item.status === "dismissed").map((item) => item.fingerprint));
-    const selected = selectRecentChanges({ rows, now, since, refs: threadRefs({ scope, messages, items }), intents, dismissed });
+    const selected = selectRecentChanges({ rows, now, since, refs: chatRefs({ scope, messages, items }), intents, dismissed });
     return renderRecentChanges(selected, now);
   }
 

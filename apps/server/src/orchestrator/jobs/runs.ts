@@ -39,7 +39,7 @@ export function createRuns(hub: OrchestratorHub, store: JobsStore) {
       return run;
     }
     const draft: JobRun = {
-      id: newId(), jobId: input.jobId ?? null, kind: input.kind, threadId: input.threadId ?? null, parentRunId: input.parentRunId ?? null,
+      id: newId(), jobId: input.jobId ?? null, kind: input.kind, parentRunId: input.parentRunId ?? null,
       status: "running", trigger: input.trigger, startedAt: hub.timers.now(), finishedAt: null, model: input.model ?? null, usage: null,
       log: [], result: null, summary: input.summary ?? null, error: null,
     };
@@ -72,7 +72,7 @@ export function createRuns(hub: OrchestratorHub, store: JobsStore) {
       void hub.activity.log({
         actor: "system", kind: "run.finished",
         summary: `${run.kind === "intent_check" ? "Watch check" : run.kind === "helper" ? "Helper" : "Job"} ${run.status.replace("_", " ")}${run.summary ? `: ${run.summary}` : ""}`,
-        refs: { runId: run.id, ...(run.jobId ? { jobId: run.jobId } : {}), ...(run.threadId ? { threadId: run.threadId } : {}) },
+        refs: { runId: run.id, ...(run.jobId ? { jobId: run.jobId } : {}) },
         detail: { status: run.status, trigger: run.trigger, ...(run.error ? { error: run.error } : {}), ...(run.usage ? { usage: run.usage } : {}) },
       });
     }

@@ -32,7 +32,7 @@ function withoutNode<T extends { node?: unknown }>(props: T): Omit<T, "node"> {
 
 /**
  * A link in a reply (docs/FILES.md, "Agent markdown links"), by `classifyHref`: internal links open
- * their workspace tab, page overlay, or Agent thread in place; file paths open a file pane;
+ * their workspace tab, page overlay, or the Agent chat in place; file paths open a file pane;
  * everything else opens in a new browser tab. Without a working directory, a relative path is
  * left as text: there is nothing to resolve it against.
  * Paths are recognised without the origin; a full URL on this origin once the browser has said what it is.

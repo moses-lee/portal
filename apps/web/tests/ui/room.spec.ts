@@ -352,7 +352,7 @@ test("live objects: a session waiting on approval puts its robot by the door, an
     portal: {
       status: {
         counts: { needsYou: 14, inbox: 0, approvals: 1, intents: 0 },
-        runs: [{ id: "r1", kind: "consolidate", jobId: "consolidate", threadId: null, startedAt: Date.now(), summary: "Curating memory" }],
+        runs: [{ id: "r1", kind: "consolidate", jobId: "consolidate", startedAt: Date.now(), summary: "Curating memory" }],
       },
     },
   });

@@ -59,13 +59,13 @@ export function intentFromWatch(watch: LegacyWatch, now: number): { intent: Inte
   const intent: Intent = {
     id: watch.id, text: watch.intent.trim() || "(no description)", trigger: LEGACY_TRIGGER, action: LEGACY_ACTION, notes: watch.notes,
     scope: normalizeScope({ projectIds: watch.links?.projectIds, sessionIds: watch.links?.sessionIds, pulls, repos: pulls.map((pull) => pull.repo) }),
-    status, expiresAt: null, fireBudget: null, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: watch.lastCheckedAt, threadId: null,
+    status, expiresAt: null, fireBudget: null, fires: 0, cooldownMs: 0, lastFiredAt: null, lastFiredTitle: null, lastCheckedAt: watch.lastCheckedAt,
     source: { type: "poll" }, events: noEvents(), renewals: 0, createdAt: watch.createdAt, updatedAt: watch.updatedAt,
   };
   const job: Job | null = status !== "active" ? null : {
     id: legacyCheckJobId(watch.id), kind: "intent_check", title: checkTitle(intent.text), schedule: { type: "every", everyMs: DEFAULT_CHECK_MS },
     payload: { intentId: watch.id }, status: "active", nextRunAt: now + DEFAULT_CHECK_MS, lastRunAt: watch.lastCheckedAt, lastRunId: null,
-    intentId: watch.id, threadId: null, createdBy: "system", failures: 0, createdAt: now, updatedAt: now,
+    intentId: watch.id, createdBy: "system", failures: 0, createdAt: now, updatedAt: now,
   };
   return { intent, job };
 }
@@ -88,7 +88,7 @@ export function itemFromLegacy(legacy: LegacyItem): Item {
 export function runFromTick(report: LegacyTickReport): JobRun {
   const failed = !!report.error && report.error !== "not ready" && report.error !== "busy";
   return {
-    id: report.id, jobId: TICK_JOB_ID, kind: "tick", threadId: null, parentRunId: null, status: failed ? "failed" : "succeeded",
+    id: report.id, jobId: TICK_JOB_ID, kind: "tick", parentRunId: null, status: failed ? "failed" : "succeeded",
     trigger: report.reason === "manual" ? "manual" : "schedule", startedAt: report.startedAt, finishedAt: report.finishedAt, model: null,
     usage: report.usage ?? null, log: report.log, result: report,
     summary: failed ? `Failed: ${report.error}` : report.modelInvoked ? `${report.changes} change(s) considered` : "Nothing changed.",

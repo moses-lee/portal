@@ -72,13 +72,13 @@ Conversations retained after project removal remain searchable, including recent
 Updated 2026-10-14. Search and Agent are separate dialogs. Search keeps its result types, appearance, and keyboard selection; it has no conversation tab.
 
 - Agent opens from the sidebar's bot button or ⌘K (Ctrl+K outside Apple platforms). The same shortcut toggles it; ⌘J is retired. Opening either dialog replaces the other.
-- Agent is centered at about 60vw × 85dvh on desktop and fills the viewport on mobile. It includes live status and the existing conditional main/side/archived thread picker. There is no full-page orchestrator route.
-- Conversation instances stay mounted after dismissal so streaming replies, drafts, and transcript scroll survive reopening. The dialog's focus trap and scroll lock are released on dismissal.
-- Main and side threads keep their draft/history keys. Each message carries the focused workspace session/tab/pane, including while a page covers that workspace.
-- Session/tab links reveal the workspace; memory, watch, and thread links dispatch local overlay or Agent actions without changing the browser URL. Closing a response never cancels its server turn.
+- Agent is centered at about 60vw × 85dvh on desktop and fills the viewport on mobile. It includes live status above the chat. There is no full-page orchestrator route.
+- The chat stays mounted after dismissal so streaming replies, drafts, and transcript scroll survive reopening. The dialog's focus trap and scroll lock are released on dismissal.
+- The chat keeps its draft/history key. Each message carries the focused workspace session/tab/pane, including while a page covers that workspace.
+- Session/tab links reveal the workspace; memory, watch, and chat links dispatch local overlay or Agent actions without changing the browser URL. Closing a response never cancels its server turn.
 - Search still excludes the orchestrator conversation from its searchable data.
 
-Tests: `tests/search.test.mjs`, `tests/ui/search.spec.ts`, `tests/ui/search-portal.spec.ts`, `tests/ui/portal-threads.spec.ts`, and `tests/ui/talk-to-portal.spec.ts`.
+Tests: `tests/search.test.mjs`, `tests/ui/search.spec.ts`, `tests/ui/search-portal.spec.ts`, and `tests/ui/talk-to-portal.spec.ts`.
 
 ## Rollout
 

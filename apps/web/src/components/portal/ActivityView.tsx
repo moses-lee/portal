@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bot,
   Brain,
@@ -9,7 +9,6 @@ import {
   FolderGit2,
   GitPullRequest,
   LoaderCircle,
-  MessagesSquare,
   ServerCog,
   ShieldQuestion,
   SquareTerminal,
@@ -20,13 +19,13 @@ import {
 } from "lucide-react";
 import type { PortalLinks } from "../PortalPage";
 import { At, Empty, ErrorLine, JsonBlock, Loading, ViewBody } from "./bits";
-import { usePortalEvents, usePortalLive, useNow } from "./PortalLive";
+import { usePortalEvents, useNow } from "./PortalLive";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { activityFilters, activityLinks, describeKind, matchesPrefix, mergeActivity, type ActivityLink } from "@/lib/orchestrator/activity";
 import { portalJson, query } from "@/lib/orchestrator/api";
 import { relativeTime } from "@/lib/orchestrator/format";
-import { MAIN_THREAD_ID, type ActivityActor, type ActivityEntry } from "@/lib/orchestrator/types";
+import type { ActivityActor, ActivityEntry } from "@/lib/orchestrator/types";
 
 const PAGE = 50;
 
@@ -36,7 +35,7 @@ const actorMeta: Record<ActivityActor, { icon: LucideIcon; label: string }> = {
   system: { icon: ServerCog, label: "System" },
 };
 
-function LinkChip({ link, links, threadTitle }: { link: ActivityLink; links: PortalLinks; threadTitle: (id: string) => string }) {
+function LinkChip({ link, links }: { link: ActivityLink; links: PortalLinks }) {
   const base =
     "inline-flex max-w-full items-center gap-1 rounded-full bg-white/6 px-2 text-[11px] leading-5 text-foreground/80 hover:bg-white/10 hover:text-foreground";
   const chip = (icon: LucideIcon, label: string, onClick: () => void) => {
@@ -49,8 +48,6 @@ function LinkChip({ link, links, threadTitle }: { link: ActivityLink; links: Por
     );
   };
   switch (link.type) {
-    case "thread":
-      return chip(MessagesSquare, threadTitle(link.id), () => links.openThread(link.id));
     case "pull":
       return (
         <a href={link.url} target="_blank" rel="noreferrer" className={base}>
@@ -91,12 +88,10 @@ function EntryRow({
   entry,
   now,
   links,
-  threadTitle,
 }: {
   entry: ActivityEntry;
   now: number;
   links: PortalLinks;
-  threadTitle: (id: string) => string;
 }) {
   const actor = actorMeta[entry.actor] ?? actorMeta.system;
   const Icon = actor.icon;
@@ -124,7 +119,7 @@ function EntryRow({
                 <At at={entry.at} now={now} />
               </span>
               {refs.map((link, index) => (
-                <LinkChip key={index} link={link} links={links} threadTitle={threadTitle} />
+                <LinkChip key={index} link={link} links={links} />
               ))}
             </div>
           </div>
@@ -149,11 +144,10 @@ function EntryRow({
 /**
  * The activity log: everything Portal and the user did to it, newest first, filterable by kind
  * (the server filters by dotted prefix), paged with `before=<id>`, with live `activity` events
- * prepended when they match the filter. Refs become links to threads, items, sessions, PRs, watches,
+ * prepended when they match the filter. Refs become links to items, sessions, PRs, watches,
  * approvals, and memory.
  */
 export default function ActivityView({ links }: { links: PortalLinks }) {
-  const { threads } = usePortalLive();
   const now = useNow(30_000);
   const [filter, setFilter] = useState(activityFilters[0].id);
   const prefix = activityFilters.find((entry) => entry.id === filter)?.prefix ?? null;
@@ -206,9 +200,6 @@ export default function ActivityView({ links }: { links: PortalLinks }) {
     }
   };
 
-  const titles = useMemo(() => new Map(threads.map((thread) => [thread.id, thread.title])), [threads]);
-  const threadTitle = (id: string) => (id === MAIN_THREAD_ID ? "Main thread" : titles.get(id) ?? "Thread");
-
   return (
     <ViewBody label="Activity">
       <div>
@@ -235,7 +226,7 @@ export default function ActivityView({ links }: { links: PortalLinks }) {
         {entries && entries.length > 0 && (
           <ol aria-label="Activity log" className="divide-y divide-white/5 rounded-2xl border border-white/8 bg-white/[.02]">
             {entries.map((entry) => (
-              <EntryRow key={entry.id} entry={entry} now={now} links={links} threadTitle={threadTitle} />
+              <EntryRow key={entry.id} entry={entry} now={now} links={links} />
             ))}
           </ol>
         )}

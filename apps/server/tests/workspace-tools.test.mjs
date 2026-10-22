@@ -40,7 +40,7 @@ function setup({ interactive = true, view = null } = {}) {
   hub.workspace = createWorkspaceService(hub, workspaceStore);
   const ctx = {
     store, deps, touched: new Set(), settings: fakeSettings(), interactive, now: () => T0,
-    hub, turn: { runId: "run1", threadId: "main", kind: "chat", origin: interactive ? "chat" : "job", view },
+    hub, turn: { runId: "run1", kind: "chat", origin: interactive ? "chat" : "job", view },
   };
   return { tools: { ...createTools(ctx), ...workspaceTools(ctx) }, ctx, deps, state, hub, activity, events, workspaceStore };
 }
@@ -85,7 +85,7 @@ test("open_in_workspace takes an id prefix, opens a new tab with its path, logs 
   assert.equal(events[0].type, "workspace");
   assert.deepEqual(activity.map(({ actor, kind, summary, refs, detail }) => ({ actor, kind, summary, refs, detail })), [{
     actor: "agent", kind: "workspace.opened", summary: 'Opened "Review auth" in a new tab',
-    refs: { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" }, detail: { actor: "portal", tabId: opened.tabId, paneId: opened.paneId },
+    refs: { sessionId: REVIEW, projectId: PORTAL, runId: "run1" }, detail: { actor: "portal", tabId: opened.tabId, paneId: opened.paneId },
   }]);
 
   const again = await run(tools.open_in_workspace, { sessionId: REVIEW });
@@ -162,7 +162,7 @@ test("arrange_tab builds a preset in a new tab or rebuilds one by id prefix, nam
   assert.equal(entry.kind, "workspace.arranged");
   assert.equal(entry.summary, 'Arranged 2 sessions as columns-2 in tab "Review pair"');
   assert.deepEqual(entry.detail, { actor: "portal", tabId: arranged.tabId, preset: "columns-2", sessionIds: [REVIEW, FIRST] });
-  assert.deepEqual(entry.refs, { runId: "run1", threadId: "main" });
+  assert.deepEqual(entry.refs, { runId: "run1" });
 
   const rebuilt = await run(tools.arrange_tab, { sessionIds: [SECOND, null, "17329ac6"], preset: "one-beside-two", tabId: arranged.tabId.slice(0, 4) });
   assert.equal(rebuilt.error, undefined, JSON.stringify(rebuilt));
@@ -187,11 +187,11 @@ test("rename_tab renames as Portal by id or prefix and is refused, with a note, 
   assert.deepEqual(renamed, { tabId, title: "Auth review", path: `/tabs/${tabId}` });
   assert.deepEqual(activity.at(-1).detail, { actor: "portal", tabId, from: null, to: "Auth review" });
   assert.equal(activity.at(-1).kind, "workspace.renamed");
-  assert.deepEqual(activity.at(-1).refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1", threadId: "main" }, "the tab's only session is the entry's, like a closed tab's");
+  assert.deepEqual(activity.at(-1).refs, { sessionId: REVIEW, projectId: PORTAL, runId: "run1" }, "the tab's only session is the entry's, like a closed tab's");
   assert.deepEqual(await run(tools.rename_tab, { tabId, title: "Auth review" }), { tabId, title: "Auth review", path: `/tabs/${tabId}`, note: "It already had that name." });
   await run(tools.open_in_workspace, { sessionId: FIRST, besideSessionId: REVIEW });
   await run(tools.rename_tab, { tabId, title: "Auth pair" });
-  assert.deepEqual(activity.at(-1).refs, { runId: "run1", threadId: "main" }, "two sessions, no session ref");
+  assert.deepEqual(activity.at(-1).refs, { runId: "run1" }, "two sessions, no session ref");
 
   await hub.workspace.apply({ op: "rename_tab", tabId, title: "Mine", source: "user" }, "user");
   const refused = await run(tools.rename_tab, { tabId, title: "Portal's pick" });

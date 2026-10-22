@@ -225,7 +225,7 @@ Built by four parallel agents (server, composer, workspace/file pane, links), re
 - **Browser tab title:** the focused file's name.
 
 **Verification**
-- Unit tests: shared 126, web 251, server 866. One server test fails, room-routes "the portal stream opens with the room's state…"; it predates this branch (main-thread queue commit `cba8617`) and is untouched here.
+- Unit tests: shared 126, web 251, server 866. One server test fails, room-routes "the portal stream opens with the room's state…"; it predates this branch (Agent queue commit `cba8617`) and is untouched here.
 - Playwright: `files.spec.ts` 9/9; with the workspace, prompt-queue and portal-mobile specs, 45/45.
 - Live check (scratch server and fresh DB): Claude Code and Codex each got a PNG and a PDF. Both described the image without tools, read the PDF's codeword from its path, and wrote `notes/summary.md`. Codex replied with a `/private/tmp/…/summary.md` markdown link. In a real browser, clicking it opened a file tab (no 404), and editing plus ⌘S saved the file to disk.
 

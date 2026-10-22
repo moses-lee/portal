@@ -231,7 +231,7 @@ test("POST /api/portal/messages streams the UI message stream and persists both 
   assert.match(refused.json().error, /API key/);
 });
 
-test("GET /api/portal/stream opens with status, items, threads, forwards events, and counts presence", async (t) => {
+test("GET /api/portal/stream opens with status, items, approvals, forwards events, and counts presence", async (t) => {
   const { app } = await setup(t);
   await app.listen({ port: 0, host: "127.0.0.1" });
   const { port } = app.server.address();
@@ -261,7 +261,7 @@ test("GET /api/portal/stream opens with status, items, threads, forwards events,
   }
   assert.equal((await next()).type, "status");
   assert.deepEqual(await next(), { type: "items", items: [] });
-  assert.equal((await next()).type, "threads");
+  assert.equal((await next()).type, "approvals");
   assert.equal(presence.count(), before + 1, "an open stream counts as a present browser");
 
   // A runtime event reaches the stream: a manual world refresh emits `world`. (No keep-alive, or
@@ -330,7 +330,7 @@ test("liveDeps and liveSettingsStore read the services from the context at call 
   assert.deepEqual(await deps.scripts.run("preWorktreeDelete", { cwd: home }), { ran: false });
 });
 
-test("message routes page the thread, hand out one message in full, and filter items by status", async (t) => {
+test("message routes page the chat, hand out one message in full, and filter items by status", async (t) => {
   const { app } = await setup(t);
   const store = appContext(app).orchestrator.hub.store;
   const tool = { type: "tool-list_sessions", toolCallId: "c1", state: "output-available", input: { limit: 2 }, output: { rows: [1, 2] } };
@@ -348,11 +348,10 @@ test("message routes page the thread, hand out one message in full, and filter i
   assert.equal(paged.parts[1].input, "[open to load]");
   assert.equal(paged.parts[1].output, "[open to load]");
   assert.equal(paged.parts[1].state, "output-available");
-  const full = (await inject(app, "GET", "/api/portal/threads/main/messages/a1")).json().message;
+  const full = (await inject(app, "GET", "/api/portal/messages/a1")).json().message;
   assert.deepEqual(full.parts[1], tool);
   assert.equal(full.metadata.toolIO, undefined);
-  assert.equal((await inject(app, "GET", "/api/portal/threads/main/messages/nope")).statusCode, 404);
-  assert.equal((await inject(app, "GET", "/api/portal/threads/other/messages/a1")).statusCode, 404);
+  assert.equal((await inject(app, "GET", "/api/portal/messages/nope")).statusCode, 404);
 
   const older = (await inject(app, "GET", `/api/portal/messages?before=${page.before}&limit=2`)).json();
   assert.deepEqual(older.messages.map((m) => m.id), ["u1", "u2"]);
@@ -360,7 +359,6 @@ test("message routes page the thread, hand out one message in full, and filter i
   assert.deepEqual(newer.messages.map((m) => m.id), ["u3", "a1"]);
   assert.equal(newer.hasMore, false);
   assert.equal((await inject(app, "GET", "/api/portal/messages?before=x")).statusCode, 400);
-  assert.equal((await inject(app, "GET", "/api/portal/threads/main/messages?limit=1")).json().messages.length, 1);
 
   await store.createItem({ kind: "custom", title: "open", body: "", links: {}, actions: [], fingerprint: "f1" });
   await store.createItem({ kind: "custom", title: "done", body: "", links: {}, actions: [], fingerprint: "f2", status: "resolved" });

@@ -38,14 +38,13 @@ export type PresenceSource = {
 /** A role's model, ready to call: what the settings chose and the key the settings store holds. */
 export type ResolvedModel = { role: ModelRole; choice: ModelChoice; model: LanguageModel; providerOptions?: ProviderOptions };
 
-/** What a turn is, for the tools that need to know (which run to attribute to, which thread to report in). */
+/** What a turn is, for the tools that need to know (which run to attribute to, whether the user is in the loop). */
 export type TurnInfo = {
   runId: string;
   kind: RunKind;
   role: ModelRole;
   /** "chat" when the user is in the loop (a chat turn); "job" for background work nobody is watching. */
   origin: "chat" | "job";
-  threadId: string | null;
   jobId: string | null;
   intentId: string | null;
   /** What the turn is about; memory retrieval narrows to it. */
@@ -65,7 +64,6 @@ export type RunStart = {
   kind: RunKind;
   trigger: RunTrigger;
   jobId?: string | null;
-  threadId?: string | null;
   parentRunId?: string | null;
   model?: ModelChoice | null;
   summary?: string | null;
@@ -82,7 +80,7 @@ export type RunOutcome = {
 };
 
 /** A new intent as the tools (and setup_pr_reviews) ask for it: what to watch, and how often to check. */
-export type IntentInput = Pick<Intent, "text" | "trigger" | "action"> & Partial<Pick<Intent, "notes" | "expiresAt" | "fireBudget" | "cooldownMs" | "threadId">> & {
+export type IntentInput = Pick<Intent, "text" | "trigger" | "action"> & Partial<Pick<Intent, "notes" | "expiresAt" | "fireBudget" | "cooldownMs">> & {
   scope?: Partial<Scope>;
   check: JobSchedule;
   /** Check right away instead of one interval from now. */
@@ -133,7 +131,7 @@ export interface JobsService {
   /** Apply a `JobPatch` (validated here: 400 for a bad one, 404 unknown or the world refresh, 409 when it cannot apply). */
   updateJob(id: string, patch: unknown, actor: "user" | "agent" | "system"): Promise<Job>;
   /** Newest first; `before` is a run id (the next page). */
-  listRuns(filter?: { jobId?: string; threadId?: string; kind?: RunKind; status?: RunStatus[]; before?: string; limit?: number }): Promise<JobRun[]>;
+  listRuns(filter?: { jobId?: string; kind?: RunKind; status?: RunStatus[]; before?: string; limit?: number }): Promise<JobRun[]>;
   getRun(id: string): Promise<JobRun | null>;
   /** Abort the runs of a job in progress in this process (as cancelling the job does); answers their ids. */
   stopJobRuns(jobId: string): string[];
@@ -141,7 +139,7 @@ export interface JobsService {
   cancelRun(id: string): Promise<boolean>;
   getIntent(id: string): Promise<Intent | null>;
   /** An intent and the job that checks it. */
-  createIntent(input: IntentInput, how: { actor: "user" | "agent" | "system"; runId?: string; threadId?: string | null }): Promise<{ intent: Intent; job: Job }>;
+  createIntent(input: IntentInput, how: { actor: "user" | "agent" | "system"; runId?: string }): Promise<{ intent: Intent; job: Job }>;
   /** The UI's intent patch: cancel it, or re-activate it. */
   updateIntent(id: string, patch: IntentPatch, actor: "user" | "agent" | "system"): Promise<Intent>;
   /** Portal started this session for the user (create_session, a card's start action): the standing watch rule takes it on while it is on. */
@@ -170,11 +168,10 @@ export interface WorldService {
   /** When the newest full build (GitHub included) was made, here or stored before a restart; null before the first. */
   lastFullAt(): Promise<number | null>;
   /**
-   * The "Recent changes" section for a chat turn in `threadId`: change-log rows detected since the
-   * thread's previous answer that concern this thread or the user (see `world/recent.ts`); "" when
-   * none do.
+   * The "Recent changes" section for a chat turn: change-log rows detected since the chat's
+   * previous answer that concern the chat or the user (see `world/recent.ts`); "" when none do.
    */
-  recentChanges(input: { threadId: string | null; scope: Scope }): Promise<string>;
+  recentChanges(input: { scope: Scope }): Promise<string>;
   /** The world as prompt text within a token budget, the parts about `scope` first; `workspace` adds the Workspace tabs section. */
   render(world: WorldState, opts?: { budgetTokens?: number; scope?: Scope; workspace?: Workspace | null }): string;
   /** resolve_pull, resolve_repo, resolve_session, get_world, ... */
@@ -191,7 +188,7 @@ export type MemoryPromptContext = {
 export interface MemoryService {
   ready: Promise<void>;
   /** CORE.md plus scoped retrieval for one turn. */
-  promptContext(input: { scope: Scope; query: string; threadId: string | null }): Promise<MemoryPromptContext>;
+  promptContext(input: { scope: Scope; query: string }): Promise<MemoryPromptContext>;
   /** Proposed records waiting for the user. */
   inboxCount(): Promise<number>;
   /** The active records of each named entity that exists (type and key as written; keys are normalized), entities in the order given. */

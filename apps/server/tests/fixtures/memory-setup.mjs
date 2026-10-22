@@ -29,7 +29,7 @@ export async function memorySetup(t, { key = "sk-test", legacy = "", database = 
 }
 
 export const user = { actor: "user" };
-export const agent = { actor: "agent", runId: "run1", threadId: "main" };
+export const agent = { actor: "agent", runId: "run1" };
 
 export function claim(overrides = {}) {
   return { entity: { type: "repo", key: "acme/app" }, type: "convention", key: "review-style", body: "Review tests before code.", ...overrides };

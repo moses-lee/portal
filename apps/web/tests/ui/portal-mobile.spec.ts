@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { emitPortal, firstTitle, portalItem, portalStatus, setupPortal, thirdTitle } from "./fixtures";
-import { approval, globalEntity, helperJob, intent, intentJob, mainThread, memoryRecords, repoEntity, reviewThread } from "./orchestrator-fixtures";
+import { approval, globalEntity, helperJob, intent, intentJob, memoryRecords, repoEntity } from "./orchestrator-fixtures";
 import { pane, split, tab, workspaceOf } from "./workspace-fixtures";
 
 test.use({ viewport: { width: 390, height: 844 } });
@@ -20,7 +20,6 @@ test("Agent and Search stay at the top of the phone sidebar, with Settings at th
 test("on a phone the views, the memory browser, and the approvals dialog fit the screen", async ({ page }, info) => {
   await setupPortal(page, {
     portal: {
-      threads: [mainThread, reviewThread],
       intents: [intent],
       jobs: [helperJob, intentJob],
       entities: [globalEntity, repoEntity],
@@ -39,7 +38,7 @@ test("on a phone the views, the memory browser, and the approvals dialog fit the
   await page.getByRole("button", { name: "Toggle sidebar" }).click();
   await page.getByRole("dialog", { name: "Your workspace" }).getByRole("button", { name: /^Agent/ }).click();
   await expect(page.getByRole("main", { name: "Agent", exact: true })).toBeVisible();
-  await expect(page.getByRole("tablist", { name: "Threads" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Message Portal", exact: true })).toBeVisible();
   const noHorizontalScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ animations: "disabled", path: info.outputPath("mobile-chat.png") });
@@ -199,7 +198,6 @@ test.describe("the workspace on a phone", () => {
 
 test.describe("Agent from the phone's bar", () => {
   const onePane = () => workspaceOf([tab("t1", pane("p1", "s1"))]);
-  const threads = [mainThread, reviewThread];
   const agentButton = (page: Page) => page.getByRole("group", { name: "Panes" }).locator("[data-agent-button]");
   const agentSheet = (page: Page) => page.getByRole("main", { name: "Agent", exact: true });
 
@@ -219,39 +217,38 @@ test.describe("Agent from the phone's bar", () => {
     await expect(agentSheet(page)).toBeVisible();
   });
 
-  test("a reply while Agent is closed marks the button and floats a preview above the composer; tapping it opens that thread", async ({ page }, info) => {
-    const fixture = await setupPortal(page, { workspace: onePane(), portal: { threads } });
+  test("a reply while Agent is closed marks the button and floats a preview above the composer; tapping it opens Agent", async ({ page }, info) => {
+    const fixture = await setupPortal(page, { workspace: onePane() });
     await page.goto("/tabs/t1");
     await expect(agentButton(page)).toHaveAccessibleName("Agent");
     fixture.appendPortalMessage(
       { id: "rt9", role: "assistant", metadata: { at: Date.now() }, parts: [{ type: "text", text: "The **review** finished with two findings." }] },
-      reviewThread.id,
     );
-    await emitPortal(page, { type: "messages", threadId: reviewThread.id });
+    await emitPortal(page, { type: "messages" });
     await expect(agentButton(page)).toHaveAccessibleName("Agent, new messages");
     const preview = page.locator("[data-agent-reply-preview]");
-    await expect(preview).toContainText(`Portal in ${reviewThread.title}: The review finished with two findings.`);
+    await expect(preview).toContainText("Portal replied: The review finished with two findings.");
     // Above the composer, clear of it.
     const composer = (await page.locator(".composer-wrap").boundingBox())!;
     const box = (await preview.boundingBox())!;
     expect(box.y + box.height).toBeLessThanOrEqual(composer.y);
     await page.screenshot({ path: info.outputPath("agent-reply-preview.png") });
 
-    await preview.getByRole("button", { name: /Portal in/ }).click();
+    await preview.getByRole("button", { name: /Portal replied/ }).click();
     await expect(agentSheet(page)).toBeVisible();
-    await expect(page.getByRole("tablist", { name: "Threads" }).getByRole("tab", { name: reviewThread.title })).toHaveAttribute("aria-selected", "true");
+    await expect(agentSheet(page).getByText("The review finished with two findings.")).toBeVisible();
     await expect(preview).toHaveCount(0);
     await agentSheet(page).getByRole("button", { name: "Close Agent" }).click();
     await expect(agentButton(page)).toHaveAccessibleName("Agent");
   });
 
-  test("the preview's cross dismisses it, and a reply in the open thread shows none", async ({ page }) => {
+  test("the preview's cross dismisses it, and a reply while Agent is open shows none", async ({ page }) => {
     const fixture = await setupPortal(page, { workspace: onePane() });
     await page.goto("/tabs/t1");
     // Wait for the live provider to mount before delivering an event through its stream.
     await expect.poll(() => fixture.requests.some((request) => request.path === "/api/portal")).toBe(true);
     fixture.appendPortalMessage({ id: "m9", role: "assistant", metadata: { at: Date.now() }, parts: [{ type: "text", text: "Nothing needs you right now." }] });
-    await emitPortal(page, { type: "messages", threadId: "main" });
+    await emitPortal(page, { type: "messages" });
     const preview = page.locator("[data-agent-reply-preview]");
     await expect(preview).toContainText("Portal replied: Nothing needs you right now.");
     await preview.getByRole("button", { name: "Dismiss" }).click();
@@ -260,7 +257,7 @@ test.describe("Agent from the phone's bar", () => {
     await expect(agentButton(page)).toHaveAccessibleName("Agent, new messages");
     await agentButton(page).click();
     await expect(agentSheet(page)).toBeVisible();
-    await emitPortal(page, { type: "messages", threadId: "main" });
+    await emitPortal(page, { type: "messages" });
     await page.waitForTimeout(300);
     await expect(preview).toHaveCount(0);
   });
@@ -270,7 +267,7 @@ test.describe("Agent from the phone's bar", () => {
     await page.goto("/tabs/t1");
     // The shell (and its stream) is up once the bar is.
     await expect(agentButton(page)).toHaveAccessibleName("Agent");
-    await emitPortal(page, { type: "status", status: { ...portalStatus, busyThreads: ["main"] } });
+    await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true } });
     await expect(agentButton(page)).toHaveAttribute("data-agent-activity", "working");
     await expect(agentButton(page)).toHaveAccessibleName("Agent, working");
     await emitPortal(page, { type: "approvals", approvals: [approval] });

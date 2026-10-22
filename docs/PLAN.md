@@ -20,7 +20,7 @@ review and live-verification reports. The essentials are folded into this docume
 Portal is a self-hosted web UI for coding agents. It talks to Claude Code and Codex over the
 Agent Client Protocol (ACP), shows each session's transcript live, gives every session and the
 standalone page a real terminal (node-pty over Socket.IO), manages projects and git worktrees,
-summarizes GitHub state per project, and has a "Talk to Portal" thread where an orchestrator
+summarizes GitHub state per project, and has a "Talk to Portal" chat where an orchestrator
 watches sessions and pull requests and turns changes into "Needs you" items.
 
 ### 1.2 What phase 1 delivered (branch `feat/portal-server`, four commits)
@@ -107,8 +107,7 @@ Built by the integrator plus five parallel agents (jobs, world, memory, approval
   Contracts per domain in `packages/contracts/src/{activity,jobs,world,memory,approvals}.ts`.
 - **Data.** Migrations 0002–0005: all phase 2 tables; watches became intents with check jobs, tick
   reports became tick-job runs, the Ideas list is gone (open ideas resolved).
-- **Behaviour.** Threads with one lock each (only the agent opens side threads); the tick is a job
-  and chat never waits for it; agent-scheduled jobs (`every`/`cron`/`at`) and intents with trigger,
+- **Behaviour.** The tick is a job and chat never waits for it; agent-scheduled jobs (`every`/`cron`/`at`) and intents with trigger,
   budget, cooldown, and expiry; helpers as sub-turns; the world state rendered into every prompt
   and `resolve_pull`/`resolve_repo`/`resolve_session`; curated memory with inbox, revisions,
   CORE.md, scoped retrieval, and a quote rule so only the user's own words become user_stated;
@@ -118,7 +117,7 @@ Built by the integrator plus five parallel agents (jobs, world, memory, approval
 - **Fold-in fixes.** Dismissals stick until the condition clears; `kind` is patchable; a capped tick
   keeps the snapshot; short sessions count as finished; reviews of other people's PRs get a
   reviewer's brief (or the orchestrator's own prompt from memory).
-- **UI.** Tabs Chat (threads), Goals (intents, upcoming jobs, runs), Activity, Memory (entities,
+- **UI.** Tabs Chat, Goals (intents, upcoming jobs, runs), Activity, Memory (entities,
   records with provenance, inbox, revisions), System (CORE.md, the world as the model sees it,
   grants); a live status line; the approvals dialog app-wide; the bookkeeping model in Settings.
 - **Verified.** Server 540, web 59, shared 36 tests; Playwright 69; live on a scratch instance over a
@@ -142,7 +141,7 @@ memory records gain `sightings`). The live database stores an Anthropic key, so 
 None of this blocks use. Phase 3 closed the phase 2 gaps (prompt weight, the cancelled helper, the
 `consolidate` stub, entity summaries and `reviewBy`, stuck job approvals, repeated approvals,
 `resolve_pull` beyond checked-out repos); the daily-use round closed corroboration, the removal
-guard, the cards in the thread, Portal's send behaviour, the review worktrees, and the permission
+guard, the cards in the chat, Portal's send behaviour, the review worktrees, and the permission
 audit. The rest is grouped by how much each change risks, one branch per batch, each batch green
 on the suites and checked live on a scratch clone.
 
@@ -223,7 +222,7 @@ slowly; all pass when run alone.
   never replace the user's own claims, observed records past `reviewBy` expire, the user's own go
   on one re-confirm item, entity summaries are written, and a plan removing more than 25% is
   refused whole. The digest and diff are on the run's page in Memory → Curation; one line goes to
-  the main thread.
+  the chat.
 - **Also.** Tools receive the SDK's call options (abort signal), so stopping a chat turn stops an
   inline helper; job approvals resume, reschedule, or end the job on every outcome.
 - **Verified.** Server 572, web 61, shared 37 tests; Playwright 74. Live on a scratch instance
@@ -256,7 +255,7 @@ clone of the live database with real Anthropic calls.
 - **Talk to Portal matches the session pages.**
   - *Prose.* `PortalMessage` no longer draws item cards under messages (the `itemIds` metadata
     stays for the audit trail); the Needs-you strip is where an item is read and acted on. The
-    system prompt says the thread is prose and the tick prompt asks for sentences with names and
+    system prompt says the chat is prose and the tick prompt asks for sentences with names and
     counts, never a list or a repeat of item bodies. A finished review goal posts one sentence
     ("Both reviews on acme/app finished: #1 needs changes, with one blocking finding and one nit;
     #2 looks good, with one nit. The findings are in Needs you.") built by `reviewProse`.
@@ -269,7 +268,7 @@ clone of the live database with real Anthropic calls.
     status comes only with the first chunk, after the model has started. Until the acknowledgement
     the composer shows the send spinner, not Stop, as on a session page.
   - *Aurora.* `AuroraBackground` is mounted in `PortalPage` behind every view; `portalActivity()`
-    makes it working while a chat turn answers in any thread, amber while an approval is pending,
+    makes it working while a chat turn answers, amber while an approval is pending,
     idle otherwise (background jobs included).
   - Live: the chat reply ("Two of your PRs need you: …#2572 has changes requested and failing
     checks, and …#2577 … has failing checks.") and the tick's note were prose; no card under any of
@@ -309,7 +308,7 @@ clone of the live database with real Anthropic calls.
     resolves or dismisses a PR's `review_findings` item, `settleReviewWorktree` removes the
     worktree Portal created, its project entry, and the local branch when its tip is exactly on
     origin (`removeWorktree` `deleteBranch: "pushed"`), without an approval, and says so in one
-    line in the thread. A worktree still used by a running session, with uncommitted changes, or
+    line in the chat. A worktree still used by a running session, with uncommitted changes, or
     that git refuses to remove is kept with a `worktree_dirty` item carrying the approval-gated
     Remove worktree action. The review session keeps its transcript.
   - Live (scratch instance over a clone of the live database, real Anthropic and Claude Code calls):
@@ -319,10 +318,10 @@ clone of the live database with real Anthropic calls.
     `$(git rev-parse …)`), so every one waited for the user (answered by a stand-in script) and
     each card in the transcript read "Allowed once by you". The advisor itself is covered by unit
     tests (plain `git status`, `gh pr view`, reads and searches are answered as Portal). The
-    review finished ("looks good, with four nits"), the thread got the prose verdict, and resolving
+    review finished ("looks good, with four nits"), the chat got the prose verdict, and resolving
     the findings item removed the worktree, its project entry, and the local branch (its tip was on
     origin), with "Removed the review worktree for liquid-labs-inc/monorepo#2579 and its local
-    branch …, now that its findings are read." in the thread and a `review.worktree_removed` entry.
+    branch …, now that its findings are read." in the chat and a `review.worktree_removed` entry.
 
 ### 1.11 Watches and the attention page (2026-10-04)
 
@@ -340,7 +339,7 @@ resolves or dismisses up to 500 items with one activity entry.
 ## 2. What the current orchestrator does, and why it is not enough
 
 The orchestrator (`apps/server/src/orchestrator/`) is a Vercel AI SDK `ToolLoopAgent` (24 steps,
-5-minute turns, gpt-5-mini by default) with one shared chat thread and a scheduler:
+5-minute turns, gpt-5-mini by default) with one shared chat and a scheduler:
 
 - **Tick.** Every 10 minutes while a tab is open (60 while idle) a deterministic pre-scan collects
   sessions (idle/working/waiting), authored and review-requested PRs via one `gh api graphql`
@@ -428,15 +427,14 @@ with a polling fallback. The current 10-minute tick becomes the default `tick` j
 creates the rest (a PR monitor at two minutes, a curation pass at night, a helper turn now).
 
 Cross-cutting: an append-only `activity_log` (who did what, with refs) that the Activity view and
-audits read; an `approvals` table with scoped grants; threads (one main, side threads per task) so
-chat and jobs never share a lock; a frontier Anthropic model for chat and curation and a cheap model
+audits read; an `approvals` table with scoped grants; chat and jobs that never share a lock; a frontier Anthropic model for chat and curation and a cheap model
 for tick bookkeeping; usage recorded per run.
 
 Planned tables: `activity_log`, `world_snapshots`, `memory_entities`, `memory_records`,
-`memory_revisions`, `intents`, `jobs`, `job_runs`, `threads`, `messages`, `approvals`; `items`
+`memory_revisions`, `intents`, `jobs`, `job_runs`, `messages`, `approvals`; `items`
 loses the `ideas` list. New routes: `/api/world`, `/api/memory/**` (entities, records, inbox
 approve/reject, revisions), `/api/jobs/**`, `/api/intents/**`, `/api/approvals/**`,
-`/api/activity`, `/api/threads/**`.
+`/api/activity`.
 
 ---
 
@@ -467,7 +465,7 @@ with pgvector on port 5433.
 Goal: the coordinator never blocks, knows the world, remembers with provenance, and asks before
 doing anything irreversible. Behaviour visibly changes for the user in this phase.
 
-1. **Concurrency.** Chat turns and jobs run independently (a lock per thread, not per process).
+1. **Concurrency.** Chat turns and jobs run independently (the chat has its own lock, not one per process).
    Stop cancels only the chat turn. Item actions check status and emit events.
 2. **Jobs and intents.** Tables, worker loop, `job_runs` with usage; the tick becomes a job whose
    cadence follows presence; tools `schedule_job`, `cancel_job`, `create_intent`, `cancel_intent`,
@@ -489,8 +487,8 @@ doing anything irreversible. Behaviour visibly changes for the user in this phas
    only for handled changes, review prompt, short-session finish detection.
 8. **UI.** Remove Ideas. Needs-you stays. New: Goals/Upcoming (intents and jobs with next run),
    Activity log, Memory browser (entities, records, inbox approve/reject, revisions), System view
-   (`CORE.md`, world state), live status line, approvals dialog. Talk to Portal page keeps one
-   main thread and gains side threads.
+   (`CORE.md`, world state), live status line, approvals dialog. Talk to Portal page keeps its
+   one chat.
 
 Exit: "review PR 2367" resolves to the monorepo without a question; the user can chat while a job
 runs; a destructive tool call shows an approval card; the memory browser shows every record with
@@ -537,10 +535,10 @@ data with its diff visible in the UI; the activity log explains every action the
 - Node 24 + pnpm + Fastify 5 + Drizzle/postgres.js. Bun was abandoned. Socket.IO stays.
 - Bearer-token auth for external clients (CLI, Hermes): later. Single user for now.
 - Talk to Portal matches the session pages: same composer and send behaviour, same aurora, and a
-  thread in prose, with actionable detail only in the Needs-you strip.
+  chat in prose, with actionable detail only in the Needs-you strip.
 - Watches and the attention page (2026-10-04): the UI and the model say "watches" for intents
   (Goals until then), and items are read and acted on on their own Needs-your-attention page
-  rather than in a strip above the thread (§1.11).
+  rather than in a strip above the chat (§1.11).
 - Unattended reviews (2026-09-24): Portal answers permission requests of the review sessions it
   started, and only those, when the step is read-only, once per command; anything that writes
   waits for the user. Every permission answer says who gave it (you or Portal) in the transcript.
@@ -550,11 +548,10 @@ data with its diff visible in the UI; the activity log explains every action the
 
 ## 7. Open questions
 
-Settled during phase 2: the live Portal was cut over before phase 2; side threads are opened by the
-agent only and retrieve memory for their own scope (plus CORE.md); no notifications outside the
+Settled during phase 2: the live Portal was cut over before phase 2; no notifications outside the
 Portal UI for now. Settled for phase 3: the consolidator runs nightly around 03:00 and when the
 inbox reaches about ten items (at most hourly), all configurable in Settings; its digest is one
-line in the main thread with the full digest and diff on the run's page; monitors report merged,
+line in the chat with the full digest and diff on the run's page; monitors report merged,
 closed, checks failing and recovering, changes requested, approved, and conflicts, with new
 comments opt-in per monitor.
 

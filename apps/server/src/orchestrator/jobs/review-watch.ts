@@ -4,7 +4,7 @@
  * or went away), a summarizing helper turn reads the reviews and reports the findings of each PR
  * through `report_review`, each PR gets a `review_findings` Needs-you item linking the PR and its
  * session, its workspace tab stays open, one line
- * goes to the intent's thread, and the intent fires once and is done.
+ * goes to the chat, and the intent fires once and is done.
  */
 import type { Intent, JobRun } from "@portal/contracts/jobs";
 import { segment } from "@portal/shared/transcript";
@@ -15,7 +15,6 @@ import { generateTurn, prepareTurn } from "../turn.ts";
 import { define } from "../tools/context.ts";
 import { EVENT_WINDOW } from "../tools/sessions.ts";
 import type { Item, ItemAction } from "../types.ts";
-import { MAIN_THREAD_ID } from "../types.ts";
 import type { JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
 
@@ -130,7 +129,7 @@ function findingsClause(findings: ReviewFinding[]): string {
   return `${parts.slice(0, -1).join(", ")}${parts.length > 2 ? "," : ""} and ${parts.at(-1)}`;
 }
 
-/** One PR's verdict as a clause of the thread's sentence: "#12 needs changes, with two blocking findings". */
+/** One PR's verdict as a clause of the chat's sentence: "#12 needs changes, with two blocking findings". */
 function verdictClause(report: ReviewReport, name = `#${report.pr}`): string {
   const clause = findingsClause(report.findings);
   const withFindings = clause ? `, with ${clause}` : "";
@@ -147,7 +146,7 @@ function verdictClause(report: ReviewReport, name = `#${report.pr}`): string {
 }
 
 /**
- * What the thread says when a review goal finishes: one or two sentences, no list. The findings
+ * What the chat says when a review goal finishes: one or two sentences, no list. The findings
  * themselves live on the Needs-you items, so the sentence names each PR's verdict and counts only.
  */
 export function reviewProse(repo: string, reports: ReviewReport[]): string {
@@ -272,9 +271,8 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
       return { recorded: true };
     },
   );
-  const threadId = intent.threadId ?? MAIN_THREAD_ID;
   const prepared = await prepareTurn(hub, {
-    kind: "helper", role: "chat", trigger, threadId, jobId: job.id, intentId: intent.id, parentRunId: run.id, interactive: false,
+    kind: "helper", role: "chat", trigger, jobId: job.id, intentId: intent.id, parentRunId: run.id, interactive: false,
     toolNames: SUMMARIZER_TOOLS, extraTools: { report_review }, scope: intent.scope, query: `code review ${watch.repo}`, touched: new Set(),
     summary: `Summarizing the reviews of ${watch.repo} ${watch.sessions.map((session) => `#${session.pr}`).join(", ")}`,
   });
@@ -294,7 +292,6 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
     const fields = findingsItem(report, session, watch.repo, watch.memoryIds);
     const links = {
       pull: { repo: watch.repo, number: session.pr, url: session.url }, sessionId: session.sessionId, projectId: session.projectId, intentId: intent.id,
-      ...(intent.threadId ? { threadId: intent.threadId } : {}),
     };
     const existing = await hub.store.findItemByFingerprint(fields.fingerprint);
     const item: Item = existing
@@ -307,7 +304,7 @@ export async function checkReview({ core, fire }: ReviewCheckParts, { job, run, 
   hub.emit({ type: "items", items: await hub.store.listItems() });
   const line = reviewProse(watch.repo, reported);
   await fire(intent.id, { title: `Reviews finished on ${watch.repo}`, body: verdicts.join("\n"), item: false }, { actor: "system", runId: run.id });
-  await core.postToThread(threadId, line, run as Pick<JobRun, "id" | "kind">, [...touched]);
+  await core.postToChat(line, run as Pick<JobRun, "id" | "kind">, [...touched]);
   return {
     summary: line, jobStatus: "done",
     result: { intentId: intent.id, fired: true, text: short(result.text, 2000), reports: [...reports.values()], itemIds: [...touched] },

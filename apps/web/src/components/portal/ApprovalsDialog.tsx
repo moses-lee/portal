@@ -8,13 +8,7 @@ import { usePortalLive, useNow } from "./PortalLive";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { portalJson, portalSend } from "@/lib/orchestrator/api";
-import {
-  MAIN_THREAD_ID,
-  type Approval,
-  type ApprovalDecision,
-  type ApprovalRisk,
-  type ApprovalScope,
-} from "@/lib/orchestrator/types";
+import type { Approval, ApprovalDecision, ApprovalRisk, ApprovalScope } from "@/lib/orchestrator/types";
 import { portalPath } from "@/lib/session-routes";
 
 const riskMeta: Record<ApprovalRisk, { label: string; tone: Tone }> = {
@@ -69,7 +63,7 @@ function approveLabel(approval: Approval, scope: ApprovalScope): string {
  * Several requests queue with previous/next. Approving takes a scope; denying needs none.
  */
 export default function ApprovalsDialog({ onNavigate }: { onNavigate: (path: string) => void }) {
-  const { approvals, setApprovals, requestedApproval, threads } = usePortalLive();
+  const { approvals, setApprovals, requestedApproval } = usePortalLive();
   // A second-by-second clock only while a request is on screen (its expiry counts down).
   const now = useNow(1000, approvals.length > 0);
   /** Requests the user put off; a new request (a new id) opens the dialog again. */
@@ -182,12 +176,6 @@ export default function ApprovalsDialog({ onNavigate }: { onNavigate: (path: str
 
   const expired = current.expiresAt <= now;
   const risk = riskMeta[current.risk] ?? riskMeta.write;
-  const threadTitle =
-    current.threadId === null
-      ? null
-      : current.threadId === MAIN_THREAD_ID
-        ? "Main thread"
-        : threads.find((thread) => thread.id === current.threadId)?.title ?? "Side thread";
   const go = (path: string) => {
     later();
     onNavigate(path);
@@ -250,16 +238,6 @@ export default function ApprovalsDialog({ onNavigate }: { onNavigate: (path: str
               <>
                 <dt className="text-muted-foreground">Repository</dt>
                 <dd className="font-mono text-[11px]">{current.repo}</dd>
-              </>
-            )}
-            {threadTitle && (
-              <>
-                <dt className="text-muted-foreground">Thread</dt>
-                <dd>
-                  <button type="button" className="hover:underline" onClick={() => go(portalPath({ view: "chat", threadId: current.threadId! }))}>
-                    {threadTitle}
-                  </button>
-                </dd>
               </>
             )}
             {(current.jobId || current.intentId) && (

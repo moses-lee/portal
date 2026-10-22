@@ -59,7 +59,7 @@ export function define<I, O>(description: string, inputSchema: FlexibleSchema<I>
 
 export const REDACTED = "[redacted]";
 
-/** `output` with every stored API key replaced, wherever it sits: a file read or a command's output must not carry it into the thread. */
+/** `output` with every stored API key replaced, wherever it sits: a file read or a command's output must not carry it into the chat. */
 export function redactKeys(output: unknown, keys: string[]): unknown {
   const secrets = keys.filter((key) => key.length > 0);
   if (secrets.length === 0 || output === undefined) return output;
@@ -80,7 +80,7 @@ export function redactKeys(output: unknown, keys: string[]): unknown {
 /**
  * Every tool of `tools` with its output passed through `redactKeys` against the keys stored for
  * all providers and the server key: a read-only command such as `grep -r ~` must not carry either
- * into the thread.
+ * into the chat.
  */
 export function withRedaction<T extends Record<string, Tool>>(ctx: Pick<ToolContext, "settings">, tools: T): T {
   const keys = () => Promise.all([

@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { openPage, showAgent } from "./surfaces";
 import { emitPortal, portalItem, portalMessages, setupPortal } from "./fixtures";
-import { approval, chatApproval, mainThread, reviewThread } from "./orchestrator-fixtures";
+import { approval, chatApproval } from "./orchestrator-fixtures";
 
 test("a pending approval opens the dialog wherever the user is, with everything needed to decide", async ({ page }, info) => {
-  const fixture = await setupPortal(page, { portal: { threads: [mainThread, reviewThread] } });
+  const fixture = await setupPortal(page);
   await page.goto("/sessions/s1");
   await expect(page.getByRole("combobox", { name: "Message Claude Code" })).toBeVisible();
   fixture.portalLive.approvals.push(structuredClone(approval));
@@ -20,7 +20,6 @@ test("a pending approval opens the dialog wherever the user is, with everything 
     "Deletes the folder /workspace/portal-worktree and the branch feature/improve-chat-experience.",
   );
   await expect(dialog.getByTestId("approval-summary").locator("code")).toHaveText("/workspace/portal-worktree");
-  await expect(dialog.getByRole("button", { name: reviewThread.title })).toBeVisible();
   await expect(dialog.getByText(/in (59|60) min/)).toBeVisible();
   await expect(dialog.getByText('"deleteBranch": true')).toBeVisible();
   // It asked from a watch's job in a repo: every scope applies.

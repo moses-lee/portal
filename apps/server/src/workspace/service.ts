@@ -25,7 +25,6 @@ export type WorkspaceActor = "user" | "portal";
 /** Where an operation came from, for its activity entry. */
 export type WorkspaceOpContext = {
   runId?: string;
-  threadId?: string;
   /** Who the activity entry names; by default the user for `actor: "user"`, else the agent. */
   actor?: ActivityActor;
 };
@@ -161,7 +160,7 @@ export function createWorkspaceService(hub: OrchestratorHub, store: WorkspaceSto
     const projectId = entry.sessionId ? (await describe(entry.sessionId)).projectId : undefined;
     const refs: ActivityRefs = {
       ...(entry.sessionId ? { sessionId: entry.sessionId } : {}), ...(projectId ? { projectId } : {}),
-      ...(context.runId ? { runId: context.runId } : {}), ...(context.threadId ? { threadId: context.threadId } : {}),
+      ...(context.runId ? { runId: context.runId } : {}),
     };
     await hub.activity.log({
       actor: context.actor ?? (actor === "user" ? "user" : "agent"), kind: entry.kind, summary: entry.summary, refs,

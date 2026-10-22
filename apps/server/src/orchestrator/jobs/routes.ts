@@ -64,7 +64,7 @@ export function registerJobRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { run };
   });
 
-  /** `GET /api/portal/runs?jobId=&threadId=&kind=&before=&limit=` — `{ runs }`, newest first. */
+  /** `GET /api/portal/runs?jobId=&kind=&before=&limit=` — `{ runs }`, newest first. */
   app.get<Query>("/api/portal/runs", async (req, reply) => {
     const jobs = await jobsFor(req, reply);
     if (!jobs) return reply;
@@ -75,7 +75,7 @@ export function registerJobRoutes(app: FastifyInstance, ctx: AppContext): void {
     const limit = query.limit && /^\d+$/.test(query.limit) ? Number(query.limit) : undefined;
     return {
       runs: await jobs.listRuns({
-        ...(query.jobId ? { jobId: query.jobId } : {}), ...(query.threadId ? { threadId: query.threadId } : {}), ...(kind ? { kind: kind[0] } : {}),
+        ...(query.jobId ? { jobId: query.jobId } : {}), ...(kind ? { kind: kind[0] } : {}),
         ...(query.before ? { before: query.before } : {}), ...(limit !== undefined ? { limit } : {}),
       }),
     };

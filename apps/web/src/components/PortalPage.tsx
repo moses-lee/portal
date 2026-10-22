@@ -6,11 +6,10 @@ import { LoaderCircle, PanelLeft, X } from "lucide-react";
 import IconButton from "./IconButton";
 import PortalItemCard, { type ItemCardHandlers } from "./PortalItemCard";
 import ResponsiveDialog from "./ResponsiveDialog";
-import { threadDraftKey } from "@/lib/orchestrator/drafts";
+import { agentDraftKey } from "@/lib/orchestrator/drafts";
 import { usePortalLive } from "./portal/PortalLive";
 import { viewMeta } from "./portal/views";
 import { readDraft, writeDraft } from "@/lib/drafts";
-import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 import { portalPath, type PortalLocation, type PortalView } from "@/lib/session-routes";
 import type { ProjectSummary } from "@/lib/types";
 import type { RemoveProjectOptions } from "./useProjects";
@@ -46,22 +45,20 @@ export default function PortalPage({ location, onNavigate, onOpenSidebar, onOpen
     onOpenMemory: () => go("memory"),
     onOpenCurationRun: (runId) => go({ view: "memory", entityId: null, runId }),
   }), [onOpenSession, putItem, requestApproval, go]);
-  const askInMain = useCallback((text: string) => {
-    const key = threadDraftKey(MAIN_THREAD_ID);
-    const current = readDraft(key);
-    if (!current.includes(text)) writeDraft(key, current.trim() ? `${current.trimEnd()}\n${text}` : text);
-    go({ view: "chat", threadId: MAIN_THREAD_ID });
+  const askAgent = useCallback((text: string) => {
+    const current = readDraft(agentDraftKey);
+    if (!current.includes(text)) writeDraft(agentDraftKey, current.trim() ? `${current.trimEnd()}\n${text}` : text);
+    go("chat");
   }, [go]);
-  const pageHandlers = useMemo<ItemCardHandlers>(() => ({ ...handlers, onAsk: askInMain }), [handlers, askInMain]);
+  const pageHandlers = useMemo<ItemCardHandlers>(() => ({ ...handlers, onAsk: askAgent }), [handlers, askAgent]);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const openItem = items.find((item) => item.id === openItemId) ?? null;
   const dialogHandlers = useMemo<ItemCardHandlers>(() => ({
     ...pageHandlers,
     onOpenSession: (id) => { setOpenItemId(null); onOpenSession(id); },
-    onAsk: (text) => { setOpenItemId(null); askInMain(text); },
-  }), [pageHandlers, askInMain, onOpenSession]);
+    onAsk: (text) => { setOpenItemId(null); askAgent(text); },
+  }), [pageHandlers, askAgent, onOpenSession]);
   const links = useMemo<PortalLinks>(() => ({
-    openThread: (threadId) => go({ view: "chat", threadId }),
     openItem: setOpenItemId,
     openSession: onOpenSession,
     openWatches: () => go("watches"),
@@ -89,9 +86,8 @@ export default function PortalPage({ location, onNavigate, onOpenSidebar, onOpen
   </main>;
 }
 
-/** What views hand to links in their rows: threads, items, sessions, watches, memory, and approvals. */
+/** What views hand to links in their rows: items, sessions, watches, memory, and approvals. */
 export type PortalLinks = {
-  openThread: (threadId: string) => void;
   openItem: (itemId: string) => void;
   openSession: (sessionId: string) => void;
   openWatches: () => void;

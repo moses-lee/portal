@@ -28,10 +28,9 @@ import type {
   OrchestratorEvent,
   OrchestratorMessage,
   OrchestratorStatus,
-  Thread,
   WorldResponse,
 } from "../../src/lib/orchestrator/types";
-import { coreDocument, mainThread, worldResponse } from "./orchestrator-fixtures";
+import { coreDocument, worldResponse } from "./orchestrator-fixtures";
 import type { RoomState } from "@portal/contracts/room";
 import type { Workspace } from "@portal/contracts/workspace";
 import type { SearchResponse } from "@portal/contracts/search";
@@ -387,7 +386,6 @@ export const portalStatus: OrchestratorStatus = {
   model: "gpt-5-mini",
   busy: false,
   presence: 1,
-  busyThreads: [],
   runs: [],
   nextJob: { id: "consolidate", title: "Curate memory", at: now + 7 * 60_000 },
   counts: { needsYou: 1, inbox: 0, approvals: 0, intents: 0 },
@@ -464,7 +462,6 @@ declare global {
     __portalLive: {
       status: OrchestratorStatus;
       items: Item[];
-      threads: Thread[];
       intents: Intent[];
       approvals: Approval[];
       workspace: Workspace;
@@ -543,17 +540,14 @@ export async function setupPortal(
     folders?: FolderHit[];
     /**
      * Talk to Portal's state: what `/api/portal`, its messages, items, and stream answer with, and
-     * what the phase 2 routes (threads, jobs, runs, intents, activity, memory, world, approvals)
-     * answer, per the contracts. Everything defaults to empty but the main thread.
+     * what the phase 2 routes (jobs, runs, intents, activity, memory, world, approvals)
+     * answer, per the contracts. Everything defaults to empty but the chat.
      */
     portal?: {
       status?: Partial<OrchestratorStatus>;
       messages?: OrchestratorMessage[];
       queue?: QueuedPrompt[];
       items?: Item[];
-      threads?: Thread[];
-      /** Side threads' messages by thread id. */
-      threadMessages?: Record<string, OrchestratorMessage[]>;
       intents?: Intent[];
       /**
        * Watches that ended (done, cancelled, expired): `GET /api/portal/intents?status=…` lists them
@@ -606,7 +600,6 @@ export async function setupPortal(
     // Timed from now, not from module load, so "next in 7 min" holds however long the run has been going.
     status: { ...portalStatus, nextJob: { ...portalStatus.nextJob!, at: Date.now() + 7 * 60_000 }, ...options.portal?.status },
     items: structuredClone(options.portal?.items ?? [portalItem]),
-    threads: structuredClone(options.portal?.threads ?? [mainThread]),
     intents: structuredClone(options.portal?.intents ?? []),
     approvals: structuredClone(options.portal?.approvals ?? []),
     workspace: structuredClone(options.workspace ?? EMPTY_WORKSPACE),
@@ -626,7 +619,6 @@ export async function setupPortal(
     await page.evaluate((workspace) => window.__portalEmit("/api/portal/stream", { type: "workspace", workspace }, "message"), next);
   };
   const orch = {
-    threadMessages: structuredClone(options.portal?.threadMessages ?? {}),
     jobs: structuredClone(options.portal?.jobs ?? []),
     runs: structuredClone(options.portal?.runs ?? []),
     activity: structuredClone(options.portal?.activity ?? []),
@@ -638,7 +630,7 @@ export async function setupPortal(
     grants: structuredClone(options.portal?.grants ?? []),
     closedIntents: structuredClone(options.portal?.closedIntents ?? []),
   };
-  const portalThread = structuredClone(options.portal?.messages ?? portalMessages);
+  const portalChat = structuredClone(options.portal?.messages ?? portalMessages);
   const history = options.history ?? events;
   const requests: { path: string; method: string; body: unknown }[] = [];
   let failSend = false;
@@ -647,8 +639,8 @@ export async function setupPortal(
   let failPortalSend: string | null = null;
   /** When set, `PATCH /api/sessions/:id` answers 400 `{ error }`, as the server does for a title it refuses. */
   let failRename: string | null = null;
-  /** Sends to these threads wait until the test releases them: a turn that stays "running". */
-  const sendHolds = new Map<string, Promise<void>>();
+  /** Sends wait on this until the test releases them: a turn that stays "running". */
+  let sendHold: Promise<void> | null = null;
   if (!options.webgl) await page.addInitScript(disableWebGL);
   await page.addInitScript(
     ({ sessions, live }) => {
@@ -686,7 +678,6 @@ export async function setupPortal(
             } else if (url === "/api/portal/stream") {
               this.send({ type: "status", status: window.__portalLive.status }, "message");
               this.send({ type: "items", items: window.__portalLive.items }, "message");
-              this.send({ type: "threads", threads: window.__portalLive.threads }, "message");
               this.send({ type: "approvals", approvals: window.__portalLive.approvals }, "message");
               this.send({ type: "intents", intents: window.__portalLive.intents }, "message");
               this.send({ type: "workspace", workspace: window.__portalLive.workspace }, "message");
@@ -791,7 +782,7 @@ export async function setupPortal(
       return json({ q, ...(options.search?.(q) ?? { messages: [], pulls: [] }) });
     }
     if (path === "/api/portal/messages" && method === "GET")
-      return json({ messages: portalThread });
+      return json({ messages: portalChat });
     if (path === "/api/portal/queue" && method === "GET") return json({ queue: agentQueue });
     if (path === "/api/portal/queue" && method === "POST") {
       const queued = { id: `aq${++queuedId}`, text: body.text, queuedAt: Date.now(), editing: false };
@@ -809,35 +800,24 @@ export async function setupPortal(
       await emitPortal(page, { type: "queue", queue: agentQueue });
       return json({ item });
     }
-    const threadRoute = path.match(/^\/api\/portal\/threads\/([^/]+)\/(messages|cancel)$/);
-    if (threadRoute?.[2] === "cancel" && method === "POST") {
-      if (threadRoute[1] !== "main") return route.fulfill({ status: 204 });
+    if (path === "/api/portal/cancel" && method === "POST") {
       const queued = agentQueue.splice(0);
       await emitPortal(page, { type: "queue", queue: [] });
       return json({ queued });
     }
-    if (threadRoute && method === "GET") {
-      const id = decodeURIComponent(threadRoute[1]);
-      if (id === "main") return json({ messages: portalThread });
-      if (!live.threads.some((thread) => thread.id === id)) return json({ error: `Unknown thread "${id}".` }, 404);
-      return json({ messages: orch.threadMessages[id] ?? [] });
-    }
-    if ((path === "/api/portal/messages" || threadRoute) && method === "POST") {
+    if (path === "/api/portal/messages" && method === "POST") {
       if (failPortalSend) return json({ error: failPortalSend }, 409);
-      const id = threadRoute ? decodeURIComponent(threadRoute[1]) : "main";
-      const thread = id === "main" ? portalThread : (orch.threadMessages[id] ??= []);
-      const hold = sendHolds.get(id);
-      if (hold) await hold;
+      if (sendHold) await sendHold;
       // Like the runtime: keep the user message and the reply, and answer with the AI SDK UI message stream.
       const reply = `Portal reply to: ${body?.message?.parts?.[0]?.text ?? ""}`;
-      thread.push(body.message, {
-        id: `reply-${id}-${thread.length}`,
+      portalChat.push(body.message, {
+        id: `reply-${portalChat.length}`,
         role: "assistant",
         metadata: { at: now },
         parts: [{ type: "text", text: reply }],
       });
       const chunks = [
-        { type: "start", messageId: `reply-${id}-${thread.length - 1}` },
+        { type: "start", messageId: `reply-${portalChat.length - 1}` },
         { type: "text-start", id: "t" },
         { type: "text-delta", id: "t", delta: reply },
         { type: "text-end", id: "t" },
@@ -852,7 +832,6 @@ export async function setupPortal(
         body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join(""),
       });
     }
-    if (path === "/api/portal/cancel") return route.fulfill({ status: 204 });
     if (path === "/api/portal/items") return json({ items: live.items });
     if (path === "/api/workspace" && method === "GET") return json({ workspace: live.workspace });
     if (path === "/api/workspace/ops" && method === "POST") {
@@ -1192,23 +1171,19 @@ export async function setupPortal(
     failRename: (error: string | null = "A title is 1 to 120 characters.") => {
       failRename = error;
     },
-    /** Adds to the thread `GET /api/portal/messages` answers with, the way a background job does; pair with a `messages` stream event. */
-    appendPortalMessage: (message: OrchestratorMessage, threadId = "main") => {
-      if (threadId === "main") portalThread.push(structuredClone(message));
-      else (orch.threadMessages[threadId] ??= []).push(structuredClone(message));
+    /** Adds to the chat `GET /api/portal/messages` answers with, the way a background job does; pair with a `messages` stream event. */
+    appendPortalMessage: (message: OrchestratorMessage) => {
+      portalChat.push(structuredClone(message));
     },
-    /** Holds chat sends to `threadId` until the returned function is called. */
-    holdSends: (threadId = "main") => {
+    /** Holds chat sends until the returned function is called. */
+    holdSends: () => {
       let release = () => {};
-      sendHolds.set(
-        threadId,
-        new Promise<void>((resolve) => {
-          release = () => {
-            sendHolds.delete(threadId);
-            resolve();
-          };
-        }),
-      );
+      sendHold = new Promise<void>((resolve) => {
+        release = () => {
+          sendHold = null;
+          resolve();
+        };
+      });
       return release;
     },
     /**
@@ -1237,13 +1212,12 @@ export async function setupPortal(
     },
     /** The mocked server's orchestrator data, for asserting what a request changed. */
     orchestrator: orch,
-    /** What the stream opened with (status, items, threads, intents, approvals); the mocked routes read it too. */
+    /** What the stream opened with (status, items, intents, approvals); the mocked routes read it too. */
     portalLive: live,
   };
 }
 
 type OrchestratorData = {
-  threadMessages: Record<string, OrchestratorMessage[]>;
   jobs: Job[];
   runs: JobRun[];
   activity: ActivityEntry[];
@@ -1266,14 +1240,13 @@ function handleOrchestrator(
   method: string,
   params: URLSearchParams,
   body: Record<string, unknown> | null,
-  live: { threads: Thread[]; intents: Intent[]; approvals: Approval[] },
+  live: { intents: Intent[]; approvals: Approval[] },
   data: OrchestratorData,
 ): { body: unknown; status?: number } | null {
   const ok = (value: unknown) => ({ body: value });
   const missing = (what: string) => ({ body: { error: `Unknown ${what}.` }, status: 404 });
   const limit = Number(params.get("limit") ?? 50);
   const before = params.get("before");
-  if (path === "/api/portal/threads" && method === "GET") return ok({ threads: live.threads });
   if (path === "/api/portal/activity" && method === "GET") {
     const kind = params.get("kind");
     const entries = data.activity
@@ -1292,7 +1265,7 @@ function handleOrchestrator(
     if (!row) return missing("job");
     if (job[2] && method === "POST") {
       const run: JobRun = {
-        id: `run-${row.id}-now`, jobId: row.id, kind: row.kind, threadId: row.threadId, parentRunId: null, status: "running",
+        id: `run-${row.id}-now`, jobId: row.id, kind: row.kind, parentRunId: null, status: "running",
         trigger: "manual", startedAt: Date.now(), finishedAt: null, model: null, usage: null, log: [], result: null, summary: null, error: null,
       };
       data.runs.unshift(run);
@@ -1319,7 +1292,7 @@ function handleOrchestrator(
     const row = data.jobs.find((entry) => entry.id === "consolidate");
     if (row?.status === "paused") return { body: { error: "Memory curation is paused." }, status: 409 };
     const run: JobRun = {
-      id: "run-curate-now", jobId: "consolidate", kind: "consolidate", threadId: null, parentRunId: null, status: "running", trigger: "manual",
+      id: "run-curate-now", jobId: "consolidate", kind: "consolidate", parentRunId: null, status: "running", trigger: "manual",
       startedAt: Date.now(), finishedAt: null, model: null, usage: null, log: [], result: null, summary: null, error: null,
     };
     data.runs.unshift(run);

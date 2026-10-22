@@ -19,8 +19,8 @@ async function run(tool, input) {
 
 const userMessage = (text, id = "u1") => ({ id, role: "user", parts: [{ type: "text", text }], metadata: { at: 1 } });
 
-function toolsFor(hub, origin, threadId = "main") {
-  const turn = { runId: "run1", kind: origin === "chat" ? "chat" : "tick", role: "chat", origin, threadId, jobId: null, intentId: null, scope: {} };
+function toolsFor(hub, origin) {
+  const turn = { runId: "run1", kind: origin === "chat" ? "chat" : "tick", role: "chat", origin, jobId: null, intentId: null, scope: {} };
   return hub.memory.tools({ hub, turn, store: hub.store, settings: hub.settings, deps: hub.deps, touched: new Set(), interactive: origin === "chat", now: () => 0, self: {} });
 }
 
@@ -32,7 +32,7 @@ test("chat turns get all five memory tools, background turns only propose and se
   assert.deepEqual(Object.keys(toolsFor(hub, "job")).sort(), ["propose_memory", "search_memory"]);
 });
 
-test("remember needs a quote from the user's latest message in the thread; anything else is refused", async (t) => {
+test("remember needs a quote from the user's latest message in the chat; anything else is refused", async (t) => {
   const { hub, store, memory } = await memorySetup(t);
   await store.appendMessages([userMessage("Earlier: I like yarn.", "u0"), { id: "a0", role: "assistant", parts: [{ type: "text", text: "ok. I PREFER PNPM" }], metadata: { at: 1 } }]);
   await store.appendMessages([userMessage("Please remember that I prefer pnpm  for installs.")]);
@@ -50,12 +50,7 @@ test("remember needs a quote from the user's latest message in the thread; anyth
   assert.equal(ok.status, "active");
   assert.equal(ok.authority, "user_stated");
   const record = await memory.store.getRecord(ok.id);
-  assert.deepEqual(record.source, { kind: "message", threadId: "main", messageId: "u1", runId: "run1", quote: "I prefer pnpm for installs" });
-
-  // In a side thread, the quote must come from that thread.
-  const side = await store.createThread({ title: "Side" });
-  const sideTools = toolsFor(hub, "chat", side.id);
-  assert.match((await run(sideTools.remember, remember({ quote: "I prefer pnpm" }))).error, /does not appear/);
+  assert.deepEqual(record.source, { kind: "message", messageId: "u1", runId: "run1", quote: "I prefer pnpm for installs" });
 });
 
 test("forget needs the same quote; explain_memory and search_memory report evidence compactly", async (t) => {

@@ -4,7 +4,6 @@ import { Activity, LoaderCircle, ShieldAlert } from "lucide-react";
 import { usePortalLive, useNow } from "./PortalLive";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { describeStatusLine, runDuration } from "@/lib/orchestrator/format";
-import { MAIN_THREAD_ID } from "@/lib/orchestrator/types";
 
 const runKindLabels: Record<string, string> = {
   chat: "Chat turn",
@@ -18,15 +17,11 @@ const runKindLabels: Record<string, string> = {
  * comes next) with the next job's time counted down here. While anything runs, it opens a list of
  * the runs; when approvals wait, a pill brings the approvals dialog back.
  */
-export default function PortalStatusLine({ onOpenThread }: { onOpenThread: (threadId: string) => void }) {
-  const { status, threads, approvals, requestApproval } = usePortalLive();
+export default function PortalStatusLine() {
+  const { status, approvals, requestApproval } = usePortalLive();
   const now = useNow(15_000);
   const { line, next, tone } = describeStatusLine(status, now);
   const runs = status?.runs ?? [];
-  const titleOf = (threadId: string | null) =>
-    threadId === null || threadId === MAIN_THREAD_ID
-      ? "Main thread"
-      : threads.find((thread) => thread.id === threadId)?.title ?? "Side thread";
   const text = (
     <>
       {/* On narrow screens the countdown gives way first, so the line stays readable. */}
@@ -60,18 +55,6 @@ export default function PortalStatusLine({ onOpenThread }: { onOpenThread: (thre
                     <p className="truncate">{run.summary ?? runKindLabels[run.kind] ?? run.kind}</p>
                     <p className="text-[11px] text-muted-foreground">
                       {runKindLabels[run.kind] ?? run.kind} · {runDuration({ startedAt: run.startedAt, finishedAt: null }, now)}
-                      {run.threadId && (
-                        <>
-                          {" · "}
-                          <button
-                            type="button"
-                            className="underline-offset-2 hover:text-foreground hover:underline"
-                            onClick={() => onOpenThread(run.threadId!)}
-                          >
-                            {titleOf(run.threadId)}
-                          </button>
-                        </>
-                      )}
                     </p>
                   </div>
                 </li>

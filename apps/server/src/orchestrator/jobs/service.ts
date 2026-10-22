@@ -52,8 +52,8 @@ export type JobsOptions = {
   store?: JobsStore;
   /** Runs one world refresh into the report (default `performRefresh`); tests pass a fake. */
   tick?: TickRunner;
-  /** Keeps a thread bounded after a job posted to it. */
-  trimThread?: (threadId: string) => Promise<void>;
+  /** Keeps the chat bounded after a job posted to it. */
+  trimChat?: () => Promise<void>;
   worker?: WorkerOptions;
 };
 
@@ -65,9 +65,9 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   const now = () => hub.timers.now();
   const store = options.store ?? (hub.db ? createPgJobsStore({ db: hub.db, now }) : createMemoryJobsStore({ now }));
   const runs = createRuns(hub, store);
-  const trimThread = options.trimThread ?? (async () => {});
+  const trimChat = options.trimChat ?? (async () => {});
   const core = createCore({
-    hub, store, runs, trimThread,
+    hub, store, runs, trimChat,
     tick: options.tick ?? ((report, { signal }) => performRefresh(hub, report, { signal })),
   });
   const intents = createIntents(core);
@@ -132,7 +132,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
   }
 
   function execute(job: Job, trigger: RunTrigger): Execution {
-    const started = runs.start({ kind: job.kind, trigger, jobId: job.id, threadId: job.threadId, parentRunId: parentOf(job), summary: job.title }, { adopt: false });
+    const started = runs.start({ kind: job.kind, trigger, jobId: job.id, parentRunId: parentOf(job), summary: job.title }, { adopt: false });
     const done = started.then((run) => fire(job, run, trigger), async (err: unknown) => {
       await store.release(job.id, { failures: job.failures + 1, nextRunAt: now() + backoff(job.failures + 1) }).catch(() => {});
       throw err;
@@ -216,7 +216,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     const fields = {
       title: `Watch stopped after failing: ${intent.text.length > 150 ? `${intent.text.slice(0, 149)}…` : intent.text}`,
       body: `Its last ${MAX_WATCH_FAILURES} runs failed${run.error ? ` (last error: ${run.error.slice(0, 300)})` : ""}. It runs again once you resume its job, or ask Portal to look into it.`,
-      links: { intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) },
+      links: { intentId: intent.id },
       actions: [{ type: "ask_portal" as const, text: `The watch "${intent.text.slice(0, 200)}" (${intent.id}) stopped after failing. Find out why and fix it.`, label: "Ask Portal" }],
     };
     const existing = await hub.store.findItemByFingerprint(fingerprint);
@@ -294,7 +294,7 @@ export function createJobsService(hub: OrchestratorHub, options: JobsOptions = {
     if (helpers.cancel(id)) return true;
     const run = runs.get(id) ?? (await store.getRun(id));
     if (!run || isRefreshRun(run)) throw httpError(`Unknown run "${id}".`, 404);
-    if (run.status === "running" && run.kind === "chat") throw httpError("A chat turn is stopped from its thread.", 409);
+    if (run.status === "running" && run.kind === "chat") throw httpError("A chat turn is stopped from the chat.", 409);
     return false;
   }
 

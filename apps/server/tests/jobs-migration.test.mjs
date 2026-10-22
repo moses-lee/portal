@@ -80,8 +80,8 @@ test("the data migration turns watches into intents with check jobs, relinks ite
   assert.deepEqual(Object.keys(intents).sort(), ["w1", "w2", "w3"]);
   const w1 = intents.w1;
   assert.deepEqual(
-    { text: w1.text, notes: w1.notes, status: w1.status, fireBudget: w1.fireBudget, fires: w1.fires, cooldownMs: w1.cooldownMs, lastCheckedAt: w1.lastCheckedAt, threadId: w1.threadId, createdAt: w1.createdAt },
-    { text: "Review PRs on acme/app (w1)", notes: "notes w1", status: "active", fireBudget: null, fires: 0, cooldownMs: 0, lastCheckedAt: 1500, threadId: null, createdAt: 1000 },
+    { text: w1.text, notes: w1.notes, status: w1.status, fireBudget: w1.fireBudget, fires: w1.fires, cooldownMs: w1.cooldownMs, lastCheckedAt: w1.lastCheckedAt, createdAt: w1.createdAt },
+    { text: "Review PRs on acme/app (w1)", notes: "notes w1", status: "active", fireBudget: null, fires: 0, cooldownMs: 0, lastCheckedAt: 1500, createdAt: 1000 },
   );
   assert.deepEqual(w1.scope, { projectIds: ["p1"], sessionIds: ["s1"], pulls: [pull, { ...pull, number: 8 }], repos: ["acme/app"], people: [], taskTypes: [] });
   assert.match(w1.trigger, /notes are waiting for/);

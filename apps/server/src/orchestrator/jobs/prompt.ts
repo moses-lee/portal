@@ -95,7 +95,7 @@ export function watchRunPrompt(intent: Intent, now: number, { events, sessions, 
     "3. Rewrite the notes with update_watch when your understanding changed: what you saw and reported, and what is left.",
     ...(intent.source.type === "poll" ? ["4. Call end_watch, with the evidence, when the watch is fulfilled or can never fire; your reply is still delivered first."] : []),
     ...(renewable ? ["   This watch expires within a day. If what it waits for is still ahead, renew_watch extends it once."] : []),
-    "Then reply with what the user should hear: one to three plain sentences, naming the session or PR and what happened (findings in brief, a question it asks, what it needs). Lead with the news itself: the first sentence becomes the item's title, so say what was found or decided, not that a turn ended or the session is idle. That reply becomes a Needs-you item and a note in the thread.",
+    "Then reply with what the user should hear: one to three plain sentences, naming the session or PR and what happened (findings in brief, a question it asks, what it needs). Lead with the news itself: the first sentence becomes the item's title, so say what was found or decided, not that a turn ended or the session is idle. That reply becomes a Needs-you item and a note in the chat.",
     "When nothing is worth telling (nothing changed since the last firing, or the event is noise), reply with [quiet] and a few words why. Never fire to say nothing happened.",
   ].join("\n");
 }

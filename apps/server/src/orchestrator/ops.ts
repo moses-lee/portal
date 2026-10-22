@@ -49,7 +49,7 @@ export type SessionWorkspace = { workspace: Pick<WorkspaceService, "apply">; con
 
 /** Attribute automatic workspace opens to the turn that created the session. */
 export function sessionWorkspace(ctx: Pick<DomainToolContext, "hub" | "turn">): SessionWorkspace {
-  return { workspace: ctx.hub.workspace, context: { runId: ctx.turn.runId, ...(ctx.turn.threadId ? { threadId: ctx.turn.threadId } : {}) } };
+  return { workspace: ctx.hub.workspace, context: { runId: ctx.turn.runId } };
 }
 
 /**

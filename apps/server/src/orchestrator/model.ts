@@ -26,7 +26,7 @@ export function buildLanguageModel(settings: OrchestratorSettings, apiKey: strin
 /**
  * Provider options per provider. Anthropic turns on automatic prompt caching: the breakpoint moves
  * to the last cacheable block of each request, so every step of a tool loop (and the next turn in
- * the thread) reads the system prompt, the tools, and the history before it from the cache.
+ * the chat) reads the system prompt, the tools, and the history before it from the cache.
  *
  * OpenAI reasoning models run at low effort (the provider drops the option with a warning on
  * models without reasoning); OpenAI caches long prefixes on its own.
@@ -35,7 +35,7 @@ export function buildLanguageModel(settings: OrchestratorSettings, apiKey: strin
  * assistant messages as references to stored items, and a message item must travel with the
  * reasoning item it came from; Portal prunes reasoning from older turns, so the second turn of a
  * conversation failed with "provided without its required 'reasoning' item". Unstored, the SDK
- * sends plain content and the thread on disk stays the only copy.
+ * sends plain content and the stored chat stays the only copy.
  */
 export function providerOptionsFor(provider: OrchestratorProvider): ProviderOptions {
   if (provider === "anthropic") return { anthropic: { cacheControl: { type: "ephemeral" } } };

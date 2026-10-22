@@ -16,7 +16,6 @@ import type {
   Item,
   OrchestratorEvent,
   OrchestratorStatus,
-  Thread,
 } from "@/lib/orchestrator/types";
 
 /** What listeners receive: every server event, plus `reconnected` when the stream reopens after a drop (anything may be stale). */
@@ -26,8 +25,6 @@ export type PortalLive = {
   /** Null until the first `GET /api/portal` or stream `status` lands. */
   status: OrchestratorStatus | null;
   items: Item[];
-  /** Main first, then the agent's side threads (as the server orders them), archived ones included. */
-  threads: Thread[];
   /** Active intents, as the stream pushes them. */
   intents: Intent[];
   /** Pending approval requests; the approvals dialog shows them whenever there are any. */
@@ -55,7 +52,7 @@ const MAX_RETRY = 30_000;
 
 /**
  * The orchestrator's live state for the whole app: `GET /api/portal/stream` opens with `status`,
- * `items`, `threads`, `approvals`, and `intents`, then pushes changes. It lives above every page so
+ * `items`, `approvals`, and `intents`, then pushes changes. It lives above every page so
  * an approval request reaches the user wherever they are, and holding it open is what the server
  * counts as presence. Views that show other data (jobs, activity, memory, world) subscribe and
  * refetch on their event. The browser reconnects a dropped `EventSource` on its own; a refused one
@@ -64,7 +61,6 @@ const MAX_RETRY = 30_000;
 export function PortalLiveProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<OrchestratorStatus | null>(null);
   const [items, setItems] = useState<Item[]>([]);
-  const [threads, setThreads] = useState<Thread[]>([]);
   const [intents, setIntents] = useState<Intent[]>([]);
   const [approvals, setApprovalsState] = useState<Approval[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -133,9 +129,6 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
           case "items":
             setItems(event.items);
             break;
-          case "threads":
-            setThreads(event.threads);
-            break;
           case "intents":
             setIntents(event.intents);
             break;
@@ -191,7 +184,6 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       items,
-      threads,
       intents,
       approvals,
       error,
@@ -202,7 +194,7 @@ export function PortalLiveProvider({ children }: { children: ReactNode }) {
       requestApproval,
       requestedApproval,
     }),
-    [status, items, threads, intents, approvals, error, putItem, putIntent, setApprovals, subscribe, requestApproval, requestedApproval],
+    [status, items, intents, approvals, error, putItem, putIntent, setApprovals, subscribe, requestApproval, requestedApproval],
   );
   return <PortalLiveContext.Provider value={value}>{children}</PortalLiveContext.Provider>;
 }

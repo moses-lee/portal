@@ -1,6 +1,6 @@
 /**
  * Wire types for "Talk to Portal", the orchestrator: a coordinator that lives outside every project
- * and session. It chats in threads, knows the user's world (refreshed quietly in the background and
+ * and session. It chats with the user, knows the user's world (refreshed quietly in the background and
  * diffed into a change log its chat turns read), runs the background jobs the agent schedules
  * (intent checks, helpers, memory curation), keeps curated memory, and asks before anything
  * irreversible. The server owns the runtime and its stores; the browser reads these shapes
@@ -11,18 +11,15 @@
  *
  * HTTP surface (all same-origin checked like the rest of Portal):
  *   GET    /api/portal                 { status }
- *   GET    /api/portal/threads         { threads }
- *   GET    /api/portal/messages        { messages }   (the main thread)
- *   POST   /api/portal/messages        body { message: OrchestratorMessage } -> UI message stream (main thread)
- *   GET    /api/portal/threads/:id/messages          { messages }
- *   POST   /api/portal/threads/:id/messages          body { message } -> UI message stream
- *   POST   /api/portal/threads/:id/cancel            -> 204
- *   POST   /api/portal/cancel          -> 204 (the main thread's turn)
+ *   GET    /api/portal/messages        { messages }   (one page, see MessagePage)
+ *   GET    /api/portal/messages/:id    { message }    (in full, tool input and output included)
+ *   POST   /api/portal/messages        body { message: OrchestratorMessage } -> UI message stream
+ *   POST   /api/portal/cancel          -> { queued } (stops the chat turn, drops the queue)
  *   GET    /api/portal/items           { items }
  *   PATCH  /api/portal/items/:id       body ItemPatch -> { item }
  *   POST   /api/portal/items/:id/actions/:index -> { sessionId?, promptError?, approvalId? }
  *   GET    /api/portal/activity        see activity.ts
- *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `threads`, `approvals`, `intents`, `workspace`, `room`, `monitoring`
+ *   GET    /api/portal/stream          SSE of OrchestratorEvent; opens with `status`, `items`, `approvals`, `intents`, `workspace`, `room`, `monitoring`
  */
 import type { UIMessage } from "ai";
 import type { QueuedPrompt } from "./types.ts";
@@ -135,7 +132,7 @@ export const defaultModels: Record<OrchestratorProvider, Record<ModelRole, strin
 };
 
 // ---------------------------------------------------------------------------------------------
-// Scope: what a thread, an intent, or a memory record is about
+// Scope: what a turn, an intent, or a memory record is about
 // ---------------------------------------------------------------------------------------------
 
 export type Scope = {
@@ -151,30 +148,6 @@ export type Scope = {
 };
 
 export const emptyScope = (): Scope => ({ projectIds: [], sessionIds: [], pulls: [], repos: [], people: [], taskTypes: [] });
-
-// ---------------------------------------------------------------------------------------------
-// Threads
-// ---------------------------------------------------------------------------------------------
-
-/** The one thread the user talks in; side threads (one per task) are created by the agent only. */
-export const MAIN_THREAD_ID = "main";
-
-export type ThreadKind = "main" | "side";
-export type ThreadStatus = "active" | "archived";
-
-export type Thread = {
-  id: string;
-  kind: ThreadKind;
-  title: string;
-  status: ThreadStatus;
-  /** What the thread is about; memory retrieval in its turns narrows to this. Empty for the main thread. */
-  scope: Scope;
-  /** The intent the thread was opened for, when there is one. */
-  intentId: string | null;
-  createdAt: number;
-  updatedAt: number;
-  lastMessageAt: number | null;
-};
 
 // ---------------------------------------------------------------------------------------------
 // Items
@@ -232,7 +205,6 @@ export type ItemLinks = {
   pull?: PullRef;
   intentId?: string;
   jobId?: string;
-  threadId?: string;
   approvalId?: string;
 };
 
@@ -278,22 +250,22 @@ export type BulkItemsResponse = { items: Item[]; missing: string[] };
 // Conversation
 // ---------------------------------------------------------------------------------------------
 
-/** Extra data Portal keeps on each message of the one shared thread. */
+/** Extra data Portal keeps on each message of the chat. */
 export type OrchestratorMessageMetadata = {
   /** Epoch ms when the message was created. */
   at: number;
   /**
    * Set on the "Scheduled check" notes the tick posted before it became a silent world refresh. No
-   * new message carries it; old ones keep it so the thread still labels them.
+   * new message carries it; old ones keep it so the chat still labels them.
    */
   tick?: { id: string; reason: TickReason };
   /** The run that produced an assistant message (chat turn, helper, intent check, curation). */
   run?: { id: string; kind: JobRun["kind"] };
-  /** Items created or updated by this message. The thread does not show them (they live in Needs you); the audit trail does. */
+  /** Items created or updated by this message. The chat does not show them (they live in Needs you); the audit trail does. */
   itemIds?: string[];
   /**
    * Set on a message served in a page: its tool parts carry `TOOL_IO_OMITTED` in place of their
-   * input and output. `GET /api/portal/threads/[id]/messages/[messageId]` has the whole message.
+   * input and output. `GET /api/portal/messages/[id]` has the whole message.
    */
   toolIO?: "omitted";
 };
@@ -304,7 +276,7 @@ export type OrchestratorMessage = UIMessage<OrchestratorMessageMetadata>;
 export const TOOL_IO_OMITTED = "[open to load]";
 
 /**
- * One page of a thread (`GET /api/portal/messages`, `GET /api/portal/threads/[id]/messages`),
+ * One page of the chat (`GET /api/portal/messages`),
  * oldest first. Cursors are the store's ordinals: `?before=<before>` pages back, `?after=<after>`
  * fetches what arrived since. Null cursors mean the page was empty.
  */
@@ -388,10 +360,8 @@ export type OrchestratorStatus = {
   busy: boolean;
   /** How many browsers currently hold a Portal event stream open. Jobs with an idle cadence follow it. */
   presence: number;
-  /** Threads with a chat turn running; each thread has its own lock, and jobs never take one. */
-  busyThreads: string[];
   /** Runs in progress right now (chat turns and background jobs), oldest first. The world refresh is not listed. */
-  runs: Pick<JobRun, "id" | "kind" | "jobId" | "threadId" | "startedAt" | "summary">[];
+  runs: Pick<JobRun, "id" | "kind" | "jobId" | "startedAt" | "summary">[];
   /** The next job due, for the status line (never the world refresh). */
   nextJob: { id: string; title: string; at: number } | null;
   counts: { needsYou: number; inbox: number; approvals: number; intents: number };
@@ -402,13 +372,12 @@ export type OrchestratorStatus = {
 /** Pushed over `GET /api/portal/stream` (Server-Sent Events). */
 export type OrchestratorEvent =
   | { type: "status"; status: OrchestratorStatus }
-  /** Main-thread prompt queue, shared by every viewer and held in memory like session queues. */
+  /** The chat's prompt queue, shared by every viewer and held in memory like session queues. */
   | { type: "queue"; queue: QueuedPrompt[] }
   /** A queued turn's live message, replacing an earlier snapshot with the same id. */
-  | { type: "chat-message"; threadId: string; message: OrchestratorMessage; done?: boolean }
-  /** A thread changed outside the viewer's own chat turn (a job appended a message). Refetch that thread; absent `threadId` means the main thread. */
-  | { type: "messages"; threadId?: string }
-  | { type: "threads"; threads: Thread[] }
+  | { type: "chat-message"; message: OrchestratorMessage; done?: boolean }
+  /** The chat changed outside the viewer's own chat turn (a job appended a message). Refetch it. */
+  | { type: "messages" }
   | { type: "activity"; entry: ActivityEntry }
   /** Jobs changed; refetch `/api/portal/jobs`. */
   | { type: "jobs" }

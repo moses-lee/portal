@@ -57,7 +57,7 @@ test("Run now starts a pass and opens it; the run fills in when it ends", async 
   await expect(run).toContainText("Run now");
 });
 
-test("the digest line in the main thread opens its run", async ({ page }) => {
+test("the digest line in the chat opens its run", async ({ page }) => {
   await setupPortal(page, {
     portal: {
       ...portal(),

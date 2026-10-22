@@ -192,7 +192,7 @@ function checkSource(raw: unknown): RecordSource {
   const source = raw as RecordSource;
   if (!SOURCE_KINDS.has(source.kind)) throw invalid(`Unknown source kind "${String(source.kind)}".`);
   const result: RecordSource = { kind: source.kind };
-  for (const field of ["threadId", "messageId", "sessionId", "runId", "url", "quote"] as const) {
+  for (const field of ["messageId", "sessionId", "runId", "url", "quote"] as const) {
     const value = source[field];
     if (value === undefined || value === null) continue;
     if (typeof value !== "string") throw invalid(`source.${field} must be a string.`);

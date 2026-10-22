@@ -8,7 +8,7 @@
  *
  * A run is a full agent turn on the watch role's model. Its final reply is the firing: a reply
  * opening with [quiet] (or empty) says nothing happened worth telling; anything else becomes the
- * watch's Needs-you item and a note in its thread. The server keeps the rules: a firing is refused
+ * watch's Needs-you item and a note in the chat. The server keeps the rules: a firing is refused
  * past the budget, during a cooldown, after expiry, or (for a poll watch) when it repeats the last
  * one; spending the budget finishes the watch; every watch but the standing rule expires (seven days
  * by default, at most thirty), and an expired one leaves an item saying so.
@@ -20,7 +20,6 @@ import { expandId, expandScope, knownIds, mapRefs } from "../ids.ts";
 import { httpError } from "../ops.ts";
 import { generateTurn, prepareTurn } from "../turn.ts";
 import type { Item, ItemAction, ItemLinks } from "../types.ts";
-import { MAIN_THREAD_ID } from "../types.ts";
 import type { JobsCore } from "./core.ts";
 import type { KindContext, KindResult } from "./kinds.ts";
 import { type EventDetail, watchRunPrompt } from "./prompt.ts";
@@ -56,10 +55,9 @@ const DETAILED_EVENTS = 5;
 export type IntentsPart = ReturnType<typeof createIntents>;
 
 /** `stopped` collects the ids of runs in progress that ending a check job stopped. */
-type How = { actor: ActivityActor; runId?: string; threadId?: string | null; stopped?: string[] };
+type How = { actor: ActivityActor; runId?: string; stopped?: string[] };
 
-const intentRefs = (intent: Pick<Intent, "id" | "threadId">, runId?: string) =>
-  ({ intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}), ...(runId ? { runId } : {}) });
+const intentRefs = (intent: Pick<Intent, "id">, runId?: string) => ({ intentId: intent.id, ...(runId ? { runId } : {}) });
 
 const short = (text: string, max = 80) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
@@ -152,12 +150,12 @@ export function createIntents(core: JobsCore) {
     const expiresAt = source.type === "portal_sessions" ? null : lifetime(input.expiresAt, now);
     // A session watch starts from what its sessions show now, so it reports only what happens next.
     const startEvents = input.events ?? (evented && events ? events.baseline({ pending: [], handled: [], seen: [] }, source, await hub.deps.sessions.list().catch(() => [])) : undefined);
-    const intent = await store.createIntent({ ...input, source, events: startEvents, expiresAt, threadId: input.threadId ?? how.threadId ?? null });
+    const intent = await store.createIntent({ ...input, source, events: startEvents, expiresAt });
     const schedule: JobSchedule = evented ? { type: "every", everyMs: EVENT_JOB_EVERY_MS } : input.check;
     const job = await core.scheduleJob({
       kind: "intent_check", title: checkTitle(intent.text), schedule,
       payload: { ...input.checkPayload, intentId: intent.id, ...(input.role ? { role: input.role } : {}) },
-      intentId: intent.id, threadId: intent.threadId, createdBy: how.actor === "user" ? "user" : how.actor === "system" ? "system" : "agent",
+      intentId: intent.id, createdBy: how.actor === "user" ? "user" : how.actor === "system" ? "system" : "agent",
       nextRunAt: evented ? null : input.checkNow ? now : nextRunAt(schedule, { now, lastRunAt: null, present: core.present() }),
     }, how.actor, { runId: how.runId });
     void hub.activity.log({
@@ -234,7 +232,7 @@ export function createIntents(core: JobsCore) {
     // The new check job carries the old one's payload: its role and any watch it keeps.
     await core.scheduleJob({
       kind: "intent_check", title: checkTitle(intent.text), schedule, payload: { ...last?.payload, intentId: id },
-      intentId: id, threadId: intent.threadId, createdBy: how.actor === "user" ? "user" : "agent",
+      intentId: id, createdBy: how.actor === "user" ? "user" : "agent",
       nextRunAt: evented ? null : nextRunAt(schedule, { now, lastRunAt: null, present: core.present() }),
     }, how.actor, { runId: how.runId });
     if (evented && events) {
@@ -266,7 +264,7 @@ export function createIntents(core: JobsCore) {
    */
   async function raiseItem(stored: Intent, title: string, body: string, sessionId?: string): Promise<Item> {
     const intent = { ...stored, scope: expandScope(stored.scope, await knownIds(hub.deps)).scope };
-    const links: ItemLinks = { intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) };
+    const links: ItemLinks = { intentId: intent.id };
     const actions: ItemAction[] = [];
     if (intent.scope.pulls.length === 1) {
       links.pull = intent.scope.pulls[0];
@@ -292,7 +290,7 @@ export function createIntents(core: JobsCore) {
     const fields = {
       title: short(`Watch expired: ${intent.text}`, 200),
       body: `This watch stopped at ${new Date(intent.expiresAt ?? hub.timers.now()).toISOString()}. Re-activate it in Watches to keep watching for another week.`,
-      links: { intentId: intent.id, ...(intent.threadId ? { threadId: intent.threadId } : {}) } as ItemLinks, actions: [] as ItemAction[],
+      links: { intentId: intent.id } as ItemLinks, actions: [] as ItemAction[],
     };
     const existing = await hub.store.findItemByFingerprint(fingerprint);
     if (existing) await hub.store.updateItem(existing.id, fields);
@@ -380,13 +378,12 @@ export function createIntents(core: JobsCore) {
    */
   async function runWatch(intent: Intent, { job, run, trigger, signal }: KindContext, taken: WatchEvent[]): Promise<KindResult> {
     const touched = new Set<string>();
-    const threadId = intent.threadId ?? MAIN_THREAD_ID;
     const now = hub.timers.now();
     const sessionIds = isSessionSource(intent.source) ? [...new Set(taken.map((event) => event.sessionId))] : intent.scope.sessionIds;
     const sessions = sessionIds.length ? await hub.deps.sessions.list().catch(() => null) : null;
     const details = await eventDetails(taken);
     const prepared = await prepareTurn(hub, {
-      kind: "intent_check", role: job.payload.role === "chat" ? "chat" : "watch", trigger, threadId, jobId: job.id, intentId: intent.id,
+      kind: "intent_check", role: job.payload.role === "chat" ? "chat" : "watch", trigger, jobId: job.id, intentId: intent.id,
       interactive: false, fullTools: true, scope: { ...intent.scope, sessionIds: [...new Set([...intent.scope.sessionIds, ...sessionIds])] },
       query: `${intent.text}\n${intent.trigger}`, touched, summary: job.title,
     });
@@ -408,7 +405,7 @@ export function createIntents(core: JobsCore) {
       const outcome = await fire(intent.id, { title: firingTitle(text), body: text, sessionId }, { actor: "agent", runId: run.id, touched });
       fired = outcome.fired;
       if (!outcome.fired) refusedBecause = outcome.reason;
-      if (fired) await core.postToThread(threadId, text, run, [...touched]);
+      if (fired) await core.postToChat(text, run, [...touched]);
     }
     if (!fired && touched.size > 0) hub.emit({ type: "items", items: await hub.store.listItems() });
     if (ending) await close(intent.id, ending.status, { actor: "agent", runId: run.id, reason: ending.reason });

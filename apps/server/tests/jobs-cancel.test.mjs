@@ -21,7 +21,7 @@ async function runOf(h, jobId) {
 
 test("cancel_job stops the job's run in progress and says so; the run sends nothing", async (t) => {
   const h = await started(jobsHarness(t, { sessions: [sessionMeta({ id: "s1" })], doGenerate: hang }));
-  const chat = await h.jobs.startRun({ kind: "chat", trigger: "user", threadId: "main" });
+  const chat = await h.jobs.startRun({ kind: "chat", trigger: "user" });
   const tools = h.jobs.tools(toolContext(h, { runId: chat.id }));
   const job = await call(tools, "schedule_job", { title: "Nudge", prompt: "Tell s1 to rebase.", schedule: { inMinutes: 0 }, tools: ["send_prompt"] });
   const run = await runOf(h, job.id);

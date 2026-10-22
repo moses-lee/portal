@@ -5,7 +5,7 @@
  * `activity.log()`; nothing ever updates or deletes an entry.
  *
  * HTTP surface:
- *   GET /api/portal/activity?before=<id>&limit=<n>&kind=<prefix>&threadId=&runId=   { entries }  (newest first)
+ *   GET /api/portal/activity?before=<id>&limit=<n>&kind=<prefix>&runId=   { entries }  (newest first)
  * Live: the orchestrator stream pushes `{ type: "activity", entry }` for every new entry.
  */
 import type { PullRef } from "./orchestrator.ts";
@@ -19,7 +19,7 @@ export type ActivityActor = "user" | "agent" | "system";
  *
  * chat.turn · run.started · run.finished · tool.call · item.created · item.updated · item.resolved ·
  * item.dismissed · item.action · job.scheduled · job.updated · job.cancelled · intent.created ·
- * intent.updated · intent.fired · intent.closed · thread.created · memory.remembered ·
+ * intent.updated · intent.fired · intent.closed · memory.remembered ·
  * memory.proposed · memory.approved · memory.rejected · memory.forgotten · memory.superseded ·
  * memory.imported · memory.promoted · memory.expired · memory.summarized · memory.consolidated ·
  * approval.requested · approval.decided · approval.executed · world.refreshed ·
@@ -57,7 +57,6 @@ export type ActivityKind = string;
 
 /** What an entry is about; every id the UI can link to. */
 export type ActivityRefs = {
-  threadId?: string;
   runId?: string;
   jobId?: string;
   intentId?: string;

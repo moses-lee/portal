@@ -22,7 +22,7 @@ export function createPgActivityStore({ db }: { db: Db }): ActivityStore {
       const entry = stripNul(raw);
       const [row] = await db.insert(activityLog).values({
         at: entry.at, actor: entry.actor, kind: entry.kind, summary: entry.summary, refs: entry.refs as Record<string, unknown>,
-        detail: entry.detail, threadId: entry.refs.threadId ?? null, runId: entry.refs.runId ?? null,
+        detail: entry.detail, runId: entry.refs.runId ?? null,
       }).returning();
       return fromRow(row);
     },
@@ -34,7 +34,6 @@ export function createPgActivityStore({ db }: { db: Db }): ActivityStore {
           ? or(eq(activityLog.kind, filter.kind), like(activityLog.kind, `${escapeLike(filter.kind)}%`))!
           : eq(activityLog.kind, filter.kind));
       }
-      if (filter.threadId) where.push(eq(activityLog.threadId, filter.threadId));
       if (filter.runId) where.push(eq(activityLog.runId, filter.runId));
       const rows = await db.select().from(activityLog).where(where.length ? and(...where) : undefined)
         .orderBy(desc(activityLog.id)).limit(clampLimit(filter.limit));

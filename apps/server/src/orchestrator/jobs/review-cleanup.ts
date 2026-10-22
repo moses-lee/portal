@@ -12,7 +12,6 @@ import { randomUUID } from "node:crypto";
 import type { Item, ItemAction } from "@portal/contracts/orchestrator";
 import type { OrchestratorHub } from "../hub.ts";
 import { removeProject } from "../ops.ts";
-import { MAIN_THREAD_ID } from "../types.ts";
 import { reviewWatchOf } from "./review-watch.ts";
 
 const fingerprintFor = (projectId: string) => `review_worktree:${projectId}`;
@@ -35,13 +34,10 @@ async function leaveToUser(hub: OrchestratorHub, item: Item, projectId: string, 
   void hub.activity.log({ actor: "system", kind: "review.worktree_kept", summary: `Kept the review worktree for ${name}: ${why}`, refs: { projectId, itemId: item.id } });
 }
 
-/** One line in the thread the goal reported to (its side thread, else the main one). */
-async function tell(hub: OrchestratorHub, item: Item, text: string): Promise<void> {
-  const wanted = item.links.threadId ?? MAIN_THREAD_ID;
-  const thread = await hub.store.getThread(wanted);
-  const threadId = thread && thread.status === "active" ? wanted : MAIN_THREAD_ID;
-  await hub.store.appendMessages([{ id: randomUUID(), role: "assistant", parts: [{ type: "text", text }], metadata: { at: hub.timers.now() } }], threadId);
-  hub.emit({ type: "messages", threadId });
+/** One line in the chat. */
+async function tell(hub: OrchestratorHub, text: string): Promise<void> {
+  await hub.store.appendMessages([{ id: randomUUID(), role: "assistant", parts: [{ type: "text", text }], metadata: { at: hub.timers.now() } }]);
+  hub.emit({ type: "messages" });
 }
 
 /**
@@ -90,7 +86,7 @@ export async function settleReviewWorktree(hub: OrchestratorHub, item: Item): Pr
       ? `Removed the review worktree for ${name} and its local branch ${branch}, now that its findings are read.`
       : `Removed the review worktree for ${name}, now that its findings are read; the local branch ${branch} stays (it is not exactly on origin).`;
     void hub.activity.log({ actor: "system", kind: "review.worktree_removed", summary: text, refs: { projectId, itemId: item.id, ...(sessionId ? { sessionId } : {}), intentId }, detail: { branch, branchDeleted } });
-    await tell(hub, item, text);
+    await tell(hub, text);
   } catch (err) {
     console.error(`Could not clean up the review worktree for ${name}:`, err);
   }

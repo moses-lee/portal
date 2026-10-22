@@ -42,17 +42,15 @@ export type NewJob = {
   status?: JobStatus;
   nextRunAt: number | null;
   intentId?: string | null;
-  threadId?: string | null;
   createdBy: Job["createdBy"];
 };
 
-export type JobChanges = Partial<Pick<Job, "title" | "schedule" | "payload" | "status" | "nextRunAt" | "lastRunAt" | "lastRunId" | "failures" | "threadId">>;
+export type JobChanges = Partial<Pick<Job, "title" | "schedule" | "payload" | "status" | "nextRunAt" | "lastRunAt" | "lastRunId" | "failures">>;
 
 export type JobFilter = { status?: JobStatus[]; kind?: JobKind[]; intentId?: string };
 
 export type RunFilter = {
   jobId?: string;
-  threadId?: string;
   kind?: RunKind;
   /** Kinds left out (the listings never show the world refresh's runs). */
   notKinds?: RunKind[];
@@ -73,7 +71,6 @@ export type NewIntent = {
   expiresAt?: number | null;
   fireBudget?: number | null;
   cooldownMs?: number;
-  threadId?: string | null;
   lastCheckedAt?: number | null;
   source?: WatchSource;
   events?: WatchEvents;
@@ -148,7 +145,7 @@ export function buildJob(input: NewJob, id: string, at: number): Job {
   return {
     id, kind: input.kind, title: title(input.title), schedule: input.schedule, payload: input.payload ?? {}, status,
     nextRunAt: status === "active" ? input.nextRunAt : null, lastRunAt: null, lastRunId: null, intentId: input.intentId ?? null,
-    threadId: input.threadId ?? null, createdBy: input.createdBy, failures: 0, createdAt: at, updatedAt: at,
+    createdBy: input.createdBy, failures: 0, createdAt: at, updatedAt: at,
   };
 }
 
@@ -231,7 +228,7 @@ export function buildIntent(input: NewIntent, id: string, at: number): Intent {
     id, text: text(input.text, "text", 2000), trigger: text(input.trigger, "trigger", 1000), action: text(input.action, "action", 1000),
     notes: input.notes ?? "", scope: normalizeScope(input.scope), status: input.status ?? "active", expiresAt: input.expiresAt ?? null,
     fireBudget: input.fireBudget === undefined ? 1 : input.fireBudget, fires: 0, cooldownMs: input.cooldownMs ?? 0, lastFiredAt: null, lastFiredTitle: null,
-    lastCheckedAt: input.lastCheckedAt ?? null, threadId: input.threadId ?? null, source: normalizeSource(input.source),
+    lastCheckedAt: input.lastCheckedAt ?? null, source: normalizeSource(input.source),
     events: normalizeEvents(input.events ?? noEvents()), renewals: 0, createdAt: at, updatedAt: at,
   });
 }
@@ -391,7 +388,7 @@ export function createMemoryJobsStore({ now = Date.now }: { now?: () => number }
       const cursor = filter.before ? runs.get(filter.before) : undefined;
       if (filter.before && !cursor) return [];
       return [...runs.values()]
-        .filter((run) => (filter.jobId === undefined || run.jobId === filter.jobId) && (filter.threadId === undefined || run.threadId === filter.threadId)
+        .filter((run) => (filter.jobId === undefined || run.jobId === filter.jobId)
           && (filter.kind === undefined || run.kind === filter.kind) && !filter.notKinds?.includes(run.kind) && (!filter.status || filter.status.includes(run.status))
           && (!cursor || compareRuns(cursor, run) < 0))
         .sort(compareRuns)

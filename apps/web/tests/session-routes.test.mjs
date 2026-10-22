@@ -45,7 +45,7 @@ test("home is the start page (docs/GLASS.md, Home)", () => {
   assert.equal(isStartPath("/watches"), false);
   // Unknown browser paths do not represent Portal pages. The internal decoder retains the legacy fallback for stored destinations.
   assert.equal(isStartPath("/whatever"), false);
-  assert.deepEqual(portalLocation("/whatever"), { view: "chat", threadId: "main" });
+  assert.deepEqual(portalLocation("/whatever"), { view: "chat" });
 });
 
 test("stored / and /palace links enter Palace mode; nothing else does", async () => {
@@ -55,26 +55,23 @@ test("stored / and /palace links enter Palace mode; nothing else does", async ()
     assert.equal(isSurfaceLinkPath(path), true, path);
     assert.equal(inAppLinkPath(path, "https://portal.example"), path);
   }
-  for (const path of ["/new", "/palace/extra", "/palaces", "/threads/main", "/watches", "/sessions/s1"]) assert.equal(isPalaceLinkPath(path), false, path);
-  // The main thread's destination is no longer `/`, which would now enter Palace mode.
-  assert.equal(portalPath("chat"), "/threads/main");
+  for (const path of ["/new", "/palace/extra", "/palaces", "/chat", "/watches", "/sessions/s1"]) assert.equal(isPalaceLinkPath(path), false, path);
+  // The chat's destination is not `/`, which enters Palace mode.
+  assert.equal(portalPath("chat"), "/chat");
   assert.notEqual(isPalaceLinkPath(portalPath()), true);
 });
 
-test("stored surface destinations round-trip, including main and side threads", () => {
-  assert.equal(portalPath(), "/threads/main");
-  assert.equal(portalPath({ view: "chat", threadId: "main" }), "/threads/main");
-  assert.deepEqual(portalLocation("/threads/main"), { view: "chat", threadId: "main" });
-  assert.equal(portalPath({ view: "chat", threadId: "t 1" }), "/threads/t%201");
-  assert.deepEqual(portalLocation("/threads/t%201"), { view: "chat", threadId: "t 1" });
-  assert.deepEqual(portalLocation("/threads/t1/extra"), { view: "chat", threadId: "main" });
-  // Watches were Goals until 2026-10-04; the old path is gone and lands on the main thread like any unknown one.
-  assert.deepEqual(portalLocation("/goals"), { view: "chat", threadId: "main" });
+test("stored surface destinations round-trip", () => {
+  assert.equal(portalPath(), "/chat");
+  assert.equal(portalPath({ view: "chat" }), "/chat");
+  assert.deepEqual(portalLocation("/chat"), { view: "chat" });
+  // Watches were Goals until 2026-10-04; the old path is gone and lands on the chat like any unknown one.
+  assert.deepEqual(portalLocation("/goals"), { view: "chat" });
   assert.equal(portalPath("watches"), "/watches");
   for (const view of ["attention", "watches", "activity", "system", "monitoring"]) {
     assert.equal(portalPath(view), `/${view}`);
     assert.deepEqual(portalLocation(`/${view}`), { view });
-    assert.deepEqual(portalLocation(`/${view}/extra`), { view: "chat", threadId: "main" });
+    assert.deepEqual(portalLocation(`/${view}/extra`), { view: "chat" });
   }
   assert.equal(portalPath("memory"), "/memory");
   assert.deepEqual(portalLocation("/memory"), { view: "memory", entityId: null });

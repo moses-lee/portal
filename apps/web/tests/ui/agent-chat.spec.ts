@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 import { emitPortal, portalStatus, setupPortal } from "./fixtures";
-import { mainThread, reviewThread } from "./orchestrator-fixtures";
 
 const agent = (page: Page) => page.getByRole("main", { name: "Agent", exact: true });
 const open = async (page: Page) => {
@@ -25,7 +24,7 @@ test("Search and Agent each fill a sidebar row with their own shortcut", async (
 });
 
 test("the main composer queues, edits, removes and restores follow-ups on Stop", async ({ page }) => {
-  const fixture = await setupPortal(page, { portal: { status: { busy: true, busyThreads: ["main"] } } });
+  const fixture = await setupPortal(page, { portal: { status: { busy: true } } });
   await open(page);
   const composer = agent(page).getByRole("textbox", { name: "Message Portal", exact: true });
   await expect(agent(page).getByRole("button", { name: "Queue message", exact: true })).toBeVisible();
@@ -56,36 +55,27 @@ test("the main composer queues, edits, removes and restores follow-ups on Stop",
 test("tool-first streaming shows jumping dots until text arrives, and tools separate text bubbles", async ({ page }) => {
   await setupPortal(page, { portal: { messages: [] } });
   await open(page);
-  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
+  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true } });
   const dots = agent(page).getByRole("status", { name: "Agent is typing" });
   await expect(dots).toBeVisible();
   await expect(dots.locator("span")).toHaveCount(3);
   expect(await dots.locator("span").first().evaluate((node) => getComputedStyle(node).animationName)).toBe("agent-typing-dot");
   const tool = { type: "tool-list_sessions" as const, toolCallId: "call-1", state: "output-available" as const, input: {}, output: { sessions: [] } };
   const message = { id: "live-reply", role: "assistant" as const, parts: [tool] };
-  await emitPortal(page, { type: "chat-message", threadId: "main", message });
+  await emitPortal(page, { type: "chat-message", message });
   await expect(agent(page).locator("[data-agent-bubble]")).toHaveCount(0);
   await expect(dots).toBeVisible();
   await expect(agent(page).getByRole("button", { name: /Ran list_sessions/ })).toBeHidden();
-  await emitPortal(page, { type: "chat-message", threadId: "main", message: { ...message, parts: [tool, { type: "text", text: "I found your session." }] } });
+  await emitPortal(page, { type: "chat-message", message: { ...message, parts: [tool, { type: "text", text: "I found your session." }] } });
   await expect(dots).toBeHidden();
   await expect(agent(page).locator("[data-agent-bubble]")).toHaveCount(1);
-  await emitPortal(page, { type: "chat-message", threadId: "main", message: { ...message, parts: [tool, { type: "text", text: "I found your session." }, { ...tool, toolCallId: "call-2" }, { type: "text", text: "The checks are passing." }, { type: "reasoning", text: "Reviewing the results.", state: "done" }] } });
+  await emitPortal(page, { type: "chat-message", message: { ...message, parts: [tool, { type: "text", text: "I found your session." }, { ...tool, toolCallId: "call-2" }, { type: "text", text: "The checks are passing." }, { type: "reasoning", text: "Reviewing the results.", state: "done" }] } });
   await expect(agent(page).locator("[data-agent-bubble]")).toHaveCount(2);
   await expect(dots).toBeHidden();
   await expect(agent(page).getByText("Thinking…", { exact: true })).toHaveCount(0);
   await agent(page).getByRole("button", { name: "Activity", exact: true }).click();
   await expect(agent(page).getByRole("button", { name: /Ran list_sessions/ })).toHaveCount(2);
   await expect(agent(page).getByRole("button", { name: "Reasoning", exact: true })).toBeVisible();
-});
-
-test("side threads retain their existing busy composer behavior", async ({ page }) => {
-  await setupPortal(page, { portal: { threads: [mainThread, reviewThread], status: { busy: true, busyThreads: [reviewThread.id] } } });
-  await open(page);
-  await agent(page).getByRole("tab", { name: reviewThread.title }).click();
-  await expect(agent(page).getByRole("button", { name: "Stop agent" })).toBeVisible();
-  await expect(agent(page).getByRole("button", { name: "Queue message", exact: true })).toHaveCount(0);
-  await expect(agent(page).getByRole("region", { name: "Queued prompts" })).toHaveCount(0);
 });
 
 test("a slow history read cannot replace newer queued streaming text", async ({ page }) => {
@@ -98,8 +88,8 @@ test("a slow history read cannot replace newer queued streaming text", async ({ 
     return route.fulfill({ json: { messages: [], hasMore: false, before: null, after: null } });
   });
   await open(page);
-  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true, busyThreads: ["main"] } });
-  await emitPortal(page, { type: "chat-message", threadId: "main", message: { id: "streamed", role: "assistant", parts: [{ type: "text", text: "A newer streamed reply." }] } });
+  await emitPortal(page, { type: "status", status: { ...portalStatus, busy: true } });
+  await emitPortal(page, { type: "chat-message", message: { id: "streamed", role: "assistant", parts: [{ type: "text", text: "A newer streamed reply." }] } });
   await expect(agent(page).getByText("A newer streamed reply.", { exact: true })).toBeVisible();
   release();
   await expect(agent(page).getByText("Opening the conversation…", { exact: true })).toBeHidden();

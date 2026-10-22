@@ -15,7 +15,7 @@ const MIN = 60_000;
 const DUE = T0 + POLL_MS;
 
 function helperJob(overrides = {}) {
-  return { kind: "helper", title: "Summarize", schedule: { type: "every", everyMs: 5 * MIN }, payload: { prompt: "Summarize the day." }, nextRunAt: T0 + MIN, createdBy: "agent", threadId: "main", ...overrides };
+  return { kind: "helper", title: "Summarize", schedule: { type: "every", everyMs: 5 * MIN }, payload: { prompt: "Summarize the day." }, nextRunAt: T0 + MIN, createdBy: "agent", ...overrides };
 }
 
 /** A model whose every call waits until the test releases it with a text answer. */
@@ -53,7 +53,7 @@ test("a due job is claimed and run once; its run is recorded and the job is rele
   assert.equal(after.lastRunAt, T0 + MIN);
   assert.equal(after.nextRunAt, T0 + MIN + 5 * MIN);
   assert.equal(after.failures, 0);
-  // The answer went to the job's thread, marked with the run.
+  // The answer went to the chat, marked with the run.
   const [note] = (await h.runtime.history()).messages;
   assert.equal(note.parts[0].text, "Three sessions finished today.");
   assert.deepEqual(note.metadata.run, { id: run.id, kind: "helper" });

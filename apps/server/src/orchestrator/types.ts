@@ -5,7 +5,7 @@
  * server's modules keep importing everything from one place.
  */
 import type {
-  BulkItemStatus, BulkItemsResponse, Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, Scope, Thread, TickSnapshot,
+  BulkItemStatus, BulkItemsResponse, Item, ItemPatch, ItemStatus, MessagePage, OrchestratorEvent, OrchestratorMessage, OrchestratorStatus, TickSnapshot,
 } from "@portal/contracts/orchestrator";
 import type { WorkspaceView } from "@portal/contracts/workspace";
 import type { QueuedPrompt } from "@portal/contracts/types";
@@ -18,17 +18,13 @@ export * from "@portal/contracts/orchestrator";
 // Store
 // ---------------------------------------------------------------------------------------------
 
-/** A side thread as the agent opens it. */
-export type ThreadInput = { title: string; scope?: Partial<Scope>; intentId?: string | null };
-
-/** A stored message with its position in the thread (the store's ordinal; the paging cursor). */
+/** A stored message with its position in the chat (the store's ordinal; the paging cursor). */
 export type MessageRow = { ordinal: number; message: OrchestratorMessage };
 
-/** One page of a thread: the newest `limit` messages, those before a cursor, or those after one. */
+/** One page of the chat: the newest `limit` messages, those before a cursor, or those after one. */
 export type MessagePageQuery = { before?: number; after?: number; limit: number };
 
 export type ItemFilter = { status?: ItemStatus[] };
-export type ThreadPatch = Partial<Pick<Thread, "title" | "status" | "scope" | "intentId">>;
 
 /**
  * Persistence for the orchestrator, in Postgres (`orchestrator_*` tables, see `src/db/schema.ts`):
@@ -39,28 +35,22 @@ export type ThreadPatch = Partial<Pick<Thread, "title" | "status" | "scope" | "i
 export interface OrchestratorStore {
   ready: Promise<void>;
 
-  /** A thread's messages in order; `threadId` defaults to the main thread. */
-  readMessages(threadId?: string): Promise<OrchestratorMessage[]>;
-  /** The thread's messages with their ordinals, oldest first. */
-  readMessageRows(threadId?: string): Promise<MessageRow[]>;
-  /** One page of the thread (see `MessagePage`); ordinals are the cursors. */
-  readMessagePage(threadId: string, query: MessagePageQuery): Promise<MessagePage>;
+  /** The chat's messages in order. */
+  readMessages(): Promise<OrchestratorMessage[]>;
+  /** The chat's messages with their ordinals, oldest first. */
+  readMessageRows(): Promise<MessageRow[]>;
+  /** One page of the chat (see `MessagePage`); ordinals are the cursors. */
+  readMessagePage(query: MessagePageQuery): Promise<MessagePage>;
   /** One message by its id, or null. */
-  getMessage(threadId: string, id: string): Promise<OrchestratorMessage | null>;
-  /** Replaces the thread's messages (the importer); ordinals are reassigned. */
-  writeMessages(messages: OrchestratorMessage[], threadId?: string): Promise<void>;
-  /** Appends to the thread and moves its `lastMessageAt`. */
-  appendMessages(messages: OrchestratorMessage[], threadId?: string): Promise<void>;
-  /** Drops the messages at or below `ordinal` (trimming the thread's head in place). */
-  deleteMessagesThrough(threadId: string, ordinal: number): Promise<void>;
+  getMessage(id: string): Promise<OrchestratorMessage | null>;
+  /** Replaces the chat's messages (the importer); ordinals are reassigned. */
+  writeMessages(messages: OrchestratorMessage[]): Promise<void>;
+  /** Appends to the chat. */
+  appendMessages(messages: OrchestratorMessage[]): Promise<void>;
+  /** Drops the messages at or below `ordinal` (trimming the chat's head in place). */
+  deleteMessagesThrough(ordinal: number): Promise<void>;
   /** Replaces one stored message, keeping its ordinal (trimming tool traffic in place). */
-  replaceMessage(threadId: string, ordinal: number, message: OrchestratorMessage): Promise<void>;
-
-  /** Every thread, the main one first, then side threads newest first. */
-  listThreads(): Promise<Thread[]>;
-  getThread(id: string): Promise<Thread | null>;
-  createThread(input: ThreadInput): Promise<Thread>;
-  updateThread(id: string, patch: ThreadPatch): Promise<Thread>;
+  replaceMessage(ordinal: number, message: OrchestratorMessage): Promise<void>;
 
   /** Items newest first; all of them, or those in the given statuses. */
   listItems(filter?: ItemFilter): Promise<Item[]>;
@@ -86,27 +76,24 @@ export interface OrchestratorRuntime {
   /** The shared parts and domain services; domain routes reach their service through it. */
   hub: OrchestratorHub;
   status(): Promise<OrchestratorStatus>;
-  listThreads(): Promise<Thread[]>;
   /**
-   * One page of a thread's messages (the main thread when `threadId` is omitted): the newest
-   * `limit`, or those before/after a cursor. Tool parts come without their input and output
-   * (`toolIO: "omitted"`); `message` has the whole message.
+   * One page of the chat: the newest `limit` messages, or those before/after a cursor. Tool parts
+   * come without their input and output (`toolIO: "omitted"`); `message` has the whole message.
    */
-  history(threadId?: string, query?: Partial<MessagePageQuery>): Promise<MessagePage>;
+  history(query?: Partial<MessagePageQuery>): Promise<MessagePage>;
   /** One message in full, or null. */
-  message(threadId: string, id: string): Promise<OrchestratorMessage | null>;
+  message(id: string): Promise<OrchestratorMessage | null>;
   /**
-   * Runs one chat turn in a thread (default: main) for the user's newest message. Returns the AI
-   * SDK UI message stream response (`toUIMessageStreamResponse`); the runtime persists the user
-   * message immediately and the assistant message when the stream finishes, then emits a
-   * `messages` event. Each thread has its own lock: rejects with status 409 while that thread is
-   * answering or when no key is stored, 404 for an unknown thread. Jobs never block it. `view` is
-   * what the sending device is looking at (docs/WORKSPACE.md); the turn's prompt names it.
+   * Runs one chat turn for the user's newest message. Returns the AI SDK UI message stream response
+   * (`toUIMessageStreamResponse`); the runtime persists the user message immediately and the
+   * assistant message when the stream finishes, then emits a `messages` event. One turn at a time:
+   * rejects with status 409 while Portal is answering or when no key is stored. Jobs never block it.
+   * `view` is what the sending device is looking at (docs/WORKSPACE.md); the turn's prompt names it.
    */
-  chat(userMessage: OrchestratorMessage, threadId?: string, view?: WorkspaceView | null): Promise<Response>;
-  /** Cancels the chat turn running in a thread (default: main), if any. Background jobs keep going. */
-  cancel(threadId?: string): QueuedPrompt[];
-  /** Main composer only; the same editing, pause, and stop semantics as session queues. */
+  chat(userMessage: OrchestratorMessage, view?: WorkspaceView | null): Promise<Response>;
+  /** Cancels the running chat turn, if any, and drops the queue. Background jobs keep going. */
+  cancel(): QueuedPrompt[];
+  /** The chat's composer; the same editing, pause, and stop semantics as session queues. */
   queue(): QueuedPrompt[];
   enqueue(text: string, view?: WorkspaceView | null): Promise<{ queued: QueuedPrompt; position: number }>;
   updateQueued(id: string, text: string): QueuedPrompt;

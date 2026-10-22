@@ -64,7 +64,7 @@ test("a covered focused tab accrues unread updates until the page closes", async
 
 test("retired page URLs no longer serve standalone screens", async ({ page }) => {
   await setupPortal(page);
-  for (const path of ["/watches", "/memory/e-global", "/threads/review", "/terminal"]) {
+  for (const path of ["/watches", "/memory/e-global", "/chat", "/terminal"]) {
     const response = await page.goto(path);
     expect(response?.status()).toBe(404);
     await expect(page.getByRole("main", { name: "Agent", exact: true })).toHaveCount(0);

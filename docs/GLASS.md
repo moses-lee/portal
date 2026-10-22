@@ -286,7 +286,7 @@ Built 2026-10-15 by subagents in the order above, then reviewed by two fresh age
   - Changes to the sidebar before hydration are instant, so a stored-collapsed sidebar doesn't slide out on load.
 - **Home**
   - `/` is a resolver path like `/new`. With tabs open it focuses or opens a start tab and rewrites the URL, rather than staying `/`.
-  - The Agent main thread's internal link is now `/threads/main`, so `/` can mean Palace mode in stored links.
+  - The Agent chat's internal link is now `/chat`, so `/` can mean Palace mode in stored links.
 - **Accents**
   - The sky spinners and dots, the non-status violet badges (a new `warm` badge tone) and the navy code and tool backgrounds also went warm.
   - Status tones stay (the sky Running/Active badges, the violet Merged badge, the violet background state).

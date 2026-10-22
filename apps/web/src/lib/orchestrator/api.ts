@@ -3,8 +3,6 @@
  * can read (the server's `{ error }` when it sent one), so views show it as is.
  */
 
-import { MAIN_THREAD_ID } from "./types";
-
 export const NETWORK_ERROR = "Could not reach the server. Check the connection and try again.";
 
 async function failure(r: Response, fallback: string): Promise<Error> {
@@ -48,12 +46,9 @@ export function query(params: Record<string, string | number | null | undefined>
 
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
 
-/** Where a thread's messages live. The main thread keeps its original routes. */
-export function threadRoutes(threadId: string) {
-  const base = `/api/portal/threads/${encodeURIComponent(threadId)}`;
-  return {
-    messages: threadId === MAIN_THREAD_ID ? "/api/portal/messages" : `${base}/messages`,
-    message: (id: string) => `${base}/messages/${encodeURIComponent(id)}`,
-    cancel: `${base}/cancel`,
-  };
-}
+/** Where the chat lives: a page of messages (and sending), one message in full, and stopping the turn. */
+export const portalRoutes = {
+  messages: "/api/portal/messages",
+  message: (id: string) => `/api/portal/messages/${encodeURIComponent(id)}`,
+  cancel: "/api/portal/cancel",
+};
